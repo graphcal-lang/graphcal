@@ -240,15 +240,28 @@ def insideInstance : Group 2 where
 
 theorem insideInstance_accepted : insideInstance.check = .ok ⟨[1, 0]⟩ := by decide
 
-/-- `node action: Dimensionless[Step] = todo { @state };` -/
+/-- `node action: Dimensionless[Step] = todo<Dimensionless[Step]> { @state };`:
+a whole-body hole has no recurrence shape. -/
 def unfinishedAction : Group 2 where
   member := fun x => match x.val with
-    | 0 => owned .unfinished
+    | 0 => owned .otherFormula
     | _ => owned (.unfoldOver stepAxis)
   reads := [⟨0, 1, .whole⟩, ⟨1, 0, .element .previousBinder⟩]
 
 theorem unfinishedAction_rejected :
-    unfinishedAction.check = .error (.unfinishedMember 0) := by decide
+    unfinishedAction.check = .error (.notRecurrenceShape 0) := by decide
+
+/-- The issue #2099 sketch: `node action = for t: Step { todo<…> { @state[t] } }`
+and `node state = unfold(Step, …, |s, prev_t, t| todo<…> { s, @action[prev_t] })`.
+The holes' interfaces carry the reads, so the group is accepted before either
+formula is written. -/
+def sketchedRecurrence : Group 2 where
+  member := fun x => match x.val with
+    | 0 => owned (.forOver stepAxis)
+    | _ => owned (.unfoldOver stepAxis)
+  reads := [⟨0, 1, .element .stepBinder⟩, ⟨1, 0, .element .previousBinder⟩]
+
+theorem sketchedRecurrence_accepted : sketchedRecurrence.check = .ok ⟨[1, 0]⟩ := by decide
 
 /-- `node gain: Dimensionless = sum(@state);` read by `state`'s closure. -/
 def scalarGain : Group 2 where

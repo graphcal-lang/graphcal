@@ -85,6 +85,8 @@ pub enum ExecutableBodyError {
     Deferred(ExprId),
     #[error("contextual metadata is not an executable value: {0:?}")]
     Contextual(ExprId),
+    #[error("expression is an unfinished formula: {0:?}")]
+    Unfinished(ExprId),
 }
 
 /// The checked tree of one root.
@@ -94,6 +96,9 @@ pub enum CheckedBody {
     Executable(TBody<Concrete>),
     /// The tree still awaits Static or generic bindings.
     Deferred(TBody<Symbolic>),
+    /// The tree contains a `todo<T> { … }` hole: its formula is unfinished
+    /// and is never evaluated.
+    Unfinished(TBody<Symbolic>),
 }
 
 impl CheckedBody {
@@ -132,6 +137,7 @@ impl CheckedBody {
         match expr.map_types(concrete) {
             Ok(concrete) => Ok(Self::Executable(TBody::Value(Box::new(concrete)))),
             Err(NotConcrete::Waiting) => Ok(Self::Deferred(TBody::Value(expr))),
+            Err(NotConcrete::Unfinished) => Ok(Self::Unfinished(TBody::Value(expr))),
             Err(NotConcrete::Discharge(error)) => Err(error),
         }
     }
@@ -149,6 +155,8 @@ pub enum NotConcrete {
     Waiting,
     /// An axis it relies on cannot be given to it.
     Discharge(DischargeError),
+    /// It contains a `todo<T> { … }` hole: its formula is unfinished.
+    Unfinished,
 }
 
 impl From<UnavailableIndex> for NotConcrete {
@@ -272,6 +280,10 @@ impl TypeMap<Symbolic, Concrete> for ToConcrete<'_, '_> {
         let axis = self.concrete_axis(index, span)?;
         LabelDispatch::try_new(axis, labels)
             .map_err(|error| NotConcrete::Discharge(DischargeError::LabelDispatch { error, span }))
+    }
+
+    fn todo_hole(&mut self, (): &(), _span: Span) -> Result<super::ExecutableHole, NotConcrete> {
+        Err(NotConcrete::Unfinished)
     }
 
     fn map_layout(
@@ -484,6 +496,7 @@ impl CheckedBodies {
                 Err(ExecutableBodyError::Contextual(root.clone()))
             }
             Some(CheckedBody::Deferred(_)) => Err(ExecutableBodyError::Deferred(root.clone())),
+            Some(CheckedBody::Unfinished(_)) => Err(ExecutableBodyError::Unfinished(root.clone())),
             None => Err(ExecutableBodyError::Missing(root.clone())),
         }
     }
@@ -493,7 +506,9 @@ impl CheckedBodies {
     pub fn contextual(&self, root: &ExprId) -> Option<&TContextual> {
         match self.roots.get(root)? {
             CheckedBody::Executable(TBody::Contextual(literal)) => Some(literal),
-            CheckedBody::Executable(TBody::Value(_)) | CheckedBody::Deferred(_) => None,
+            CheckedBody::Executable(TBody::Value(_))
+            | CheckedBody::Deferred(_)
+            | CheckedBody::Unfinished(_) => None,
         }
     }
 }
@@ -567,7 +582,7 @@ impl CheckedBodies {
                         }
                     });
                 }
-                CheckedBody::Deferred(body) => {
+                CheckedBody::Deferred(body) | CheckedBody::Unfinished(body) => {
                     super::model::visit_tnodes(body.as_node(), &mut |node| {
                         let TNodeRef::Value(expr) = node else {
                             return;

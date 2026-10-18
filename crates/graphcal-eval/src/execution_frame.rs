@@ -429,6 +429,33 @@ impl<'a> ExecutionFrame<'a> {
                 );
                 return Ok(());
             }
+            ComputedBody::BlockedInGroup(unfinished) => {
+                let todo = unfinished
+                    .iter()
+                    .map(|member| {
+                        (
+                            member,
+                            NodeUnavailable::Todo {
+                                declaration: member.clone(),
+                            },
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let outside = step.deps().iter().filter_map(|dep| {
+                    let dependency = callable.step(*dep).declaration().key();
+                    self.errors
+                        .get(dependency)
+                        .map(|reason| (dependency, reason))
+                });
+                if let Some(reason) = NodeUnavailable::blocked_by(
+                    todo.iter()
+                        .map(|(member, reason)| (*member, reason))
+                        .chain(outside),
+                ) {
+                    self.errors.insert(key.clone(), reason);
+                }
+                return Ok(());
+            }
             ComputedBody::Expression { root, tree } => (root.get(), tree),
         };
         if let Some(reason) = NodeUnavailable::blocked_by(step.deps().iter().filter_map(|dep| {

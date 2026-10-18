@@ -57,7 +57,7 @@ it.each(catalog)(
 );
 it("preserves TODO, static blocking, and independent values through real Wasm", () => {
   const source =
-    "node missing: Length = todo {}; node blocked: Length = if true { 1.0 m } else { @missing }; node known: Length = 2.0 m; assert pending = @missing > 0.0 m; plot pending_plot = { mark: point, encode: { y: @missing } };";
+    "node missing: Length = todo<Length> {}; node blocked: Length = if true { 1.0 m } else { @missing }; node known: Length = 2.0 m; assert pending = @missing > 0.0 m; plot pending_plot = { mark: point, encode: { y: @missing } };";
   const result = outcomeSchema.parse(evaluate(evaluationRequest({ filename: "main.gcl", source })));
   if (result.status !== "evaluated") throw new Error(JSON.stringify(result));
   expect(result.evaluation.incomplete).toBe(true);

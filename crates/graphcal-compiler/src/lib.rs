@@ -33,7 +33,6 @@ pub mod import_cycle;
 pub mod internal_error;
 pub mod ir;
 pub mod nat;
-pub mod node_definition;
 pub mod node_unavailable;
 pub mod outcome;
 pub mod plot_props;

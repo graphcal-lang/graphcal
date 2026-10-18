@@ -450,6 +450,22 @@ pub enum ExprKind<C: Completeness = Strict> {
         output_name: crate::syntax::decl_name::DeclName,
         output: Spanned<ResolvedDeclName>,
     },
+    /// A typed hole `todo<T> { @a, @b }` standing for an unfinished formula.
+    TodoHole(Box<TodoHole<C>>),
+}
+
+/// A typed hole: the type it stands for and its possible direct dependencies.
+///
+/// Each interface entry is a child expression of one of three shapes, fixed
+/// by the syntax: a graph reference `@y`, an element access `@y[t, …]` keyed
+/// by locals, or a local `s`. Entries are checked like reads and are
+/// dependencies of the enclosing declaration, but are never evaluated: a
+/// formula containing a hole is unfinished.
+#[derive(Debug, Clone)]
+pub struct TodoHole<C: Completeness = Strict> {
+    pub ty: crate::hir::types::DeclType,
+    /// The span covers the braces, including an explicitly empty list.
+    pub interface: Spanned<Vec<Expr<C>>>,
 }
 
 /// Resolved axis and lexical bindings for an `unfold` recurrence.

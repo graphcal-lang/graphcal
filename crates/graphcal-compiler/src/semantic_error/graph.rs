@@ -57,8 +57,6 @@ impl std::fmt::Display for CycleMember {
 pub enum RecurrenceRejection {
     /// R1: the cycle reads `other`, which another DAG declares.
     MixedOwners { other: DeclName },
-    /// R2: the member is an unfinished `todo` node.
-    Unfinished,
     /// R3: the member is not a top-level `for` or `unfold`.
     NotRecurrenceShape,
     /// R4: the member steps along another axis than `first`.
@@ -119,6 +117,9 @@ pub enum GraphError {
     /// include expansion re-entered back to it.
     #[error("recursive DAG instantiation: {}", format_template_cycle(templates))]
     RecursiveDagInstantiation { templates: Vec<DagId> },
+    /// A `todo<T> { … }` hole outside the body of a runtime `node`.
+    #[error("`todo` holes are allowed only in `node` formulas")]
+    TodoHoleOutsideNode,
 }
 
 impl DiagnosticKind for GraphError {
@@ -133,6 +134,7 @@ impl DiagnosticKind for GraphError {
             Self::DagArgTypeMismatch { .. } => "graphcal::G006",
             Self::InlineDagTargetNotFound { .. } => "graphcal::G008",
             Self::RecursiveDagInstantiation { .. } => "graphcal::G009",
+            Self::TodoHoleOutsideNode => "graphcal::G010",
         }
     }
 
@@ -153,6 +155,7 @@ impl DiagnosticKind for GraphError {
             Self::InlineDagTargetNotFound { .. } | Self::RecursiveDagInstantiation { .. } => {
                 Some("error here".to_owned())
             }
+            Self::TodoHoleOutsideNode => Some("unfinished formula not allowed here".to_owned()),
         }
     }
 
@@ -166,6 +169,7 @@ impl DiagnosticKind for GraphError {
             Self::MissingDagBindings { .. } => Some("every required `param` declared in the DAG must be bound at each `include` or call site".to_owned()),
             Self::UnknownDagOutput { .. } => Some("the projection after `)::` must name a param input port, an explicitly exported node, or a public include-output alias in the called DAG".to_owned()),
             Self::DagArgTypeMismatch { .. } => Some("the binding expression must have the same type as the DAG's param declaration".to_owned()),
+            Self::TodoHoleOutsideNode => Some("only a `node` can be unfinished; write the formula here".to_owned()),
             Self::InlineDagTargetNotFound { .. }
             | Self::RecursiveDagInstantiation { .. }=> None,
         }
@@ -182,7 +186,8 @@ impl DiagnosticKind for GraphError {
             | Self::UnknownDagOutput { .. }
             | Self::DagArgTypeMismatch { .. }
             | Self::InlineDagTargetNotFound { .. }
-            | Self::RecursiveDagInstantiation { .. } => Vec::new(),
+            | Self::RecursiveDagInstantiation { .. }
+            | Self::TodoHoleOutsideNode => Vec::new(),
         }
     }
 }
@@ -193,7 +198,6 @@ impl RecurrenceRejection {
             Self::MixedOwners { other } => {
                 format!("this cycle reads `{other}`, declared in another DAG")
             }
-            Self::Unfinished => "unfinished node in a cycle".to_owned(),
             Self::NotRecurrenceShape => "not a top-level `for` or `unfold`".to_owned(),
             Self::AxisMismatch { first } => {
                 format!("steps along another axis than `{first}`")
@@ -222,9 +226,6 @@ impl RecurrenceRejection {
         match self {
             Self::MixedOwners { .. } => {
                 "a recurrence cannot span declarations of different DAGs".to_owned()
-            }
-            Self::Unfinished => {
-                "a recurrence needs formulas to check the step offsets of its reads".to_owned()
             }
             Self::NotRecurrenceShape => "every declaration in a cycle with an `unfold` must be a top-level `for` or `unfold` over the recurrence axis".to_owned(),
             Self::AxisMismatch { .. } => {

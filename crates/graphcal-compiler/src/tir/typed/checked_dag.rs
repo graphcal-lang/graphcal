@@ -221,14 +221,11 @@ impl CheckedDag {
         self.body.value_declaration_identities()
     }
 
-    /// The unfinished-definition marker of a declaration, if it is a TODO.
+    /// Whether a declaration is an unfinished node: its formula contains a
+    /// `todo<T> { … }` hole.
     #[must_use]
-    pub fn todo(
-        &self,
-        key: &ResolvedDeclName,
-    ) -> Option<&crate::syntax::span::Spanned<Vec<crate::syntax::span::Spanned<ResolvedDeclName>>>>
-    {
-        self.body.todo(key)
+    pub fn is_unfinished(&self, key: &ResolvedDeclName) -> bool {
+        self.body.is_unfinished(key)
     }
 
     /// Each assertion with the declarations that assume it.

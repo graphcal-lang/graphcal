@@ -203,6 +203,14 @@ impl<V: SymbolicView> TypeMap<V, Symbolic> for Specializer<'_> {
         Ok(())
     }
 
+    fn todo_hole(
+        &mut self,
+        _carried: &V::Discharged<crate::tir::texpr::ExecutableHole>,
+        _span: Span,
+    ) -> Result<(), SemanticError> {
+        Ok(())
+    }
+
     fn key(
         &mut self,
         _carried: &V::Discharged<KeyValue>,
@@ -231,7 +239,7 @@ impl Specializer<'_> {
     fn body(&mut self, body: &CheckedBody) -> Result<TBody<Symbolic>, SemanticError> {
         match body {
             CheckedBody::Executable(body) => body.map_types(self),
-            CheckedBody::Deferred(body) => body.map_types(self),
+            CheckedBody::Deferred(body) | CheckedBody::Unfinished(body) => body.map_types(self),
         }
     }
 }
@@ -399,6 +407,9 @@ pub(super) fn specialize_bound_body(
         )),
         CheckedBody::Deferred(_) => Err(diagnostic(
             crate::tir::texpr::ExecutableBodyError::Deferred(root.id().clone()).to_string(),
+        )),
+        CheckedBody::Unfinished(_) => Err(diagnostic(
+            crate::tir::texpr::ExecutableBodyError::Unfinished(root.id().clone()).to_string(),
         )),
     }
 }

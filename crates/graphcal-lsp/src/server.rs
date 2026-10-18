@@ -2555,7 +2555,7 @@ mod tests {
         let uri = untitled_uri();
         for prefix in ["", "param required: Length;"] {
             let source = format!(
-                "{prefix} node missing: Length = todo {{}}; node blocked: Length = @missing;"
+                "{prefix} node missing: Length = todo<Length> {{}}; node blocked: Length = @missing;"
             );
             let analysis = run_analysis(&uri, &source, &[], test_plugin_host());
             let diagnostics = &analysis.diagnostics[&uri];
@@ -2576,7 +2576,7 @@ mod tests {
         }
         let analysis = run_analysis(
             &uri,
-            "dag unused { node missing: Length = todo {}; }",
+            "dag unused { node missing: Length = todo<Length> {}; }",
             &[],
             test_plugin_host(),
         );

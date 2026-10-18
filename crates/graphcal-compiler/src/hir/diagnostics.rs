@@ -9,7 +9,7 @@ use crate::semantic_error::SemanticError;
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::domain::DomainError;
-use crate::semantic_error::graph::DagReference;
+use crate::semantic_error::graph::{DagReference, GraphError};
 use crate::semantic_error::index::IndexError;
 use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::name::NameError;
@@ -166,6 +166,12 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             *span,
             ModuleError::InvalidTypeLevelBindingValue { name: name.clone() },
         ),
+        ExprLowerError::TodoHoleNotAllowed { span } => {
+            SemanticError::located(src, *span, GraphError::TodoHoleOutsideNode)
+        }
+        ExprLowerError::TodoHoleDomainConstraint { span } => {
+            SemanticError::located(src, *span, DomainError::TodoHoleDomainConstraint)
+        }
         ExprLowerError::UnknownLocalRef { name, span } => SemanticError::located(
             src,
             *span,

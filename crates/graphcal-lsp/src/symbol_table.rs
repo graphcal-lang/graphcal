@@ -183,11 +183,33 @@ impl<'a> HirRefCollector<'a> {
         expr: &graphcal_compiler::desugar::desugared_ast::Expr,
         table: &mut SymbolTable,
     ) {
+        self.collect_lowered(expr, table, BodyHoles::Rejected);
+    }
+
+    /// Collect a node formula, which may contain `todo<T> { … }` holes.
+    fn collect_node_body(
+        &mut self,
+        expr: &graphcal_compiler::desugar::desugared_ast::Expr,
+        table: &mut SymbolTable,
+    ) {
+        self.collect_lowered(expr, table, BodyHoles::Allowed);
+    }
+
+    fn collect_lowered(
+        &mut self,
+        expr: &graphcal_compiler::desugar::desugared_ast::Expr,
+        table: &mut SymbolTable,
+        holes: BodyHoles,
+    ) {
         let generic_scope = hir::lower::GenericScope::new();
         let ctx = hir::ExprLoweringContext::new(
             hir::lower::ModuleScope::new(self.dag_id, self.resolver, &generic_scope),
             &self.time_zones,
         );
+        let ctx = match holes {
+            BodyHoles::Rejected => ctx,
+            BodyHoles::Allowed => ctx.allowing_todo_holes(),
+        };
         let lowered = hir::lower_expr_tolerant(expr, ctx);
         self.locals.clear();
         self.body_span = expr.span;
@@ -329,6 +351,11 @@ impl<'a> HirRefCollector<'a> {
                     target.span,
                     SymbolKey::Declaration(target.value.clone()),
                 );
+            }
+            hir::expr::ExprKind::TodoHole(hole) => {
+                for entry in &hole.interface.value {
+                    self.walk(entry, table);
+                }
             }
             hir::expr::ExprKind::ConstRef(const_ref) => {
                 let target = match &const_ref.value {
@@ -1371,8 +1398,7 @@ fn apply_doc_comments(
         if let Some(doc) = &declaration.doc {
             let name_span = match &declaration.kind {
                 DeclKind::Param(param) => Some(param.name.span),
-                DeclKind::Node(node) => Some(node.name.span),
-                DeclKind::ConstNode(node) => Some(node.name.span),
+                DeclKind::Node(node) | DeclKind::ConstNode(node) => Some(node.name.span),
                 _ => None,
             };
             for definition in table.definitions.entries.values_mut() {
@@ -1626,19 +1652,10 @@ fn collect_node_decl(
         );
     }
     collect_type_expr_refs(&n.type_ann, table, refs);
-    match &n.definition {
-        graphcal_compiler::node_definition::NodeDefinition::Formula(expression) => {
-            refs.collect_body(expression, table);
-        }
-        graphcal_compiler::node_definition::NodeDefinition::Todo(dependencies) => {
-            table
-                .references
-                .extend(dependencies.value.iter().map(|reference| ReferenceInfo {
-                    span: reference.span,
-                    target: refs.declaration_target(&reference.value.to_name_path()),
-                }));
-        }
+    for hole in graphcal_compiler::syntax::visitor::collect_todo_holes(&n.value) {
+        collect_type_expr_refs(&hole.value.ty, table, refs);
     }
+    refs.collect_node_body(&n.value, table);
 }
 
 fn collect_const_node_decl(
@@ -2199,6 +2216,13 @@ fn collect_selected_names(
 type GenericParamSymbolScope = HashMap<GenericParamName, SymbolKey>;
 
 /// Collect references from a type expression outside a generic declaration.
+/// Whether a lowered body may contain `todo<T> { … }` holes (node formulas).
+#[derive(Debug, Clone, Copy)]
+enum BodyHoles {
+    Rejected,
+    Allowed,
+}
+
 fn collect_type_expr_refs(
     type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
     table: &mut SymbolTable,

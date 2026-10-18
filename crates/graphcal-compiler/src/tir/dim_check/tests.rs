@@ -165,9 +165,11 @@ fn count_nodes(bodies: &crate::tir::texpr::CheckedBodies, select: fn(bool) -> bo
             CheckedBody::Executable(body) => visit_tnodes(body.as_node(), &mut |node| {
                 visit(matches!(node, TNodeRef::Contextual(_)));
             }),
-            CheckedBody::Deferred(body) => visit_tnodes(body.as_node(), &mut |node| {
-                visit(matches!(node, TNodeRef::Contextual(_)));
-            }),
+            CheckedBody::Deferred(body) | CheckedBody::Unfinished(body) => {
+                visit_tnodes(body.as_node(), &mut |node| {
+                    visit(matches!(node, TNodeRef::Contextual(_)));
+                });
+            }
         }
     }
     count
@@ -211,7 +213,7 @@ fn consuming_rules_record_contextual_literals() {
     let node = tir.root().body().nodes().next().unwrap();
     let independent = check_callless_value_expr_type(
         &tir,
-        node.definition.formula().unwrap(),
+        &node.definition,
         node.type_ann.checked().declared(),
         src,
     )
@@ -246,14 +248,7 @@ fn body_observations_reject_a_second_record_of_one_expression() {
     let source = "node value: Dimensionless = 1.0;";
     let (tir, src) = module_aware_tir(source);
     let observations = infer::hir::BodyObservations::default();
-    let expr = tir
-        .root()
-        .nodes()
-        .next()
-        .unwrap()
-        .definition
-        .formula()
-        .unwrap();
+    let expr = &tir.root().nodes().next().unwrap().definition;
     let ty = CheckedType::Quantity(Dimension::dimensionless());
     let unchecked = tir.clone().finish();
     observations
@@ -442,14 +437,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     let (mut draft, src) = module_aware_tir(source);
     let mut ids = Vec::new();
     crate::hir::expr::visit_expr(
-        draft
-            .root()
-            .nodes()
-            .next()
-            .unwrap()
-            .definition
-            .formula()
-            .unwrap(),
+        &draft.root().nodes().next().unwrap().definition,
         &mut |expr| {
             if matches!(expr.kind(), crate::hir::expr::ExprKind::ForComp { .. }) {
                 ids.push(expr.id().clone());
@@ -459,25 +447,13 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     assert_eq!(ids.len(), 2);
     edit_root_decls(&mut draft, |decl| {
         if let crate::ir::entry::Decl::Node(entry) = decl {
-            entry
-                .definition
-                .formula_mut()
-                .unwrap()
-                .map_spans_for_test(|_| Span::new(0, 1));
+            entry.definition.map_spans_for_test(|_| Span::new(0, 1));
         }
     });
     let tir = check_draft(draft.clone(), src).unwrap();
     // The executable tree nodes checked for `ids`, in pre-order.
     let nodes = |tir: &crate::tir::typed::CheckedTir| {
-        let formula = tir
-            .root()
-            .body()
-            .nodes()
-            .next()
-            .unwrap()
-            .definition
-            .formula()
-            .unwrap();
+        let formula = &tir.root().body().nodes().next().unwrap().definition;
         let tree = tir.root().bodies().executable_value(formula.id()).unwrap();
         let mut types = Vec::new();
         crate::tir::texpr::visit_tnodes(crate::tir::texpr::TNodeRef::Value(tree), &mut |node| {
@@ -509,11 +485,7 @@ fn materialized_shape_identity_survives_equal_and_shifted_source_coordinates() {
     assert_eq!(totals(&tir), vec![2, 3]);
     edit_root_decls(&mut draft, |decl| {
         if let crate::ir::entry::Decl::Node(entry) = decl {
-            entry
-                .definition
-                .formula_mut()
-                .unwrap()
-                .map_spans_for_test(|_| Span::new(2, 3));
+            entry.definition.map_spans_for_test(|_| Span::new(2, 3));
         }
     });
     let tir = check_draft(draft, src).unwrap();
@@ -530,8 +502,6 @@ fn node_entry_body_is_authoritative_for_hir_dimension_check() {
         if let crate::ir::entry::Decl::Node(entry) = decl {
             entry
                 .definition
-                .formula_mut()
-                .unwrap()
                 .replace_kind_for_test(crate::hir::expr::ExprKind::StringLiteral(
                     "not dimensionless".to_string(),
                 ));
@@ -551,8 +521,6 @@ fn indexed_node_entry_body_is_authoritative_for_hir_dimension_check() {
         if let crate::ir::entry::Decl::Node(entry) = decl {
             entry
                 .definition
-                .formula_mut()
-                .unwrap()
                 .replace_kind_for_test(crate::hir::expr::ExprKind::StringLiteral(
                     "not indexed".to_string(),
                 ));
@@ -1715,14 +1683,7 @@ fn hir_normalizes_omitted_dimension_and_unit_powers() {
 #[test]
 fn hir_preserves_exact_power_metadata() {
     let (tir, _) = module_aware_tir("param x: Length = 4.0 m;\nnode y: Length^(3/2) = @x ^ (3/2);");
-    let expression = &tir
-        .root()
-        .nodes()
-        .next()
-        .unwrap()
-        .definition
-        .formula()
-        .unwrap();
+    let expression = &tir.root().nodes().next().unwrap().definition;
     assert!(matches!(
         expression.kind(),
         crate::hir::expr::ExprKind::BinOp {
@@ -4715,7 +4676,7 @@ fn constructor_calls_place_written_fields_at_their_declared_fields() {
         .body()
         .nodes()
         .find(|entry| entry.name().as_str() == "p")
-        .and_then(|entry| entry.definition.formula())
+        .map(|entry| &entry.definition)
         .unwrap();
     let tree = dag.bodies().executable_value(formula.id()).unwrap();
     let TExprKind::Construct(call) = tree.kind() else {
@@ -4800,7 +4761,7 @@ fn inference_emits_typed_trees_carrying_node_facts() {
             .body()
             .nodes()
             .find(|entry| entry.name().as_str() == name)
-            .and_then(|entry| entry.definition.formula())
+            .map(|entry| &entry.definition)
             .unwrap();
         bodies
             .executable_value(formula.id())
@@ -5010,10 +4971,35 @@ fn recurrence_member_rules_report_the_member() {
     assert_eq!(name, "gain");
     let unfinished = format!(
         "{RECURRENCE_AXIS}\
-         node action: Dimensionless[Step] = todo {{ @state }};\n\
+         node action: Dimensionless[Step] = todo<Dimensionless[Step]> {{ @state }};\n\
          node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);"
     );
+    // A whole-body hole has no recurrence shape (R3).
     let (reason, name, _) = recurrence_rejection(&unfinished);
-    assert_eq!(reason, RecurrenceRejection::Unfinished);
+    assert_eq!(reason, RecurrenceRejection::NotRecurrenceShape);
     assert_eq!(name, "action");
+}
+
+#[test]
+fn unfinished_formulas_are_checked_but_never_executable() {
+    let (draft, src) = module_aware_tir(
+        "node done: Length = 1.0 m;\nnode pending: Length = 2.0 * todo<Length> {} + @done;",
+    );
+    let tir = check_draft(draft, src).unwrap();
+    let nodes = tir.root().body().nodes().collect::<Vec<_>>();
+    let [done, pending] = nodes.as_slice() else {
+        panic!("expected two nodes");
+    };
+    let bodies = tir.root().bodies();
+    assert!(bodies.executable_value(done.definition.id()).is_ok());
+    assert!(matches!(
+        bodies.get(pending.definition.id()),
+        Some(crate::tir::texpr::CheckedBody::Unfinished(_))
+    ));
+    assert!(matches!(
+        bodies.executable_value(pending.definition.id()),
+        Err(crate::tir::texpr::ExecutableBodyError::Unfinished(_))
+    ));
+    assert!(tir.root().is_unfinished(&pending.identity()));
+    assert!(!tir.root().is_unfinished(&done.identity()));
 }

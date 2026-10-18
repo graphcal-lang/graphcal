@@ -188,8 +188,9 @@ pub enum BodyKind<'t> {
 pub enum NodeBody<'t> {
     /// Its formula.
     Formula(Scoped<'t, Expr>),
-    /// An unfinished node (`todo`): it has no formula.
-    Todo,
+    /// An unfinished formula: it contains a `todo<T> { … }` hole, so the
+    /// node is TODO and its formula is never evaluated.
+    Unfinished(Scoped<'t, Expr>),
 }
 
 impl<'t> DeclarationBody<'t> {
@@ -229,12 +230,14 @@ impl<'t> DeclarationBody<'t> {
                     .as_deref()
                     .map(|expr| Scoped::new(scope, expr)),
             },
-            Decl::Node(entry) => BodyKind::Node(match &entry.definition {
-                crate::node_definition::NodeDefinition::Formula(expr) => {
-                    NodeBody::Formula(Scoped::new(scope, &**expr))
-                }
-                crate::node_definition::NodeDefinition::Todo(_) => NodeBody::Todo,
-            }),
+            Decl::Node(entry) => {
+                let formula = Scoped::new(scope, &*entry.definition);
+                BodyKind::Node(if crate::hir::expr::contains_todo_hole(&entry.definition) {
+                    NodeBody::Unfinished(formula)
+                } else {
+                    NodeBody::Formula(formula)
+                })
+            }
             Decl::Assert(entry) => BodyKind::Assert(Scoped::new(scope, entry)),
             Decl::Plot(entry) => BodyKind::Plot(Scoped::new(scope, entry)),
             Decl::Figure(entry) => BodyKind::Figure(Scoped::new(scope, entry)),
@@ -248,9 +251,10 @@ impl<'t> DeclarationBody<'t> {
     pub fn runtime_expression(self) -> Option<Scoped<'t, Expr>> {
         match self.kind() {
             BodyKind::Param { default } => default,
-            BodyKind::Node(NodeBody::Formula(formula)) => Some(formula),
+            BodyKind::Node(NodeBody::Formula(formula) | NodeBody::Unfinished(formula)) => {
+                Some(formula)
+            }
             BodyKind::Const(_)
-            | BodyKind::Node(NodeBody::Todo)
             | BodyKind::Assert(_)
             | BodyKind::Plot(_)
             | BodyKind::Figure(_)

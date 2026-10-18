@@ -12,7 +12,6 @@ enum Bare {}
 impl BodyPhase for Bare {
     type Expr = ();
     type TypeAnnotation = ();
-    type NodeDefinition = ();
     type AssertBody = ();
     type PlotBody = ();
     type CompositionFields = ();
@@ -25,7 +24,6 @@ enum Counted {}
 impl BodyPhase for Counted {
     type Expr = usize;
     type TypeAnnotation = ();
-    type NodeDefinition = usize;
     type AssertBody = usize;
     type PlotBody = ();
     type CompositionFields = ();

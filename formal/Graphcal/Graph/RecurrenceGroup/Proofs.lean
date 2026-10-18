@@ -3,6 +3,7 @@ import Graphcal.Graph.RecurrenceGroup.Proofs.Check
 import Graphcal.Graph.RecurrenceGroup.Proofs.Evaluation
 import Graphcal.Graph.RecurrenceGroup.Proofs.Structure
 import Graphcal.Graph.RecurrenceGroup.Proofs.Relabel
+import Graphcal.Graph.RecurrenceGroup.Proofs.Monotonicity
 
 /-!
 # Recurrence groups: proofs
@@ -25,4 +26,6 @@ Headline results, by file:
   for axes with at least two elements), `Group.diagnose_dependencyCycle`.
 * `Proofs/Relabel.lean`: `Group.Relabeling.accepted_iff` (acceptance does not
   depend on declaration order).
+* `Proofs/Monotonicity.lean`: `Group.Accepted.of_reads_subset` (removing reads,
+  as filling a `todo` hole within its interface does, keeps a group accepted).
 -/

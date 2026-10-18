@@ -5,7 +5,7 @@ use crate::syntax::ast::common::{
 };
 use crate::syntax::ast::multi_decl::MultiDecl;
 use crate::syntax::ast::value::{
-    DimExpr, Expr, GenericArg, IdentPath, NatExpr, ParamBinding, TypeExpr, UnitExpr,
+    DimExpr, Expr, GenericArg, NatExpr, ParamBinding, TypeExpr, UnitExpr,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::dimension::{DimName, UnitName};
@@ -602,22 +602,10 @@ pub struct ValueDecl<P: Phase = Raw> {
     pub value_range: Span,
 }
 
-/// Runtime node declaration, with either a formula or an unfinished body.
-#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
-#[phase_lift(from = Raw, to = Desugared)]
-#[fe(phase = Raw)]
-pub struct NodeDecl<P: Phase = Raw> {
-    pub visibility: Visibility,
-    pub name: Spanned<DeclName>,
-    pub type_ann: TypeExpr<P>,
-    #[phase_lift(map = map_formula)]
-    pub definition: crate::node_definition::NodeDefinition<Expr<P>, IdentPath>,
-    /// The source range of the definition after `=`, from its first token
-    /// to its last (enclosing parentheses included). Every slot of a
-    /// multi-declaration shares the range of its table.
-    #[fe(skip)]
-    pub definition_range: Span,
-}
+/// Runtime node declaration: `node name: Type = expr;`
+///
+/// An unfinished formula is an expression containing a `todo<T> { … }` hole.
+pub type NodeDecl<P = Raw> = ValueDecl<P>;
 
 /// Const node declaration: `const node name: Type = expr;`
 pub type ConstNodeDecl<P = Raw> = ValueDecl<P>;

@@ -122,7 +122,7 @@ const value = (values, name) => values.find(item => item.name === name).outcome.
 {
   const run = runtime(`
     param active: Bool = true;
-    dag model { node unfinished: Length = todo {}; pub node known: Length = 2.0 m; }
+    dag model { node unfinished: Length = todo<Length> {}; pub node known: Length = 2.0 m; }
     node known: Length = if @active { @model()::known } else { 1.0 m };
   `);
   for (const active of [true, false, true, false]) {

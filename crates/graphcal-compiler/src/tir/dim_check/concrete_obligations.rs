@@ -98,7 +98,7 @@ fn constructor_applications(body: &CheckedBody) -> Vec<(CheckedType<Symbolic>, S
     }
     match body {
         CheckedBody::Executable(body) => collect(body),
-        CheckedBody::Deferred(body) => collect(body),
+        CheckedBody::Deferred(body) | CheckedBody::Unfinished(body) => collect(body),
     }
 }
 

@@ -36,6 +36,12 @@ pub enum ExprLowerError {
     /// A categorized Static DAG-call binding did not contain a type-level value.
     #[error("invalid Static binding value for `{name}`")]
     InvalidStaticBindingValue { name: NameAtom, span: Span },
+    /// A `todo<T> { … }` hole outside a runtime node body.
+    #[error("`todo` holes are allowed only in `node` formulas")]
+    TodoHoleNotAllowed { span: Span },
+    /// The type of a `todo<T> { … }` hole carries domain constraints.
+    #[error("domain constraints are not supported on the type of a `todo` hole")]
+    TodoHoleDomainConstraint { span: Span },
     /// A local reference had no lexical binding in scope.
     #[error("unknown local variable `{name}`")]
     UnknownLocalRef { name: LocalName, span: Span },

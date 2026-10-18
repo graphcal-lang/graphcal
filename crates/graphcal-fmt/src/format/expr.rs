@@ -5,7 +5,8 @@
 use graphcal_compiler::syntax::ast::{
     BinOp, DomainBound, ElementTypeExpr, Expr, ExprKind, FieldInit, ForBinding, GenericArg,
     IndexArg, MapEntry, MapEntryKey, MatchArm, MatchPattern, ModulePath, ParamBinding,
-    PatternBinding, PatternBindings, TableIndexSpec, TypeExpr, TypeExprKind, UnaryOp,
+    PatternBinding, PatternBindings, TableIndexSpec, TodoDependency, TodoHole, TypeExpr,
+    TypeExprKind, UnaryOp,
 };
 use graphcal_compiler::syntax::local_name::LocalName;
 use graphcal_compiler::syntax::span::Spanned;
@@ -141,7 +142,8 @@ const fn binding_strength(expr: &Expr) -> BindingStrength {
         | ExprKind::Scan { .. }
         | ExprKind::Unfold { .. }
         | ExprKind::KeyForm { .. }
-        | ExprKind::Match { .. } => BindingStrength::Atom,
+        | ExprKind::Match { .. }
+        | ExprKind::TodoHole(_) => BindingStrength::Atom,
     }
 }
 
@@ -206,6 +208,7 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         ExprKind::Bool(b) => RcDoc::text(if *b { "true" } else { "false" }),
         ExprKind::StringLiteral(s) => RcDoc::text(format!("\"{s}\"")),
         ExprKind::GraphRef(target) => RcDoc::text(format!("@{target}")),
+        ExprKind::TodoHole(hole) => format_todo_hole(fmt, hole),
         ExprKind::InlineDagRef { path, args, output } => {
             format_inline_dag_ref(fmt, path, args, output.value.as_str())
         }
@@ -1313,4 +1316,81 @@ fn format_domain_constraints(
     RcDoc::text("(")
         .append(RcDoc::intersperse(docs, RcDoc::text(", ")))
         .append(RcDoc::text(")"))
+}
+
+/// `todo<T> { @a, @b }`, one dependency per line when it does not fit or
+/// carries comments.
+fn format_todo_hole(fmt: &mut Formatter<'_>, hole: &TodoHole) -> RcDoc<'static> {
+    let dependencies = &hole.interface;
+    let opening = RcDoc::text("todo<")
+        .append(format_type_expr_inline(fmt, &hole.ty))
+        .append(RcDoc::text(">"));
+    let end = dependencies.span.offset() + dependencies.span.len();
+    let mut commented = false;
+    let items = dependencies
+        .value
+        .iter()
+        .map(|reference| {
+            let leading = fmt.drain_comments_before(reference.span().offset());
+            let trailing = if fmt.has_comment_before(end) {
+                fmt.drain_trailing_comment(reference.span().offset() + reference.span().len())
+            } else {
+                None
+            };
+            commented |= leading.is_some() || trailing.is_some();
+            prepend_comments(
+                leading,
+                RcDoc::text(format!("{},", todo_dependency_text(reference))),
+            )
+            .append(trailing.unwrap_or_else(RcDoc::nil))
+        })
+        .collect::<Vec<_>>();
+    let dangling = fmt.drain_comments_before(end);
+    commented |= dangling.is_some();
+    let body = RcDoc::intersperse(items, RcDoc::hardline());
+    let body = match dangling {
+        Some(comment) if dependencies.value.is_empty() => comment,
+        Some(comment) => body.append(RcDoc::hardline()).append(comment),
+        None => body,
+    };
+    let multi = opening
+        .clone()
+        .append(RcDoc::text(" {"))
+        .append(RcDoc::hardline().append(body).nest(INDENT))
+        .append(RcDoc::hardline())
+        .append(RcDoc::text("}"));
+    if commented {
+        return multi;
+    }
+    let single = if dependencies.value.is_empty() {
+        opening.append(RcDoc::text(" {}"))
+    } else {
+        opening
+            .append(RcDoc::text(" { "))
+            .append(RcDoc::intersperse(
+                dependencies
+                    .value
+                    .iter()
+                    .map(|reference| RcDoc::text(todo_dependency_text(reference))),
+                RcDoc::text(", "),
+            ))
+            .append(RcDoc::text(" }"))
+    };
+    flat_alt_group(single, multi)
+}
+
+/// One hole interface entry: `@y`, `@y[t, k]`, or a local `s`.
+fn todo_dependency_text(dependency: &TodoDependency) -> String {
+    match dependency {
+        TodoDependency::Read(target) => format!("@{}", target.value),
+        TodoDependency::Element { target, keys, .. } => format!(
+            "@{}[{}]",
+            target.value,
+            keys.iter()
+                .map(|key| key.value.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        TodoDependency::Local(local) => local.value.as_str().to_owned(),
+    }
 }

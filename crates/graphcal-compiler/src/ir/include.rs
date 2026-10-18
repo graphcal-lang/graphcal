@@ -263,10 +263,7 @@ impl UnfrozenIR {
             doc: None,
             identity,
             type_ann: InScope::new(type_ann, type_resolution_owner),
-            definition: InScope::new(
-                crate::node_definition::NodeDefinition::Formula(expr),
-                body_resolution_owner,
-            ),
+            definition: InScope::new(expr, body_resolution_owner),
             span,
             definition_range: span,
         }));

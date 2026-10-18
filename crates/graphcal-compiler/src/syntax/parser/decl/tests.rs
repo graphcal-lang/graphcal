@@ -2319,7 +2319,7 @@ fn definition_ranges_include_enclosing_parentheses() {
         .map(|declaration| match &declaration.kind {
             DeclKind::Param(p) => p.value_range.map(text),
             DeclKind::ConstNode(c) => Some(text(c.value_range)),
-            DeclKind::Node(n) => Some(text(n.definition_range)),
+            DeclKind::Node(n) => Some(text(n.value_range)),
             DeclKind::Assert(a) => Some(text(a.body_range)),
             other => panic!("unexpected declaration {other:?}"),
         })

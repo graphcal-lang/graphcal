@@ -659,7 +659,6 @@ pub enum Typed {}
 impl crate::ir::entry::BodyPhase for Typed {
     type Expr = crate::hir::expr::CheckedExpr;
     type TypeAnnotation = CheckedTypeAnnotation;
-    type NodeDefinition = crate::hir::node_definition::NodeDefinition;
     type AssertBody = crate::hir::expr::CheckedAssertBody;
     type PlotBody = crate::ir::model::LoweredPlotBody;
     type CompositionFields =
@@ -1128,21 +1127,20 @@ impl DagTIR {
     pub fn runtime_expr(&self, key: &ResolvedDeclName) -> Option<&crate::hir::expr::Expr> {
         match self.decls.get(key)? {
             crate::ir::entry::Decl::Param(entry) => entry.default.as_deref(),
-            crate::ir::entry::Decl::Node(entry) => entry.definition.formula().map(|expr| &**expr),
+            crate::ir::entry::Decl::Node(entry) => Some(&*entry.definition),
             _ => None,
         }
     }
 
-    /// Look up an unfinished node's canonical dependency interface.
+    /// Whether `key` is an unfinished node: its formula contains a
+    /// `todo<T> { … }` hole.
     #[must_use]
-    pub fn todo(
-        &self,
-        key: &ResolvedDeclName,
-    ) -> Option<&crate::syntax::span::Spanned<Vec<crate::syntax::span::Spanned<ResolvedDeclName>>>>
-    {
-        match self.decls.get(key)? {
-            crate::ir::entry::Decl::Node(entry) => entry.definition.todo(),
-            _ => None,
+    pub fn is_unfinished(&self, key: &ResolvedDeclName) -> bool {
+        match self.decls.get(key) {
+            Some(crate::ir::entry::Decl::Node(entry)) => {
+                crate::hir::expr::contains_todo_hole(&entry.definition)
+            }
+            _ => false,
         }
     }
 
@@ -1221,11 +1219,7 @@ impl DagTIR {
                     .params()
                     .filter_map(|entry| entry.default.as_deref()),
             )
-            .chain(
-                self.decls
-                    .nodes()
-                    .filter_map(|entry| entry.definition.formula().map(|expr| &**expr)),
-            )
+            .chain(self.decls.nodes().map(|entry| &*entry.definition))
             .chain(
                 self.semantic
                     .domain_bounds

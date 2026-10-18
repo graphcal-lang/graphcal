@@ -85,7 +85,6 @@ pub enum Lowered {}
 impl BodyPhase for Lowered {
     type Expr = crate::hir::expr::CheckedExpr;
     type TypeAnnotation = crate::hir::type_annotation::TypeAnnotation;
-    type NodeDefinition = crate::hir::node_definition::NodeDefinition;
     type AssertBody = crate::hir::expr::CheckedAssertBody;
     type PlotBody = LoweredPlotBody;
     type CompositionFields = Vec<LoweredPlotField<crate::plot_props::CompositionProperty>>;

@@ -31,8 +31,6 @@ pub trait BodyPhase {
     type Expr: fmt::Debug + Clone;
     /// A declaration's type annotation, including its domain bounds.
     type TypeAnnotation: fmt::Debug + Clone;
-    /// A node's formula or explicit dependency interface.
-    type NodeDefinition: fmt::Debug + Clone;
     /// An assertion body.
     type AssertBody: fmt::Debug + Clone;
     /// A plot's encodings and properties.
@@ -77,8 +75,6 @@ pub struct PlotSyntax {
 impl BodyPhase for Syntax {
     type Expr = InScope<Expr>;
     type TypeAnnotation = InScope<TypeExpr>;
-    type NodeDefinition =
-        InScope<crate::node_definition::NodeDefinition<Expr, crate::syntax::ast::IdentPath>>;
     type AssertBody = InScope<AssertBody>;
     type PlotBody = InScope<PlotSyntax>;
     type CompositionFields = InScope<Vec<PlotField>>;
@@ -126,7 +122,7 @@ pub struct NodeEntry<P: BodyPhase> {
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
     pub type_ann: P::TypeAnnotation,
-    pub definition: P::NodeDefinition,
+    pub definition: P::Expr,
     pub span: Span,
     /// The source range of the definition after `=`, enclosing parentheses
     /// included.

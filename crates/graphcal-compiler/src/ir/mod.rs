@@ -12,7 +12,6 @@ pub mod lower;
 pub mod model;
 pub mod module_definitions;
 pub mod module_interface;
-mod node_definition;
 pub(crate) mod override_reconciliation;
 pub mod prelude_definitions;
 pub(crate) mod required_bindability;

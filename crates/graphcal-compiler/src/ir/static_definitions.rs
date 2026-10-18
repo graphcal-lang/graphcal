@@ -1408,13 +1408,7 @@ fn validate_structural_finite_indexes(
                     validate_expr_finite_indexes(value, src)?;
                 }
             }
-            DeclKind::Node(d) => {
-                validate_type_expr_finite_indexes(&d.type_ann, src)?;
-                d.definition.formula().map_or(Ok(()), |expression| {
-                    validate_expr_finite_indexes(expression, src)
-                })?;
-            }
-            DeclKind::ConstNode(d) => {
+            DeclKind::Node(d) | DeclKind::ConstNode(d) => {
                 validate_type_expr_finite_indexes(&d.type_ann, src)?;
                 validate_expr_finite_indexes(&d.value, src)?;
             }

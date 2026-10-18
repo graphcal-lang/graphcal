@@ -118,7 +118,7 @@ fn validate_direct_dag_calls(
                     visit(value)?;
                 }
             }
-            DeclKind::Node(node) => node.definition.formula().map_or(Ok(()), &mut visit)?,
+            DeclKind::Node(node) => visit(&node.value)?,
             DeclKind::ConstNode(constant) => visit(&constant.value)?,
             DeclKind::Assert(assertion) => match &assertion.body {
                 graphcal_compiler::desugar::desugared_ast::AssertBody::Expr(expr) => visit(expr)?,

@@ -13,7 +13,7 @@ fn run(source: &str, args: &[&str]) -> Output {
         .unwrap()
 }
 
-const MODEL: &str = "node unfinished: Length = todo {}; node blocked: Length = @unfinished; node known: Length = 1.0 m;";
+const MODEL: &str = "node unfinished: Length = todo<Length> {}; node blocked: Length = @unfinished; node known: Length = 1.0 m;";
 
 #[test]
 fn check_accepts_incomplete_source_but_deny_todo_rejects_it_without_evaluation() {
@@ -24,7 +24,7 @@ fn check_accepts_incomplete_source_but_deny_todo_rejects_it_without_evaluation()
     assert!(!run(&source, &["check", "--deny-todo"]).status.success());
     assert!(
         !run(
-            "dag unused { node x: Length = todo {}; }",
+            "dag unused { node x: Length = todo<Length> {}; }",
             &["check", "--deny-todo"]
         )
         .status
@@ -59,7 +59,7 @@ fn json_distinguishes_incompleteness_without_fabricating_values() {
 
 #[test]
 fn allowing_incomplete_does_not_hide_private_call_failures() {
-    let source = "dag model { node missing: Length = todo {}; node bad: Length = 1.0 m / 0.0; pub node known: Length = 1.0 m; } node known: Length = @model()::known;";
+    let source = "dag model { node missing: Length = todo<Length> {}; node bad: Length = 1.0 m / 0.0; pub node known: Length = 1.0 m; } node known: Length = @model()::known;";
     let output = run(source, &["eval", "--allow-incomplete"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("ERROR"));
@@ -77,9 +77,9 @@ fn allowing_incomplete_never_suppresses_real_failures() {
 /// their internal identities (`input.unfinished`, `input.inner.pending`).
 #[test]
 fn unavailability_reasons_name_declarations_as_the_output_does() {
-    let source = "dag inner { node pending: Length = todo {}; pub node out: Length = @pending; } \
+    let source = "dag inner { node pending: Length = todo<Length> {}; pub node out: Length = @pending; } \
                   include inner() as inst; \
-                  node unfinished: Length = todo {}; \
+                  node unfinished: Length = todo<Length> {}; \
                   node blocked: Length = @unfinished + @inst::out; \
                   node bad: Length = 1.0 m / 0.0; \
                   node failed: Length = @bad + @inst::out;";

@@ -7471,7 +7471,7 @@ fn model_describe_and_serve_report_a_port_the_protocol_cannot_carry() {
         dir.path(),
         "model.gcl",
         "pub base dim Money;\n\
-         node unpriced: Money = todo {};\n\
+         node unpriced: Money = todo<Money> {};\n\
          param budget: Money = @unpriced;\n\
          param load: Length = 1.0 m;\n\
          pub node margin: Length = 10.0 m - @load;\n",

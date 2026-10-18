@@ -27,6 +27,25 @@ pub(super) fn infer_hir_quantity_literal(
     Ok(CheckedType::Quantity(dim))
 }
 
+impl Infer<'_> {
+    /// A hole is self-typed: its annotation is its type. Each interface entry
+    /// is checked as the read it names, although it is never evaluated.
+    pub(super) fn infer_hir_todo_hole(
+        &self,
+        hole: &crate::hir::expr::TodoHole,
+    ) -> Result<CheckedType<Symbolic>, crate::outcome::Outcome<SemanticError>> {
+        for entry in &hole.interface.value {
+            self.infer_hir_type(entry)?;
+        }
+        Ok(crate::tir::typed::resolve_todo_hole_type(
+            &hole.ty,
+            self.env.src,
+            self.env.tir.project_type_store(),
+        )?
+        .to_symbolic())
+    }
+}
+
 impl InferEnv<'_> {
     pub(super) fn infer_resolved_decl_ref_type(
         &self,

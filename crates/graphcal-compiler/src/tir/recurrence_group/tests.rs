@@ -190,14 +190,6 @@ fn members_with_further_axes_are_accepted() {
 
 #[test]
 fn member_rules_are_checked_in_order() {
-    let unfinished = GroupFacts {
-        members: vec![
-            member("action", Definition::Unfinished),
-            member("state", Definition::UnfoldOver(step_axis())),
-        ],
-        reads: vec![read(0, 1, ReadForm::Implicit), read(1, 0, PREVIOUS_KEY)],
-    };
-    assert_eq!(reason(&unfinished), RecurrenceRejection::Unfinished);
     let scalar = GroupFacts {
         members: vec![
             member("state", Definition::UnfoldOver(step_axis())),

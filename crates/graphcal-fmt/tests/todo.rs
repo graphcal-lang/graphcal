@@ -5,10 +5,17 @@ use graphcal_fmt::format_source;
 #[test]
 fn compact_empty_and_qualified_dependency_lists_round_trip() {
     for (source, expected) in [
-        ("node x:Length=todo{};", "node x: Length = todo {};\n"),
         (
-            "node x:Length=todo{@a,@module.child::b,};",
-            "node x: Length = todo { @a, @module.child::b };\n",
+            "node x:Length=todo<Length>{};",
+            "node x: Length = todo<Length> {};\n",
+        ),
+        (
+            "node x:Length=todo<Length>{@a,@module.child::b,};",
+            "node x: Length = todo<Length> { @a, @module.child::b };\n",
+        ),
+        (
+            "node x:Length[Fin(2)]=for t:Fin(2){todo<Length>{@a[t],t,}};",
+            "node x: Length[Fin(2)] = for t: Fin(2) { todo<Length> { @a[t], t } };\n",
         ),
     ] {
         assert_eq!(format_source(source).unwrap(), expected);
@@ -19,10 +26,11 @@ fn compact_empty_and_qualified_dependency_lists_round_trip() {
 #[test]
 fn comments_and_multiline_lists_are_preserved() {
     for source in [
-        "node x: Length = todo { // opening\n// before\n@first, // after\n@second,\n// last\n}; // end\n",
-        "node x: Length = todo {\n// empty\n};\n",
-        "node long_name: Length = todo { @first_long_dependency_name, @second_long_dependency_name, @third_long_dependency_name };\n",
-        "node x: Length = todo // marker\n{ @a };\n",
+        "node x: Length = todo<Length> { // opening\n// before\n@first, // after\n@second,\n// last\n}; // end\n",
+        "node x: Length = todo<Length> {\n// empty\n};\n",
+        "node long_name: Length = todo<Length> { @first_long_dependency_name, @second_long_dependency_name, @third_long_dependency_name };\n",
+        "node x: Length = todo<Length> // marker\n{ @a };\n",
+        "node x: Length = 2.0 * todo<Length[Fin(2)]> { @a }[0];\n",
     ] {
         let formatted = format_source(source).unwrap();
         assert_eq!(formatted, format_source(&formatted).unwrap());

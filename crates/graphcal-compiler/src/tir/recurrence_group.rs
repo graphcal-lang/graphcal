@@ -37,7 +37,6 @@ pub(crate) enum Definition {
     ForOver(GroupAxis),
     UnfoldOver(GroupAxis),
     OtherFormula,
-    Unfinished,
 }
 
 impl Definition {
@@ -45,14 +44,14 @@ impl Definition {
         match self {
             Self::ForOver(_) => Some(RecurrenceShape::For),
             Self::UnfoldOver(_) => Some(RecurrenceShape::Unfold),
-            Self::OtherFormula | Self::Unfinished => None,
+            Self::OtherFormula => None,
         }
     }
 
     const fn axis(&self) -> Option<&GroupAxis> {
         match self {
             Self::ForOver(axis) | Self::UnfoldOver(axis) => Some(axis),
-            Self::OtherFormula | Self::Unfinished => None,
+            Self::OtherFormula => None,
         }
     }
 }
@@ -171,7 +170,9 @@ pub(crate) fn check_group(
     Ok(plan(facts, &accesses, &order))
 }
 
-/// R1–R4: one owner, finished, a top-level `for` or `unfold`, one axis.
+/// R1, R3, R4: one owner, a top-level `for` or `unfold`, one axis. (R2, which
+/// rejected unfinished members, is retired: a hole's interface lists its
+/// keyed reads, so an unfinished member is classified like a finished one.)
 fn check_members(facts: &GroupFacts, callable: &DagId) -> Result<(), Violation> {
     let members = &facts.members;
     let Some(first) = members.first() else {
@@ -204,12 +205,6 @@ fn check_members(facts: &GroupFacts, callable: &DagId) -> Result<(), Violation> 
         span: members[member].span,
         reason,
     };
-    if let Some(member) = members
-        .iter()
-        .position(|member| member.definition == Definition::Unfinished)
-    {
-        return Err(at_member(member, RecurrenceRejection::Unfinished));
-    }
     if let Some(member) = members
         .iter()
         .position(|member| member.definition.shape().is_none())
@@ -483,12 +478,9 @@ fn group_facts(
     let mut reads = Vec::new();
     for (source, candidate) in candidates.iter().enumerate() {
         let dag = candidate.dag;
-        let (definition, binders) = if dag.todo(candidate.identity).is_some() {
-            (Definition::Unfinished, None)
-        } else {
-            dag.runtime_expr(candidate.identity)
-                .map_or((Definition::OtherFormula, None), definition_of)
-        };
+        let (definition, binders) = dag
+            .runtime_expr(candidate.identity)
+            .map_or((Definition::OtherFormula, None), definition_of);
         let first_read = reads.len();
         if let Some(expr) = dag.runtime_expr(candidate.identity) {
             let mut collector = ReadCollector {

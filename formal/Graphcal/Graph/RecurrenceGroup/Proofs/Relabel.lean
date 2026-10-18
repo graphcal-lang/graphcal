@@ -45,12 +45,10 @@ theorem Relabeling.sameReads (ρ : Relabeling g h) {a b : Fin size} (hab : h.Sam
 theorem Relabeling.accepted (ρ : Relabeling g h) (hg : g.Accepted) : h.Accepted := by
   have hmember : ∀ y, h.member y = g.member (ρ.inv y) := fun y => by
     rw [← ρ.member, ρ.f_inv]
-  obtain ⟨⟨howned, hfinished, hshaped, haxis⟩, hself, hkeyed, hcycle⟩ := hg
-  refine ⟨⟨fun x y => ?_, fun y => ?_, fun y => ?_, fun x y => ?_⟩, ?_, ?_, ?_⟩
+  obtain ⟨⟨howned, hshaped, haxis⟩, hself, hkeyed, hcycle⟩ := hg
+  refine ⟨⟨fun x y => ?_, fun y => ?_, fun x y => ?_⟩, ?_, ?_, ?_⟩
   · rw [hmember, hmember]
     exact howned _ _
-  · rw [hmember]
-    exact hfinished _
   · simpa [Group.shape?, hmember] using hshaped (ρ.inv y)
   · rw [hmember, hmember]
     exact haxis _ _

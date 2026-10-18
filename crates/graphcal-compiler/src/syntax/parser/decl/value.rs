@@ -1,11 +1,10 @@
-use crate::node_definition::NodeDefinition;
 use crate::syntax::ast::{
-    AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, IdentPath, NodeDecl, ParamDecl,
-    SlotKind, Visibility,
+    AssertBody, AssertDecl, ConstNodeDecl, DeclKind, Declaration, NodeDecl, ParamDecl, SlotKind,
+    Visibility,
 };
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::span::{Span, Spanned};
-use crate::syntax::token::{ContextualKeyword, Token};
+use crate::syntax::token::Token;
 
 use super::super::{ParseError, Parser};
 use super::multi::SlotHeader;
@@ -48,16 +47,15 @@ impl Parser<'_> {
             }
             SlotKind::Node(visibility) => {
                 self.expect(Token::Eq)?;
-                let (definition, definition_range) =
-                    self.parse_ranged(Self::parse_node_definition)?;
+                let (value, value_range) = self.parse_ranged(Self::parse_expr)?;
                 let (_, semi_span) = self.expect(Token::Semicolon)?;
                 (
                     DeclKind::Node(NodeDecl {
                         visibility,
                         name,
                         type_ann,
-                        definition,
-                        definition_range,
+                        value,
+                        value_range,
                     }),
                     semi_span,
                 )
@@ -109,31 +107,6 @@ impl Parser<'_> {
             (Some(start), Some(end)) if end.offset() >= start.offset() => start.merge(end),
             _ => fallback,
         }
-    }
-
-    /// Only `todo {` at the node-body boundary selects the marker. `todo()`
-    /// and identifiers named `todo` continue through ordinary expression parsing.
-    fn parse_node_definition(
-        &mut self,
-    ) -> Result<NodeDefinition<crate::syntax::ast::Expr, IdentPath>, ParseError> {
-        if self.lexer.peek() != Some(&Token::ContextualKeyword(ContextualKeyword::Todo))
-            || self.lexer.peek_second() != Some(&Token::LBrace)
-        {
-            return self.parse_expr().map(NodeDefinition::Formula);
-        }
-        let (_, start) = self.advance()?;
-        self.expect(Token::LBrace)?;
-        let dependencies = self.parse_comma_separated(Token::RBrace, |parser| {
-            let (_, at) = parser.expect(Token::At)?;
-            let path = parser.parse_ident_path()?;
-            let span = at.merge(path.span());
-            Ok(Spanned::new(path, span))
-        })?;
-        let (_, end) = self.expect(Token::RBrace)?;
-        Ok(NodeDefinition::Todo(Spanned::new(
-            dependencies,
-            start.merge(end),
-        )))
     }
 
     // --- assert declaration ---

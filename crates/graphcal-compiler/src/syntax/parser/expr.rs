@@ -486,6 +486,10 @@ impl Parser<'_> {
                 let (_, span) = self.advance()?;
                 self.parse_unfold(span)
             }
+            Some(Token::ContextualKeyword(ContextualKeyword::Todo)) if self.is_todo_hole() => {
+                let (_, span) = self.advance()?;
+                self.parse_todo_hole(span)
+            }
             Some(Token::ContextualKeyword(ContextualKeyword::Key))
                 if self.lexer.peek_second() == Some(&Token::LParen) =>
             {
@@ -866,8 +870,28 @@ impl Parser<'_> {
         let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
             return false;
         };
+        self.angle_brackets_at_followed_by(lt_span.offset() + lt_span.len(), expected)
+    }
+
+    /// After peeking `todo`, look ahead for `< … > {`: only that shape is a
+    /// typed hole, so `todo` stays an ordinary identifier elsewhere (`todo < x`).
+    fn is_todo_hole(&mut self) -> bool {
+        if self.lexer.peek_second() != Some(&Token::Lt) {
+            return false;
+        }
+        let Some((_, todo_span)) = self.lexer.peek_with_span() else {
+            return false;
+        };
         let bytes = self.source.as_bytes();
-        let mut pos = lt_span.offset() + lt_span.len(); // byte after `<`
+        let pos = skip_ws_and_line_comments(bytes, todo_span.offset() + todo_span.len());
+        bytes.get(pos) == Some(&b'<') && self.angle_brackets_at_followed_by(pos + 1, b'{')
+    }
+
+    /// Scan from `pos`, the byte after an opening `<`, to its matching `>`
+    /// and report whether the next significant byte is `expected`. Pure byte
+    /// scan; the lexer is not advanced.
+    fn angle_brackets_at_followed_by(&self, mut pos: usize, expected: u8) -> bool {
+        let bytes = self.source.as_bytes();
         let mut depth: usize = 1;
         while pos < bytes.len() {
             match bytes[pos] {
@@ -990,9 +1014,69 @@ mod tests {
         let full = format!("node x: Dimensionless = {input};");
         let file = Parser::new(&full).parse_file().unwrap();
         match file.declarations.into_iter().next().unwrap().kind {
-            DeclKind::Node(n) => n.definition.formula().unwrap().clone(),
+            DeclKind::Node(n) => n.value,
             _ => panic!("expected node"),
         }
+    }
+
+    #[test]
+    fn todo_hole_is_an_atom_with_its_type_and_interface() {
+        let expr = parse_node_expr("2.0 * todo<Length[Fin(2)]> { @a, @m.c::b, }");
+        let ExprKind::BinOp { rhs, .. } = &expr.kind else {
+            panic!("expected a binary operation, got {expr:?}");
+        };
+        let ExprKind::TodoHole(hole) = &rhs.kind else {
+            panic!("expected a hole, got {rhs:?}");
+        };
+        assert!(hole.ty.indexes.is_some());
+        assert_eq!(hole.interface.value.len(), 2);
+        assert!(matches!(
+            parse_node_expr("todo<Length> {}").kind,
+            ExprKind::TodoHole(ref hole) if hole.interface.value.is_empty()
+        ));
+    }
+
+    #[test]
+    fn todo_interface_entries_are_reads_element_reads_or_locals() {
+        use crate::syntax::ast::TodoDependency;
+        let expr = parse_node_expr("todo<Length> { @a, @b[t, k], s }");
+        let ExprKind::TodoHole(hole) = &expr.kind else {
+            panic!("expected a hole, got {expr:?}");
+        };
+        let [read, element, local] = hole.interface.value.as_slice() else {
+            panic!("expected three entries");
+        };
+        assert!(matches!(read, TodoDependency::Read(_)));
+        assert!(matches!(element, TodoDependency::Element { keys, .. } if keys.len() == 2));
+        assert!(matches!(local, TodoDependency::Local(_)));
+        for source in [
+            "node x: Length = todo<Length> { @b[] };",
+            "node x: Length = todo<Length> { @b[0] };",
+            "node x: Length = todo<Length> { @b[t + 1] };",
+            "node x: Length = todo<Length> { @b.field };",
+        ] {
+            assert!(Parser::new(source).parse_file().is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn todo_is_an_identifier_unless_angle_brackets_and_braces_follow() {
+        assert!(matches!(
+            parse_node_expr("todo < x").kind,
+            ExprKind::BinOp { op: BinOp::Lt, .. }
+        ));
+        assert!(matches!(
+            parse_node_expr("if todo < x { 1.0 } else { 2.0 }").kind,
+            ExprKind::If { .. }
+        ));
+        assert!(matches!(
+            parse_node_expr("todo(1.0)").kind,
+            ExprKind::FnCall { .. }
+        ));
+        assert!(matches!(
+            parse_node_expr("todo<Length>(1.0)").kind,
+            ExprKind::FnCall { .. }
+        ));
     }
 
     #[test]
@@ -1181,7 +1265,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Convert { expr, target } => {
                     assert!(
                         matches!(&expr.kind, ExprKind::GraphRef(id) if id.to_scoped_name().leaf().as_str() == "speed")
@@ -1203,7 +1287,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Convert { target, .. } => {
                     assert_eq!(target.terms.len(), 1);
                     let unit_ref = &target.terms[0].name.value;
@@ -1227,7 +1311,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::QuantityLiteral { unit, .. } => {
                     assert_eq!(unit.terms[0].name.value.to_string(), "u::mile");
                 }
@@ -1245,7 +1329,7 @@ mod tests {
         let DeclKind::Node(node) = &file.declarations[0].kind else {
             panic!("expected node");
         };
-        let ExprKind::Convert { target, .. } = &node.definition.formula().unwrap().kind else {
+        let ExprKind::Convert { target, .. } = &node.value.kind else {
             panic!("expected conversion");
         };
         assert_eq!(target.terms[0].name.value.to_string(), "app.units::mile");
@@ -1257,7 +1341,7 @@ mod tests {
             .parse_file()
             .unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Convert { expr, target } => {
                     assert!(matches!(expr.kind, ExprKind::BinOp { op: BinOp::Add, .. }));
                     assert_eq!(target.terms[0].name.value.to_string(), "km");
@@ -1712,7 +1796,7 @@ mod tests {
         let source = "node x: Dimensionless = @transfer.dv1;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::FieldAccess { expr, field } => {
                     assert!(
                         matches!(&expr.kind, ExprKind::GraphRef(ident) if ident.to_scoped_name().leaf().as_str() == "transfer")
@@ -1730,7 +1814,7 @@ mod tests {
         let source = "node x: Dimensionless = @mission.transfer.dv1;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::FieldAccess { expr, field } => {
                     assert_eq!(field.value.as_str(), "dv1");
                     match &expr.kind {
@@ -1766,7 +1850,7 @@ mod tests {
         };
         // The expression should be `FieldAccess(GraphRef(stage), delta_v)`,
         // not a qualified-graph-ref construct.
-        match &node.definition.formula().unwrap().kind {
+        match &node.value.kind {
             ExprKind::FieldAccess { expr: inner, field } => {
                 assert!(
                     matches!(&inner.kind, ExprKind::GraphRef(id) if id.to_scoped_name().leaf().as_str() == "stage")
@@ -1786,7 +1870,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.definition.formula().unwrap().kind {
+        match &node.value.kind {
             ExprKind::InlineDagRef { path, args, output } => {
                 assert_eq!(path.segments.len(), 1);
                 assert_eq!(path.segments[0].name.as_str(), "clamp");
@@ -1810,7 +1894,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.definition.formula().unwrap().kind {
+        match &node.value.kind {
             ExprKind::InlineDagRef { path, args, output } => {
                 assert_eq!(path.segments.len(), 1);
                 assert_eq!(path.segments[0].name.as_str(), "scale");
@@ -1845,7 +1929,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.definition.formula().unwrap().kind {
+        match &node.value.kind {
             ExprKind::InlineDagRef { path, args, output } => {
                 assert_eq!(path.segments.len(), 2);
                 assert_eq!(path.segments[0].name.as_str(), "geom");
@@ -1872,7 +1956,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.definition.formula().unwrap().kind {
+        match &node.value.kind {
             ExprKind::FieldAccess { expr, field } => {
                 assert_eq!(field.value.as_str(), "altitude");
                 match &expr.kind {
@@ -1901,7 +1985,7 @@ mod tests {
         let ExprKind::FieldAccess {
             expr: outer_inner,
             field: c,
-        } = &node.definition.formula().unwrap().kind
+        } = &node.value.kind
         else {
             panic!("expected outer FieldAccess");
         };
@@ -1958,10 +2042,7 @@ mod tests {
                 _ => None,
             })
             .expect("doubled_result node");
-        assert!(matches!(
-            &node.definition.formula().unwrap().kind,
-            ExprKind::InlineDagRef { .. }
-        ));
+        assert!(matches!(&node.value.kind, ExprKind::InlineDagRef { .. }));
     }
 
     #[test]
@@ -1973,7 +2054,7 @@ mod tests {
         let DeclKind::Node(node) = decl else {
             panic!("expected Node");
         };
-        match &node.definition.formula().unwrap().kind {
+        match &node.value.kind {
             ExprKind::UnresolvedRef(crate::syntax::ast::UnresolvedRef::Path(path)) => {
                 assert_eq!(
                     path.owner()

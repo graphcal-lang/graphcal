@@ -6,7 +6,6 @@
 //! they came from, so a cell can be edited by replacing exactly that span.
 
 use graphcal_compiler::desugar::desugared_ast::{DeclKind, Declaration, Expr, ExprKind};
-use graphcal_compiler::node_definition::NodeDefinition;
 use graphcal_compiler::syntax::ast::MapEntryKey;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
@@ -39,10 +38,7 @@ fn defining_expr<'a>(kind: &'a DeclKind, name: &DeclName) -> Option<&'a Expr> {
     match kind {
         DeclKind::Param(param) if param.name.value == *name => param.value.as_ref(),
         DeclKind::ConstNode(constant) if constant.name.value == *name => Some(&constant.value),
-        DeclKind::Node(node) if node.name.value == *name => match &node.definition {
-            NodeDefinition::Formula(formula) => Some(formula),
-            NodeDefinition::Todo(_) => None,
-        },
+        DeclKind::Node(node) if node.name.value == *name => Some(&node.value),
         _ => None,
     }
 }

@@ -81,21 +81,21 @@ Nodes are computed values. Their expressions can reference parameters, other nod
 
 #### Unfinished nodes
 
-To design a dependency graph before writing its formulas, give an entire node a `todo` definition:
+To design a dependency graph before writing its formulas, write a `todo<T> { … }` hole where a formula is missing:
 
 ```
 param isp: Time = 320.0 s;
 const node g0: Acceleration = 9.80665 m/s^2;
-node v_exhaust: Velocity = todo { @isp, @g0 };
+node v_exhaust: Velocity = todo<Velocity> { @isp, @g0 };
 node mass_ratio: Dimensionless = 3.0;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
-The type is mandatory. The braces list **all possible direct dependencies** while the node is unfinished; transitive dependencies need not be listed. An explicitly empty interface is `todo {}`. References have the usual name, visibility, and cycle checks. Constant references are permitted without making constants runtime DAG nodes.
+A hole has the written type `T` and can replace a whole formula or any part of one, such as `@mass * todo<Acceleration> { @g0 }`; the rest of the formula is still type-checked. Holes are allowed only in `node` formulas, and a node whose formula contains a hole is unfinished. The braces list **all possible direct dependencies** of the missing part; transitive dependencies need not be listed. An entry is a reference `@y`, an element `@y[t]` keyed by local variables in scope, or a local variable such as `s`, which documents intent without being a graph dependency. Element entries let an unfinished recurrence state which step it reads. An explicitly empty interface is `todo<T> {}`. References have the usual name, visibility, and cycle checks. Constant references are permitted without making constants runtime DAG nodes.
 
-Here, `mass_ratio` evaluates, `v_exhaust` is **TODO**, and `delta_v` is **BLOCKED**. Blocking follows the static dependency graph, including references in unselected branches. These outcomes are not values, `null`, or evaluation errors. `todo` is a whole-node definition, not a function or an expression hole.
+Here, `mass_ratio` evaluates, `v_exhaust` is **TODO**, and `delta_v` is **BLOCKED**. An unfinished node is TODO even if evaluation would not reach its hole, and blocking follows the static dependency graph, including references in unselected branches. These outcomes are not values, `null`, or evaluation errors.
 
-Replace `todo { … }` with a formula to finish the node. The formula then determines its dependencies; no historical contract remains. `check` accepts otherwise-valid unfinished models and summarizes them (`--deny-todo` rejects them). `eval` prints partial results but exits unsuccessfully unless `--allow-incomplete` is given. That flag never suppresses genuine evaluation or assertion failures.
+Replace every hole with an expression to finish the node. The formula then determines its dependencies; no historical contract remains. `check` accepts otherwise-valid unfinished models and summarizes them (`--deny-todo` rejects them). `eval` prints partial results but exits unsuccessfully unless `--allow-incomplete` is given. That flag never suppresses genuine evaluation or assertion failures.
 
 ### Constants
 

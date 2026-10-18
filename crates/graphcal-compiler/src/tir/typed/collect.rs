@@ -68,12 +68,7 @@ fn add_dynamic_unit_reads(
         .chain(dag.nodes().map(|entry| {
             (
                 entry.identity(),
-                entry
-                    .definition
-                    .formula()
-                    .map_or_else(Default::default, |expression| {
-                        collect_unit_names(&dag.frame, expression)
-                    }),
+                collect_unit_names(&dag.frame, &entry.definition),
             )
         }))
         .collect::<Vec<_>>();
@@ -201,22 +196,11 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in decls.nodes() {
         let key = entry.identity();
-        record_call_reads(
-            &mut resolved,
-            &key,
-            entry.definition.formula().map(std::ops::Deref::deref),
+        record_call_reads(&mut resolved, &key, std::iter::once(&*entry.definition));
+        let dependencies = resolve_all(
+            frame,
+            &crate::hir::expr::collect_expr_dependencies(&entry.definition).graph_refs,
         );
-        let dependencies = match &entry.definition {
-            crate::node_definition::NodeDefinition::Formula(expression) => resolve_all(
-                frame,
-                &crate::hir::expr::collect_expr_dependencies(expression).graph_refs,
-            ),
-            crate::node_definition::NodeDefinition::Todo(dependencies) => dependencies
-                .value
-                .iter()
-                .map(|reference| reference.value.clone())
-                .collect(),
-        };
         resolved.runtime_deps.insert(key, dependencies);
     }
 

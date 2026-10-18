@@ -7,23 +7,8 @@ role = "interpreter"
 
 [[module]]
 package = "compiler"
-path = ["node_definition"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["node_unavailable"]
 role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["hir", "node_definition"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["ir", "node_definition"]
-role = "checking"
 
 [[module]]
 package = "compiler"

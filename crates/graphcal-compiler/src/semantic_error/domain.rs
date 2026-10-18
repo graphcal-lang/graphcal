@@ -310,6 +310,8 @@ pub enum DomainError {
     /// An Int bound on a quantity domain that `f64` cannot represent exactly.
     #[error("domain bound integer {value} is too large for exact quantity comparison")]
     InexactIntDomainBound { value: i64 },
+    #[error("domain constraints are not supported on the type of a `todo` hole")]
+    TodoHoleDomainConstraint,
 }
 
 impl DiagnosticKind for DomainError {
@@ -323,6 +325,7 @@ impl DiagnosticKind for DomainError {
             Self::GenericTypeArgDomainConstraint => "graphcal::C006",
             Self::DatetimeDomainBoundTypeMismatch { .. } => "graphcal::C007",
             Self::InexactIntDomainBound { .. } => "graphcal::C008",
+            Self::TodoHoleDomainConstraint => "graphcal::C009",
         }
     }
 
@@ -337,7 +340,9 @@ impl DiagnosticKind for DomainError {
             Self::IntDomainBoundTypeMismatch { .. } => {
                 Some("Int bound must have type Int".to_owned())
             }
-            Self::GenericTypeArgDomainConstraint => Some("constraint not allowed here".to_owned()),
+            Self::GenericTypeArgDomainConstraint | Self::TodoHoleDomainConstraint => {
+                Some("constraint not allowed here".to_owned())
+            }
             Self::DatetimeDomainBoundTypeMismatch { .. } => {
                 Some("datetime bound has the wrong time scale or value type".to_owned())
             }
@@ -354,6 +359,7 @@ impl DiagnosticKind for DomainError {
             Self::IntDomainBoundTypeMismatch { .. } => Some("Int domain bounds must be Int so their full range is preserved exactly".to_owned()),
             Self::GenericTypeArgDomainConstraint => Some("put the constraint on the field in the struct definition, not on the generic type argument".to_owned()),
             Self::DatetimeDomainBoundTypeMismatch { .. } => Some("datetime bounds must have exactly the constrained Datetime<S> type; use an explicit time-scale conversion".to_owned()),
+            Self::TodoHoleDomainConstraint => Some("put the constraint on the declaration's type instead".to_owned()),
             Self::InexactIntDomainBound { .. } => None,
         }
     }
@@ -367,7 +373,8 @@ impl DiagnosticKind for DomainError {
             | Self::IntDomainBoundTypeMismatch { .. }
             | Self::GenericTypeArgDomainConstraint
             | Self::DatetimeDomainBoundTypeMismatch { .. }
-            | Self::InexactIntDomainBound { .. } => Vec::new(),
+            | Self::InexactIntDomainBound { .. }
+            | Self::TodoHoleDomainConstraint => Vec::new(),
         }
     }
 }

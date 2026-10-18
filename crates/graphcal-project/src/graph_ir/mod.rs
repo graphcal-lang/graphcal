@@ -618,7 +618,7 @@ fn project_dag_nodes(
                 .value_decl_type(&id)
                 .map(|ty| ty.resolved().format(tir.registry()));
             GraphNode {
-                is_unfinished: dag.todo(&id).is_some(),
+                is_unfinished: dag.is_unfinished(&id),
                 id: GraphNodeId::Declaration(id),
                 kind,
                 is_public_output,
@@ -669,7 +669,7 @@ fn project_calls(
                     && dag
                         .projectable_outputs()
                         .contains(&read.output.to_unowned_def_name()),
-                is_unfinished: dag.todo(&read.output).is_some(),
+                is_unfinished: dag.is_unfinished(&read.output),
                 type_label: dag
                     .value_decl_type(&read.output)
                     .map(|ty| ty.resolved().format(tir.registry())),
