@@ -236,11 +236,7 @@ fn build_project_type_store<Mode>(
                 project_types
                     .insert_module(dag.definitions())
                     .map_err(|error| {
-                        SemanticError::internal_error(
-                            format!("cannot build project type store: {error}"),
-                            *source,
-                            DiagnosticAnchor::WholeFile,
-                        )
+                        error.into_semantic_error(*source, DiagnosticAnchor::WholeFile)
                     })
             })?;
     }

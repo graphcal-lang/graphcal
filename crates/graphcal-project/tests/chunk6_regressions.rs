@@ -15,25 +15,7 @@ use graphcal_compiler::semantic_error::rendered::RenderedSemanticError;
 use graphcal_io::RealFileSystem;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::load_project;
-use graphcal_project::prepare::{
-    compile_and_eval, compile_and_eval_named, compile_and_eval_project,
-};
-
-#[test]
-fn recursive_algebraic_values_evaluate_after_checking() {
-    let result = compile_and_eval(
-        r"
-type List { Nil, Cons(head: Int, tail: List) }
-node empty: List = Nil;
-node one: List = Cons(head: 1, tail: @empty);
-",
-    );
-
-    assert!(
-        result.is_ok(),
-        "recursive algebraic values should evaluate: {result:?}"
-    );
-}
+use graphcal_project::prepare::{compile_and_eval_named, compile_and_eval_project};
 
 #[test]
 fn nested_inline_module_paths_preserve_every_segment() {

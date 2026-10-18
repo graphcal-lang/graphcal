@@ -7334,8 +7334,6 @@ const BATCH_MODEL: &str = "pub index Mode = { A, B };\n\
      param load: Length(min: 0.0 m, max: 10.0 m);\n\
      param mode: Key<Mode>;\n\
      param factor: Dimensionless = 2.0;\n\
-     pub type Chain { End, Link(next: Chain) }\n\
-     param chain: Chain = End;\n\
      pub node failure: Bool = @load * @factor > 8.0 m && @mode == Mode#B;\n\
      pub node margin: Length = 10.0 m - @load * @factor;\n";
 
@@ -7374,10 +7372,6 @@ fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
     assert_eq!(load["name"], "load");
     assert_eq!(load["wire"]["unit"], "m");
     assert_eq!(load["domain"]["max"], 10.0);
-    assert_eq!(
-        json["interface"]["parameters"][3]["wire"]["kind"],
-        "unsupported"
-    );
 
     let document = describe_batch_model(&model);
     assert_eq!(document.interface().outputs().len(), 2);
@@ -7387,7 +7381,7 @@ fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
 fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
-    let cases: [(&[&str], &str); 6] = [
+    let cases: [(&[&str], &str); 5] = [
         (
             &[
                 "--input",
@@ -7432,20 +7426,6 @@ fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
                 "load",
                 "--input",
                 "mode",
-                "--input",
-                "chain",
-                "--output",
-                "failure",
-                "--skip-fingerprint-check",
-            ],
-            "cannot be varied",
-        ),
-        (
-            &[
-                "--input",
-                "load",
-                "--input",
-                "mode",
                 "--output",
                 "nope",
                 "--skip-fingerprint-check",
@@ -7481,6 +7461,50 @@ fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(expected), "{arguments:?}: {stderr}");
     }
+}
+
+#[test]
+fn model_describe_and_serve_report_a_port_the_protocol_cannot_carry() {
+    // A dimension without a canonical unit has no wire representation.
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "model.gcl",
+        "pub base dim Money;\n\
+         node unpriced: Money = todo {};\n\
+         param budget: Money = @unpriced;\n\
+         param load: Length = 1.0 m;\n\
+         pub node margin: Length = 10.0 m - @load;\n",
+    );
+    let output = graphcal_bin()
+        .args(["model", "describe"])
+        .arg(&model)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(output.status.success());
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(json["interface"]["parameters"][0]["name"], "budget");
+    assert_eq!(
+        json["interface"]["parameters"][0]["wire"]["kind"],
+        "unsupported"
+    );
+
+    let output = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args([
+            "--input",
+            "budget",
+            "--output",
+            "margin",
+            "--skip-fingerprint-check",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("cannot be varied"), "{stderr}");
 }
 
 #[test]

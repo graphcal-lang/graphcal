@@ -1292,6 +1292,28 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn recursive_type_relates_every_reference_of_its_cycle() {
+        let source = "pub type Expr {\n    Lit(value: Int),\n    Add(lhs: Term),\n}\npub type Term {\n    Wrap(expr: Expr),\n}";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let diagnostic = &diagnostics[0];
+        assert!(matches!(
+            &diagnostic.code,
+            Some(NumberOrString::String(code)) if code == "graphcal::S034"
+        ));
+        assert_eq!(diagnostic.range.start.line, 0);
+        let related = diagnostic
+            .related_information
+            .as_ref()
+            .expect("each reference of the cycle should be related information");
+        let lines = related
+            .iter()
+            .map(|related| related.location.range.start.line)
+            .collect::<Vec<_>>();
+        assert_eq!(lines, [2, 5]);
+    }
+
+    #[test]
     fn duplicate_extern_param_has_original_as_related_information() {
         let source = concat!(
             "import plugin \"graphcal:demo\" as demo {\n",

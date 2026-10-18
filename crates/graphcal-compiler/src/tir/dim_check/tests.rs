@@ -52,8 +52,7 @@ fn check(source: &str) -> Result<HashMap<ScopedName, CheckedType>, SemanticError
         project_types
             .insert_module(dag.definitions())
             .map_err(|error| {
-                SemanticError::internal_error(
-                    format!("test HIR type store failed: {error}"),
+                error.into_semantic_error(
                     src,
                     crate::diagnostic_anchor::DiagnosticAnchor::Source(Span::new(0, 0)),
                 )
@@ -3892,6 +3891,18 @@ dag broken {
 }
 ";
     assert!(Parser::new(source).parse_file().is_err());
+}
+
+#[test]
+fn non_recursive_nominal_graphs_are_accepted() {
+    let source = "\
+pub type Box<T: Type> { Box(value: T) }
+pub type Leaf { Leaf(x: Length) }
+pub type Pair { Pair(left: Leaf, right: Leaf) }
+pub type Nested { Nested(inner: Box<Box<Pair>>, many: Leaf[Fin(3)]) }
+param n: Nested;
+";
+    check(source).unwrap();
 }
 
 #[test]
