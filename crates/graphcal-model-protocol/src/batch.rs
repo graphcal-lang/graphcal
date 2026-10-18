@@ -8,7 +8,7 @@ use crate::finite::FiniteF64;
 use crate::label::PortName;
 use crate::outcome::{RowFailure, RowOutcome};
 use crate::session::{InputSlot, OutputSlot, SessionSchema};
-use crate::value::{Value, ValueRef};
+use crate::value::{ComplexValue, Value, ValueRef};
 use crate::wire_type::{VariantPosition, WireType};
 
 /// The values of one varied parameter across a batch.
@@ -22,6 +22,13 @@ pub enum InputColumn {
     Bool(Vec<bool>),
     /// Variant positions within the parameter's key type.
     Key(Vec<VariantPosition>),
+    /// Complex values in the parameter's wire unit.
+    Complex(Vec<ComplexValue>),
+    /// Seconds since J2000 in the parameter's time scale.
+    Datetime(Vec<FiniteF64>),
+    /// Indexed or algebraic values, each conforming to the parameter's wire
+    /// type.
+    Structured(Vec<Value>),
 }
 
 impl InputColumn {
@@ -29,10 +36,12 @@ impl InputColumn {
     #[must_use]
     pub const fn len(&self) -> usize {
         match self {
-            Self::Quantity(values) => values.len(),
+            Self::Quantity(values) | Self::Datetime(values) => values.len(),
             Self::Int(values) => values.len(),
             Self::Bool(values) => values.len(),
             Self::Key(values) => values.len(),
+            Self::Complex(values) => values.len(),
+            Self::Structured(values) => values.len(),
         }
     }
 
@@ -42,7 +51,7 @@ impl InputColumn {
         self.len() == 0
     }
 
-    fn value<'a>(&self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
+    fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
         Some(match (self, wire) {
             (Self::Quantity(values), WireType::Quantity(_)) => {
                 ValueRef::Quantity(*values.get(row)?)
@@ -51,6 +60,13 @@ impl InputColumn {
             (Self::Bool(values), WireType::Bool) => ValueRef::Bool(*values.get(row)?),
             (Self::Key(values), WireType::Key(key)) => {
                 ValueRef::Key(key.variant(*values.get(row)?)?)
+            }
+            (Self::Complex(values), WireType::Complex(_)) => ValueRef::Complex(*values.get(row)?),
+            (Self::Datetime(values), WireType::Datetime(_)) => {
+                ValueRef::Datetime(*values.get(row)?)
+            }
+            (Self::Structured(values), WireType::Indexed(_) | WireType::Algebraic(_)) => {
+                values.get(row)?.as_value_ref()
             }
             _ => return None,
         })
@@ -74,6 +90,8 @@ pub enum RequestBatchError {
     Empty,
     #[error("parameter `{input}` has an out-of-range variant at row {row}")]
     VariantOutOfRange { input: PortName, row: usize },
+    #[error("parameter `{input}` has a value of another shape at row {row}")]
+    ShapeMismatch { input: PortName, row: usize },
 }
 
 /// One request: a non-empty batch of rows, one column per varied parameter.
@@ -114,8 +132,21 @@ impl RequestBatch {
             let input_name = || input.name().clone();
             match (input.wire(), column) {
                 (WireType::Quantity(_), InputColumn::Quantity(_))
+                | (WireType::Complex(_), InputColumn::Complex(_))
+                | (WireType::Datetime(_), InputColumn::Datetime(_))
                 | (WireType::Int, InputColumn::Int(_))
                 | (WireType::Bool, InputColumn::Bool(_)) => {}
+                (
+                    wire @ (WireType::Indexed(_) | WireType::Algebraic(_)),
+                    InputColumn::Structured(values),
+                ) => {
+                    if let Some(row) = values.iter().position(|value| !value.conforms_to(wire)) {
+                        return Err(RequestBatchError::ShapeMismatch {
+                            input: input_name(),
+                            row,
+                        });
+                    }
+                }
                 (WireType::Key(key), InputColumn::Key(positions)) => {
                     if let Some(row) = positions
                         .iter()
@@ -192,31 +223,43 @@ pub enum OutputColumn {
     Bool(Vec<Option<bool>>),
     /// Variant positions within the output's key type.
     Key(Vec<Option<VariantPosition>>),
+    /// Complex values in the output's wire unit.
+    Complex(Vec<Option<ComplexValue>>),
+    /// Seconds since J2000 in the output's time scale.
+    Datetime(Vec<Option<FiniteF64>>),
+    /// Indexed or algebraic values.
+    Structured(Vec<Option<Value>>),
 }
 
 impl OutputColumn {
     const fn empty(wire: &WireType) -> Self {
         match wire {
             WireType::Quantity(_) => Self::Quantity(Vec::new()),
+            WireType::Complex(_) => Self::Complex(Vec::new()),
             WireType::Int => Self::Int(Vec::new()),
             WireType::Bool => Self::Bool(Vec::new()),
             WireType::Key(_) => Self::Key(Vec::new()),
+            WireType::Datetime(_) => Self::Datetime(Vec::new()),
+            WireType::Indexed(_) | WireType::Algebraic(_) => Self::Structured(Vec::new()),
         }
     }
 
     fn push_none(&mut self) {
         match self {
-            Self::Quantity(values) => values.push(None),
+            Self::Quantity(values) | Self::Datetime(values) => values.push(None),
             Self::Int(values) => values.push(None),
             Self::Bool(values) => values.push(None),
             Self::Key(values) => values.push(None),
+            Self::Complex(values) => values.push(None),
+            Self::Structured(values) => values.push(None),
         }
     }
 
     /// Append `value`, which has already been checked against `wire`.
     fn push(&mut self, wire: &WireType, value: &Value) -> bool {
         match (self, value, wire) {
-            (Self::Quantity(values), Value::Quantity(value), _) => values.push(Some(*value)),
+            (Self::Quantity(values), Value::Quantity(value), _)
+            | (Self::Datetime(values), Value::Datetime(value), _) => values.push(Some(*value)),
             (Self::Int(values), Value::Int(value), _) => values.push(Some(*value)),
             (Self::Bool(values), Value::Bool(value), _) => values.push(Some(*value)),
             (Self::Key(values), Value::Key(variant), WireType::Key(key)) => {
@@ -225,12 +268,20 @@ impl OutputColumn {
                 };
                 values.push(Some(position));
             }
+            (Self::Complex(values), Value::Complex(value), _) => values.push(Some(*value)),
+            (
+                Self::Structured(values),
+                value @ (Value::Indexed(_) | Value::Algebraic { .. }),
+                _,
+            ) => {
+                values.push(Some(value.clone()));
+            }
             _ => return false,
         }
         true
     }
 
-    fn value<'a>(&self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
+    fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
         Some(match (self, wire) {
             (Self::Quantity(values), WireType::Quantity(_)) => {
                 ValueRef::Quantity((*values.get(row)?)?)
@@ -239,6 +290,15 @@ impl OutputColumn {
             (Self::Bool(values), WireType::Bool) => ValueRef::Bool((*values.get(row)?)?),
             (Self::Key(values), WireType::Key(key)) => {
                 ValueRef::Key(key.variant((*values.get(row)?)?)?)
+            }
+            (Self::Complex(values), WireType::Complex(_)) => {
+                ValueRef::Complex((*values.get(row)?)?)
+            }
+            (Self::Datetime(values), WireType::Datetime(_)) => {
+                ValueRef::Datetime((*values.get(row)?)?)
+            }
+            (Self::Structured(values), WireType::Indexed(_) | WireType::Algebraic(_)) => {
+                values.get(row)?.as_ref()?.as_value_ref()
             }
             _ => return None,
         })

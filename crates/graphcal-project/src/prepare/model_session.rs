@@ -8,23 +8,22 @@
 
 use std::sync::Arc;
 
-use graphcal_compiler::dimension::{BaseDimId, Dimension as GraphcalDimension};
 use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
-use graphcal_eval::eval::public_projection;
-use graphcal_eval::eval_expr::RuntimeValue;
+use graphcal_eval::eval::bindings::RuntimeParameterBinding;
+use graphcal_eval::eval_expr::j2000_seconds::seconds_since_j2000;
 use graphcal_eval::runtime_value::IndexAxis;
 use graphcal_model_protocol::{
-    BaseDimensionName, Bounds, Dimension, Domain, Exponent, FiniteF64, IndexName, InputColumn,
-    InterfaceError, InterfaceFingerprint, KeyType, LabelError, ModelInterface, OutputDescription,
-    ParameterDescription, ParameterError, PortName, PortWire, QuantityType, RequestBatch,
-    ResultBatch, ResultBatchBuilder, RowFailure, RowOutcome, SessionError, SessionOutput,
-    SessionSchema, SessionSpec, SiScale, UnitSpelling, Value, VariantName, WireType,
+    Bounds, Domain, FiniteF64, InputColumn, InterfaceError, InterfaceFingerprint, LabelError,
+    ModelInterface, OutputDescription, ParameterDescription, ParameterError, PortName,
+    RequestBatch, ResultBatch, ResultBatchBuilder, RowFailure, RowOutcome, SessionError,
+    SessionSchema, SessionSpec, SiScale, UnitSpelling, WireType,
 };
 
+use super::model_value::{ValueBindError, ValueCodec, ValueCodecError};
 use super::{
     CheckedType, CompileError, DeclName, Error, IndexVariantName, ModelExecutionError,
-    ModelOutputPort, ModelRowFailure, ModelRowOutcome, OutputProjectionError, ParameterBindingRow,
-    ParameterDomain, ParameterPort, ParameterPosition, PreparedProject,
+    ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterBindingRow, ParameterDomain,
+    ParameterPort, ParameterPosition, PreparedProject,
 };
 use crate::binding_error::BindingError;
 
@@ -37,6 +36,9 @@ enum InputBinding {
     Bool,
     /// The variants of the parameter's index, in the key type's order.
     Key(Vec<IndexVariantName>),
+    /// A complex, datetime, indexed, or algebraic value, converted by the
+    /// parameter's codec.
+    Value(ValueCodec),
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +55,8 @@ pub struct ModelSession {
     schema: Arc<SessionSchema>,
     inputs: Vec<SessionInputPort>,
     outputs: Vec<ModelOutputPort>,
+    /// The codec of each output, in session order.
+    output_codecs: Vec<ValueCodec>,
 }
 
 impl ModelSession {
@@ -74,6 +78,10 @@ pub enum ModelInterfaceError {
     Interface(#[from] InterfaceError),
     #[error("internal model interface invariant failed: {0}")]
     Parameter(#[from] ParameterError),
+    #[error(
+        "internal model interface invariant failed: type `{type_name}` has no model definition"
+    )]
+    MissingDefinition { type_name: String },
 }
 
 /// Why a session schema does not belong to a prepared project.
@@ -97,6 +105,9 @@ pub enum ModelSessionError {
     /// The fingerprints agree, yet the model lacks a session port.
     #[error("internal model session invariant failed: the model has no port `{name}`")]
     MissingPort { name: PortName },
+    /// A port's value conversion cannot be prepared.
+    #[error("internal model session invariant failed for port `{name}`: {message}")]
+    Codec { name: PortName, message: String },
 }
 
 impl PreparedProject {
@@ -122,7 +133,7 @@ impl PreparedProject {
                 Ok(OutputDescription::new(
                     port_name(&port.name)?,
                     self.type_label(&port.declared_type),
-                    self.port_wire(&port.declared_type)?,
+                    self.port_wire(&port.value_schema)?,
                 ))
             })
             .collect::<Result<Vec<_>, ModelInterfaceError>>()?;
@@ -186,6 +197,13 @@ impl PreparedProject {
                         self.named_variants(&port.declared_type)
                             .ok_or_else(|| missing(input.name()))?,
                     ),
+                    WireType::Complex(_)
+                    | WireType::Datetime(_)
+                    | WireType::Indexed(_)
+                    | WireType::Algebraic(_) => InputBinding::Value(
+                        self.value_codec(&port.value_schema, input.si_scale())
+                            .map_err(|error| codec_error(input.name(), &error))?,
+                    ),
                 };
                 Ok(SessionInputPort {
                     name: input.name().clone(),
@@ -205,11 +223,20 @@ impl PreparedProject {
                     .ok_or_else(|| missing(output.name()))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let output_codecs = outputs
+            .iter()
+            .zip(schema.outputs())
+            .map(|(port, output)| {
+                self.value_codec(&port.value_schema, output.si_scale())
+                    .map_err(|error| codec_error(output.name(), &error))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(ModelSession {
             plan_id: self.plan_id,
             schema,
             inputs,
             outputs,
+            output_codecs,
         })
     }
 
@@ -241,7 +268,7 @@ impl PreparedProject {
                 Err(failure) => RowOutcome::Failure(failure),
                 Ok(bindings) => {
                     match self.evaluate_row(&bindings, &session.outputs, |runtime, position| {
-                        Self::wire_value(runtime, &session.schema.outputs()[position])
+                        session.output_codecs[position].protocol_value(runtime)
                     })? {
                         ModelRowOutcome::Success(values) => RowOutcome::Success(values),
                         ModelRowOutcome::Failure(failure) => {
@@ -289,6 +316,31 @@ impl PreparedProject {
                 (InputBinding::Key(variants), InputColumn::Key(positions)) => {
                     builder.bind_named_key(input.position, &variants[positions[row].get()])
                 }
+                (InputBinding::Value(codec), _) => {
+                    let value = request
+                        .value(
+                            session
+                                .schema
+                                .input_slot(input.name.as_str())
+                                .ok_or(ModelExecutionError::SessionMismatch)?,
+                            row,
+                        )
+                        .ok_or(ModelExecutionError::SessionMismatch)?;
+                    match codec.runtime_value(value) {
+                        Ok(runtime) => {
+                            builder.insert(input.position, RuntimeParameterBinding::plain(runtime))
+                        }
+                        Err(ValueBindError::OutOfRange(message)) => {
+                            return Ok(Err(RowFailure::InputOutOfDomain {
+                                parameter: input.name.clone(),
+                                message,
+                            }));
+                        }
+                        Err(ValueBindError::Shape) => {
+                            return Err(ModelExecutionError::SessionMismatch);
+                        }
+                    }
+                }
                 _ => return Err(ModelExecutionError::SessionMismatch),
             };
             match bound {
@@ -305,42 +357,16 @@ impl PreparedProject {
         Ok(Ok(builder.finish()?))
     }
 
-    /// The protocol value of an output's runtime value, in the output's unit.
-    fn wire_value(
-        runtime: &RuntimeValue,
-        output: &SessionOutput,
-    ) -> Result<Value, OutputProjectionError> {
-        Ok(match output.wire() {
-            WireType::Quantity(_) => {
-                let si = FiniteF64::new(public_projection::project_quantity(runtime)?.get());
-                Value::Quantity(
-                    si.and_then(|si| output.si_scale().map_or(Ok(si), |scale| scale.from_si(si)))
-                        .map_err(|_| OutputProjectionError::Unrepresentable)?,
-                )
-            }
-            WireType::Int => Value::Int(public_projection::project_int(runtime)?),
-            WireType::Bool => Value::Bool(public_projection::project_bool(runtime)?),
-            WireType::Key(key) => Value::Key(
-                key.variants()
-                    .get(public_projection::project_key_position(runtime)?)
-                    .cloned()
-                    .ok_or(OutputProjectionError::Unrepresentable)?,
-            ),
-        })
-    }
-
     fn parameter_description(
         &self,
         port: &ParameterPort,
     ) -> Result<ParameterDescription, ModelInterfaceError> {
-        let wire = self.port_wire(&port.declared_type)?;
+        let wire = self.port_wire(&port.value_schema)?;
         // Checked domains have finite, ordered bounds; a domain that does not
-        // convert is not published rather than misrepresented.
-        let domain = match (&wire, &port.domain) {
-            (
-                PortWire::Supported(WireType::Quantity(_)),
-                Some(ParameterDomain::Quantity(bounds)),
-            ) => {
+        // convert is not published rather than misrepresented. The domain of
+        // an indexed parameter bounds its innermost elements.
+        let domain = match (wire.supported().map(WireType::leaf), &port.domain) {
+            (Some(WireType::Quantity(_)), Some(ParameterDomain::Quantity(bounds))) => {
                 let finite = |bound: Option<&f64>| {
                     bound.map(|bound| FiniteF64::new(*bound)).transpose().ok()
                 };
@@ -349,10 +375,25 @@ impl PreparedProject {
                     .and_then(|(min, max)| Bounds::new(min, max).ok())
                     .map(Domain::Quantity)
             }
-            (PortWire::Supported(WireType::Int), Some(ParameterDomain::Integer(bounds))) => {
+            (Some(WireType::Int), Some(ParameterDomain::Integer(bounds))) => {
                 Bounds::new(bounds.lower().copied(), bounds.upper().copied())
                     .ok()
                     .map(Domain::Int)
+            }
+            (Some(WireType::Datetime(_)), Some(ParameterDomain::Datetime { scale, bounds })) => {
+                let seconds = |bound: Option<&hifitime::Duration>| {
+                    bound
+                        .map(|tai| {
+                            seconds_since_j2000(hifitime::Epoch::from_tai_duration(*tai), *scale)
+                                .ok()
+                                .and_then(|seconds| FiniteF64::new(seconds).ok())
+                        })
+                        .map_or(Some(None), |bound| bound.map(Some))
+                };
+                seconds(bounds.lower())
+                    .zip(seconds(bounds.upper()))
+                    .and_then(|(min, max)| Bounds::new(min, max).ok())
+                    .map(Domain::Datetime)
             }
             _ => None,
         };
@@ -363,88 +404,6 @@ impl PreparedProject {
             domain,
             port.has_default,
         )?)
-    }
-
-    fn type_label(&self, declared_type: &CheckedType) -> String {
-        declared_type.format(&self.tir().registry().dimensions)
-    }
-
-    /// How a value of `declared_type` travels on the wire.
-    fn port_wire(&self, declared_type: &CheckedType) -> Result<PortWire, ModelInterfaceError> {
-        let unsupported = |reason: String| PortWire::Unsupported { reason };
-        Ok(match declared_type {
-            CheckedType::Quantity(dimension) => self.quantity_wire(dimension)?,
-            CheckedType::Int => PortWire::Supported(WireType::Int),
-            CheckedType::Bool => PortWire::Supported(WireType::Bool),
-            CheckedType::Key(index) => match self.named_variants(declared_type) {
-                None => unsupported(format!("key index `{index}` is not a concrete named index")),
-                Some(variants) => {
-                    let variants = variants
-                        .iter()
-                        .map(|variant| VariantName::new(variant.as_str()))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    match KeyType::new(IndexName::new(index.to_string())?, variants) {
-                        Ok(key) => PortWire::Supported(WireType::Key(key)),
-                        Err(error) => unsupported(error.to_string()),
-                    }
-                }
-            },
-            CheckedType::Complex(_)
-            | CheckedType::Datetime(_)
-            | CheckedType::Struct(..)
-            | CheckedType::Indexed { .. } => unsupported(format!(
-                "type `{}` is not supported by protocol version {}",
-                self.type_label(declared_type),
-                graphcal_model_protocol::PROTOCOL_VERSION
-            )),
-        })
-    }
-
-    /// A quantity of `dimension` in its canonical SI unit at scale one.
-    fn quantity_wire(
-        &self,
-        dimension: &GraphcalDimension,
-    ) -> Result<PortWire, ModelInterfaceError> {
-        let dimensions = &self.tir().registry().dimensions;
-        let unsupported = |reason: String| Ok(PortWire::Unsupported { reason });
-        let mut exponents = Vec::new();
-        for (base, exponent) in dimension.iter() {
-            let name = match base {
-                BaseDimId::Prelude(prelude) => prelude.as_str().to_owned(),
-                BaseDimId::UserDefined(resolved) => resolved.to_string(),
-            };
-            let Some(exponent) = u32::try_from(exponent.den())
-                .ok()
-                .and_then(|denominator| Exponent::new(exponent.num(), denominator).ok())
-            else {
-                return unsupported(format!(
-                    "dimension exponent {exponent} is not representable"
-                ));
-            };
-            exponents.push((BaseDimensionName::new(name)?, exponent));
-        }
-        let unit = if dimension.is_dimensionless() {
-            None
-        } else {
-            let Some(spelling) = graphcal_eval::eval::types::default_unit_label(
-                dimension,
-                &dimensions.base_unit_symbols(),
-            ) else {
-                return unsupported(format!(
-                    "dimension `{}` has no canonical SI unit",
-                    dimensions.format_dimension(dimension)
-                ));
-            };
-            Some(UnitSpelling::new(spelling)?)
-        };
-        Ok(
-            match QuantityType::new(exponents.into_iter().collect::<Dimension>(), unit) {
-                Ok(quantity) => PortWire::Supported(WireType::Quantity(quantity)),
-                Err(error) => PortWire::Unsupported {
-                    reason: error.to_string(),
-                },
-            },
-        )
     }
 
     /// The variants of a `Key<I>` type over a concrete named index, in
@@ -458,6 +417,13 @@ impl PreparedProject {
             ConcreteIndexKind::Named { variants } => Some(variants.as_slice().to_vec()),
             _ => None,
         }
+    }
+}
+
+fn codec_error(name: &PortName, error: &ValueCodecError) -> ModelSessionError {
+    ModelSessionError::Codec {
+        name: name.clone(),
+        message: error.to_string(),
     }
 }
 

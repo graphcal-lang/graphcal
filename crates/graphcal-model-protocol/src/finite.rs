@@ -22,6 +22,9 @@ pub struct NonFiniteError {
 }
 
 impl FiniteF64 {
+    /// Zero.
+    pub const ZERO: Self = Self(0.0);
+
     /// Validate a finite value.
     ///
     /// # Errors

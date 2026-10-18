@@ -161,3 +161,109 @@ fn client_sessions_carry_quantities_in_server_resolved_units() {
         Err(ClientError::Session(_))
     ));
 }
+
+const RICH_MODEL: &str = "pub index Phase = { Climb, Cruise };\n\
+    pub type Shape {\n\
+        Circle(r: Length),\n\
+        Dot,\n\
+    }\n\
+    param profile: Length[Phase];\n\
+    param modes: Key<Phase>[Phase];\n\
+    param at: Datetime<TAI>;\n\
+    param z: Complex<Length>;\n\
+    param shape: Shape;\n\
+    pub node doubled: Length[Phase] = for p: Phase { @profile[p] * 2.0 };\n\
+    pub node modes_out: Key<Phase>[Phase] = @modes;\n\
+    pub node later: Datetime<TAI> = @at + 60.0 s;\n\
+    pub node z2: Complex<Length> = @z * 2.0;\n\
+    pub node shape_out: Shape = @shape;\n";
+
+#[test]
+fn client_carries_indexed_datetime_complex_and_algebraic_values() {
+    use graphcal_model_client::{Algebraic, Complex, Datetime, Indexed};
+    use graphcal_model_protocol::{FiniteF64, UnitSpelling, Value, WireType};
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("rich.gcl");
+    std::fs::write(&file, RICH_MODEL).unwrap();
+    let model = Model::describe(GraphcalCommand::new(file).program(env!("CARGO_BIN_EXE_graphcal")))
+        .unwrap();
+    let profile = model.input::<Indexed<Quantity>>("profile").unwrap();
+    let phase_keys = model.input::<Indexed<Key>>("modes").unwrap();
+    let at = model.input::<Datetime>("at").unwrap();
+    let z = model.input::<Complex>("z").unwrap();
+    let shape = model.input::<Algebraic>("shape").unwrap();
+    let doubled = model.output::<Indexed<Quantity>>("doubled").unwrap();
+    let phase_keys_out = model.output::<Indexed<Key>>("modes_out").unwrap();
+    let later = model.output::<Datetime>("later").unwrap();
+    let z2 = model.output::<Complex>("z2").unwrap();
+    let shape_out = model.output::<Algebraic>("shape_out").unwrap();
+
+    let mut session = model
+        .session()
+        .vary_in(&profile, UnitSpelling::new("km").unwrap())
+        .vary(&phase_keys)
+        .vary(&at)
+        .vary(&z)
+        .vary(&shape)
+        .output(&doubled)
+        .output(&phase_keys_out)
+        .output(&later)
+        .output(&z2)
+        .output(&shape_out)
+        .spawn()
+        .unwrap();
+    let circle = Value::Algebraic {
+        constructor: shape.detail().position("Circle").unwrap(),
+        fields: vec![Value::Quantity(FiniteF64::new(0.5).unwrap())],
+    };
+    let cruise = phase_keys.variant("Cruise").unwrap();
+    let climb = phase_keys.variant("Climb").unwrap();
+    let request = session
+        .batch()
+        .column(&profile, [vec![1.0, 2.0]])
+        .unwrap()
+        .column(&phase_keys, [vec![cruise, climb]])
+        .unwrap()
+        .column(&at, [100.0])
+        .unwrap()
+        .column(&z, [(1.0, -1.0)])
+        .unwrap()
+        .column(&shape, [circle.clone()])
+        .unwrap()
+        .build()
+        .unwrap();
+    let result = session.evaluate(&request).unwrap();
+    let RowOutcome::Success(row) = result.row(0).unwrap() else {
+        panic!("row 0 succeeds: {:?}", result.failure(0));
+    };
+    assert_eq!(
+        row.get(&doubled).unwrap(),
+        [2000.0, 4000.0],
+        "km inputs, SI output in metres"
+    );
+    assert_eq!(
+        row.get(&phase_keys_out)
+            .unwrap()
+            .iter()
+            .map(graphcal_model_protocol::VariantName::as_str)
+            .collect::<Vec<_>>(),
+        ["Cruise", "Climb"]
+    );
+    assert_eq!(row.get(&later).unwrap(), 160.0);
+    assert_eq!(row.get(&z2).unwrap(), (2.0, -2.0));
+    assert_eq!(row.get(&shape_out).unwrap(), circle);
+    assert!(matches!(
+        session.schema().inputs()[0].wire(),
+        WireType::Indexed(_)
+    ));
+    assert!(matches!(
+        session.batch().column(&profile, [vec![1.0]]),
+        Err(ClientError::EntryCount {
+            expected: 2,
+            found: 1,
+            ..
+        })
+    ));
+    session.shutdown().unwrap();
+}

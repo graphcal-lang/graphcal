@@ -5,8 +5,10 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::axis::Axis;
+use crate::datetime_type::DatetimeType;
 use crate::dimension::Dimension;
-use crate::label::{IndexName, UnitSpelling, VariantName};
+use crate::label::{ConstructorName, FieldName, IndexName, TypeName, UnitSpelling, VariantName};
 
 /// A real quantity: its dimension and the unit its values are expressed in.
 ///
@@ -211,25 +213,328 @@ impl From<KeyType> for KeyTypeRepr {
     }
 }
 
+/// One value per entry of a fixed axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IndexedType {
+    axis: Axis,
+    element: Box<WireType>,
+}
+
+impl IndexedType {
+    /// One `element` per entry of `axis`.
+    #[must_use]
+    pub fn new(axis: Axis, element: WireType) -> Self {
+        Self {
+            axis,
+            element: Box::new(element),
+        }
+    }
+
+    /// The outer axis.
+    #[must_use]
+    pub const fn axis(&self) -> &Axis {
+        &self.axis
+    }
+
+    /// The type of each entry.
+    #[must_use]
+    pub fn element(&self) -> &WireType {
+        &self.element
+    }
+}
+
+/// One field of a constructor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldType {
+    name: FieldName,
+    wire: WireType,
+}
+
+impl FieldType {
+    /// A field `name` of type `wire`.
+    #[must_use]
+    pub const fn new(name: FieldName, wire: WireType) -> Self {
+        Self { name, wire }
+    }
+
+    /// The field name.
+    #[must_use]
+    pub const fn name(&self) -> &FieldName {
+        &self.name
+    }
+
+    /// The field's wire type.
+    #[must_use]
+    pub const fn wire(&self) -> &WireType {
+        &self.wire
+    }
+}
+
+/// One constructor of an algebraic type, with its fields in declaration
+/// order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConstructorType {
+    name: ConstructorName,
+    fields: Vec<FieldType>,
+}
+
+impl ConstructorType {
+    /// A constructor `name` with `fields`.
+    #[must_use]
+    pub const fn new(name: ConstructorName, fields: Vec<FieldType>) -> Self {
+        Self { name, fields }
+    }
+
+    /// The constructor name.
+    #[must_use]
+    pub const fn name(&self) -> &ConstructorName {
+        &self.name
+    }
+
+    /// The fields in declaration order.
+    #[must_use]
+    pub fn fields(&self) -> &[FieldType] {
+        &self.fields
+    }
+}
+
+/// The position of a constructor within an [`AlgebraicType`].
+///
+/// A position is only meaningful together with the type it came from; on the
+/// wire, constructors are resolved by name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ConstructorPosition(usize);
+
+impl ConstructorPosition {
+    /// The constructor at zero-based declaration-order `position`; values
+    /// using it are checked against their type
+    /// ([`Value::conforms_to`](crate::Value::conforms_to)).
+    #[must_use]
+    pub const fn new(position: usize) -> Self {
+        Self(position)
+    }
+
+    /// The zero-based declaration-order position.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+/// A concrete, non-recursive algebraic type: a record (one constructor) or
+/// a tagged union (several).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "AlgebraicTypeRepr", into = "AlgebraicTypeRepr")]
+pub struct AlgebraicType {
+    name: TypeName,
+    constructors: Vec<ConstructorType>,
+}
+
+/// Why an algebraic type description is invalid.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum AlgebraicTypeError {
+    #[error("type `{name}` has no constructors")]
+    NoConstructors { name: TypeName },
+    #[error("type `{name}` repeats constructor `{constructor}`")]
+    DuplicateConstructor {
+        name: TypeName,
+        constructor: ConstructorName,
+    },
+    #[error("constructor `{constructor}` of type `{name}` repeats field `{field}`")]
+    DuplicateField {
+        name: TypeName,
+        constructor: ConstructorName,
+        field: FieldName,
+    },
+    #[error("type `{name}` has {count} constructors, more than an Int32 dictionary can encode")]
+    TooManyConstructors { name: TypeName, count: usize },
+}
+
+impl AlgebraicType {
+    /// A type `name` with `constructors` in declaration order.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AlgebraicTypeError`] for no constructors, a repeated
+    /// constructor, or a repeated field within one constructor.
+    pub fn new(
+        name: TypeName,
+        constructors: Vec<ConstructorType>,
+    ) -> Result<Self, AlgebraicTypeError> {
+        if constructors.is_empty() {
+            return Err(AlgebraicTypeError::NoConstructors { name });
+        }
+        if i32::try_from(constructors.len()).is_err() {
+            return Err(AlgebraicTypeError::TooManyConstructors {
+                name,
+                count: constructors.len(),
+            });
+        }
+        let mut names = HashSet::with_capacity(constructors.len());
+        for constructor in &constructors {
+            if !names.insert(constructor.name()) {
+                return Err(AlgebraicTypeError::DuplicateConstructor {
+                    constructor: constructor.name().clone(),
+                    name,
+                });
+            }
+            let mut fields = HashSet::with_capacity(constructor.fields().len());
+            if let Some(field) = constructor
+                .fields()
+                .iter()
+                .find(|field| !fields.insert(field.name()))
+            {
+                return Err(AlgebraicTypeError::DuplicateField {
+                    constructor: constructor.name().clone(),
+                    field: field.name().clone(),
+                    name,
+                });
+            }
+        }
+        Ok(Self { name, constructors })
+    }
+
+    /// The type name.
+    #[must_use]
+    pub const fn name(&self) -> &TypeName {
+        &self.name
+    }
+
+    /// The constructors in declaration order.
+    #[must_use]
+    pub fn constructors(&self) -> &[ConstructorType] {
+        &self.constructors
+    }
+
+    /// Every constructor with its position, in declaration order.
+    pub fn entries(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (ConstructorPosition, &ConstructorType)> {
+        self.constructors
+            .iter()
+            .enumerate()
+            .map(|(position, constructor)| (ConstructorPosition::new(position), constructor))
+    }
+
+    /// The position of the constructor named `name`.
+    #[must_use]
+    pub fn position(&self, name: &str) -> Option<ConstructorPosition> {
+        self.constructors
+            .iter()
+            .position(|constructor| constructor.name().as_str() == name)
+            .map(ConstructorPosition::new)
+    }
+
+    /// The constructor at `position`, when it is in range.
+    #[must_use]
+    pub fn constructor(&self, position: ConstructorPosition) -> Option<&ConstructorType> {
+        self.constructors.get(position.get())
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AlgebraicTypeRepr {
+    name: TypeName,
+    constructors: Vec<ConstructorType>,
+}
+
+impl TryFrom<AlgebraicTypeRepr> for AlgebraicType {
+    type Error = AlgebraicTypeError;
+
+    fn try_from(repr: AlgebraicTypeRepr) -> Result<Self, Self::Error> {
+        Self::new(repr.name, repr.constructors)
+    }
+}
+
+impl From<AlgebraicType> for AlgebraicTypeRepr {
+    fn from(algebraic: AlgebraicType) -> Self {
+        Self {
+            name: algebraic.name,
+            constructors: algebraic.constructors,
+        }
+    }
+}
+
 /// A value type the protocol can carry.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "WireRepr", into = "WireRepr")]
 pub enum WireType {
     /// A finite real quantity (Arrow `Float64`).
     Quantity(QuantityType),
+    /// A finite complex quantity (Arrow `Struct{re: Float64, im: Float64}`),
+    /// both parts in the same unit.
+    Complex(QuantityType),
     /// A signed 64-bit integer (Arrow `Int64`).
     Int,
     /// A Boolean (Arrow `Boolean`).
     Bool,
     /// A categorical key (Arrow `Dictionary<Int32, Utf8>`).
     Key(KeyType),
+    /// A datetime instant, seconds since J2000 in its time scale (Arrow
+    /// `Float64`).
+    Datetime(DatetimeType),
+    /// One value per entry of a fixed axis (Arrow `FixedSizeList`).
+    Indexed(IndexedType),
+    /// A record or tagged union (Arrow `Struct`).
+    Algebraic(AlgebraicType),
+}
+
+impl WireType {
+    /// The quantity type of a quantity-like wire: a quantity, a complex
+    /// quantity, or an indexed value whose innermost elements are one of
+    /// those.
+    #[must_use]
+    pub fn quantity(&self) -> Option<&QuantityType> {
+        match self {
+            Self::Quantity(quantity) | Self::Complex(quantity) => Some(quantity),
+            Self::Indexed(indexed) => indexed.element().quantity(),
+            Self::Int | Self::Bool | Self::Key(_) | Self::Datetime(_) | Self::Algebraic(_) => None,
+        }
+    }
+
+    /// This quantity-like wire with its quantities carried in `unit`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `None` when the wire is not quantity-like (see
+    /// [`Self::quantity`]), or [`QuantityTypeError`] when the quantity cannot
+    /// name `unit`.
+    pub fn with_unit(&self, unit: &UnitSpelling) -> Option<Result<Self, QuantityTypeError>> {
+        let rewrap = |quantity: &QuantityType| {
+            QuantityType::new(quantity.dimension().clone(), Some(unit.clone()))
+        };
+        Some(match self {
+            Self::Quantity(quantity) => rewrap(quantity).map(Self::Quantity),
+            Self::Complex(quantity) => rewrap(quantity).map(Self::Complex),
+            Self::Indexed(indexed) => indexed
+                .element()
+                .with_unit(unit)?
+                .map(|element| Self::Indexed(IndexedType::new(indexed.axis().clone(), element))),
+            Self::Int | Self::Bool | Self::Key(_) | Self::Datetime(_) | Self::Algebraic(_) => {
+                return None;
+            }
+        })
+    }
+
+    /// The innermost element of an indexed wire, or the wire itself.
+    #[must_use]
+    pub fn leaf(&self) -> &Self {
+        match self {
+            Self::Indexed(indexed) => indexed.element().leaf(),
+            _ => self,
+        }
+    }
 }
 
 /// How one port of a model interface travels on the wire.
 ///
 /// Ports whose type the protocol cannot carry are still listed, with the
 /// reason, so they are never silently omitted.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(from = "WireRepr", into = "WireRepr")]
 pub enum PortWire {
     /// The port carries values of this type.
@@ -258,9 +563,13 @@ impl PortWire {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WireRepr {
     Quantity(QuantityType),
+    Complex(QuantityType),
     Int {},
     Bool {},
     Key(KeyType),
+    Datetime(DatetimeType),
+    Indexed(IndexedType),
+    Algebraic(AlgebraicType),
     Unsupported { reason: String },
 }
 
@@ -292,9 +601,13 @@ impl From<WireRepr> for PortWire {
     fn from(repr: WireRepr) -> Self {
         match repr {
             WireRepr::Quantity(quantity) => Self::Supported(WireType::Quantity(quantity)),
+            WireRepr::Complex(quantity) => Self::Supported(WireType::Complex(quantity)),
             WireRepr::Int {} => Self::Supported(WireType::Int),
             WireRepr::Bool {} => Self::Supported(WireType::Bool),
             WireRepr::Key(key) => Self::Supported(WireType::Key(key)),
+            WireRepr::Datetime(datetime) => Self::Supported(WireType::Datetime(datetime)),
+            WireRepr::Indexed(indexed) => Self::Supported(WireType::Indexed(indexed)),
+            WireRepr::Algebraic(algebraic) => Self::Supported(WireType::Algebraic(algebraic)),
             WireRepr::Unsupported { reason } => Self::Unsupported { reason },
         }
     }
@@ -304,9 +617,13 @@ impl From<PortWire> for WireRepr {
     fn from(wire: PortWire) -> Self {
         match wire {
             PortWire::Supported(WireType::Quantity(quantity)) => Self::Quantity(quantity),
+            PortWire::Supported(WireType::Complex(quantity)) => Self::Complex(quantity),
             PortWire::Supported(WireType::Int) => Self::Int {},
             PortWire::Supported(WireType::Bool) => Self::Bool {},
             PortWire::Supported(WireType::Key(key)) => Self::Key(key),
+            PortWire::Supported(WireType::Datetime(datetime)) => Self::Datetime(datetime),
+            PortWire::Supported(WireType::Indexed(indexed)) => Self::Indexed(indexed),
+            PortWire::Supported(WireType::Algebraic(algebraic)) => Self::Algebraic(algebraic),
             PortWire::Unsupported { reason } => Self::Unsupported { reason },
         }
     }
@@ -383,5 +700,40 @@ mod tests {
             serde_json::from_str::<WireType>(r#"{"kind":"unsupported","reason":"x"}"#).is_err(),
             "a wire type is always supported"
         );
+    }
+
+    #[test]
+    fn algebraic_types_have_unique_constructors_and_fields() {
+        let name = TypeName::new("Shape").unwrap();
+        let constructor = |name: &str, fields: &[&str]| {
+            ConstructorType::new(
+                ConstructorName::new(name).unwrap(),
+                fields
+                    .iter()
+                    .map(|field| FieldType::new(FieldName::new(*field).unwrap(), WireType::Int))
+                    .collect(),
+            )
+        };
+        assert!(matches!(
+            AlgebraicType::new(name.clone(), Vec::new()),
+            Err(AlgebraicTypeError::NoConstructors { .. })
+        ));
+        assert!(matches!(
+            AlgebraicType::new(
+                name.clone(),
+                vec![constructor("A", &[]), constructor("A", &[])]
+            ),
+            Err(AlgebraicTypeError::DuplicateConstructor { .. })
+        ));
+        assert!(matches!(
+            AlgebraicType::new(name.clone(), vec![constructor("A", &["x", "x"])]),
+            Err(AlgebraicTypeError::DuplicateField { .. })
+        ));
+        let shape = AlgebraicType::new(
+            name,
+            vec![constructor("Circle", &["r"]), constructor("Dot", &[])],
+        )
+        .unwrap();
+        assert_eq!(shape.position("Dot").map(ConstructorPosition::get), Some(1));
     }
 }

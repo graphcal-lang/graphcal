@@ -96,6 +96,22 @@ label_type!(
     "base dimension name"
 );
 label_type!(
+    /// The human-readable name of a concrete algebraic type, such as
+    /// `Orbit` or `Pair<Length, Mass>`.
+    TypeName,
+    "type name"
+);
+label_type!(
+    /// The name of one constructor of an algebraic type.
+    ConstructorName,
+    "constructor name"
+);
+label_type!(
+    /// The name of one field of a constructor.
+    FieldName,
+    "field name"
+);
+label_type!(
     /// The source spelling of a unit expression, such as `kg*m/s^2`.
     ///
     /// The spelling is compared exactly; it is never normalized.

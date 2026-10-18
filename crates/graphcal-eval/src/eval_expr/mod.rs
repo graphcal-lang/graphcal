@@ -5,6 +5,7 @@ mod context;
 mod conversions;
 mod datetime;
 mod hir_eval;
+pub mod j2000_seconds;
 mod linear_algebra;
 mod linear_algebra_error;
 mod linear_algebra_lu;

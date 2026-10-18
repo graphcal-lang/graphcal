@@ -9,7 +9,7 @@ use graphcal_model_protocol::{
 use crate::command::GraphcalCommand;
 use crate::error::ClientError;
 use crate::identity::{ModelId, PortIdentity};
-use crate::kind::{Key, KeyVariant, Kind};
+use crate::kind::{Indexed, Key, KeyVariant, Kind};
 
 /// A Graphcal model whose interface has been described.
 #[derive(Debug, Clone)]
@@ -197,6 +197,25 @@ impl InputHandle<Key> {
         self.detail
             .entries()
             .map(|(position, _)| KeyVariant::new(self.port.clone(), position))
+    }
+}
+
+impl InputHandle<Indexed<Key>> {
+    /// The variant spelled `name` of this parameter's key elements.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::UnknownVariant`] when the index has no such
+    /// variant.
+    pub fn variant(&self, name: &str) -> Result<KeyVariant, ClientError> {
+        self.detail
+            .element()
+            .position(name)
+            .map(|position| KeyVariant::new(self.port.clone(), position))
+            .ok_or_else(|| ClientError::UnknownVariant {
+                input: self.port.name().clone(),
+                variant: name.to_owned(),
+            })
     }
 }
 

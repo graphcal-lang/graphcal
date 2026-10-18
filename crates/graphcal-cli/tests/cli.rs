@@ -7334,7 +7334,8 @@ const BATCH_MODEL: &str = "pub index Mode = { A, B };\n\
      param load: Length(min: 0.0 m, max: 10.0 m);\n\
      param mode: Key<Mode>;\n\
      param factor: Dimensionless = 2.0;\n\
-     param at: Datetime<UTC> = datetime(\"2026-01-01T00:00:00Z\");\n\
+     pub type Chain { End, Link(next: Chain) }\n\
+     param chain: Chain = End;\n\
      pub node failure: Bool = @load * @factor > 8.0 m && @mode == Mode#B;\n\
      pub node margin: Length = 10.0 m - @load * @factor;\n";
 
@@ -7432,7 +7433,7 @@ fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
                 "--input",
                 "mode",
                 "--input",
-                "at",
+                "chain",
                 "--output",
                 "failure",
                 "--skip-fingerprint-check",

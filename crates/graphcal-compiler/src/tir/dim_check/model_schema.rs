@@ -4,6 +4,7 @@ use thiserror::Error;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::hir::nominal::{NominalConstructor, NominalTypeDef, NominalTypeKind};
+use crate::semantic::applied_constructor::{AppliedConstructor, AppliedField};
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
 use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
@@ -237,6 +238,35 @@ impl<'tir> ConcreteModelType<'tir> {
         src: SourceId,
     ) -> Result<Vec<ConcreteModelConstructor>, SemanticError> {
         self.validated.constructors(src)
+    }
+
+    /// Every constructor of this application as a checked constructor call
+    /// applies it: with its fields at their instantiated types, in
+    /// declaration order.
+    ///
+    /// # Errors
+    ///
+    /// Returns a compiler diagnostic if checked TIR field metadata is missing.
+    pub fn applied_constructors(
+        &self,
+        src: SourceId,
+    ) -> Result<Vec<std::sync::Arc<AppliedConstructor>>, SemanticError> {
+        Ok(self
+            .constructors(src)?
+            .into_iter()
+            .map(|constructor| {
+                std::sync::Arc::new(AppliedConstructor::new(
+                    self.identity().resolved().clone(),
+                    constructor.name,
+                    self.generic_args().to_vec(),
+                    constructor
+                        .fields
+                        .into_iter()
+                        .map(|field| AppliedField::new(field.name, field.declared_type))
+                        .collect(),
+                ))
+            })
+            .collect())
     }
 }
 

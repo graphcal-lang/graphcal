@@ -89,7 +89,8 @@ impl<T> From<Bounds<T>> for BoundsRepr<T> {
     }
 }
 
-/// The declared domain of one parameter, in the parameter's wire unit.
+/// The declared domain of one parameter, in the parameter's wire unit. The
+/// domain of an indexed parameter bounds every element.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Domain {
@@ -97,6 +98,8 @@ pub enum Domain {
     Quantity(Bounds<FiniteF64>),
     /// Bounds of an integer.
     Int(Bounds<i64>),
+    /// Bounds of a datetime, in seconds since J2000 in its time scale.
+    Datetime(Bounds<FiniteF64>),
 }
 
 #[cfg(test)]

@@ -62,12 +62,24 @@ node:
 }
 ```
 
-- `wire` is how values travel. Quantities, `Int`, `Bool`, and `Key<I>` over a
-  named index are supported. Other types are listed with
+- `wire` is how values travel (see the table below). A type the protocol
+  cannot carry, such as a recursive type, is listed with
   `"kind": "unsupported"` and a reason, never silently omitted.
 - `unit` is the port's canonical SI unit. Values travel in it unless a
   session chooses another unit for the port (see below).
-- `domain` is in the same unit. A value outside it fails only its own row.
+- `domain` is in the same unit. It bounds every element of an indexed
+  parameter. A value outside it fails only its own row.
+
+| Graphcal type | `kind` | Value |
+|---------------|--------|-------|
+| Quantity | `quantity` | A number in `unit` |
+| `Complex<D>` | `complex` | Real and imaginary parts in `unit` |
+| `Int`, `Bool` | `int`, `bool` | An integer or Boolean |
+| `Key<I>` over a named index | `key` | A variant name |
+| `Datetime<S>` | `datetime` | Seconds since J2000 (2000-01-01T12:00:00), read in `S` |
+| `T[I]` | `indexed` | One `T` per entry of `I`, in declaration order |
+| Struct or union type | `algebraic` | One constructor and its fields |
+
 - `interface_fingerprint` identifies this interface. Formulas may change
   without changing it; adding, removing, or retyping a port changes it.
 
@@ -106,7 +118,9 @@ Arrow IPC streams, so it is driven by a client rather than a terminal.
 ## 3. Evaluate from Rust
 
 The `graphcal-model-client` crate runs both commands and keeps Arrow
-internal. Handles are typed, so each column takes values of the port's kind:
+internal. Handles are typed (`Quantity`, `Complex`, `Int`, `Bool`, `Key`,
+`Datetime`, `Indexed<K>`, or `Algebraic`), so each column takes values of the
+port's kind:
 
 ```rust
 use graphcal_model_client::{Bool, GraphcalCommand, Key, Model, Quantity};
@@ -204,6 +218,10 @@ The result stream has two struct fields:
 | `outputs` | One nullable field per read output, in declaration order; null exactly in failed rows |
 | `outcome` | `status` (`UInt8`: `0` success, `1` assertion failed, `2` input out of domain, `3` evaluation error), `subject` (the failed assertion or parameter), `message` |
 
-Quantities are `Float64`, `Int` is `Int64`, `Bool` is `Boolean`, and keys are
-`Dictionary<Int32, Utf8>`. Key values are resolved by their dictionary value,
-never by their code.
+Quantities and datetimes are `Float64`, `Int` is `Int64`, `Bool` is
+`Boolean`, and keys are `Dictionary<Int32, Utf8>`. Key values are resolved by
+their dictionary value, never by their code. A complex value is a struct of
+`re` and `im`, and an indexed value a `FixedSizeList` with one item per axis
+entry. A struct type is a struct of its fields; a union is a struct of a
+`constructor` key and a `variants` struct with one nullable child per
+constructor, of which exactly the row's constructor is non-null.

@@ -44,6 +44,13 @@ pub enum ClientError {
     MissingColumn { name: PortName },
     #[error("parameter `{input}` has a non-finite value at row {row}")]
     NonFinite { input: PortName, row: usize },
+    #[error("parameter `{input}` has {found} entries at row {row}; its axis has {expected}")]
+    EntryCount {
+        input: PortName,
+        row: usize,
+        expected: usize,
+        found: usize,
+    },
     #[error(transparent)]
     Request(#[from] RequestBatchError),
     #[error("the request or result belongs to another session")]

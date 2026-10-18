@@ -35,8 +35,9 @@ impl ParameterDescription {
     /// # Errors
     ///
     /// Returns [`ParameterError::DomainKindMismatch`] when `domain` does not
-    /// match `wire`: quantity bounds need a quantity, integer bounds an
-    /// integer, and an unsupported port has no domain.
+    /// match `wire`'s innermost element: quantity bounds need a quantity,
+    /// integer bounds an integer, datetime bounds a datetime, and an
+    /// unsupported port has no domain.
     pub fn new(
         name: PortName,
         graphcal_type: impl Into<String>,
@@ -44,10 +45,11 @@ impl ParameterDescription {
         domain: Option<Domain>,
         has_default: bool,
     ) -> Result<Self, ParameterError> {
-        let consistent = match (&wire, &domain) {
+        let consistent = match (wire.supported().map(WireType::leaf), &domain) {
             (_, None)
-            | (PortWire::Supported(WireType::Quantity(_)), Some(Domain::Quantity(_)))
-            | (PortWire::Supported(WireType::Int), Some(Domain::Int(_))) => true,
+            | (Some(WireType::Quantity(_)), Some(Domain::Quantity(_)))
+            | (Some(WireType::Int), Some(Domain::Int(_)))
+            | (Some(WireType::Datetime(_)), Some(Domain::Datetime(_))) => true,
             (_, Some(_)) => false,
         };
         if !consistent {
@@ -130,7 +132,7 @@ impl From<ParameterDescription> for ParameterRepr {
 }
 
 /// One public model output, in declaration order.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct OutputDescription {
     name: PortName,

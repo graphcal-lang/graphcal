@@ -7,11 +7,11 @@ use arrow_schema::{DataType, Field, Fields, Metadata, Schema, SchemaRef};
 use thiserror::Error;
 
 use super::metadata::{FieldMetadata, METADATA_KEY, SchemaMetadata, StreamKind};
+use super::value_array::data_type;
 use crate::label::PortName;
 use crate::session::SessionSchema;
 use crate::unit_scale::SiScale;
 use crate::version::PROTOCOL_VERSION;
-use crate::wire_type::WireType;
 
 pub(super) const OUTPUTS_FIELD: &str = "outputs";
 pub(super) const OUTCOME_FIELD: &str = "outcome";
@@ -29,17 +29,6 @@ fn json<T: serde::Serialize>(value: &T) -> String {
 
 fn metadata<T: serde::Serialize>(value: &T) -> HashMap<String, String> {
     HashMap::from([(METADATA_KEY.to_owned(), json(value))])
-}
-
-pub(super) fn data_type(wire: &WireType) -> DataType {
-    match wire {
-        WireType::Quantity(_) => DataType::Float64,
-        WireType::Int => DataType::Int64,
-        WireType::Bool => DataType::Boolean,
-        WireType::Key(_) => {
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
-        }
-    }
 }
 
 fn schema_metadata(session: &SessionSchema, stream: StreamKind) -> HashMap<String, String> {

@@ -21,7 +21,39 @@ pub struct IndexedValue<V> {
     entries: NonEmpty<V>,
 }
 
+/// Entries that do not have one value per key of their axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("an indexed value over {expected} keys received {found} entries")]
+pub struct EntryCountError {
+    pub expected: usize,
+    pub found: usize,
+}
+
 impl<V> IndexedValue<V> {
+    /// An indexed value with one entry per key of `axis`, given in axis
+    /// order, as a model boundary binds an indexed value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EntryCountError`] unless there is exactly one entry per key.
+    pub fn try_from_entries(axis: IndexAxis, entries: Vec<V>) -> Result<Self, EntryCountError> {
+        let count = EntryCountError {
+            expected: axis.len(),
+            found: entries.len(),
+        };
+        if count.expected != count.found {
+            return Err(count);
+        }
+        let entries = NonEmpty::try_from_vec(entries).map_err(|_| count)?;
+        Ok(Self { axis, entries })
+    }
+
+    /// Entries in axis order (at least one).
+    #[must_use]
+    pub fn entries(&self) -> &[V] {
+        self.entries.as_slice()
+    }
+
     /// Build one entry per axis key, in axis order.
     ///
     /// `entry` receives each key of the axis.
