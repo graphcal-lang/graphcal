@@ -454,20 +454,18 @@ Coast     : ManeuverKind
 
 型が複数のコンストラクターを持つ場合、単一のペイロード形状が保証されないため、フィールドアクセスは拒否されます。代わりに `match` で値を分解してください。
 
-#### 再帰的な代数的型 { #recursive-algebraic-types }
+#### 再帰型の禁止 { #no-recursive-types }
 
-ペイロードフィールドは代数的型を直接または相互に参照できるため、有限の再帰的な値は通常の検査済みの値として扱われます。
+型は自分自身を参照できません。直接の参照だけでなく、他の型、ジェネリック引数、ジェネリックのデフォルトを経由した参照も禁止です（`S034`）。
 
 ```graphcal
 type List {
     Nil,
-    Cons(head: Int, tail: List),
+    Cons(head: Int, tail: List), // error: `List` refers to itself through `Cons.tail`
 }
-
-node one: List = Cons(head: 1, tail: Nil);
 ```
 
-型は再帰的ですが、個々の実行時の値は有限のコンストラクターツリーのままです。`graphcal check` と `graphcal eval` はこのような出力を受け入れ、準備済みプロジェクトのパラメーター束縛では、`Cons(head: 1, tail: Cons(head: 2, tail: Nil))` のような完全で有限の値を渡せます。モデル API は、ツリースキーマを無限に展開する代わりに、型付き参照を持つ有限の定義グラフを通じてこれらの型を公開します。再帰的スキーマに対応しない転送形式では、その転送境界で型を明示的に拒否しなければなりません。[バッチ評価のプロトコル](../batch-evaluation.md)は、そのようなポートを unsupported として一覧に載せます。
+Graphcal には再帰がないため、このような値はソースに書き出した深さまでしか作成も検査もできません。再帰型がなければ、すべての値の大きさは型から決まります。項目の並びは `Item[I]` のようなインデックス付きの値で表してください。
 
 ### 宣言型（レベル 3） { #declaration-types-level-3 }
 

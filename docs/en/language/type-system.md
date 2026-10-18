@@ -684,29 +684,22 @@ Field access is rejected when a type has multiple constructors because no
 single payload shape is guaranteed. Destructure the value through `match`
 instead.
 
-#### Recursive Algebraic Types
+#### No Recursive Types
 
-Payload fields may refer directly or mutually to algebraic types, so finite
-recursive values are ordinary checked values:
+A type cannot refer to itself, either directly or through other types, generic
+arguments, or generic defaults (`S034`):
 
 ```graphcal
 type List {
     Nil,
-    Cons(head: Int, tail: List),
+    Cons(head: Int, tail: List), // error: `List` refers to itself through `Cons.tail`
 }
-
-node one: List = Cons(head: 1, tail: Nil);
 ```
 
-The type is recursive; each runtime value is still a finite constructor tree.
-`graphcal check` and `graphcal eval` accept such outputs, and prepared-project
-parameter bindings may provide complete finite values such as
-`Cons(head: 1, tail: Cons(head: 2, tail: Nil))`. The model API exposes these
-types through a finite definition graph with typed references rather than by
-infinitely expanding a tree schema. A transport that lacks recursive schemas
-must reject the type explicitly at that transport boundary; the
-[batch-evaluation protocol](../batch-evaluation.md) lists such ports as
-unsupported.
+Graphcal has no recursion, so a program could only build and inspect such a
+value to a depth written out in the source. Without recursive types, the size
+of every value follows from its type. Model a sequence of items as an indexed
+value such as `Item[I]`.
 
 ### Declaration Types (Level 3)
 
