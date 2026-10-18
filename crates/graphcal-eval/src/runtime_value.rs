@@ -9,7 +9,7 @@ mod indexed;
 pub use graphcal_compiler::semantic::index_axis::IndexAxis;
 pub use graphcal_compiler::semantic::key_value::{KeyElement, KeyValue};
 pub use graphcal_compiler::semantic::struct_value::{StructFieldsError, StructValue};
-pub use indexed::IndexedValue;
+pub use indexed::{EntryCountError, IndexedValue};
 
 /// The compiler/evaluator boundary representation of a runtime value.
 ///

@@ -75,6 +75,23 @@ impl<V> StructValue<V> {
         Self::try_new(Arc::clone(record.applied()), fields)
     }
 
+    /// Apply a constructor of a concrete model type
+    /// ([`ConcreteModelType::applied_constructors`]) to `fields`, as a model
+    /// boundary binds a structured value.
+    ///
+    /// [`ConcreteModelType::applied_constructors`]: crate::tir::dim_check::ConcreteModelType::applied_constructors
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StructFieldsError`] when `fields` is not exactly the
+    /// constructor's field set.
+    pub fn try_from_model_constructor(
+        application: &Arc<AppliedConstructor>,
+        fields: impl IntoIterator<Item = (FieldName, V)>,
+    ) -> Result<Self, StructFieldsError> {
+        Self::try_new(Arc::clone(application), fields)
+    }
+
     fn try_new(
         application: Arc<AppliedConstructor>,
         fields: impl IntoIterator<Item = (FieldName, V)>,

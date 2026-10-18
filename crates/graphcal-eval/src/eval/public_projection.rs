@@ -79,6 +79,78 @@ pub fn project_quantity(runtime: &RuntimeValue) -> Result<FiniteQuantity, Invari
     }
 }
 
+/// The SI value of a declaration checked as a complex quantity.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value is not a complex quantity.
+pub fn project_complex(
+    runtime: &RuntimeValue,
+) -> Result<graphcal_compiler::complex_value::ComplexValue, Invariant> {
+    match runtime {
+        RuntimeValue::Complex(value) => Ok(*value),
+        other => Err(mismatch_kind(other.describe(), "a complex value")),
+    }
+}
+
+/// The instant of a declaration checked as a datetime.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value is not a datetime.
+pub fn project_datetime(runtime: &RuntimeValue) -> Result<hifitime::Epoch, Invariant> {
+    match runtime {
+        RuntimeValue::Datetime(value) => Ok(*value),
+        other => Err(mismatch_kind(other.describe(), "a datetime")),
+    }
+}
+
+/// The entries, in axis order, of a declaration checked as an indexed value.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value is not an indexed value.
+pub fn project_indexed_entries(runtime: &RuntimeValue) -> Result<&[RuntimeValue], Invariant> {
+    match runtime {
+        RuntimeValue::Indexed(value) => Ok(value.entries()),
+        other => Err(mismatch_kind(other.describe(), "an indexed value")),
+    }
+}
+
+/// The struct value of a declaration checked as an algebraic type.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value is not a struct value.
+pub fn project_struct_value(
+    runtime: &RuntimeValue,
+) -> Result<&StructValue<RuntimeValue>, Invariant> {
+    match runtime {
+        RuntimeValue::Struct(value) => Ok(value),
+        other => Err(mismatch_kind(other.describe(), "a struct value")),
+    }
+}
+
+/// The struct value of a declaration checked as an algebraic type whose
+/// constructors are `constructors`, with the position of its constructor
+/// among them.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when the value is not a struct value of one of
+/// `constructors`.
+pub fn project_constructor<'r>(
+    runtime: &'r RuntimeValue,
+    constructors: impl IntoIterator<Item = &'r graphcal_compiler::syntax::type_name::ConstructorName>,
+) -> Result<(usize, &'r StructValue<RuntimeValue>), Invariant> {
+    let value = project_struct_value(runtime)?;
+    constructors
+        .into_iter()
+        .position(|constructor| constructor == value.constructor())
+        .map(|position| (position, value))
+        .ok_or_else(|| mismatch_kind(value.constructor(), "a constructor of the port's type"))
+}
+
 /// The axis position of a declaration checked as `Key<I>`.
 ///
 /// # Errors
