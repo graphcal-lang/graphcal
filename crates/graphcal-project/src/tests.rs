@@ -10041,6 +10041,26 @@ fn model_interface_carries_indexed_datetime_complex_and_algebraic_ports() {
 }
 
 #[test]
+fn model_interface_names_the_base_dimension_that_needs_a_base_unit() {
+    use graphcal_model_protocol::PortWire;
+
+    let source = r"
+        pub base dim Money;
+        param budget: Money * Length;
+    ";
+    let project = crate::loader::LoadedProject::from_source(source, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let interface = prepared.model_interface().unwrap();
+    let PortWire::Unsupported { reason } = interface.parameter("budget").unwrap().wire() else {
+        panic!("a dimension without a canonical unit is unsupported");
+    };
+    assert!(
+        reason.ends_with("declare a `base unit` for base dimension `Money`"),
+        "{reason}"
+    );
+}
+
+#[test]
 fn model_sessions_round_trip_rich_values_through_evaluation() {
     use graphcal_model_protocol::{
         ComplexValue, ConstructorPosition, FiniteF64, InputColumn, RequestBatch, RowFailure,

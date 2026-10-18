@@ -136,12 +136,25 @@ impl PreparedProject {
         let unit = if dimension.is_dimensionless() {
             None
         } else {
-            let Some(spelling) = graphcal_eval::eval::types::default_unit_label(
-                dimension,
-                &dimensions.base_unit_symbols(),
-            ) else {
+            let symbols = dimensions.base_unit_symbols();
+            let Some(spelling) =
+                graphcal_eval::eval::types::default_unit_label(dimension, &symbols)
+            else {
+                let unitless = dimension
+                    .iter()
+                    .map(|(base, _)| base)
+                    .filter(|base| !symbols.contains_key(*base))
+                    .map(|base| {
+                        format!(
+                            "`{}`",
+                            dimensions.format_dimension(&GraphcalDimension::base(base.clone()))
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 return Ok(Err(format!(
-                    "dimension `{}` has no canonical SI unit",
+                    "dimension `{}` has no canonical unit; declare a `base unit` for base \
+                     dimension {unitless}",
                     dimensions.format_dimension(dimension)
                 )));
             };
