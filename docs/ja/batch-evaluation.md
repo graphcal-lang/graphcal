@@ -57,9 +57,20 @@ graphcal model describe reliability.gcl
 }
 ```
 
-- `wire` は値の受け渡し方です。対応しているのは物理量、`Int`、`Bool`、名前付きインデックス上の `Key<I>` です。それ以外の型も一覧には載り、`"kind": "unsupported"` と理由が付きます。黙って除外されることはありません。
+- `wire` は値の受け渡し方です（下の表を参照）。再帰型のようにプロトコルで運べない型も一覧には載り、`"kind": "unsupported"` と理由が付きます。黙って除外されることはありません。
 - `unit` はそのポートの SI の基準単位です。セッションでそのポートに別の単位を選ばない限り、値はこの単位でやりとりします（後述）。
-- `domain` も同じ単位で表されます。値域外の値は、その行だけを失敗させます。
+- `domain` も同じ単位で表されます。インデックス付きのパラメータでは、すべての要素を制約します。値域外の値は、その行だけを失敗させます。
+
+| Graphcal の型 | `kind` | 値 |
+|---------------|--------|----|
+| 物理量 | `quantity` | `unit` で表した数値 |
+| `Complex<D>` | `complex` | `unit` で表した実部と虚部 |
+| `Int`、`Bool` | `int`、`bool` | 整数または真偽値 |
+| 名前付きインデックス上の `Key<I>` | `key` | ヴァリアント名 |
+| `Datetime<S>` | `datetime` | J2000（2000-01-01T12:00:00）からの秒数。`S` で読む |
+| `T[I]` | `indexed` | `I` の要素ごとに1つの `T`。宣言順に並ぶ |
+| 構造体型・共用体型 | `algebraic` | 1つのコンストラクタとそのフィールド |
+
 - `interface_fingerprint` はこのインターフェースを識別します。式を変えても指紋は変わりませんが、ポートの追加・削除・型の変更では変わります。
 
 ## 2. セッションを開始する { #2-start-a-session }
@@ -87,7 +98,7 @@ graphcal model serve reliability.gcl \
 
 ## 3. Rust から評価する { #3-evaluate-from-rust }
 
-`graphcal-model-client` crate は2つのコマンドを実行し、Arrow を内部に隠します。ハンドルには型が付いているので、各列にはそのポートの種類の値しか渡せません。
+`graphcal-model-client` crate は2つのコマンドを実行し、Arrow を内部に隠します。ハンドルには型（`Quantity`、`Complex`、`Int`、`Bool`、`Key`、`Datetime`、`Indexed<K>`、`Algebraic`）が付いているので、各列にはそのポートの種類の値しか渡せません。
 
 ```rust
 use graphcal_model_client::{Bool, GraphcalCommand, Key, Model, Quantity};
@@ -167,4 +178,4 @@ include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded)
 | `outputs` | 読み出す出力ごとに null を許すフィールドが宣言順に並ぶ。失敗した行でだけ null になる |
 | `outcome` | `status`（`UInt8`：`0` 成功、`1` アサーション不成立、`2` 値域外の入力、`3` 評価エラー）、`subject`（不成立のアサーション名またはパラメータ名）、`message` |
 
-物理量は `Float64`、`Int` は `Int64`、`Bool` は `Boolean`、キーは `Dictionary<Int32, Utf8>` です。キーの値は辞書のコードではなく、辞書の値で解決されます。
+物理量と日時は `Float64`、`Int` は `Int64`、`Bool` は `Boolean`、キーは `Dictionary<Int32, Utf8>` です。キーの値は辞書のコードではなく、辞書の値で解決されます。複素数は `re` と `im` の struct、インデックス付きの値は軸の要素ごとに1項目を持つ `FixedSizeList` です。構造体型はそのフィールドの struct です。共用体は `constructor` キーと `variants` struct からなる struct で、`variants` はコンストラクタごとに null を許す子フィールドを持ち、その行のコンストラクタの子だけが null になりません。
