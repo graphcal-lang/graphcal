@@ -109,7 +109,7 @@ impl<'d> DeclarationView<'d> {
                     &entry.type_ann,
                     false,
                     entry.span,
-                    entry.definition.formula().map(|_| entry.definition_range),
+                    Some(entry.definition_range),
                     entry.doc.as_deref(),
                 ),
             ),

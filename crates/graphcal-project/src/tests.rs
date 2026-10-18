@@ -155,13 +155,15 @@ fn checked_nodes(
                 };
                 nodes.insert(node.id().clone(), summary);
             }),
-            CheckedBody::Deferred(body) => visit_tnodes(body.as_node(), &mut |node| {
-                let summary = match node {
-                    TNodeRef::Value(expr) => (expr.span(), None, false),
-                    TNodeRef::Contextual(literal) => (literal.span(), None, true),
-                };
-                nodes.insert(node.id().clone(), summary);
-            }),
+            CheckedBody::Deferred(body) | CheckedBody::Unfinished(body) => {
+                visit_tnodes(body.as_node(), &mut |node| {
+                    let summary = match node {
+                        TNodeRef::Value(expr) => (expr.span(), None, false),
+                        TNodeRef::Contextual(literal) => (literal.span(), None, true),
+                    };
+                    nodes.insert(node.id().clone(), summary);
+                });
+            }
         }
     }
     nodes
@@ -267,7 +269,8 @@ node packet: Packet = Packet(value: @first);
                                 },
                             );
                         }
-                        graphcal_compiler::tir::texpr::CheckedBody::Deferred(body) => {
+                        graphcal_compiler::tir::texpr::CheckedBody::Deferred(body)
+                        | graphcal_compiler::tir::texpr::CheckedBody::Unfinished(body) => {
                             graphcal_compiler::tir::texpr::visit_tnodes(
                                 body.as_node(),
                                 &mut |node| {
@@ -2696,11 +2699,11 @@ fn unavailability_reasons_name_declarations_as_the_output_does() {
         &[
             (
                 "lib.gcl",
-                "node pending: Dimensionless = todo {};\nnode bad: Dimensionless = 1.0 / 0.0;\npub node output: Dimensionless = @pending;\npub node broken: Dimensionless = @bad;\n",
+                "node pending: Dimensionless = todo<Dimensionless> {};\nnode bad: Dimensionless = 1.0 / 0.0;\npub node output: Dimensionless = @pending;\npub node broken: Dimensionless = @bad;\n",
             ),
             (
                 "main.gcl",
-                "include pipeline.lib() as l;\ninclude pipeline.lib()::{output as picked, broken as busted};\ndag helper {\n    node inner: Dimensionless = todo {};\n    pub node out: Dimensionless = @inner;\n}\nnode total: Dimensionless = @l::output + @picked;\nnode sad: Dimensionless = @l::broken + @busted;\nnode called: Dimensionless = @helper()::out;\nassert waits = @l::output > 0.0;\nassert fails = @sad > 0.0;\n",
+                "include pipeline.lib() as l;\ninclude pipeline.lib()::{output as picked, broken as busted};\ndag helper {\n    node inner: Dimensionless = todo<Dimensionless> {};\n    pub node out: Dimensionless = @inner;\n}\nnode total: Dimensionless = @l::output + @picked;\nnode sad: Dimensionless = @l::broken + @busted;\nnode called: Dimensionless = @helper()::out;\nassert waits = @l::output > 0.0;\nassert fails = @sad > 0.0;\n",
             ),
         ],
         "main.gcl",
@@ -4691,7 +4694,7 @@ fn model_session_rejects_a_schema_of_another_interface() {
 fn generic_model_interface_accepts_types_the_batch_protocol_cannot_carry() {
     let project = crate::loader::LoadedProject::from_source(
         "pub base dim Money;\n\
-         node unpriced: Money = todo {};\n\
+         node unpriced: Money = todo<Money> {};\n\
          param at: Money = @unpriced; pub node same: Money = @at;",
         "generic-model.gcl",
     )
@@ -5404,7 +5407,7 @@ fn compositions_name_unavailable_plots_as_the_root_does() {
         "dag lib { pub plot inner = { mark: line { stroke_width: 1.0 / 0.0 }, encode: { x: 1.0, y: 2.0 } }; }\n\
          include lib()::{ inner as shown };\n\
          plot broken = { mark: line { stroke_width: 1.0 / 0.0 }, encode: { x: 1.0, y: 2.0 } };\n\
-         node missing: Dimensionless = todo {};\n\
+         node missing: Dimensionless = todo<Dimensionless> {};\n\
          plot pending = { mark: point, encode: { y: @missing } };\n\
          figure comparison = { plots: [broken], title: \"C\" };\n\
          layer overlay = { plots: [shown, broken] };\n\
@@ -9871,9 +9874,9 @@ fn invoked_modules_name_unavailable_declarations_by_source_module_path() {
         &[
             (
                 "lib.gcl",
-                "pub dag d {\n    node pending: Dimensionless = todo {};\n    pub node out: Dimensionless = @pending;\n}\n\
-                 dag helper {\n    node inner: Dimensionless = todo {};\n    pub node out: Dimensionless = @inner;\n}\n\
-                 node pending: Dimensionless = todo {};\n\
+                "pub dag d {\n    node pending: Dimensionless = todo<Dimensionless> {};\n    pub node out: Dimensionless = @pending;\n}\n\
+                 dag helper {\n    node inner: Dimensionless = todo<Dimensionless> {};\n    pub node out: Dimensionless = @inner;\n}\n\
+                 node pending: Dimensionless = todo<Dimensionless> {};\n\
                  pub node output: Dimensionless = @pending;\n\
                  pub node via_helper: Dimensionless = @helper()::out;\n",
             ),

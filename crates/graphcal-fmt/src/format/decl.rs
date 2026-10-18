@@ -9,8 +9,8 @@ use pretty::RcDoc;
 
 use super::doc::{
     INDENT, display_width, flat_alt_group, multiline_parenthesized_list, pad_left_to_width,
-    pad_right_to_width, prepend_comments, render_doc_to_string, soft_parenthesized,
-    soft_parenthesized_list, text_with_hardlines,
+    pad_right_to_width, render_doc_to_string, soft_parenthesized, soft_parenthesized_list,
+    text_with_hardlines,
 };
 use super::expr::{format_expr, format_generic_arg_inline, format_type_expr_inline};
 use super::formatter::Formatter;
@@ -72,8 +72,7 @@ fn format_decl_visibility(kind: &DeclKind) -> RcDoc<'static> {
         DeclKind::Dimension(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Type(d) => bindable_visibility_prefix(d.visibility),
         DeclKind::Index(d) => bindable_visibility_prefix(d.visibility),
-        DeclKind::Node(d) => visibility_prefix(d.visibility),
-        DeclKind::ConstNode(d) => visibility_prefix(d.visibility),
+        DeclKind::Node(d) | DeclKind::ConstNode(d) => visibility_prefix(d.visibility),
         DeclKind::BaseDimension(d) => visibility_prefix(d.visibility),
         DeclKind::Unit(d) => visibility_prefix(d.visibility),
         DeclKind::Dag(d) => visibility_prefix(d.visibility),
@@ -168,73 +167,7 @@ fn format_param_decl(fmt: &mut Formatter<'_>, d: &ParamDecl) -> RcDoc<'static> {
 
 /// `node name: Type = expr;`
 fn format_node_decl(fmt: &mut Formatter<'_>, d: &NodeDecl) -> RcDoc<'static> {
-    match &d.definition {
-        graphcal_compiler::node_definition::NodeDefinition::Formula(expression) => {
-            format_value_decl(fmt, "node", &d.name.value, &d.type_ann, expression)
-        }
-        graphcal_compiler::node_definition::NodeDefinition::Todo(dependencies) => {
-            let header = RcDoc::text(format!("node {}: ", d.name.value))
-                .append(format_type_expr_inline(fmt, &d.type_ann))
-                .append(RcDoc::text(" = "));
-            header
-                .append(format_todo(fmt, dependencies))
-                .append(RcDoc::text(";"))
-        }
-    }
-}
-
-fn format_todo(
-    fmt: &mut Formatter<'_>,
-    dependencies: &graphcal_compiler::syntax::span::Spanned<
-        Vec<graphcal_compiler::syntax::span::Spanned<graphcal_compiler::syntax::ast::IdentPath>>,
-    >,
-) -> RcDoc<'static> {
-    let end = dependencies.span.offset() + dependencies.span.len();
-    let mut commented = false;
-    let items = dependencies
-        .value
-        .iter()
-        .map(|reference| {
-            let leading = fmt.drain_comments_before(reference.span.offset());
-            let trailing = if fmt.has_comment_before(end) {
-                fmt.drain_trailing_comment(reference.span.offset() + reference.span.len())
-            } else {
-                None
-            };
-            commented |= leading.is_some() || trailing.is_some();
-            prepend_comments(leading, RcDoc::text(format!("@{},", reference.value)))
-                .append(trailing.unwrap_or_else(RcDoc::nil))
-        })
-        .collect::<Vec<_>>();
-    let dangling = fmt.drain_comments_before(end);
-    commented |= dangling.is_some();
-    let body = RcDoc::intersperse(items, RcDoc::hardline());
-    let body = match dangling {
-        Some(comment) if dependencies.value.is_empty() => comment,
-        Some(comment) => body.append(RcDoc::hardline()).append(comment),
-        None => body,
-    };
-    let multi = RcDoc::text("todo {")
-        .append(RcDoc::hardline().append(body).nest(INDENT))
-        .append(RcDoc::hardline())
-        .append(RcDoc::text("}"));
-    if commented {
-        return multi;
-    }
-    let single = if dependencies.value.is_empty() {
-        RcDoc::text("todo {}")
-    } else {
-        RcDoc::text("todo { ")
-            .append(RcDoc::intersperse(
-                dependencies
-                    .value
-                    .iter()
-                    .map(|reference| RcDoc::text(format!("@{}", reference.value))),
-                RcDoc::text(", "),
-            ))
-            .append(RcDoc::text(" }"))
-    };
-    flat_alt_group(single, multi)
+    format_value_decl(fmt, "node", &d.name.value, &d.type_ann, &d.value)
 }
 
 /// `const node name: Type = expr;`

@@ -71,25 +71,28 @@ fn auto_import_data(
 pub fn unfinished_node_diagnostics<P: graphcal_compiler::syntax::phase::Phase>(
     declarations: &[graphcal_compiler::syntax::ast::Declaration<P>],
     source: &str,
-) -> Vec<Diagnostic> {
+) -> Vec<Diagnostic>
+where
+    graphcal_compiler::syntax::ast::TodoHole<P>: Clone,
+{
     use graphcal_compiler::syntax::ast::DeclKind;
     let lines = LineIndex::new(source);
     declarations
         .iter()
         .flat_map(|declaration| match &declaration.kind {
-            DeclKind::Node(node) => node
-                .definition
-                .todo()
-                .map(|marker| Diagnostic {
-                    range: lines.span_to_range(marker.span),
-                    severity: Some(DiagnosticSeverity::INFORMATION),
-                    code: Some(NumberOrString::String("graphcal::todo".to_string())),
-                    source: Some("graphcal".to_string()),
-                    message: format!("{}: TODO — formula unfinished", node.name.value),
-                    ..Default::default()
-                })
-                .into_iter()
-                .collect(),
+            DeclKind::Node(node) => {
+                graphcal_compiler::syntax::visitor::collect_todo_holes(&node.value)
+                    .into_iter()
+                    .map(|hole| Diagnostic {
+                        range: lines.span_to_range(hole.span),
+                        severity: Some(DiagnosticSeverity::INFORMATION),
+                        code: Some(NumberOrString::String("graphcal::todo".to_string())),
+                        source: Some("graphcal".to_string()),
+                        message: format!("{}: TODO — formula unfinished", node.name.value),
+                        ..Default::default()
+                    })
+                    .collect()
+            }
             DeclKind::Dag(dag) => unfinished_node_diagnostics(&dag.body, source),
             _ => Vec::new(),
         })

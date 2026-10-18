@@ -986,7 +986,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
                                     == graphcal_compiler::declaration_category::DeclCategory::Value(
                                         graphcal_compiler::declaration_category::ValueDeclCategory::Node,
                                     )
-                                    && dag.todo(declaration.identity()).is_some()
+                                    && dag.is_unfinished(declaration.identity())
                             })
                             .count()
                     })

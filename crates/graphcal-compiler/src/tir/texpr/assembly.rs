@@ -257,6 +257,7 @@ impl PendingNodes {
                 )),
             },
             ExprKind::LocalRef(local) => TExprKind::Local(local.clone()),
+            ExprKind::TodoHole(_) => TExprKind::TodoHole(()),
             ExprKind::BinOp { op, lhs, rhs } => binary(
                 *op,
                 self.take_boxed(expr, lhs)?,

@@ -272,7 +272,7 @@ impl UnfrozenIR {
                     Decl::Node(entry) => Decl::Node(NodeEntry {
                         doc: entry.doc,
                         type_ann: lower_type_annotation(&entry.type_ann)?,
-                        definition: super::node_definition::lower(
+                        definition: crate::hir::expr_lower::lower::lower_expr(
                             &entry.definition.syntax,
                             crate::hir::expr_lower::context::ExprLoweringContext::with_overlay(
                                 crate::hir::lower::ModuleScope::new(
@@ -282,7 +282,8 @@ impl UnfrozenIR {
                                 ),
                                 &time_zones,
                                 overlay,
-                            ),
+                            )
+                            .allowing_todo_holes(),
                         )
                         .map_err(|error| {
                             crate::hir::diagnostics::expr_lower_error_to_semantic(&error, src)

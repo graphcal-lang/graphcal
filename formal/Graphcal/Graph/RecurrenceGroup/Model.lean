@@ -40,7 +40,7 @@ inductive Definition where
   /-- Any other formula: an aggregation, an arithmetic expression, a map
   literal, `scan`, a `for` or `unfold` nested in a larger expression, … -/
   | otherFormula
-  /-- An unfinished node, `todo { … }`. -/
+  /-- An unfinished node: its formula contains a `todo<T> { … }` hole. -/
   | unfinished
   deriving DecidableEq, Repr
 

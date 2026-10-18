@@ -58,6 +58,7 @@ pub type IndexDeclKind = crate::syntax::ast::IndexDeclKind<Desugared>;
 pub type Expr = crate::syntax::ast::Expr<Desugared>;
 pub type ExprKind = crate::syntax::ast::ExprKind<Desugared>;
 pub(crate) type MapEntry = crate::syntax::ast::MapEntry<Desugared>;
+pub(crate) type TodoHole = crate::syntax::ast::TodoHole<Desugared>;
 pub(crate) type IndexArg = crate::syntax::ast::IndexArg<Desugared>;
 pub(crate) type FieldInit = crate::syntax::ast::FieldInit<Desugared>;
 pub(crate) type MatchArm = crate::syntax::ast::MatchArm<Desugared>;

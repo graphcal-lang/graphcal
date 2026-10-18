@@ -751,8 +751,6 @@ node displayed: Datetime = @meeting -> "america/new_york";
         .next()
         .unwrap()
         .definition
-        .formula()
-        .unwrap()
         .kind()
     else {
         panic!("expected datetime function call");

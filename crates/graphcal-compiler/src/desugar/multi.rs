@@ -20,7 +20,6 @@
 
 use std::iter;
 
-use crate::node_definition::NodeDefinition;
 use crate::syntax::ast::{
     ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, MapEntry, MapEntryKey, MultiDataRow,
     MultiDecl, MultiDeclSlice, MultiHeaderCell, MultiSlotColumnSpan, NodeDecl, ParamDecl, SlotKind,
@@ -56,8 +55,8 @@ pub(super) fn expand_multi_decl(multi: &MultiDecl) -> Vec<Declaration<Desugared>
                     visibility,
                     name,
                     type_ann,
-                    definition: NodeDefinition::Formula(value),
-                    definition_range: multi.table_expr_span,
+                    value,
+                    value_range: multi.table_expr_span,
                 }),
                 SlotKind::ConstNode(visibility) => DeclKind::ConstNode(ConstNodeDecl {
                     visibility,
@@ -246,7 +245,6 @@ pub node a: Int[Component], const node b: Int[Component], pub const node c: Int[
             &decls[0].kind,
             DeclKind::Node(NodeDecl {
                 visibility: Visibility::Public,
-                definition: NodeDefinition::Formula(_),
                 ..
             })
         ));

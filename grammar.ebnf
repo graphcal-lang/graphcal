@@ -212,19 +212,7 @@ param_decl
 
 (* --- node, const node --- *)
 node_decl
-   = "node", IDENT,
-     ( [ ":", type_expr ], "=", expr
-     | ":", type_expr, "=", todo_definition ), ";";
-
-(* `todo` is contextual: only `todo {` as the entire typed runtime-node
-   body selects this form. It is not an expression or a function call.
-   The mandatory, possibly empty list is the exhaustive set of possible
-   direct dependencies while the node remains unfinished. *)
-todo_definition
-   = "todo", "{", [ todo_dependency, { ",", todo_dependency }, [ "," ] ], "}";
-
-todo_dependency
-   = "@", ident_path;
+   = "node", IDENT, [ ":", type_expr ], "=", expr, ";";
 
 const_decl
    = "const", "node", IDENT, [ ":", type_expr ], "=", expr, ";";
@@ -893,7 +881,23 @@ atom
    | for_expr
    | scan_expr
    | unfold_expr
-   | key_form_expr;
+   | key_form_expr
+   | todo_hole;
+
+(* --- Typed holes --- *)
+todo_hole
+   = "todo", "<", type_expr, ">",
+     "{", [ todo_dependency, { ",", todo_dependency }, [ "," ] ], "}";
+
+todo_dependency
+   = "@", ident_path;
+
+(* `todo` is contextual: only `todo < … > {` selects a hole, so `todo`
+   remains an ordinary identifier elsewhere. A hole stands for an unfinished
+   formula of the written type, which carries no domain constraints. It is
+   accepted only in runtime `node` formulas; a node whose formula contains a
+   hole is unfinished. The mandatory, possibly empty list is the exhaustive
+   set of possible direct dependencies of the unfinished part. *)
 
 (* --- Literals --- *)
 float_literal

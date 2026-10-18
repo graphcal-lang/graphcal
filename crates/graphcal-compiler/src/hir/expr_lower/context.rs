@@ -16,6 +16,18 @@ pub struct ExprLoweringContext<'a> {
     pub(super) scope: ModuleScope<'a>,
     pub(super) time_zones: &'a TimeZoneRegistry,
     pub(super) overlay: BindingOverlay<'a>,
+    pub(super) todo_holes: TodoHolePolicy,
+}
+
+/// Whether the lowered expression may contain `todo<T> { … }` holes.
+///
+/// Only runtime node bodies can be unfinished; every other body rejects holes
+/// unless its lowering opts in through
+/// [`ExprLoweringContext::allowing_todo_holes`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TodoHolePolicy {
+    Rejected,
+    Allowed,
 }
 
 impl<'a> ExprLoweringContext<'a> {
@@ -38,6 +50,16 @@ impl<'a> ExprLoweringContext<'a> {
             scope,
             time_zones,
             overlay,
+            todo_holes: TodoHolePolicy::Rejected,
+        }
+    }
+
+    /// Accept `todo<T> { … }` holes: the expression is a runtime node body.
+    #[must_use]
+    pub const fn allowing_todo_holes(self) -> Self {
+        Self {
+            todo_holes: TodoHolePolicy::Allowed,
+            ..self
         }
     }
 }

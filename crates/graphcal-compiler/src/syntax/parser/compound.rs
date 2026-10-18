@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
     Expr, ExprKind, ForBinding, ForBindingIndex, KeyFormKind, MatchArm, MatchPattern, NatExpr,
-    PatternBinding, PatternBindings,
+    PatternBinding, PatternBindings, TodoHole,
 };
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::NamePath;
@@ -350,6 +350,32 @@ impl Parser<'_> {
         ))
     }
 
+    // --- Typed hole ---
+
+    /// Parse a typed hole: `todo<T> { @a, @b }` → `ExprKind::TodoHole`.
+    ///
+    /// The `todo` keyword has already been consumed; `keyword_span` is its span.
+    pub(super) fn parse_todo_hole(&mut self, keyword_span: Span) -> Result<Expr, ParseError> {
+        self.expect(Token::Lt)?;
+        let ty = self.parse_type_expr()?;
+        self.expect(Token::Gt)?;
+        let (_, open_span) = self.expect(Token::LBrace)?;
+        let dependencies = self.parse_comma_separated(Token::RBrace, |parser| {
+            let (_, at) = parser.expect(Token::At)?;
+            let path = parser.parse_ident_path()?;
+            let span = at.merge(path.span());
+            Ok(Spanned::new(path, span))
+        })?;
+        let (_, end_span) = self.expect(Token::RBrace)?;
+        Ok(Expr::new(
+            ExprKind::TodoHole(Box::new(TodoHole {
+                ty,
+                interface: Spanned::new(dependencies, open_span.merge(end_span)),
+            })),
+            keyword_span.merge(end_span),
+        ))
+    }
+
     // --- Unfold expression ---
 
     /// Parse an unfold expression:
@@ -419,7 +445,7 @@ node x: Dimensionless = match @r {
         let source = "node t: Dimensionless = TransferResult(dv1: @a + @b, dv2: @c);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ConstructorCall { callee, fields, .. } => {
                     assert_eq!(callee.as_bare().unwrap().name.as_str(), "TransferResult");
                     assert_eq!(fields.len(), 2);
@@ -437,7 +463,7 @@ node x: Dimensionless = match @r {
         let source = "node t: Dimensionless = module::TransferResult(dv1: @a);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ConstructorCall { callee, fields, .. } => {
                     assert_eq!(callee.owner().unwrap()[0].name.as_str(), "module");
                     assert_eq!(callee.leaf().name.as_str(), "TransferResult");
@@ -454,7 +480,7 @@ node x: Dimensionless = match @r {
         let source = "node t: Dimensionless = TransferResult(dv1: 1.0, dv2: 2.0,);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ConstructorCall { fields, .. } => {
                     assert_eq!(fields.len(), 2);
                 }
@@ -475,7 +501,7 @@ node x: Dimensionless = match @r {
         let source = "node v: Vec3<Length, ECI> = Vec3<Length, ECI>(x: 1.0, y: 2.0, z: 3.0);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ConstructorCall {
                     callee,
                     generic_args,
@@ -506,7 +532,7 @@ node x: Dimensionless = match @r {
         let source = "node v: Dimensionless = FixedVec<3>(x: 1.0);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ConstructorCall { generic_args, .. } => {
                     assert_eq!(generic_args.len(), 1);
                     assert!(matches!(
@@ -576,7 +602,7 @@ node x: Dimensionless = match @r {
         let DeclKind::Node(node) = &file.declarations[0].kind else {
             panic!("expected node");
         };
-        let ExprKind::ForComp { bindings, .. } = &node.definition.formula().unwrap().kind else {
+        let ExprKind::ForComp { bindings, .. } = &node.value.kind else {
             panic!("expected for comprehension");
         };
         assert!(matches!(
@@ -593,7 +619,7 @@ node x: Dimensionless = match @r {
         let source = "node fuel: Mass[Maneuver] = for m: Maneuver { 1.0 kg };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ForComp { bindings, body } => {
                     assert_eq!(bindings.len(), 1);
                     assert_eq!(bindings[0].var.value.as_str(), "m");
@@ -614,7 +640,7 @@ node x: Dimensionless = match @r {
         let source = "node x: Dimensionless[Row, Col] = for r: Row, c: Col { 0.0 };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ForComp { bindings, .. } => {
                     assert_eq!(bindings.len(), 2);
                     assert_eq!(bindings[0].var.value.as_str(), "r");
@@ -639,7 +665,7 @@ node x: Dimensionless = match @r {
         let source = "node x: Velocity = @dv[Maneuver#Departure];";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::IndexAccess { expr, args } => {
                     assert!(matches!(expr.kind, ExprKind::GraphRef(_)));
                     assert_eq!(args.len(), 1);
@@ -665,7 +691,7 @@ node x: Dimensionless = match @r {
         let source = "node y: Velocity[Maneuver] = for m: Maneuver { @dv[m] };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::ForComp { body, .. } => match &body.kind {
                     ExprKind::IndexAccess { args, .. } => {
                         assert_eq!(args.len(), 1);
@@ -692,7 +718,7 @@ node x: Dimensionless = match @r {
         let source = "node cum: Velocity[Maneuver] = scan(@dv, 0.0 m/s, |acc, val| acc + val);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Scan {
                     acc_name, val_name, ..
                 } => {
@@ -710,7 +736,7 @@ node x: Dimensionless = match @r {
         let source = "node x: Dimensionless[TimeStep] = unfold(TimeStep, 1.0, |prev_x, prev_t, t| prev_x * 2.0);";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Unfold {
                     axis,
                     prev_state_name,
@@ -734,7 +760,7 @@ node x: Dimensionless = match @r {
         let source = "node x: Dimensionless = @t.dv1 + @t.dv2;";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::BinOp { op, lhs, rhs } => {
                     assert!(matches!(op, BinOp::Add));
                     assert!(matches!(&lhs.kind, ExprKind::FieldAccess { .. }));
@@ -751,7 +777,7 @@ node x: Dimensionless = match @r {
         let source = "node fuel: Force = match @maneuver { LowThrust(thrust: thrust, duration: _) => thrust, Coast() => 0.0 N, Idle => 0.0 N };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Match { arms, .. } => {
                     assert_eq!(arms.len(), 3);
                     let MatchPattern::Path { path, bindings, .. } = &arms[0].pattern else {
@@ -804,7 +830,7 @@ node x: Dimensionless = match @r {
             "node x: Dimensionless = match @phase { module::Launch(label: value) => 1.0 };";
         let file = Parser::new(source).parse_file().unwrap();
         match &file.declarations[0].kind {
-            DeclKind::Node(n) => match &n.definition.formula().unwrap().kind {
+            DeclKind::Node(n) => match &n.value.kind {
                 ExprKind::Match { arms, .. } => {
                     let MatchPattern::Path { path, bindings, .. } = &arms[0].pattern else {
                         panic!("expected syntactic path pattern");

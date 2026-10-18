@@ -450,6 +450,19 @@ pub enum ExprKind<C: Completeness = Strict> {
         output_name: crate::syntax::decl_name::DeclName,
         output: Spanned<ResolvedDeclName>,
     },
+    /// A typed hole `todo<T> { @a, @b }` standing for an unfinished formula.
+    TodoHole(Box<TodoHole<C>>),
+}
+
+/// A typed hole: the type it stands for and its possible direct dependencies.
+///
+/// The interface entries are declaration references like `@name`; they are
+/// dependencies of the enclosing declaration but are never read.
+#[derive(Debug, Clone)]
+pub struct TodoHole<C: Completeness = Strict> {
+    pub ty: crate::hir::types::DeclType,
+    /// The span covers the braces, including an explicitly empty list.
+    pub interface: Spanned<Vec<Spanned<C::DeclRef>>>,
 }
 
 /// Resolved axis and lexical bindings for an `unfold` recurrence.

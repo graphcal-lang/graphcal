@@ -31,7 +31,6 @@ pub(crate) mod diagnostics;
 pub mod expr;
 pub(crate) mod expr_lower;
 pub mod lower;
-pub mod node_definition;
 pub mod nominal;
 pub mod nominal_cycle;
 pub(crate) mod nominal_lower;

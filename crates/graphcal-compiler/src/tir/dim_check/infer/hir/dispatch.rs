@@ -171,6 +171,7 @@ impl Infer<'_> {
                 arg,
             } => self.infer_hir_key_form(expr, *kind, axis, *axis_span, arg)?,
             ExprKind::Match { scrutinee, arms } => self.infer_hir_match(expr, scrutinee, arms)?,
+            ExprKind::TodoHole(hole) => self.env.infer_hir_todo_hole(hole)?,
             ExprKind::DagCall {
                 target,
                 args,

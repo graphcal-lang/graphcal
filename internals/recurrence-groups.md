@@ -182,26 +182,27 @@ recurrence group of its own can be included.
 
 ### R2. Members are finished
 
-No member is a `todo` node [`Finished`].
+No member is an unfinished node, whose formula contains a `todo<T> { … }` hole
+[`Finished`].
 
 ```gcl
-node action: Dimensionless[Step] = todo { @state };   // ✗ R2
+node action: Dimensionless[Step] = todo<Dimensionless[Step]> { @state };   // ✗ R2
 node state: Dimensionless[Step] = unfold(Step, @initial_state, |s, prev_t, t| s + @action[prev_t]);
 ```
 
-A `todo` interface lists declarations, not step offsets, so R6 and R7 cannot be
-checked. This is today's behavior for cycles through `todo` nodes.
+A hole's interface lists declarations, not step offsets, so R6 and R7 cannot be
+checked. This is today's behavior for cycles through unfinished nodes.
 [`Examples.unfinishedAction_rejected`]
 
-Expression-level `todo` holes
+Hole interfaces with keyed element reads
 ([#2099](https://github.com/graphcal-lang/graphcal/issues/2099)) would make R2
 redundant. A member whose entire body is a hole has no recurrence shape (R3),
 and a hole inside a `for` or `unfold` member is classified through its interface,
 whose reads carry step offsets:
 
 ```gcl
-node action: Dimensionless[Step] = for t: Step { todo { @k, @state[t] } };
-node state: Dimensionless[Step] = unfold(Step, todo { @initial_state }, |s, prev_t, t| todo { s, @action[prev_t] });
+node action: Dimensionless[Step] = for t: Step { todo<Dimensionless> { @k, @state[t] } };
+node state: Dimensionless[Step] = unfold(Step, todo<Dimensionless> { @initial_state }, |s, prev_t, t| todo<Dimensionless> { s, @action[prev_t] });
 ```
 
 That relaxation only accepts more programs: filling a hole within its interface

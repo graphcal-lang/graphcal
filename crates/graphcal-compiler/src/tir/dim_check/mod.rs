@@ -107,9 +107,6 @@ fn validate_declared_shape(
 
 /// Check that a declaration's expression type matches its declared type
 /// annotation.
-///
-/// An unfinished node (`todo`) has no expression: its explicit declaration
-/// type is the entire contract, so it is not checked here.
 fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
     name: &DeclName,
@@ -316,7 +313,8 @@ fn check_ineffective_conversions_inner(
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)
         | ExprKind::QuantityLiteral { .. }
-        | ExprKind::VariantLiteral(_) => Ok(()),
+        | ExprKind::VariantLiteral(_)
+        | ExprKind::TodoHole(_) => Ok(()),
     }
 }
 
@@ -982,15 +980,13 @@ fn check_dimensions_dag(
     for entry in dag.nodes() {
         ctx.checkpoint()?;
         validate_declared_shape(&ctx, &entry.type_ann)?;
-        if let Some(formula) = entry.definition.formula() {
-            check_decl_expr_type(
-                &ctx,
-                entry.name(),
-                &entry.identity(),
-                &entry.type_ann,
-                formula,
-            )?;
-        }
+        check_decl_expr_type(
+            &ctx,
+            entry.name(),
+            &entry.identity(),
+            &entry.type_ann,
+            &entry.definition,
+        )?;
     }
     check_param_defaults(&ctx)?;
 

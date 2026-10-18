@@ -483,7 +483,7 @@ fn group_facts(
     let mut reads = Vec::new();
     for (source, candidate) in candidates.iter().enumerate() {
         let dag = candidate.dag;
-        let (definition, binders) = if dag.todo(candidate.identity).is_some() {
+        let (definition, binders) = if dag.is_unfinished(candidate.identity) {
             (Definition::Unfinished, None)
         } else {
             dag.runtime_expr(candidate.identity)

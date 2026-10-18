@@ -161,9 +161,7 @@ fn node_value<'a>(file: &'a ast::File, name: &str) -> &'a ast::Expr {
     file.declarations
         .iter()
         .find_map(|decl| match &decl.kind {
-            ast::DeclKind::Node(node) if node.name.value.as_str() == name => {
-                node.definition.formula()
-            }
+            ast::DeclKind::Node(node) if node.name.value.as_str() == name => Some(&node.value),
             _ => None,
         })
         .expect("source should contain requested node")

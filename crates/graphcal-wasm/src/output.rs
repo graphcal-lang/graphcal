@@ -597,7 +597,7 @@ mod tests {
 
     #[test]
     fn browser_outcomes_distinguish_unfinished_blocked_and_successful_values() {
-        let result = compile_and_eval("node missing: Length = todo {}; node blocked: Length = @missing; node known: Length = 1.0 m; assert pending = @missing > 0.0 m;").unwrap();
+        let result = compile_and_eval("node missing: Length = todo<Length> {}; node blocked: Length = @missing; node known: Length = 1.0 m; assert pending = @missing > 0.0 m;").unwrap();
         let view = EvaluationView::from(&result);
         assert!(view.incomplete);
         assert!(!view.has_errors);

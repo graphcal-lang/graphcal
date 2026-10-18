@@ -240,7 +240,7 @@ def insideInstance : Group 2 where
 
 theorem insideInstance_accepted : insideInstance.check = .ok ⟨[1, 0]⟩ := by decide
 
-/-- `node action: Dimensionless[Step] = todo { @state };` -/
+/-- `node action: Dimensionless[Step] = todo<Dimensionless[Step]> { @state };` -/
 def unfinishedAction : Group 2 where
   member := fun x => match x.val with
     | 0 => owned .unfinished

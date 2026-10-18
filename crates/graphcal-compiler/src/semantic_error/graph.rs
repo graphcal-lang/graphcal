@@ -119,6 +119,9 @@ pub enum GraphError {
     /// include expansion re-entered back to it.
     #[error("recursive DAG instantiation: {}", format_template_cycle(templates))]
     RecursiveDagInstantiation { templates: Vec<DagId> },
+    /// A `todo<T> { … }` hole outside the body of a runtime `node`.
+    #[error("`todo` holes are allowed only in `node` formulas")]
+    TodoHoleOutsideNode,
 }
 
 impl DiagnosticKind for GraphError {
@@ -133,6 +136,7 @@ impl DiagnosticKind for GraphError {
             Self::DagArgTypeMismatch { .. } => "graphcal::G006",
             Self::InlineDagTargetNotFound { .. } => "graphcal::G008",
             Self::RecursiveDagInstantiation { .. } => "graphcal::G009",
+            Self::TodoHoleOutsideNode => "graphcal::G010",
         }
     }
 
@@ -153,6 +157,7 @@ impl DiagnosticKind for GraphError {
             Self::InlineDagTargetNotFound { .. } | Self::RecursiveDagInstantiation { .. } => {
                 Some("error here".to_owned())
             }
+            Self::TodoHoleOutsideNode => Some("unfinished formula not allowed here".to_owned()),
         }
     }
 
@@ -166,6 +171,7 @@ impl DiagnosticKind for GraphError {
             Self::MissingDagBindings { .. } => Some("every required `param` declared in the DAG must be bound at each `include` or call site".to_owned()),
             Self::UnknownDagOutput { .. } => Some("the projection after `)::` must name a param input port, an explicitly exported node, or a public include-output alias in the called DAG".to_owned()),
             Self::DagArgTypeMismatch { .. } => Some("the binding expression must have the same type as the DAG's param declaration".to_owned()),
+            Self::TodoHoleOutsideNode => Some("only a `node` can be unfinished; write the formula here".to_owned()),
             Self::InlineDagTargetNotFound { .. }
             | Self::RecursiveDagInstantiation { .. }=> None,
         }
@@ -182,7 +188,8 @@ impl DiagnosticKind for GraphError {
             | Self::UnknownDagOutput { .. }
             | Self::DagArgTypeMismatch { .. }
             | Self::InlineDagTargetNotFound { .. }
-            | Self::RecursiveDagInstantiation { .. } => Vec::new(),
+            | Self::RecursiveDagInstantiation { .. }
+            | Self::TodoHoleOutsideNode => Vec::new(),
         }
     }
 }

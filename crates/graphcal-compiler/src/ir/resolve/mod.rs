@@ -536,9 +536,9 @@ fn entry<E>(
                 doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
                 type_ann: InScope::new(n.type_ann.clone(), dag_id.clone()),
-                definition: InScope::new(n.definition.clone(), dag_id.clone()),
+                definition: InScope::new(n.value.clone(), dag_id.clone()),
                 span: decl.span,
-                definition_range: n.definition_range,
+                definition_range: n.value_range,
             })
         }),
     })

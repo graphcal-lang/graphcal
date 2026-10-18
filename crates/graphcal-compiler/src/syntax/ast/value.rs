@@ -710,6 +710,7 @@ fn nat_expr_from_binding_expr<P: Phase>(expr: &Expr<P>) -> Option<NatExpr> {
         | ExprKind::KeyForm { .. }
         | ExprKind::Match { .. }
         | ExprKind::InlineDagRef { .. }
+        | ExprKind::TodoHole(_)
         | ExprKind::Sugar(_) => None,
     }
 }
@@ -853,6 +854,8 @@ pub enum ExprKind<P: Phase = Raw> {
         /// Projected output value name (after the closing paren `.`).
         output: Spanned<DeclName>,
     },
+    /// Typed hole for an unfinished formula: `todo<Velocity> { @isp, @g0 }`.
+    TodoHole(Box<TodoHole<P>>),
     /// Unresolved reference produced by the parser.
     ///
     /// Carries an unresolved identifier path. HIR expression lowering is the
@@ -996,6 +999,20 @@ impl std::fmt::Display for MapEntryKey {
 pub struct MapEntry<P: Phase = Raw> {
     pub keys: NonEmpty<MapEntryKey>,
     pub value: Expr<P>,
+}
+
+/// A typed hole: `todo<T> { @a, @b }`.
+///
+/// The hole has the type `T` (without domain constraints) and stands for an
+/// unfinished formula whose possible direct dependencies are listed in the
+/// braces. An explicitly empty interface is `todo<T> {}`.
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
+#[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
+pub struct TodoHole<P: Phase = Raw> {
+    pub ty: TypeExpr<P>,
+    /// The span includes the braces, including an explicitly empty list.
+    pub interface: Spanned<Vec<Spanned<IdentPath>>>,
 }
 
 /// A binding in a `for` comprehension: `m: Maneuver` or `i: Fin(3)`

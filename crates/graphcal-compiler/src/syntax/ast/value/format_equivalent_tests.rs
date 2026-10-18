@@ -198,11 +198,11 @@ fn non_span_field_differences_are_not_equivalent() {
             "#[other]\nnode x: Dimensionless = 1.0;\n",
         ),
         (
-            "node x: Length = todo { @a, @b };\n",
-            "node x: Length = todo { @b, @a };\n",
+            "node x: Length = todo<Length> { @a, @b };\n",
+            "node x: Length = todo<Length> { @b, @a };\n",
         ),
         (
-            "node x: Length = todo { @a };\n",
+            "node x: Length = todo<Length> { @a };\n",
             "node x: Length = 1.0 m;\n",
         ),
         (

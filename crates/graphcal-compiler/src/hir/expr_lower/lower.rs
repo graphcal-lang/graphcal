@@ -1,7 +1,5 @@
 //! Expression lowering entry points and the structural lowering walk.
 
-use crate::resolved_name::ResolvedDeclName;
-
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
@@ -13,14 +11,15 @@ use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 
-use super::context::ExprLoweringContext;
+use super::context::{ExprLoweringContext, TodoHolePolicy};
 use super::error::ExprLowerError;
 use super::lowerer::ExprLowerer;
 use super::resolve::{ResolvedCallable, spanned};
 use super::tolerant::{LoweringFailure, Tolerant, assert_body_into_draft, into_draft};
 use crate::hir::expr::{
     AssertBody, Expr, ExprKind, FieldInit, ForBinding, ForBindingIndex, IndexArg, IndexVariantRef,
-    MapEntry, MapEntryKey, MatchArm, MatchPattern, ParamBinding, PatternBinding, UnfoldRecurrence,
+    MapEntry, MapEntryKey, MatchArm, MatchPattern, ParamBinding, PatternBinding, TodoHole,
+    UnfoldRecurrence,
 };
 use crate::hir::expr::{CheckedAssertBody, CheckedExpr, Draft};
 use crate::hir::lower::{lower_generic_args, lower_nat_expr};
@@ -110,14 +109,6 @@ pub fn lower_expr(
         source,
         span: expr.span,
     })
-}
-
-/// Resolve a declaration reference without constructing an expression.
-pub fn lower_graph_reference(
-    reference: &Spanned<crate::syntax::ast::IdentPath>,
-    ctx: ExprLoweringContext<'_>,
-) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
-    ExprLowerer::new(ctx).resolve_source_graph_ref(reference)
 }
 
 /// Lower a syntax assertion body into tolerant HIR.
@@ -219,7 +210,8 @@ impl ExprLowerer<'_> {
             | ast::ExprKind::StringLiteral(_)
             | ast::ExprKind::UnresolvedRef(_)
             | ast::ExprKind::GraphRef(_)
-            | ast::ExprKind::QuantityLiteral { .. } => Vec::new(),
+            | ast::ExprKind::QuantityLiteral { .. }
+            | ast::ExprKind::TodoHole(_) => Vec::new(),
             ast::ExprKind::BinOp { lhs, rhs, .. } => vec![lhs, rhs],
             ast::ExprKind::UnaryOp { operand, .. } => vec![operand],
             ast::ExprKind::FnCall { args, .. } => args.iter().collect(),
@@ -541,6 +533,9 @@ impl ExprLowerer<'_> {
                     output: Spanned::new(lowered_output, output.span),
                 }
             }
+            ast::ExprKind::TodoHole(hole) => {
+                ExprKind::TodoHole(Box::new(self.lower_todo_hole(hole, expr.span)?))
+            }
             // `Sugar(_)` payload is `Infallible` post-desugar.
             #[expect(
                 clippy::uninhabited_references,
@@ -549,6 +544,31 @@ impl ExprLowerer<'_> {
             ast::ExprKind::Sugar(s) => never(*s),
         };
         Ok(Expr::new(kind, expr.span))
+    }
+
+    /// Lower a `todo<T> { … }` hole where the context accepts one.
+    fn lower_todo_hole(
+        &self,
+        hole: &ast::TodoHole,
+        span: Span,
+    ) -> Result<TodoHole<Tolerant>, ExprLowerError> {
+        if self.ctx.todo_holes == TodoHolePolicy::Rejected {
+            return Err(ExprLowerError::TodoHoleNotAllowed { span });
+        }
+        if let Some(bound) = hole.ty.element.constraints.first() {
+            return Err(ExprLowerError::TodoHoleDomainConstraint { span: bound.span });
+        }
+        let ty = crate::hir::lower::lower_decl_type(&hole.ty, self.ctx.scope)?;
+        let interface = hole
+            .interface
+            .value
+            .iter()
+            .map(|reference| self.resolve_source_graph_ref(reference))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(TodoHole {
+            ty,
+            interface: Spanned::new(interface, hole.interface.span),
+        })
     }
 
     pub(super) fn lower_field_init(&mut self, field: &ast::FieldInit) -> FieldInit<Tolerant> {

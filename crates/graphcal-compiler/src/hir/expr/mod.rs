@@ -34,12 +34,12 @@ pub use model::{
     AssertBody, ConstRef, Expr, ExprKind, ExternFnRef, FieldInit, ForBinding, ForBindingIndex,
     FunctionRef, IndexArg, IndexVariantRef, LocalDef, LocalId, MapEntry, MapEntryKey, MatchArm,
     MatchPattern, ParamBinding, PatternBinding, ResolvedUnitExpr, ResolvedUnitExprItem,
-    ResolvedUnitRef, TypeSystemRef, UnappliedFunctionRef, UnfoldRecurrence,
+    ResolvedUnitRef, TodoHole, TypeSystemRef, UnappliedFunctionRef, UnfoldRecurrence,
 };
 pub use model::{Completeness, Draft, NoErrorNode, Strict};
 pub(crate) use refine::{Refinement, refine_assert_body, refine_expr};
 pub use visit::{
-    ExprDependencies, collect_expr_dependencies, find_dag_call, visit_expr, visit_expr_children,
-    visit_expr_postorder,
+    ExprDependencies, collect_expr_dependencies, contains_todo_hole, find_dag_call, visit_expr,
+    visit_expr_children, visit_expr_postorder,
 };
 pub(crate) use visit::{collect_dag_call_reads, find_extern_call};

@@ -8,7 +8,7 @@
 use super::model::Completeness;
 use super::model::{
     AssertBody, ConstRef, Expr, ExprKind, FieldInit, IndexArg, MapEntry, MatchArm, ParamBinding,
-    ResolvedUnitExpr, ResolvedUnitExprItem,
+    ResolvedUnitExpr, ResolvedUnitExprItem, TodoHole,
 };
 use crate::syntax::span::Spanned;
 
@@ -154,6 +154,22 @@ where
             span,
         )),
         ExprKind::LocalRef(value) => ExprKind::LocalRef(value),
+        ExprKind::TodoHole(hole) => {
+            let TodoHole { ty, interface } = *hole;
+            ExprKind::TodoHole(Box::new(TodoHole {
+                ty,
+                interface: Spanned::new(
+                    interface
+                        .value
+                        .into_iter()
+                        .map(|Spanned { value, span }| {
+                            Spanned::new(refinement.decl_ref(value), span)
+                        })
+                        .collect(),
+                    interface.span,
+                ),
+            }))
+        }
         ExprKind::VariantLiteral(value) => ExprKind::VariantLiteral(value),
         ExprKind::QuantityLiteral { value, unit } => ExprKind::QuantityLiteral {
             value,

@@ -45,7 +45,7 @@ plot dv_plot = {
 #[test]
 fn unfinished_reports_are_explicitly_incomplete_not_errors() {
     let document = build_document(
-        "node missing: Length = todo {}; node blocked: Length = @missing; node known: Length = 1.0 m; assert pending = @missing > 0.0 m;",
+        "node missing: Length = todo<Length> {}; node blocked: Length = @missing; node known: Length = 1.0 m; assert pending = @missing > 0.0 m;",
     );
     for rendered in [
         render_report_html(&document, VegaScriptSource::Inline, None),
@@ -191,7 +191,7 @@ fn blocked_include_ports_are_not_entry_inputs() {
     let document = build_document(
         "\
 param len: Length = 1.0 m;
-node broken: Length = todo {};
+node broken: Length = todo<Length> {};
 dag double { param x: Length; pub node y: Length = @x * 2.0; }
 include double(x: @broken) as d;
 ",

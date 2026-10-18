@@ -518,7 +518,6 @@ struct ResolvedAnnotation {
 impl crate::ir::entry::BodyPhase for SignatureResolved {
     type Expr = crate::hir::expr::CheckedExpr;
     type TypeAnnotation = ResolvedAnnotation;
-    type NodeDefinition = crate::hir::node_definition::NodeDefinition;
     type AssertBody = crate::hir::expr::CheckedAssertBody;
     type PlotBody = crate::ir::model::LoweredPlotBody;
     type CompositionFields =
@@ -631,6 +630,16 @@ impl<'a> DeclTypeResolver<'a> {
     }
 }
 
+/// Resolve the type of a `todo<T> { … }` hole exactly as a declaration
+/// annotation `T` would be resolved, and require it to be concrete.
+pub(crate) fn resolve_todo_hole_type(
+    decl_type: &crate::hir::types::DeclType,
+    src: SourceId,
+    types: &ProjectTypeStore,
+) -> Result<crate::semantic::checked_type::CheckedType, SemanticError> {
+    type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, types)?.to_checked_type(src)
+}
+
 /// Resolve declaration annotations in the type view `types` (see
 /// [`DeclTypeResolver`]).
 fn resolve_declared_types<'d>(
@@ -739,7 +748,6 @@ where
     P: crate::ir::entry::BodyPhase,
     Q: crate::ir::entry::BodyPhase<
             Expr = P::Expr,
-            NodeDefinition = P::NodeDefinition,
             AssertBody = P::AssertBody,
             PlotBody = P::PlotBody,
             CompositionFields = P::CompositionFields,
@@ -1304,14 +1312,12 @@ fn check_hir_body_policies(
     check_dynamic_unit_policies(semantic, dag.frame(), ctx)?;
     for entry in dag.nodes() {
         let key = entry.identity();
-        entry.definition.formula().map_or(Ok(()), |expression| {
-            HirPolicyChecker {
-                ctx,
-                src,
-                frame: dag.frame(),
-            }
-            .check_expr(expression, BodyPhase::Runtime, local(&key))
-        })?;
+        HirPolicyChecker {
+            ctx,
+            src,
+            frame: dag.frame(),
+        }
+        .check_expr(&entry.definition, BodyPhase::Runtime, local(&key))?;
     }
     for entry in dag.params() {
         let Some(default) = &entry.default else {
@@ -1530,6 +1536,11 @@ impl HirPolicyChecker<'_> {
             crate::hir::expr::ExprKind::VariantLiteral(variant) => {
                 self.check_variant_literal(variant, check_pub_bind_literals)
             }
+            crate::hir::expr::ExprKind::TodoHole(hole) => hole
+                .interface
+                .value
+                .iter()
+                .try_for_each(|target| self.check_graph_ref(target, target.span, phase)),
             crate::hir::expr::ExprKind::BinOp { lhs, rhs, .. } => {
                 recurse(lhs)?;
                 recurse(rhs)

@@ -130,7 +130,9 @@ fn prepare_declarations<'p>(
         for unit in tir.declaration_bodies(position) {
             let key = unit.identity();
             let body = match unit.kind() {
-                BodyKind::Node(NodeBody::Todo) => PlannedBody::Computed(ComputedBody::Todo),
+                BodyKind::Node(NodeBody::Unfinished(_)) => {
+                    PlannedBody::Computed(ComputedBody::Todo)
+                }
                 BodyKind::Node(NodeBody::Formula(root))
                 | BodyKind::Param {
                     default: Some(root),
@@ -419,7 +421,7 @@ mod tests {
             "const node BASE: Dimensionless = 1.0;\n\
              param input: Dimensionless;\n\
              node done: Dimensionless = @input + @BASE;\n\
-             node pending: Dimensionless = todo { @done };",
+             node pending: Dimensionless = todo<Dimensionless> { @done };",
         )
         .unwrap();
         let debug = format!("{prepared:?}");
@@ -436,7 +438,7 @@ mod tests {
             "param input: Dimensionless;\n\
              param scale: Dimensionless = 2.0;\n\
              node doubled: Dimensionless = @scale * @input;\n\
-             node pending: Dimensionless = todo { @doubled };",
+             node pending: Dimensionless = todo<Dimensionless> { @doubled };",
         )
         .unwrap();
         let root = prepared.plan().root();

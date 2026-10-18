@@ -28,6 +28,15 @@ pub(super) fn infer_hir_quantity_literal(
 }
 
 impl InferEnv<'_> {
+    /// A hole is self-typed: its annotation is its type.
+    pub(super) fn infer_hir_todo_hole(
+        &self,
+        hole: &crate::hir::expr::TodoHole,
+    ) -> Result<CheckedType<Symbolic>, SemanticError> {
+        crate::tir::typed::resolve_todo_hole_type(&hole.ty, self.src, self.tir.project_type_store())
+            .map(|checked| checked.to_symbolic())
+    }
+
     pub(super) fn infer_resolved_decl_ref_type(
         &self,
         target: &LocalDecl,

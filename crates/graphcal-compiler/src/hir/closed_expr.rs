@@ -110,7 +110,8 @@ const fn validate_literal_node(expr: &Expr<Draft>) -> Result<(), ClosedExpressio
         | ExprKind::Scan { .. }
         | ExprKind::Unfold { .. }
         | ExprKind::Match { .. }
-        | ExprKind::DagCall { .. } => Err(ClosedExpressionError::NotLiteral),
+        | ExprKind::DagCall { .. }
+        | ExprKind::TodoHole(_) => Err(ClosedExpressionError::NotLiteral),
     }
 }
 

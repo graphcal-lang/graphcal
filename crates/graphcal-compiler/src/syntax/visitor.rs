@@ -105,6 +105,11 @@ pub trait ExprVisitor<P: Phase> {
 
             ExprKind::Match { scrutinee, arms } => self.visit_match(expr, scrutinee, arms),
 
+            ExprKind::TodoHole(hole) => {
+                self.visit_type_expr(&hole.ty)?;
+                self.visit_todo_hole(expr, hole)
+            }
+
             // Phase-specific sugar. Default: ignore — Raw consumers that need
             // to walk into sugar (formatter) bypass the visitor; Desugared
             // consumers' Sugar payload is `Infallible` so this arm is
@@ -127,6 +132,16 @@ pub trait ExprVisitor<P: Phase> {
     }
 
     fn visit_graph_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
+        Ok(())
+    }
+
+    /// Called for a `todo<T> { … }` hole after its type. Its interface holds
+    /// declaration references, not expressions. Default: no-op.
+    fn visit_todo_hole(
+        &mut self,
+        _expr: &Expr<P>,
+        _hole: &crate::syntax::ast::TodoHole<P>,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
 
@@ -281,4 +296,37 @@ pub trait ExprVisitor<P: Phase> {
         }
         Ok(())
     }
+}
+
+/// Every `todo<T> { … }` hole of `expr`, in pre-order, each spanned by the
+/// whole hole.
+#[must_use]
+pub fn collect_todo_holes<P: Phase>(
+    expr: &Expr<P>,
+) -> Vec<crate::syntax::span::Spanned<crate::syntax::ast::TodoHole<P>>>
+where
+    crate::syntax::ast::TodoHole<P>: Clone,
+{
+    struct Collector<P: Phase>(Vec<crate::syntax::span::Spanned<crate::syntax::ast::TodoHole<P>>>);
+
+    impl<P: Phase> ExprVisitor<P> for Collector<P>
+    where
+        crate::syntax::ast::TodoHole<P>: Clone,
+    {
+        type Error = std::convert::Infallible;
+
+        fn visit_todo_hole(
+            &mut self,
+            expr: &Expr<P>,
+            hole: &crate::syntax::ast::TodoHole<P>,
+        ) -> Result<(), Self::Error> {
+            self.0
+                .push(crate::syntax::span::Spanned::new(hole.clone(), expr.span));
+            Ok(())
+        }
+    }
+
+    let mut collector = Collector(Vec::new());
+    let Ok(()) = collector.visit_expr(expr);
+    collector.0
 }
