@@ -38,7 +38,7 @@ graphcal model describe reliability.gcl
 
 ```json
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "graphcal_version": "0.0.1-alpha.37",
   "interface_fingerprint": "sha256:…",
   "interface": {
@@ -66,7 +66,7 @@ graphcal model describe reliability.gcl
 | 物理量 | `quantity` | `unit` で表した数値 |
 | `Complex<D>` | `complex` | `unit` で表した実部と虚部 |
 | `Int`、`Bool` | `int`、`bool` | 整数または真偽値 |
-| 名前付きインデックス上の `Key<I>` | `key` | ヴァリアント名 |
+| `Key<I>` | `key` | ヴァリアント名、0から数えた `Fin` の位置、または SI の座標 |
 | `Datetime<S>` | `datetime` | J2000（2000-01-01T12:00:00）からの秒数。`S` で読む |
 | `T[I]` | `indexed` | `I` の要素ごとに1つの `T`。宣言順に並ぶ |
 | 構造体型・共用体型 | `algebraic` | 1つのコンストラクタとそのフィールド |
@@ -159,7 +159,7 @@ include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded)
 | 値域外の入力 | 値がパラメータの `min`/`max` の範囲外 | なし |
 | 評価エラー | ゼロ除算など、それ以外の実行時の失敗 | なし |
 
-ストリームの形式不正、セッションと異なるリクエストのスキーマ、NaN や無限大の値、未知のキーの variant はプロトコルエラーです。このときサーバは行の結果を返さず、終了コード `1` で停止します。
+ストリームの形式不正、セッションと異なるリクエストのスキーマ、NaN や無限大の値、インデックスにないキーはプロトコルエラーです。このときサーバは行の結果を返さず、終了コード `1` で停止します。
 
 ## 別のクライアントを書く { #writing-another-client }
 
@@ -178,4 +178,4 @@ include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded)
 | `outputs` | 読み出す出力ごとに null を許すフィールドが宣言順に並ぶ。失敗した行でだけ null になる |
 | `outcome` | `status`（`UInt8`：`0` 成功、`1` アサーション不成立、`2` 値域外の入力、`3` 評価エラー）、`subject`（不成立のアサーション名またはパラメータ名）、`message` |
 
-物理量と日時は `Float64`、`Int` は `Int64`、`Bool` は `Boolean`、キーは `Dictionary<Int32, Utf8>` です。キーの値は辞書のコードではなく、辞書の値で解決されます。複素数は `re` と `im` の struct、インデックス付きの値は軸の要素ごとに1項目を持つ `FixedSizeList` です。構造体型はそのフィールドの struct です。共用体は `constructor` キーと `variants` struct からなる struct で、`variants` はコンストラクタごとに null を許す子フィールドを持ち、その行のコンストラクタの子だけが null になりません。
+物理量と日時は `Float64`、`Int` は `Int64`、`Bool` は `Boolean` です。名前付きインデックスのキーは `Dictionary<Int32, Utf8>` で、辞書のコードではなく辞書の値で解決されます。`Fin(N)` のキーは `UInt32` の位置です。座標インデックスのキーは SI の `Float64` 座標で、インデックスの座標のどれかと厳密に一致しなければなりません。複素数は `re` と `im` の struct、インデックス付きの値は軸の要素ごとに1項目を持つ `FixedSizeList` です。構造体型はそのフィールドの struct です。共用体は `constructor` キーと `variants` struct からなる struct で、`variants` はコンストラクタごとに null を許す子フィールドを持ち、その行のコンストラクタの子だけが null になりません。

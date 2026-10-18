@@ -43,7 +43,7 @@ node:
 
 ```json
 {
-  "protocol_version": 1,
+  "protocol_version": 2,
   "graphcal_version": "0.0.1-alpha.37",
   "interface_fingerprint": "sha256:…",
   "interface": {
@@ -75,7 +75,7 @@ node:
 | Quantity | `quantity` | A number in `unit` |
 | `Complex<D>` | `complex` | Real and imaginary parts in `unit` |
 | `Int`, `Bool` | `int`, `bool` | An integer or Boolean |
-| `Key<I>` over a named index | `key` | A variant name |
+| `Key<I>` | `key` | A variant name, a `Fin` position counted from 0, or a coordinate in SI |
 | `Datetime<S>` | `datetime` | Seconds since J2000 (2000-01-01T12:00:00), read in `S` |
 | `T[I]` | `indexed` | One `T` per entry of `I`, in declaration order |
 | Struct or union type | `algebraic` | One constructor and its fields |
@@ -190,7 +190,7 @@ Every request row produces exactly one outcome, in request order:
 | Evaluation error | Any other runtime failure, such as a division by zero | None |
 
 Malformed streams, a request schema that differs from the session, NaN or
-infinite values, and unknown key variants are protocol errors: the server stops
+infinite values, and keys outside their index are protocol errors: the server stops
 with exit code `1` instead of reporting a row.
 
 ## Writing another client
@@ -218,9 +218,11 @@ The result stream has two struct fields:
 | `outputs` | One nullable field per read output, in declaration order; null exactly in failed rows |
 | `outcome` | `status` (`UInt8`: `0` success, `1` assertion failed, `2` input out of domain, `3` evaluation error), `subject` (the failed assertion or parameter), `message` |
 
-Quantities and datetimes are `Float64`, `Int` is `Int64`, `Bool` is
-`Boolean`, and keys are `Dictionary<Int32, Utf8>`. Key values are resolved by
-their dictionary value, never by their code. A complex value is a struct of
+Quantities and datetimes are `Float64`, `Int` is `Int64`, and `Bool` is
+`Boolean`. A key over a named index is a `Dictionary<Int32, Utf8>` resolved by
+its dictionary value, never by its code; a key over `Fin(N)` is its `UInt32`
+position; a key over a coordinate index is its `Float64` coordinate in SI,
+which must equal one of the index's coordinates exactly. A complex value is a struct of
 `re` and `im`, and an indexed value a `FixedSizeList` with one item per axis
 entry. A struct type is a struct of its fields; a union is a struct of a
 `constructor` key and a `variants` struct with one nullable child per
