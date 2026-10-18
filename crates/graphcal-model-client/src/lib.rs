@@ -47,7 +47,10 @@ pub use error::ClientError;
 pub use evaluation::{Evaluation, Row};
 #[doc(hidden)]
 pub use identity::PortIdentity;
-pub use kind::{Bool, Int, Key, KeyVariant, Kind, Quantity};
+pub use kind::{
+    Algebraic, Bool, Complex, Datetime, Indexed, IndexedDetail, Int, Key, KeyVariant, Kind,
+    Quantity, QuantityLike,
+};
 pub use model::{InputHandle, Model, OutputHandle};
 pub use session::{Session, SessionBuilder};
 

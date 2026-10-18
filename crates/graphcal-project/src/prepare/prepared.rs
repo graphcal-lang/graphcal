@@ -56,13 +56,16 @@ mod model_port;
 mod model_session;
 #[path = "model_unit.rs"]
 mod model_unit;
+#[path = "model_value.rs"]
+mod model_value;
+#[path = "model_wire.rs"]
+mod model_wire;
 
 use binding_compile::build_parameter_ports;
 pub use binding_compile::{
     ExternalValue, ParameterBindingRow, StructuredBindingError, StructuredBindingErrorKind,
     StructuredBindingPathSegment, StructuredValueExpr,
 };
-use model_port::OutputProjectionError;
 pub use model_port::{
     InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,
     ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterDomain, ParameterPort,

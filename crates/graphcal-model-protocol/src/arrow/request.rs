@@ -2,19 +2,19 @@
 
 use std::sync::Arc;
 
-use arrow_array::types::Int32Type;
-use arrow_array::{
-    Array, ArrayRef, BooleanArray, DictionaryArray, Float64Array, Int32Array, Int64Array,
-    RecordBatch, StringArray,
-};
+use arrow_array::{Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch};
 use arrow_schema::ArrowError;
 use thiserror::Error;
 
 use super::schema::request_schema;
+use super::value_array::{
+    DictionaryError, ValueDecodeError, decode, decode_dictionary, encode, key_array,
+};
 use crate::batch::{InputColumn, RequestBatch, RequestBatchError};
 use crate::finite::FiniteF64;
-use crate::label::{PortName, VariantName};
+use crate::label::PortName;
 use crate::session::SessionSchema;
+use crate::value::Value;
 use crate::wire_type::{KeyType, VariantPosition, WireType};
 
 /// Why a received record batch is not a valid request.
@@ -36,6 +36,11 @@ pub enum RequestDecodeError {
     },
     #[error("parameter `{input}` has an invalid dictionary key at row {row}")]
     DictionaryKey { input: PortName, row: usize },
+    #[error("the column for parameter `{input}` {source}")]
+    Value {
+        input: PortName,
+        source: ValueDecodeError,
+    },
     #[error(transparent)]
     Batch(#[from] RequestBatchError),
 }
@@ -69,6 +74,19 @@ impl RequestBatch {
                             input.name()
                         )));
                     }
+                    (InputColumn::Datetime(values), _) => Arc::new(Float64Array::from_iter_values(
+                        values.iter().map(|value| value.get()),
+                    )),
+                    (InputColumn::Complex(values), wire) => encode(
+                        wire,
+                        &values
+                            .iter()
+                            .copied()
+                            .map(Value::Complex)
+                            .collect::<Vec<_>>(),
+                        None,
+                    )?,
+                    (InputColumn::Structured(values), wire) => encode(wire, values, None)?,
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -102,35 +120,6 @@ impl RequestBatch {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self::new(schema, columns)?)
     }
-}
-
-/// A `Dictionary<Int32, Utf8>` array over every variant of `key`, in
-/// declaration order.
-pub(super) fn key_array(
-    key: &KeyType,
-    positions: impl Iterator<Item = Option<VariantPosition>>,
-) -> Result<ArrayRef, ArrowError> {
-    let dictionary = Arc::new(StringArray::from_iter_values(
-        key.variants().iter().map(VariantName::as_str),
-    ));
-    let codes = positions
-        .map(|position| {
-            position
-                .map(|position| {
-                    // `KeyType` guarantees the variant count fits in `i32`.
-                    i32::try_from(position.get()).map_err(|_| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "variant position {} exceeds Int32",
-                            position.get()
-                        ))
-                    })
-                })
-                .transpose()
-        })
-        .collect::<Result<Int32Array, _>>()?;
-    Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
-        codes, dictionary,
-    )?))
 }
 
 fn reject_nulls(input: &PortName, array: &dyn Array) -> Result<(), RequestDecodeError> {
@@ -189,6 +178,27 @@ fn decode_column(
                 .iter()
                 .collect(),
         ),
+        WireType::Complex(_) => InputColumn::Complex(
+            all_values(input, wire, array)?
+                .into_iter()
+                .map(|value| match value {
+                    Value::Complex(value) => Ok(value),
+                    _ => Err(arrow_type()),
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+        WireType::Datetime(_) => InputColumn::Datetime(
+            all_values(input, wire, array)?
+                .into_iter()
+                .map(|value| match value {
+                    Value::Datetime(value) => Ok(value),
+                    _ => Err(arrow_type()),
+                })
+                .collect::<Result<_, _>>()?,
+        ),
+        WireType::Indexed(_) | WireType::Algebraic(_) => {
+            InputColumn::Structured(all_values(input, wire, array)?)
+        }
         WireType::Key(key) => {
             let positions = decode_keys(input, key, array)?
                 .into_iter()
@@ -205,6 +215,28 @@ fn decode_column(
     })
 }
 
+/// The value in every row of a column without nulls.
+fn all_values(
+    input: &PortName,
+    wire: &WireType,
+    array: &dyn Array,
+) -> Result<Vec<Value>, RequestDecodeError> {
+    decode(wire, array)
+        .map_err(|source| RequestDecodeError::Value {
+            input: input.clone(),
+            source,
+        })?
+        .into_iter()
+        .enumerate()
+        .map(|(row, value)| {
+            value.ok_or_else(|| RequestDecodeError::Value {
+                input: input.clone(),
+                source: ValueDecodeError::Null { row },
+            })
+        })
+        .collect()
+}
+
 /// Resolve every dictionary entry of a key column by value; a null row
 /// decodes as `None`.
 pub(super) fn decode_keys(
@@ -212,58 +244,32 @@ pub(super) fn decode_keys(
     key: &KeyType,
     array: &dyn Array,
 ) -> Result<Vec<Option<VariantPosition>>, RequestDecodeError> {
-    let arrow_type = || RequestDecodeError::ArrowType {
-        input: input.clone(),
-    };
-    let dictionary = array
-        .as_any()
-        .downcast_ref::<DictionaryArray<Int32Type>>()
-        .ok_or_else(arrow_type)?;
-    let values = dictionary
-        .values()
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .ok_or_else(arrow_type)?;
-    // Positions of each dictionary entry within the key type, resolved once.
-    let resolved = (0..values.len())
-        .map(|entry| {
-            (!values.is_null(entry))
-                .then(|| key.position(values.value(entry)))
-                .flatten()
-        })
-        .collect::<Vec<_>>();
-    dictionary
-        .keys()
-        .iter()
-        .enumerate()
-        .map(|(row, code)| {
-            let Some(code) = code else {
-                return Ok(None);
-            };
-            let entry = usize::try_from(code)
-                .ok()
-                .filter(|entry| *entry < values.len())
-                .ok_or_else(|| RequestDecodeError::DictionaryKey {
-                    input: input.clone(),
-                    row,
-                })?;
-            resolved[entry]
-                .ok_or_else(|| RequestDecodeError::UnknownVariant {
-                    input: input.clone(),
-                    variant: if values.is_null(entry) {
-                        "null".to_owned()
-                    } else {
-                        values.value(entry).to_owned()
-                    },
-                    row,
-                })
-                .map(Some)
-        })
-        .collect()
+    let positions = decode_dictionary(array, |label| key.position(label).map(VariantPosition::get))
+        .map_err(|error| match error {
+            DictionaryError::ArrowType => RequestDecodeError::ArrowType {
+                input: input.clone(),
+            },
+            DictionaryError::Key { row } => RequestDecodeError::DictionaryKey {
+                input: input.clone(),
+                row,
+            },
+            DictionaryError::Unknown { name, row } => RequestDecodeError::UnknownVariant {
+                input: input.clone(),
+                variant: name,
+                row,
+            },
+        })?;
+    Ok(positions
+        .into_iter()
+        .map(|position| position.map(VariantPosition::new))
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::types::Int32Type;
+    use arrow_array::{DictionaryArray, Int32Array, StringArray};
+
     use super::*;
     use crate::session::tests::sample_session;
 

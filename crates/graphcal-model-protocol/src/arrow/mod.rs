@@ -23,8 +23,10 @@ mod metadata;
 mod request;
 mod result;
 mod schema;
+mod value_array;
 
 pub use metadata::{FieldMetadata, METADATA_KEY, SchemaMetadata, StreamKind};
 pub use request::RequestDecodeError;
 pub use result::ResultDecodeError;
 pub use schema::{SchemaMismatch, request_schema, result_schema, si_scales, validate_schema};
+pub use value_array::ValueDecodeError;

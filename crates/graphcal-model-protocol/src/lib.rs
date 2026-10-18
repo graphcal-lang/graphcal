@@ -16,7 +16,9 @@
 
 #[cfg(feature = "arrow")]
 pub mod arrow;
+mod axis;
 mod batch;
+mod datetime_type;
 mod describe;
 mod dimension;
 mod domain;
@@ -31,10 +33,12 @@ mod value;
 mod version;
 mod wire_type;
 
+pub use axis::{Axis, AxisError, AxisKind};
 pub use batch::{
     InputColumn, OutputColumn, RequestBatch, RequestBatchError, ResultBatch, ResultBatchBuilder,
     ResultBatchError, RowValues,
 };
+pub use datetime_type::{DatetimeType, TimeScale};
 pub use describe::{DescribeDocument, DescribeDocumentError};
 pub use dimension::{Dimension, Exponent, ExponentError};
 pub use domain::{Bounds, BoundsError, Domain};
@@ -43,15 +47,20 @@ pub use finite::{FiniteF64, NonFiniteError};
 pub use interface::{
     InterfaceError, ModelInterface, OutputDescription, ParameterDescription, ParameterError,
 };
-pub use label::{BaseDimensionName, IndexName, LabelError, PortName, UnitSpelling, VariantName};
+pub use label::{
+    BaseDimensionName, ConstructorName, FieldName, IndexName, LabelError, PortName, TypeName,
+    UnitSpelling, VariantName,
+};
 pub use outcome::{RowFailure, RowOutcome, RowStatus, UnknownRowStatus};
 pub use session::{
     CanonicalUnitsOnly, InputSlot, OutputSlot, SessionError, SessionInput, SessionOutput,
     SessionSchema, SessionSpec, UnitChoice, UnitResolver,
 };
 pub use unit_scale::{SiScale, SiScaleError};
-pub use value::{Value, ValueRef};
+pub use value::{ComplexValue, Value, ValueRef};
 pub use version::PROTOCOL_VERSION;
 pub use wire_type::{
-    KeyType, KeyTypeError, PortWire, QuantityType, QuantityTypeError, VariantPosition, WireType,
+    AlgebraicType, AlgebraicTypeError, ConstructorPosition, ConstructorType, FieldType,
+    IndexedType, KeyType, KeyTypeError, PortWire, QuantityType, QuantityTypeError, VariantPosition,
+    WireType,
 };

@@ -4333,7 +4333,10 @@ fn model_interface_describes_wire_types_units_and_domains() {
         .collect::<Vec<_>>();
     assert_eq!(variants, ["Zulu", "Alpha"], "declaration order");
     assert_eq!(wire("enabled"), PortWire::Supported(WireType::Bool));
-    assert!(matches!(wire("at"), PortWire::Unsupported { .. }));
+    assert!(matches!(
+        wire("at"),
+        PortWire::Supported(WireType::Datetime(_))
+    ));
 
     let outputs = interface
         .outputs()
@@ -4676,7 +4679,8 @@ fn model_session_rejects_a_schema_of_another_interface() {
 #[test]
 fn generic_model_interface_accepts_types_the_batch_protocol_cannot_carry() {
     let project = crate::loader::LoadedProject::from_source(
-        "param at: Datetime<UTC>; pub node same: Datetime<UTC> = @at;",
+        "pub type Chain { End, Link(next: Chain) }\n\
+         param at: Chain = End; pub node same: Chain = @at;",
         "generic-model.gcl",
     )
     .unwrap();
@@ -9966,4 +9970,173 @@ fn inline_dags_without_required_inputs_run_on_their_own_defaults() {
             ("twice".to_string(), ready, 4.0),
         ]
     );
+}
+
+const RICH_MODEL: &str = r"
+    pub index Phase = { Climb, Cruise };
+    pub index Step = linspace(0.0 s, 1.0 s, points: 3);
+    pub type Shape {
+        Circle(r: Length),
+        Dot,
+    }
+    pub type Chain {
+        End,
+        Link(next: Chain),
+    }
+    param profile: Length(min: 0.0 m)[Phase];
+    param samples: Length[Step];
+    param shape: Shape;
+    param at: Datetime<TAI>;
+    param z: Complex<Length>;
+    param chain: Chain = End;
+    pub node doubled: Length[Phase] = for p: Phase { @profile[p] * 2.0 };
+    pub node samples_out: Length[Step] = @samples;
+    pub node shape_out: Shape = @shape;
+    pub node later: Datetime<TAI> = @at + 60.0 s;
+    pub node z2: Complex<Length> = @z * 2.0;
+    pub node chain_out: Chain = @chain;
+";
+
+#[test]
+fn model_interface_carries_indexed_datetime_complex_and_algebraic_ports() {
+    use graphcal_model_protocol::{AxisKind, Domain, PortWire, WireType};
+
+    let project = crate::loader::LoadedProject::from_source(RICH_MODEL, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let interface = prepared.model_interface().unwrap();
+    let parameter = |name: &str| interface.parameter(name).unwrap();
+
+    let PortWire::Supported(WireType::Indexed(profile)) = parameter("profile").wire() else {
+        panic!("profile is indexed");
+    };
+    assert!(matches!(profile.axis().kind(), AxisKind::Named { variants } if variants.len() == 2));
+    assert!(matches!(profile.element(), WireType::Quantity(_)));
+    assert!(matches!(
+        parameter("profile").domain(),
+        Some(Domain::Quantity(_))
+    ));
+    let PortWire::Supported(WireType::Indexed(samples)) = parameter("samples").wire() else {
+        panic!("samples is indexed");
+    };
+    assert!(matches!(
+        samples.axis().kind(),
+        AxisKind::Coordinate { coordinates, .. } if coordinates.len() == 3
+    ));
+    assert!(matches!(
+        parameter("shape").wire(),
+        PortWire::Supported(WireType::Algebraic(_))
+    ));
+    assert!(matches!(
+        parameter("at").wire(),
+        PortWire::Supported(WireType::Datetime(_))
+    ));
+    assert!(matches!(
+        parameter("z").wire(),
+        PortWire::Supported(WireType::Complex(_))
+    ));
+    assert!(matches!(
+        parameter("chain").wire(),
+        PortWire::Unsupported { reason } if reason.contains("recursive")
+    ));
+}
+
+#[test]
+fn model_sessions_round_trip_rich_values_through_evaluation() {
+    use graphcal_model_protocol::{
+        ComplexValue, ConstructorPosition, FiniteF64, InputColumn, RequestBatch, RowFailure,
+        RowOutcome, Value, ValueRef, WireType,
+    };
+
+    let project = crate::loader::LoadedProject::from_source(RICH_MODEL, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let schema = std::sync::Arc::new(
+        prepared
+            .session_schema(
+                &unit_names(
+                    &["profile", "samples", "shape", "at", "z"],
+                    &["doubled", "samples_out", "shape_out", "later", "z2"],
+                )
+                .with_unit(
+                    graphcal_model_protocol::PortName::new("doubled").unwrap(),
+                    graphcal_model_protocol::UnitSpelling::new("cm").unwrap(),
+                ),
+            )
+            .unwrap(),
+    );
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let x = |value: f64| FiniteF64::new(value).unwrap();
+    let lengths = |values: &[f64]| {
+        Value::Indexed(
+            values
+                .iter()
+                .map(|value| Value::Quantity(x(*value)))
+                .collect(),
+        )
+    };
+    let WireType::Algebraic(shape) = schema.inputs()[2].wire() else {
+        panic!("shape is algebraic");
+    };
+    let circle = |radius: f64| Value::Algebraic {
+        constructor: shape.position("Circle").unwrap(),
+        fields: vec![Value::Quantity(x(radius))],
+    };
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![
+            InputColumn::Structured(vec![lengths(&[1.0, 2.0]), lengths(&[-1.0, 2.0])]),
+            InputColumn::Structured(vec![lengths(&[0.1, 0.2, 0.3]), lengths(&[0.0, 0.0, 0.0])]),
+            InputColumn::Structured(vec![circle(4.0), circle(5.0)]),
+            InputColumn::Datetime(vec![x(100.0), x(0.0)]),
+            InputColumn::Complex(vec![
+                ComplexValue {
+                    re: x(1.0),
+                    im: x(-1.5)
+                };
+                2
+            ]),
+        ],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    let RowOutcome::Success(values) = result.row(0).unwrap() else {
+        panic!("row 0 succeeds: {:?}", result.failure(0));
+    };
+    let get = |name: &str| {
+        values
+            .get(schema.output_slot(name).unwrap())
+            .unwrap()
+            .to_owned_value()
+    };
+    assert_eq!(get("doubled"), lengths(&[200.0, 400.0]), "in centimetres");
+    assert_eq!(get("samples_out"), lengths(&[0.1, 0.2, 0.3]));
+    assert_eq!(get("shape_out"), circle(4.0));
+    assert_eq!(get("later"), Value::Datetime(x(160.0)));
+    assert_eq!(
+        get("z2"),
+        Value::Complex(ComplexValue {
+            re: x(2.0),
+            im: x(-3.0)
+        })
+    );
+    assert!(matches!(
+        values.get(schema.output_slot("shape_out").unwrap()),
+        Some(ValueRef::Algebraic { constructor, .. }) if constructor == ConstructorPosition::new(0)
+    ));
+    assert!(matches!(
+        result.row(1),
+        Some(RowOutcome::Failure(RowFailure::InputOutOfDomain { ref parameter, .. }))
+            if parameter.as_str() == "profile"
+    ));
+}
+
+fn unit_names(inputs: &[&str], outputs: &[&str]) -> graphcal_model_protocol::SessionSpec {
+    let names = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| graphcal_model_protocol::PortName::new(*name).unwrap())
+            .collect()
+    };
+    graphcal_model_protocol::SessionSpec::new(names(inputs), names(outputs))
 }

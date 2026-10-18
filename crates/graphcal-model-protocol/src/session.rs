@@ -11,7 +11,7 @@ use crate::finite::FiniteF64;
 use crate::interface::ModelInterface;
 use crate::label::{PortName, UnitSpelling};
 use crate::unit_scale::SiScale;
-use crate::wire_type::{PortWire, QuantityType, WireType};
+use crate::wire_type::{PortWire, WireType};
 
 /// A unit a session chooses for one selected quantity port.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,7 +142,7 @@ pub enum SessionError {
     DuplicateUnit { name: PortName },
     #[error("a unit is chosen for port `{name}`, which the session does not select")]
     UnitForUnselectedPort { name: PortName },
-    #[error("a unit is chosen for port `{name}`, which is not a quantity")]
+    #[error("a unit is chosen for port `{name}`, which carries no quantities")]
     UnitForNonQuantity { name: PortName },
     #[error("unit `{unit}` cannot carry port `{name}`: {reason}")]
     UnresolvedUnit {
@@ -305,15 +305,12 @@ impl SessionSchema {
     /// The selection this schema was configured from.
     #[must_use]
     pub fn spec(&self) -> SessionSpec {
-        let chosen = |name: &PortName, wire: &WireType, scale: Option<SiScale>| match (wire, scale)
-        {
-            (WireType::Quantity(quantity), Some(_)) => {
-                quantity.unit().cloned().map(|unit| UnitChoice {
-                    port: name.clone(),
-                    unit,
-                })
-            }
-            _ => None,
+        let chosen = |name: &PortName, wire: &WireType, scale: Option<SiScale>| {
+            scale?;
+            wire.quantity()?.unit().cloned().map(|unit| UnitChoice {
+                port: name.clone(),
+                unit,
+            })
         };
         SessionSpec {
             inputs: self.inputs.iter().map(|input| input.name.clone()).collect(),
@@ -347,25 +344,17 @@ fn chosen_wire(
     let Some(unit) = choice else {
         return Ok((wire.clone(), None));
     };
-    let WireType::Quantity(quantity) = wire else {
+    let Some(chosen) = wire.with_unit(unit) else {
         return Err(SessionError::UnitForNonQuantity { name: name.clone() });
     };
-    let scale = resolver
-        .si_scale(name, unit)
-        .map_err(|reason| SessionError::UnresolvedUnit {
-            name: name.clone(),
-            unit: unit.clone(),
-            reason,
-        })?;
-    let quantity =
-        QuantityType::new(quantity.dimension().clone(), Some(unit.clone())).map_err(|error| {
-            SessionError::UnresolvedUnit {
-                name: name.clone(),
-                unit: unit.clone(),
-                reason: error.to_string(),
-            }
-        })?;
-    Ok((WireType::Quantity(quantity), Some(scale)))
+    let unresolved = |reason: String| SessionError::UnresolvedUnit {
+        name: name.clone(),
+        unit: unit.clone(),
+        reason,
+    };
+    let scale = resolver.si_scale(name, unit).map_err(unresolved)?;
+    let chosen = chosen.map_err(|error| unresolved(error.to_string()))?;
+    Ok((chosen, Some(scale)))
 }
 
 /// The unit chosen for each selected port, rejecting repeated choices and

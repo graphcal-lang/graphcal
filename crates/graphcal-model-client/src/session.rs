@@ -17,7 +17,7 @@ use crate::batch::{BatchBuilder, Request};
 use crate::error::ClientError;
 use crate::evaluation::Evaluation;
 use crate::identity::{ModelId, SessionId};
-use crate::kind::{Kind, Quantity};
+use crate::kind::{Kind, QuantityLike};
 use crate::model::{InputHandle, Model, OutputHandle};
 
 impl Model {
@@ -62,20 +62,24 @@ impl<'m> SessionBuilder<'m> {
         self
     }
 
-    /// Vary the quantity `input`, supplying its values in `unit`.
+    /// Vary the quantity-like `input`, supplying its quantities in `unit`.
     ///
     /// `unit` is a Graphcal unit expression in the model's entry file with a
     /// fixed scale, such as `kN`; the server resolves it when the session
     /// starts.
-    pub fn vary_in(mut self, input: &InputHandle<Quantity>, unit: UnitSpelling) -> Self {
+    pub fn vary_in<K: QuantityLike>(mut self, input: &InputHandle<K>, unit: UnitSpelling) -> Self {
         if self.record(input.port(), true) {
             self.units.push((input.name().clone(), unit));
         }
         self
     }
 
-    /// Return the quantity `output` in `unit` (see [`Self::vary_in`]).
-    pub fn output_in(mut self, output: &OutputHandle<Quantity>, unit: UnitSpelling) -> Self {
+    /// Return the quantity-like `output` in `unit` (see [`Self::vary_in`]).
+    pub fn output_in<K: QuantityLike>(
+        mut self,
+        output: &OutputHandle<K>,
+        unit: UnitSpelling,
+    ) -> Self {
         if self.record(output.port(), false) {
             self.units.push((output.name().clone(), unit));
         }

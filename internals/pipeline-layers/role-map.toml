@@ -2055,6 +2055,16 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["prepare", "prepared", "model_value"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["prepare", "prepared", "model_wire"]
+role = "facade"
+
+[[module]]
+package = "project"
 path = ["prepare", "prepared", "binding_compile"]
 role = "facade"
 
@@ -2196,6 +2206,16 @@ role = "interpreter"
 [[module]]
 package = "eval"
 path = ["eval_expr", "datetime", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "j2000_seconds"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "j2000_seconds", "tests"]
 role = "interpreter"
 
 [[module]]

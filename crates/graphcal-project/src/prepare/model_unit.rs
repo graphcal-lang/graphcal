@@ -41,7 +41,8 @@ pub enum ModelUnitError {
 }
 
 impl PreparedProject {
-    /// The scale of `unit` for the quantity port `port`.
+    /// The scale of `unit` for the quantity-like port `port`: a quantity, a
+    /// complex quantity, or an indexed value of one of those.
     ///
     /// # Errors
     ///
@@ -53,7 +54,7 @@ impl PreparedProject {
         port: &PortName,
         unit: &UnitSpelling,
     ) -> Result<SiScale, ModelUnitError> {
-        let Some(CheckedType::Quantity(expected)) = self.port_type(port) else {
+        let Some(expected) = self.port_type(port).and_then(quantity_dimension) else {
             return Err(ModelUnitError::NotQuantityPort { port: port.clone() });
         };
         let expr = Parser::new(unit.as_str())
@@ -121,5 +122,20 @@ impl PreparedProject {
                     .find(|output| output.is_public && output.name.as_str() == port.as_str())
                     .map(|output| &output.declared_type)
             })
+    }
+}
+
+/// The dimension of a quantity-like type's quantities.
+fn quantity_dimension(
+    declared_type: &CheckedType,
+) -> Option<&graphcal_compiler::dimension::Dimension> {
+    match declared_type {
+        CheckedType::Quantity(dimension) | CheckedType::Complex(dimension) => Some(dimension),
+        CheckedType::Indexed { element, .. } => quantity_dimension(element),
+        CheckedType::Int
+        | CheckedType::Bool
+        | CheckedType::Key(_)
+        | CheckedType::Datetime(_)
+        | CheckedType::Struct(..) => None,
     }
 }

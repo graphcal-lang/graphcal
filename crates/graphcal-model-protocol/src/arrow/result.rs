@@ -9,8 +9,9 @@ use arrow_array::{
 use arrow_schema::ArrowError;
 use thiserror::Error;
 
-use super::request::{RequestDecodeError, decode_keys, key_array};
+use super::request::{RequestDecodeError, decode_keys};
 use super::schema::{outcome_fields, output_fields, result_schema};
+use super::value_array::{ValueDecodeError, decode, encode, key_array, with_placeholders};
 use crate::batch::{OutputColumn, ResultBatch, ResultBatchBuilder, ResultBatchError};
 use crate::finite::FiniteF64;
 use crate::label::{LabelError, PortName};
@@ -46,6 +47,11 @@ pub enum ResultDecodeError {
         output: PortName,
         source: RequestDecodeError,
     },
+    #[error("the column for output `{output}` {source}")]
+    Value {
+        output: PortName,
+        source: ValueDecodeError,
+    },
     #[error(transparent)]
     Batch(#[from] ResultBatchError),
 }
@@ -78,6 +84,20 @@ impl ResultBatch {
                             "key column for non-key output `{}`",
                             output.name()
                         )));
+                    }
+                    (OutputColumn::Datetime(values), _) => Arc::new(Float64Array::from_iter(
+                        values.iter().map(|value| value.map(FiniteF64::get)),
+                    )),
+                    (OutputColumn::Complex(values), wire) => {
+                        let (values, valid) = with_placeholders(
+                            wire,
+                            values.iter().map(|value| value.map(Value::Complex)),
+                        );
+                        encode(wire, &values, Some(&valid))?
+                    }
+                    (OutputColumn::Structured(values), wire) => {
+                        let (values, valid) = with_placeholders(wire, values.iter().cloned());
+                        encode(wire, &values, Some(&valid))?
                     }
                 })
             })
@@ -274,6 +294,15 @@ fn decode_output(
             .iter()
             .map(|value| value.map(Value::Bool))
             .collect(),
+        WireType::Complex(_)
+        | WireType::Datetime(_)
+        | WireType::Indexed(_)
+        | WireType::Algebraic(_) => {
+            decode(wire, array).map_err(|source| ResultDecodeError::Value {
+                output: output.clone(),
+                source,
+            })?
+        }
         WireType::Key(key) => decode_keys(output, key, array)
             .map_err(|source| ResultDecodeError::Key {
                 output: output.clone(),
