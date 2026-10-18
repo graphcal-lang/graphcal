@@ -3,7 +3,7 @@
 use std::process::ExitStatus;
 
 use graphcal_model_protocol::arrow::{ResultDecodeError, SchemaMismatch};
-use graphcal_model_protocol::{PortName, RequestBatchError, SessionError};
+use graphcal_model_protocol::{KeyValue, PortName, RequestBatchError, SessionError};
 use thiserror::Error;
 
 /// Why a client operation failed.
@@ -30,8 +30,10 @@ pub enum ClientError {
     ForeignHandle { name: PortName },
     #[error("index of parameter `{input}` has no variant `{variant}`")]
     UnknownVariant { input: PortName, variant: String },
-    #[error("a variant of parameter `{owner}` was supplied for parameter `{input}`")]
-    ForeignVariant { input: PortName, owner: PortName },
+    #[error("index of parameter `{input}` has no entry at {key}")]
+    UnknownKey { input: PortName, key: KeyValue },
+    #[error("a key of parameter `{owner}` was supplied for parameter `{input}`")]
+    ForeignKey { input: PortName, owner: PortName },
     #[error(transparent)]
     Session(#[from] SessionError),
     #[error("parameter `{name}` is not varied by this session")]

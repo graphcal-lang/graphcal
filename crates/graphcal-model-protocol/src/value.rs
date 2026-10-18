@@ -1,7 +1,7 @@
 //! Single values carried by the protocol.
 
+use crate::axis::{KeyRef, KeyValue};
 use crate::finite::FiniteF64;
-use crate::label::VariantName;
 use crate::wire_type::ConstructorPosition;
 use crate::wire_type::WireType;
 
@@ -25,8 +25,8 @@ pub enum Value {
     Int(i64),
     /// A Boolean.
     Bool(bool),
-    /// A categorical variant, identified by name.
-    Key(VariantName),
+    /// A key of an axis entry.
+    Key(KeyValue),
     /// Seconds since J2000 in the port's time scale.
     Datetime(FiniteF64),
     /// One value per axis entry, in axis order.
@@ -43,8 +43,8 @@ pub enum Value {
 
 impl Value {
     /// Whether this value has the shape of `wire`: the same kind at every
-    /// level, a key variant of the key type, one entry per axis entry, and a
-    /// constructor of the type with one value per field.
+    /// level, a key of an entry of the key's axis, one entry per axis entry,
+    /// and a constructor of the type with one value per field.
     #[must_use]
     pub fn conforms_to(&self, wire: &WireType) -> bool {
         match (self, wire) {
@@ -53,7 +53,7 @@ impl Value {
             | (Self::Int(_), WireType::Int)
             | (Self::Bool(_), WireType::Bool)
             | (Self::Datetime(_), WireType::Datetime(_)) => true,
-            (Self::Key(variant), WireType::Key(key)) => key.position(variant.as_str()).is_some(),
+            (Self::Key(value), WireType::Key(key)) => key.position(value.as_key_ref()).is_some(),
             (Self::Indexed(entries), WireType::Indexed(indexed)) => {
                 entries.len() == indexed.axis().len()
                     && entries
@@ -88,7 +88,7 @@ impl Value {
             Self::Complex(value) => ValueRef::Complex(*value),
             Self::Int(value) => ValueRef::Int(*value),
             Self::Bool(value) => ValueRef::Bool(*value),
-            Self::Key(variant) => ValueRef::Key(variant),
+            Self::Key(key) => ValueRef::Key(key.as_key_ref()),
             Self::Datetime(value) => ValueRef::Datetime(*value),
             Self::Indexed(entries) => ValueRef::Indexed(entries),
             Self::Algebraic {
@@ -113,8 +113,8 @@ pub enum ValueRef<'a> {
     Int(i64),
     /// A Boolean.
     Bool(bool),
-    /// A categorical variant.
-    Key(&'a VariantName),
+    /// A key of an axis entry.
+    Key(KeyRef<'a>),
     /// Seconds since J2000 in the port's time scale.
     Datetime(FiniteF64),
     /// One value per axis entry, in axis order.
@@ -137,7 +137,7 @@ impl ValueRef<'_> {
             Self::Complex(value) => Value::Complex(value),
             Self::Int(value) => Value::Int(value),
             Self::Bool(value) => Value::Bool(value),
-            Self::Key(variant) => Value::Key(variant.clone()),
+            Self::Key(key) => Value::Key(key.to_key_value()),
             Self::Datetime(value) => Value::Datetime(value),
             Self::Indexed(entries) => Value::Indexed(entries.to_vec()),
             Self::Algebraic {

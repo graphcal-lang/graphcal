@@ -48,8 +48,8 @@ pub use evaluation::{Evaluation, Row};
 #[doc(hidden)]
 pub use identity::PortIdentity;
 pub use kind::{
-    Algebraic, Bool, Complex, Datetime, Indexed, IndexedDetail, Int, Key, KeyVariant, Kind,
-    Quantity, QuantityLike,
+    Algebraic, Bool, Complex, Datetime, Indexed, IndexedDetail, Int, Key, KeyEntry, Kind, Quantity,
+    QuantityLike,
 };
 pub use model::{InputHandle, Model, OutputHandle};
 pub use session::{Session, SessionBuilder};

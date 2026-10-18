@@ -7502,6 +7502,16 @@ fn model_serve_requires_an_explicit_fingerprint_choice() {
     );
 }
 
+/// The position of the variant spelled `name` of a named key.
+fn variant_position(
+    key: &graphcal_model_protocol::KeyType,
+    name: &str,
+) -> graphcal_model_protocol::KeyPosition {
+    let variant = graphcal_model_protocol::VariantName::new(name).unwrap();
+    key.position(graphcal_model_protocol::KeyRef::Variant(&variant))
+        .unwrap()
+}
+
 #[test]
 fn model_serve_subprocess_answers_request_batches() {
     use std::io::Read as _;
@@ -7553,7 +7563,7 @@ fn model_serve_subprocess_answers_request_batches() {
     let WireType::Key(mode) = schema.inputs()[1].wire() else {
         panic!("mode is a key");
     };
-    let b = mode.position("B").unwrap();
+    let b = variant_position(mode, "B");
     let load = |values: &[f64]| {
         InputColumn::Quantity(
             values

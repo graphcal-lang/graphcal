@@ -21,12 +21,13 @@ use graphcal_eval::eval::public_projection::{
 use graphcal_eval::eval_expr::j2000_seconds::{epoch_from_j2000_seconds, seconds_since_j2000};
 use graphcal_eval::runtime_value::{IndexAxis, IndexedValue, KeyValue, RuntimeValue, StructValue};
 use graphcal_model_protocol::{
-    ComplexValue, ConstructorPosition, FiniteF64, LabelError, SiScale, Value, ValueRef, VariantName,
+    ComplexValue, ConstructorPosition, FiniteF64, KeyType, LabelError, SiScale, Value, ValueRef,
 };
 use thiserror::Error;
 
+use super::model_axis::axis_wire;
 use super::model_port::OutputProjectionError;
-use super::{ModelIndexKind, ModelValueSchema, PreparedProject};
+use super::{ModelValueSchema, PreparedProject};
 
 /// One constructor of an algebraic port with its field codecs.
 #[derive(Debug, Clone)]
@@ -44,10 +45,10 @@ pub(super) enum ValueCodec {
     Complex(Option<SiScale>),
     Int,
     Bool,
-    /// A key of a named axis, with its variants in axis order.
+    /// A key of an axis, with the protocol's view of its entries.
     Key {
         axis: IndexAxis,
-        variants: Vec<VariantName>,
+        key: KeyType,
     },
     /// Seconds since J2000 in the time scale.
     Datetime(TimeScale),
@@ -65,8 +66,8 @@ pub(super) enum ValueCodec {
 pub(super) enum ValueCodecError {
     #[error("index `{index}` of a model port has no axis")]
     MissingAxis { index: IndexTypeRef },
-    #[error("key index `{index}` of a model port is not named")]
-    UnnamedKey { index: IndexTypeRef },
+    #[error("key index `{index}` of a model port has no wire axis: {reason}")]
+    KeyAxis { index: IndexTypeRef, reason: String },
     #[error("type `{identity}` has no model definition")]
     MissingDefinition { identity: StructTypeRef },
     #[error("type `{identity}` has another constructor list than its model definition")]
@@ -113,20 +114,14 @@ impl PreparedProject {
             ModelValueSchema::Int => ValueCodec::Int,
             ModelValueSchema::Bool => ValueCodec::Bool,
             ModelValueSchema::Datetime(time_scale) => ValueCodec::Datetime(*time_scale),
-            ModelValueSchema::Key(index) => match index.kind() {
-                ModelIndexKind::Named { variants } => ValueCodec::Key {
-                    axis: axis(index.identity())?,
-                    variants: variants
-                        .as_slice()
-                        .iter()
-                        .map(|variant| VariantName::new(variant.as_str()))
-                        .collect::<Result<_, _>>()?,
-                },
-                ModelIndexKind::Finite { .. } | ModelIndexKind::Coordinate { .. } => {
-                    return Err(ValueCodecError::UnnamedKey {
+            ModelValueSchema::Key(index) => ValueCodec::Key {
+                axis: axis(index.identity())?,
+                key: KeyType::new(axis_wire(index)?.map_err(|reason| {
+                    ValueCodecError::KeyAxis {
                         index: index.identity().clone(),
-                    });
-                }
+                        reason,
+                    }
+                })?),
             },
             ModelValueSchema::Indexed {
                 element,
@@ -217,10 +212,9 @@ impl ValueCodec {
             ),
             (Self::Int, ValueRef::Int(value)) => RuntimeValue::Int(value),
             (Self::Bool, ValueRef::Bool(value)) => RuntimeValue::Bool(value),
-            (Self::Key { axis, variants }, ValueRef::Key(variant)) => RuntimeValue::Key(
-                variants
-                    .iter()
-                    .position(|candidate| candidate == variant)
+            (Self::Key { axis, key }, ValueRef::Key(value)) => RuntimeValue::Key(
+                key.axis()
+                    .position(value)
                     .and_then(|position| KeyValue::at(axis.clone(), position))
                     .ok_or(ValueBindError::Shape)?,
             ),
@@ -293,11 +287,11 @@ impl ValueCodec {
             }
             Self::Int => Value::Int(project_int(runtime)?),
             Self::Bool => Value::Bool(project_bool(runtime)?),
-            Self::Key { variants, .. } => Value::Key(
-                variants
-                    .get(project_key_position(runtime)?)
-                    .cloned()
-                    .ok_or(OutputProjectionError::Unrepresentable)?,
+            Self::Key { key, .. } => Value::Key(
+                key.axis()
+                    .key(project_key_position(runtime)?)
+                    .ok_or(OutputProjectionError::Unrepresentable)?
+                    .to_key_value(),
             ),
             Self::Datetime(time_scale) => {
                 let seconds = seconds_since_j2000(project_datetime(runtime)?, *time_scale)

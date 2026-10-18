@@ -9,7 +9,6 @@ use arrow_array::{
 use arrow_schema::ArrowError;
 use thiserror::Error;
 
-use super::request::{RequestDecodeError, decode_keys};
 use super::schema::{outcome_fields, output_fields, result_schema};
 use super::value_array::{ValueDecodeError, decode, encode, key_array, with_placeholders};
 use crate::batch::{OutputColumn, ResultBatch, ResultBatchBuilder, ResultBatchError};
@@ -21,7 +20,7 @@ use crate::value::Value;
 use crate::wire_type::WireType;
 
 /// Why a received record batch is not a valid result.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum ResultDecodeError {
     #[error("the result does not have the `outputs` and `outcome` struct columns")]
     Layout,
@@ -42,11 +41,6 @@ pub enum ResultDecodeError {
     MissingFailurePart { row: usize, part: &'static str },
     #[error("row {row} names an invalid parameter: {source}")]
     Subject { row: usize, source: LabelError },
-    #[error("output `{output}`: {source}")]
-    Key {
-        output: PortName,
-        source: RequestDecodeError,
-    },
     #[error("the column for output `{output}` {source}")]
     Value {
         output: PortName,
@@ -296,6 +290,7 @@ fn decode_output(
             .collect(),
         WireType::Complex(_)
         | WireType::Datetime(_)
+        | WireType::Key(_)
         | WireType::Indexed(_)
         | WireType::Algebraic(_) => {
             decode(wire, array).map_err(|source| ResultDecodeError::Value {
@@ -303,19 +298,6 @@ fn decode_output(
                 source,
             })?
         }
-        WireType::Key(key) => decode_keys(output, key, array)
-            .map_err(|source| ResultDecodeError::Key {
-                output: output.clone(),
-                source,
-            })?
-            .into_iter()
-            .map(|position| {
-                position
-                    .and_then(|position| key.variant(position))
-                    .cloned()
-                    .map(Value::Key)
-            })
-            .collect(),
     })
 }
 
