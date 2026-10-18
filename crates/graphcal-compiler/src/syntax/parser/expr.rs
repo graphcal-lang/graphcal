@@ -1037,6 +1037,29 @@ mod tests {
     }
 
     #[test]
+    fn todo_interface_entries_are_reads_element_reads_or_locals() {
+        use crate::syntax::ast::TodoDependency;
+        let expr = parse_node_expr("todo<Length> { @a, @b[t, k], s }");
+        let ExprKind::TodoHole(hole) = &expr.kind else {
+            panic!("expected a hole, got {expr:?}");
+        };
+        let [read, element, local] = hole.interface.value.as_slice() else {
+            panic!("expected three entries");
+        };
+        assert!(matches!(read, TodoDependency::Read(_)));
+        assert!(matches!(element, TodoDependency::Element { keys, .. } if keys.len() == 2));
+        assert!(matches!(local, TodoDependency::Local(_)));
+        for source in [
+            "node x: Length = todo<Length> { @b[] };",
+            "node x: Length = todo<Length> { @b[0] };",
+            "node x: Length = todo<Length> { @b[t + 1] };",
+            "node x: Length = todo<Length> { @b.field };",
+        ] {
+            assert!(Parser::new(source).parse_file().is_err(), "{source}");
+        }
+    }
+
+    #[test]
     fn todo_is_an_identifier_unless_angle_brackets_and_braces_follow() {
         assert!(matches!(
             parse_node_expr("todo < x").kind,

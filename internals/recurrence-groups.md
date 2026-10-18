@@ -156,7 +156,7 @@ ignored, as in the delayed copy under R7.
 
 ## 3. Acceptance rule
 
-A candidate group is accepted exactly when R1–R7 hold [`Group.Accepted`]. The
+A candidate group is accepted exactly when R1 and R3–R7 hold [`Group.Accepted`]. The
 reference checker decides this [`Group.check`, `check_ok_iff_accepted`].
 
 No rule refers to declaration order. Declaring the members, or the references
@@ -180,33 +180,33 @@ A group entirely inside an included instance has one owner, so a DAG with a
 recurrence group of its own can be included.
 [`Examples.insideInstance_accepted`]
 
-### R2. Members are finished
+### R2. (Retired)
 
-No member is an unfinished node, whose formula contains a `todo<T> { … }` hole
-[`Finished`].
+R2 used to reject unfinished members. A `todo<T> { … }` hole now lists its
+reads in its interface, including element reads keyed by the member's binders
+([#2099](https://github.com/graphcal-lang/graphcal/issues/2099)), so an
+unfinished member is checked like a finished one. Rules keep their numbers.
+
+A member whose entire body is a hole has no recurrence shape (R3)
+[`Examples.unfinishedAction_rejected`]:
 
 ```gcl
-node action: Dimensionless[Step] = todo<Dimensionless[Step]> { @state };   // ✗ R2
+node action: Dimensionless[Step] = todo<Dimensionless[Step]> { @state };   // ✗ R3
 node state: Dimensionless[Step] = unfold(Step, @initial_state, |s, prev_t, t| s + @action[prev_t]);
 ```
 
-A hole's interface lists declarations, not step offsets, so R6 and R7 cannot be
-checked. This is today's behavior for cycles through unfinished nodes.
-[`Examples.unfinishedAction_rejected`]
-
-Hole interfaces with keyed element reads
-([#2099](https://github.com/graphcal-lang/graphcal/issues/2099)) would make R2
-redundant. A member whose entire body is a hole has no recurrence shape (R3),
-and a hole inside a `for` or `unfold` member is classified through its interface,
-whose reads carry step offsets:
+A hole inside a `for` or `unfold` member is classified through its interface,
+whose element reads carry step offsets like any other read
+[`Examples.sketchedRecurrence_accepted`]:
 
 ```gcl
 node action: Dimensionless[Step] = for t: Step { todo<Dimensionless> { @k, @state[t] } };
 node state: Dimensionless[Step] = unfold(Step, todo<Dimensionless> { @initial_state }, |s, prev_t, t| todo<Dimensionless> { s, @action[prev_t] });
 ```
 
-That relaxation only accepts more programs: filling a hole within its interface
-removes reads, which never breaks R6 or R7.
+Filling a hole within its interface only removes reads, which keeps an accepted
+group accepted [`Accepted.of_reads_subset`]. A group with an unfinished member
+is not evaluated (§5.2).
 
 ### R3. Members are a top-level `for` or `unfold`
 
@@ -460,6 +460,11 @@ dependency graph. Every member that is not supplied has exactly one outcome
 | **failed** | Some element failed. The reported error is the failure at its earliest step. |
 | **dependency unavailable** | Otherwise. The reason kind (TODO, blocked, dependency failed) follows today's evaluator. |
 
+A group with an unfinished member is not evaluated: its unfinished members are
+TODO, and every other member is blocked by them, since each one reaches them
+through the group's cycle. Element statuses (§5.1) apply to groups whose
+members are all finished.
+
 Every element of an ok member is computed [`ValidOrder.run_memberOk`]. In
 particular, if no element fails and every outside input is available, every
 element is computed [`ValidOrder.run_complete`].
@@ -490,7 +495,7 @@ whether the group has an `unfold` member [`Group.diagnose`]:
   accidental cycles keep their current diagnostic.
   [`diagnose_dependencyCycle`; `Examples.scalarCycle_plain`, `forCycle_plain`]
 - **Otherwise.** The diagnostic explains the first violation: rules in order
-  R1–R7, members in source order within R1–R4, and reads in source order within
+  R1 and R3–R7, members in source order within R1–R4, and reads in source order within
   R5–R6 [`Violation.Reported`, `check_error_reported`, `diagnose_reported`].
   Source order only chooses which of several violations is reported first,
   as it does for today's `G001`; it never decides whether the group is
@@ -502,7 +507,6 @@ whether the group has an `unfold` member [`Group.diagnose`]:
 | Rule | Anchor | Reason (wording illustrative) |
 |------|--------|-------------------------------|
 | R1 | the first member, in source order, of the checked DAG that reads a member of another DAG | "this cycle reads `y`, declared in another DAG" |
-| R2 | the `todo` member | "`x` is unfinished; a recurrence needs formulas to check step offsets" |
 | R3 | the member | "`x` is in a cycle with an `unfold`, but is not a top-level `for` or `unfold`" |
 | R4 | the member | "`x` steps along `B`, but `first` steps along `A`" |
 | R5 | the read | "`x` reads itself; use the `unfold` state binding" |
@@ -524,10 +528,11 @@ for every axis length `n`.
 
 | Guarantee | Theorem |
 |-----------|---------|
-| The checker accepts exactly the groups satisfying R1–R7. | `Group.check_ok_iff_accepted` |
+| The checker accepts exactly the groups satisfying R1 and R3–R7. | `Group.check_ok_iff_accepted` |
 | Every rejection reports the violation selected in §6, and an R7 rejection lists a real same-step cycle. | `Group.check_error_reported` |
 | An accepted group's reference order exists, is unique, and is a valid order. | `check_ok_planOrder`, `planOrder_unique`, `PlanOrder.validOrder` |
 | Acceptance does not depend on declaration order. | `Relabeling.accepted_iff` |
+| Removing reads, as filling a `todo` hole within its interface does, keeps a group accepted. | `Accepted.of_reads_subset` |
 | **Soundness:** an accepted group's element graph is acyclic. | `Group.Accepted.elementAcyclic` |
 | The evaluator reads exactly the element dependencies of §4.2. | `Group.mem_elementDeps` |
 | The evaluator never reads an element before evaluating it. | `ValidOrder.run_not_stuck` |
@@ -557,8 +562,7 @@ is acyclic:
 - **Reads of members in an `unfold` init.** An initial value derived from other
   members at the first step, which Vensim supports, must be computed outside
   the group.
-- **`scan` members**, **cycles across include boundaries** (R1), and **`todo`
-  members** (R2; expression-level holes, #2099, would lift this).
+- **`scan` members** and **cycles across include boundaries** (R1).
 
 Two related cases are outside the rule for other reasons:
 
@@ -582,8 +586,9 @@ does.
    (`DependencyGraph::cyclic_components`).
 2. **Members.** For each member: its owning DAG; its definition shape after
    stripping parentheses (the parser drops them) and one top-level display
-   conversion; the resolved axis of a `for` or `unfold`; whether it is a
-   `todo` node (`group_facts`).
+   conversion; the resolved axis of a `for` or `unfold` (`group_facts`). A
+   hole's interface entries are child expressions of the hole, so its keyed
+   reads are walked like any other `@y` occurrence.
 3. **Reads are complete.** One read per dependency source, in source order:
    every `@y` occurrence that contributes to `runtime_deps`, and every implicit
    dependency (today: one per quantity literal per member its dynamic unit's
@@ -618,12 +623,12 @@ does.
 | #2058 text | This specification |
 |------------|-------------------|
 | Causality: "edges made only of same-step references are acyclic" | Per read: one same-step read makes a same-step edge (R7). |
-| "Accepted only if" rules 1–3, plus a separate self-reference decision | R1–R7 are the whole rule; self-reads are R5, documented as a canonical-form rule. |
+| "Accepted only if" rules 1–3, plus a separate self-reference decision | R1 and R3–R7 are the whole rule; self-reads are R5, documented as a canonical-form rule. |
 | Delayed copy with `\|_, prev_t, t\|` | `_` is not an identifier; the example uses `ignored`. |
 | Axes unconstrained | Groups step along coordinate axes, as a proved consequence. |
 | Multi-axis members unspecified | Allowed; only the leading key is constrained (R6). |
 | Failures unspecified | §5: per-element statuses, per-declaration outcomes, domain checks at commit. |
-| Params, `todo`, implicit reads, instances unspecified | Params allowed, supplied params pre-filled (§4.4); `todo` rejected (R2, to be relaxed by #2099); implicit reads rejected (R6); cycles across include boundaries rejected, groups inside an included DAG allowed (R1). |
+| Params, `todo`, implicit reads, instances unspecified | Params allowed, supplied params pre-filled (§4.4); `todo` members checked through their hole interfaces (R2 retired by #2099); implicit reads rejected (R6); cycles across include boundaries rejected, groups inside an included DAG allowed (R1). |
 | "Inside an `unfold` init" | Covered by binder scope: the top-level init has no own binder, while nested inits may use the reader's `t`. |
 | "Existing `G001`" vs "specific diagnostics" | `G001` with a typed reason, a fixed priority, and anchors (§6); plain message without an `unfold` member. |
 | Evaluation order unspecified within a step | Any valid order (§4.1); statuses are order-independent; the reference order is a deterministic choice. |
@@ -635,8 +640,7 @@ does.
   fragment of that relation.
 - #1029 (`prev_state` binding): R5 keeps self-references rejected.
 - #888 (bounded solve): same-step algebraic loops stay out of scope (R7).
-- #2099 (expression-level `todo` holes): independent of this rule; makes R2
-  redundant when it lands.
+- #2099 (expression-level `todo` holes): retired R2 (§3).
 - When implementing, reconcile `docs/*/language/indexes.md` ("Evaluation
   granularity") and the statements in `computation-model.md` and
   `type-system.md` ("DAG Correspondence") with the element-level model of §2.

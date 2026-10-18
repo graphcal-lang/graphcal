@@ -1012,7 +1012,37 @@ pub struct MapEntry<P: Phase = Raw> {
 pub struct TodoHole<P: Phase = Raw> {
     pub ty: TypeExpr<P>,
     /// The span includes the braces, including an explicitly empty list.
-    pub interface: Spanned<Vec<Spanned<IdentPath>>>,
+    pub interface: Spanned<Vec<TodoDependency>>,
+}
+
+/// One possible direct dependency of a `todo<T> { … }` hole.
+#[derive(Debug, Clone, FormatEquivalent)]
+pub enum TodoDependency {
+    /// `@y`: the whole value, or any part of it.
+    Read(Spanned<IdentPath>),
+    /// `@y[t, …]`: an element keyed by locals in scope, so that step offsets
+    /// are known statically.
+    Element {
+        target: Spanned<IdentPath>,
+        keys: NonEmpty<Spanned<LocalName>>,
+        #[fe(skip)]
+        span: Span,
+    },
+    /// `s`: a local in scope. It is not a graph dependency; listing it
+    /// documents intent.
+    Local(Spanned<LocalName>),
+}
+
+impl TodoDependency {
+    /// The source span of the whole entry.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Read(target) => target.span,
+            Self::Element { span, .. } => *span,
+            Self::Local(local) => local.span,
+        }
+    }
 }
 
 /// A binding in a `for` comprehension: `m: Maneuver` or `i: Fin(3)`

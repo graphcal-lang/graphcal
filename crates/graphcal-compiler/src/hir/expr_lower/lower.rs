@@ -563,12 +563,40 @@ impl ExprLowerer<'_> {
             .interface
             .value
             .iter()
-            .map(|reference| self.resolve_source_graph_ref(reference))
+            .map(|dependency| self.lower_todo_dependency(dependency))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(TodoHole {
             ty,
             interface: Spanned::new(interface, hole.interface.span),
         })
+    }
+
+    /// Lower one interface entry to the read expression it names.
+    fn lower_todo_dependency(
+        &self,
+        dependency: &crate::syntax::ast::TodoDependency,
+    ) -> Result<Expr<Tolerant>, ExprLowerError> {
+        let span = dependency.span();
+        let kind = match dependency {
+            crate::syntax::ast::TodoDependency::Read(target) => {
+                ExprKind::GraphRef(self.resolve_source_graph_ref(target)?)
+            }
+            crate::syntax::ast::TodoDependency::Element { target, keys, .. } => {
+                let reference = self.resolve_source_graph_ref(target)?;
+                ExprKind::IndexAccess {
+                    expr: Box::new(Expr::new(ExprKind::GraphRef(reference), target.span)),
+                    args: keys.try_map_ref(|key| {
+                        self.lookup_local(&key.value, key.span)
+                            .map(|local| IndexArg::Var(Spanned::new(local, key.span)))
+                    })?,
+                }
+            }
+            crate::syntax::ast::TodoDependency::Local(local) => ExprKind::LocalRef(Spanned::new(
+                self.lookup_local(&local.value, local.span)?,
+                local.span,
+            )),
+        };
+        Ok(Expr::new(kind, span))
     }
 
     pub(super) fn lower_field_init(&mut self, field: &ast::FieldInit) -> FieldInit<Tolerant> {

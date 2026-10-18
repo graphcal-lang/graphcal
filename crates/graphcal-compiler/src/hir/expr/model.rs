@@ -456,13 +456,16 @@ pub enum ExprKind<C: Completeness = Strict> {
 
 /// A typed hole: the type it stands for and its possible direct dependencies.
 ///
-/// The interface entries are declaration references like `@name`; they are
-/// dependencies of the enclosing declaration but are never read.
+/// Each interface entry is a child expression of one of three shapes, fixed
+/// by the syntax: a graph reference `@y`, an element access `@y[t, …]` keyed
+/// by locals, or a local `s`. Entries are checked like reads and are
+/// dependencies of the enclosing declaration, but are never evaluated: a
+/// formula containing a hole is unfinished.
 #[derive(Debug, Clone)]
 pub struct TodoHole<C: Completeness = Strict> {
     pub ty: crate::hir::types::DeclType,
     /// The span covers the braces, including an explicitly empty list.
-    pub interface: Spanned<Vec<Spanned<C::DeclRef>>>,
+    pub interface: Spanned<Vec<Expr<C>>>,
 }
 
 /// Resolved axis and lexical bindings for an `unfold` recurrence.

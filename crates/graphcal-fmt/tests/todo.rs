@@ -13,6 +13,10 @@ fn compact_empty_and_qualified_dependency_lists_round_trip() {
             "node x:Length=todo<Length>{@a,@module.child::b,};",
             "node x: Length = todo<Length> { @a, @module.child::b };\n",
         ),
+        (
+            "node x:Length[Fin(2)]=for t:Fin(2){todo<Length>{@a[t],t,}};",
+            "node x: Length[Fin(2)] = for t: Fin(2) { todo<Length> { @a[t], t } };\n",
+        ),
     ] {
         assert_eq!(format_source(source).unwrap(), expected);
         assert_eq!(format_source(expected).unwrap(), expected);

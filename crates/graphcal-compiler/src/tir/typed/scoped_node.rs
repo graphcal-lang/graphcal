@@ -298,7 +298,7 @@ impl<'t> Scoped<'t, TExpr> {
                 clippy::uninhabited_references,
                 reason = "ExecutableHole is uninhabited: no concrete tree contains a hole"
             )]
-            TExprKind::TodoHole(hole) => match *hole {},
+            TExprKind::TodoHole { executable, .. } => match *executable {},
             TExprKind::DatetimeLiteral(literal) => NodeKind::DatetimeLiteral(literal),
             TExprKind::Aggregate { function, arg } => NodeKind::Aggregate {
                 function: *function,

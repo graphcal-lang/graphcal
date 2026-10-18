@@ -55,9 +55,9 @@ instance is fine; a cycle across an include boundary is not. -/
 def SingleOwner (g : Group size) : Prop :=
   ∀ x y, (g.member x).owner = (g.member y).owner
 
-/-- R2: no member is a `todo` node. -/
-def Finished (g : Group size) : Prop :=
-  ∀ x, (g.member x).definition ≠ .unfinished
+/- R2 ("no member is a `todo` node") is retired: a `todo<T> { … }` hole lists
+its keyed reads, so an unfinished member is classified like a finished one.
+Rules keep their numbers. -/
 
 /-- R3: every member is a top-level `for` or `unfold`. -/
 def RecurrenceShaped (g : Group size) : Prop :=
@@ -76,14 +76,13 @@ binder. -/
 def StepKeyed (g : Group size) : Prop :=
   ∀ r ∈ g.reads, g.access? r ≠ none
 
-/-- The member-level rules R1–R4. -/
+/-- The member-level rules R1, R3, and R4. -/
 structure MemberRules (g : Group size) : Prop where
   singleOwner : g.SingleOwner
-  finished : g.Finished
   recurrenceShaped : g.RecurrenceShaped
   commonAxis : g.CommonAxis
 
-/-- A candidate group is accepted exactly when R1–R7 hold. -/
+/-- A candidate group is accepted exactly when R1 and R3–R7 hold. -/
 structure Accepted (g : Group size) : Prop where
   memberRules : g.MemberRules
   noSelfRead : g.NoSelfRead
@@ -100,7 +99,7 @@ end Group
 /-! ## Diagnostics -/
 
 /-- The single violation reported for a rejected group. Rules are checked in
-order R1–R7; within a rule, members are visited in source order and reads in
+order R1, R3–R7; within a rule, members are visited in source order and reads in
 source order, and the first offender is reported. A same-step cycle is reported
 as one listed cycle; which cycle is the deterministic choice of the reference
 checker. -/
@@ -108,14 +107,11 @@ def Violation.Reported (g : Group size) : Violation size → Prop
   | .mixedOwners x =>
       (g.member x).owner ≠ (g.member ⟨0, x.pos⟩).owner ∧
         ∀ y, y < x → (g.member y).owner = (g.member ⟨0, x.pos⟩).owner
-  | .unfinishedMember x =>
-      g.SingleOwner ∧ (g.member x).definition = .unfinished ∧
-        ∀ y, y < x → (g.member y).definition ≠ .unfinished
   | .notRecurrenceShape x =>
-      g.SingleOwner ∧ g.Finished ∧ g.shape? x = none ∧
+      g.SingleOwner ∧ g.shape? x = none ∧
         ∀ y, y < x → g.shape? y ≠ none
   | .axisMismatch x =>
-      g.SingleOwner ∧ g.Finished ∧ g.RecurrenceShaped ∧
+      g.SingleOwner ∧ g.RecurrenceShaped ∧
         (g.member x).definition.axis? ≠ (g.member ⟨0, x.pos⟩).definition.axis? ∧
         ∀ y, y < x →
           (g.member y).definition.axis? = (g.member ⟨0, x.pos⟩).definition.axis?

@@ -439,7 +439,17 @@ impl<V: Concreteness> TExpr<V> {
                 target.span,
             )),
             TExprKind::Local(local) => TExprKind::Local(local.clone()),
-            TExprKind::TodoHole(carried) => TExprKind::TodoHole(map.todo_hole(carried, span)?),
+            TExprKind::TodoHole {
+                interface,
+                executable,
+            } => TExprKind::TodoHole {
+                // Entries first, so their own discharge errors are reported.
+                interface: interface
+                    .iter()
+                    .map(|entry| entry.map_types(map))
+                    .collect::<Result<_, M::Error>>()?,
+                executable: map.todo_hole(executable, span)?,
+            },
             TExprKind::DatetimeLiteral(literal) => TExprKind::DatetimeLiteral(literal.clone()),
             TExprKind::Aggregate { function, arg } => TExprKind::Aggregate {
                 function: *function,

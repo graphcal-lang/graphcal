@@ -1,6 +1,6 @@
 use crate::syntax::ast::{
     Expr, ExprKind, ForBinding, ForBindingIndex, KeyFormKind, MatchArm, MatchPattern, NatExpr,
-    PatternBinding, PatternBindings, TodoHole,
+    PatternBinding, PatternBindings, TodoDependency, TodoHole,
 };
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::NamePath;
@@ -360,12 +360,8 @@ impl Parser<'_> {
         let ty = self.parse_type_expr()?;
         self.expect(Token::Gt)?;
         let (_, open_span) = self.expect(Token::LBrace)?;
-        let dependencies = self.parse_comma_separated(Token::RBrace, |parser| {
-            let (_, at) = parser.expect(Token::At)?;
-            let path = parser.parse_ident_path()?;
-            let span = at.merge(path.span());
-            Ok(Spanned::new(path, span))
-        })?;
+        let dependencies =
+            self.parse_comma_separated(Token::RBrace, Self::parse_todo_dependency)?;
         let (_, end_span) = self.expect(Token::RBrace)?;
         Ok(Expr::new(
             ExprKind::TodoHole(Box::new(TodoHole {
@@ -374,6 +370,29 @@ impl Parser<'_> {
             })),
             keyword_span.merge(end_span),
         ))
+    }
+
+    /// Parse one hole interface entry: `@y`, `@y[t, …]`, or a local `s`.
+    fn parse_todo_dependency(&mut self) -> Result<TodoDependency, ParseError> {
+        if self.lexer.peek() != Some(&Token::At) {
+            return Ok(TodoDependency::Local(self.parse_any_ident()?.classify()));
+        }
+        let (_, at) = self.advance()?;
+        let path = self.parse_ident_path()?;
+        let target = Spanned::new(path.clone(), at.merge(path.span()));
+        if self.lexer.peek() != Some(&Token::LBracket) {
+            return Ok(TodoDependency::Read(target));
+        }
+        self.advance()?;
+        let keys = self.parse_non_empty_comma_separated(Token::RBracket, |parser| {
+            Ok(parser.parse_any_ident()?.classify())
+        })?;
+        let (_, end) = self.expect(Token::RBracket)?;
+        Ok(TodoDependency::Element {
+            span: target.span.merge(end),
+            target,
+            keys,
+        })
     }
 
     // --- Unfold expression ---

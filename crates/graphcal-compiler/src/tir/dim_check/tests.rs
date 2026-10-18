@@ -4974,8 +4974,9 @@ fn recurrence_member_rules_report_the_member() {
          node action: Dimensionless[Step] = todo<Dimensionless[Step]> {{ @state }};\n\
          node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);"
     );
+    // A whole-body hole has no recurrence shape (R3).
     let (reason, name, _) = recurrence_rejection(&unfinished);
-    assert_eq!(reason, RecurrenceRejection::Unfinished);
+    assert_eq!(reason, RecurrenceRejection::NotRecurrenceShape);
     assert_eq!(name, "action");
 }
 

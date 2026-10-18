@@ -38,10 +38,10 @@ inductive Definition where
   /-- `unfold(A, init, |prev_state, prev_t, t| body)`. -/
   | unfoldOver (axis : AxisId)
   /-- Any other formula: an aggregation, an arithmetic expression, a map
-  literal, `scan`, a `for` or `unfold` nested in a larger expression, … -/
+  literal, `scan`, a `for` or `unfold` nested in a larger expression, a
+  whole-body `todo<T> { … }` hole, … A hole elsewhere in a body does not change
+  its shape: its interface entries are reads like any others. -/
   | otherFormula
-  /-- An unfinished node: its formula contains a `todo<T> { … }` hole. -/
-  | unfinished
   deriving DecidableEq, Repr
 
 /-- One member of a candidate group. -/
@@ -61,14 +61,12 @@ def Definition.shape? : Definition → Option Shape
   | .forOver _ => some .forBody
   | .unfoldOver _ => some .unfoldBody
   | .otherFormula => none
-  | .unfinished => none
 
 /-- The axis a recurrence-shaped definition steps along. -/
 def Definition.axis? : Definition → Option AxisId
   | .forOver axis => some axis
   | .unfoldOver axis => some axis
   | .otherFormula => none
-  | .unfinished => none
 
 /-- How the leading key of an element access `@y[k, …]` is written, decided by
 binder identity, never by spelling.
@@ -174,8 +172,6 @@ inductive Violation (size : Nat) where
   /-- A member is declared by another DAG than the first member: the cycle
   crosses an include boundary. -/
   | mixedOwners (member : Fin size)
-  /-- A member is a `todo` node. -/
-  | unfinishedMember (member : Fin size)
   /-- A member's definition is not a top-level `for` or `unfold`. -/
   | notRecurrenceShape (member : Fin size)
   /-- A member steps along a different axis than the first member. -/

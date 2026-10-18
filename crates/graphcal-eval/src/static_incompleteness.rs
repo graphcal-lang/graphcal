@@ -155,6 +155,9 @@ impl Analysis<'_> {
             PlannedBody::Computed(ComputedBody::Todo) => {
                 origins.insert(name.clone());
             }
+            PlannedBody::Computed(ComputedBody::BlockedInGroup(unfinished)) => {
+                origins.extend(unfinished.iter().cloned());
+            }
             PlannedBody::Computed(ComputedBody::Expression { root, .. }) => {
                 for dependency in declaration.reads() {
                     origins.extend(self.declaration(dependency, bound)?);

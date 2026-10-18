@@ -5,7 +5,8 @@
 use graphcal_compiler::syntax::ast::{
     BinOp, DomainBound, ElementTypeExpr, Expr, ExprKind, FieldInit, ForBinding, GenericArg,
     IndexArg, MapEntry, MapEntryKey, MatchArm, MatchPattern, ModulePath, ParamBinding,
-    PatternBinding, PatternBindings, TableIndexSpec, TodoHole, TypeExpr, TypeExprKind, UnaryOp,
+    PatternBinding, PatternBindings, TableIndexSpec, TodoDependency, TodoHole, TypeExpr,
+    TypeExprKind, UnaryOp,
 };
 use graphcal_compiler::syntax::local_name::LocalName;
 use graphcal_compiler::syntax::span::Spanned;
@@ -1330,15 +1331,18 @@ fn format_todo_hole(fmt: &mut Formatter<'_>, hole: &TodoHole) -> RcDoc<'static> 
         .value
         .iter()
         .map(|reference| {
-            let leading = fmt.drain_comments_before(reference.span.offset());
+            let leading = fmt.drain_comments_before(reference.span().offset());
             let trailing = if fmt.has_comment_before(end) {
-                fmt.drain_trailing_comment(reference.span.offset() + reference.span.len())
+                fmt.drain_trailing_comment(reference.span().offset() + reference.span().len())
             } else {
                 None
             };
             commented |= leading.is_some() || trailing.is_some();
-            prepend_comments(leading, RcDoc::text(format!("@{},", reference.value)))
-                .append(trailing.unwrap_or_else(RcDoc::nil))
+            prepend_comments(
+                leading,
+                RcDoc::text(format!("{},", todo_dependency_text(reference))),
+            )
+            .append(trailing.unwrap_or_else(RcDoc::nil))
         })
         .collect::<Vec<_>>();
     let dangling = fmt.drain_comments_before(end);
@@ -1367,10 +1371,26 @@ fn format_todo_hole(fmt: &mut Formatter<'_>, hole: &TodoHole) -> RcDoc<'static> 
                 dependencies
                     .value
                     .iter()
-                    .map(|reference| RcDoc::text(format!("@{}", reference.value))),
+                    .map(|reference| RcDoc::text(todo_dependency_text(reference))),
                 RcDoc::text(", "),
             ))
             .append(RcDoc::text(" }"))
     };
     flat_alt_group(single, multi)
+}
+
+/// One hole interface entry: `@y`, `@y[t, k]`, or a local `s`.
+fn todo_dependency_text(dependency: &TodoDependency) -> String {
+    match dependency {
+        TodoDependency::Read(target) => format!("@{}", target.value),
+        TodoDependency::Element { target, keys, .. } => format!(
+            "@{}[{}]",
+            target.value,
+            keys.iter()
+                .map(|key| key.value.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        TodoDependency::Local(local) => local.value.as_str().to_owned(),
+    }
 }

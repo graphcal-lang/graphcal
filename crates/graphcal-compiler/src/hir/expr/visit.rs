@@ -46,14 +46,6 @@ fn collect_expr_dependencies_into<C: Completeness>(
         ExprKind::GraphRef(target) => {
             deps.graph_refs.insert(target.value.clone());
         }
-        ExprKind::TodoHole(hole) => {
-            deps.graph_refs.extend(
-                hole.interface
-                    .value
-                    .iter()
-                    .map(|target| target.value.clone()),
-            );
-        }
         ExprKind::ConstRef(Spanned {
             value: ConstRef::Decl(target),
             ..
@@ -75,8 +67,8 @@ macro_rules! expression_children {
             | ExprKind::ZonedDateTimeLiteral(_)
             | ExprKind::IanaTimeZoneLiteral(_) | ExprKind::TypeSystemRef(_)
             | ExprKind::GraphRef(_) | ExprKind::ConstRef(_) | ExprKind::LocalRef(_)
-            | ExprKind::QuantityLiteral { .. } | ExprKind::VariantLiteral(_)
-            | ExprKind::TodoHole(_) => {},
+            | ExprKind::QuantityLiteral { .. } | ExprKind::VariantLiteral(_) => {},
+            ExprKind::TodoHole(hole) => hole.interface.value.$iter().for_each(&mut *$visitor),
             ExprKind::BinOp { lhs, rhs, .. } => { $visitor(lhs); $visitor(rhs); }
             ExprKind::UnaryOp { operand, .. } | ExprKind::Convert { expr: operand, .. }
             | ExprKind::DisplayTimezone { expr: operand, .. } | ExprKind::FieldAccess { expr: operand, .. } => $visitor(operand),

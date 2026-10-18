@@ -441,3 +441,77 @@ node known: Length = @partial()::known;
         Err(NodeUnavailable::Todo { .. })
     ));
 }
+
+const RECURRENCE: &str = r"
+index Step = range(0.0 s, 3.0 s, step: 1.0 s);
+param initial_state: Dimensionless = 1.0;
+param k: Dimensionless = 0.5;
+";
+
+#[test]
+fn keyed_interfaces_sketch_a_recurrence_before_its_formulas() {
+    let source = format!(
+        "{RECURRENCE}
+node action: Dimensionless[Step] = for t: Step {{ todo<Dimensionless> {{ @k, @state[t] }} }};
+node state: Dimensionless[Step] = unfold(Step, todo<Dimensionless> {{ @initial_state }}, |s, prev_t, t| todo<Dimensionless> {{ s, @action[prev_t] }});
+node total: Dimensionless = sum(@state);
+node free: Dimensionless = @k * 2.0;
+"
+    );
+    assert!(check(&source));
+    let evaluation = compile_and_eval(&source).unwrap();
+    for name in ["action", "state"] {
+        assert!(matches!(
+            result(&evaluation, name),
+            Err(NodeUnavailable::Todo { .. })
+        ));
+    }
+    assert!(matches!(
+        result(&evaluation, "total"),
+        Err(NodeUnavailable::Blocked { .. })
+    ));
+    assert!(result(&evaluation, "free").is_ok());
+    assert!(!evaluation.has_errors());
+}
+
+#[test]
+fn finished_members_of_a_group_with_an_unfinished_member_are_blocked() {
+    let evaluation = compile_and_eval(&format!(
+        "{RECURRENCE}
+node action: Dimensionless[Step] = for t: Step {{ @k * @state[t] }};
+node state: Dimensionless[Step] = unfold(Step, @initial_state, |s, prev_t, t| todo<Dimensionless> {{ s, @action[prev_t] }});
+"
+    ))
+    .unwrap();
+    assert!(matches!(
+        result(&evaluation, "state"),
+        Err(NodeUnavailable::Todo { .. })
+    ));
+    let reason = result(&evaluation, "action").as_ref().unwrap_err();
+    assert!(matches!(reason, NodeUnavailable::Blocked { .. }));
+    assert_eq!(reason.unfinished().len(), 1);
+    assert!(!evaluation.has_errors());
+}
+
+#[test]
+fn keyed_interfaces_are_checked_like_reads() {
+    for body in [
+        // Same-step cycle through two interfaces (R7).
+        "node action: Dimensionless[Step] = for t: Step { todo<Dimensionless> { @state[t] } };
+         node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| todo<Dimensionless> { @action[t] });",
+        // A whole-value read in a cycle (R6).
+        "node action: Dimensionless[Step] = for t: Step { todo<Dimensionless> { @state } };
+         node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| s + @action[prev_t]);",
+        // A key out of scope.
+        "node action: Dimensionless[Step] = for t: Step { todo<Dimensionless> { @k[prev_t] } };",
+        // A key of another axis.
+        "index Other = { A, B };
+         node o: Dimensionless[Other] = for x: Other { 1.0 };
+         node bad: Dimensionless[Step] = for t: Step { todo<Dimensionless> { @o[t] } };",
+        // A local that is not in scope.
+        "node x: Dimensionless = todo<Dimensionless> { s };",
+    ] {
+        let source = format!("{RECURRENCE}{body}");
+        assert!(!check(&source), "unexpectedly accepted: {body}");
+    }
+}

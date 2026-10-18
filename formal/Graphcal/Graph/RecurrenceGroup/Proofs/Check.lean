@@ -300,11 +300,6 @@ theorem singleOwner_iff :
   · intro h x
     exact h _ _
 
-theorem finished_iff :
-    (List.finRange size).find? (fun x => decide ((g.member x).definition = .unfinished)) = none ↔
-      g.Finished := by
-  simp [Finished]
-
 theorem recurrenceShaped_iff :
     (List.finRange size).find? (fun x => decide (g.shape? x = none)) = none ↔
       g.RecurrenceShaped := by
@@ -338,9 +333,6 @@ theorem accepted_of_check_ok {plan : Plan size} (h : g.check = .ok plan) : g.Acc
   rename_i h1
   split at h
   · cases h
-  rename_i h2
-  split at h
-  · cases h
   rename_i h3
   split at h
   · cases h
@@ -353,7 +345,7 @@ theorem accepted_of_check_ok {plan : Plan size} (h : g.check = .ok plan) : g.Acc
   rename_i h6
   split at h
   · rename_i order hk
-    exact ⟨⟨singleOwner_iff.1 h1, finished_iff.1 h2, recurrenceShaped_iff.1 h3,
+    exact ⟨⟨singleOwner_iff.1 h1, recurrenceShaped_iff.1 h3,
       commonAxis_iff.1 h4⟩, noSelfRead_iff.1 h5, stepKeyed_iff.1 h6,
       (kahn_validOrder hk).noSameStepCycle⟩
   · cases h
@@ -361,7 +353,7 @@ theorem accepted_of_check_ok {plan : Plan size} (h : g.check = .ok plan) : g.Acc
 /-- Every accepted group gets a plan. -/
 theorem check_ok_of_accepted (h : g.Accepted) : ∃ plan, g.check = .ok plan := by
   unfold check
-  rw [singleOwner_iff.2 h.memberRules.singleOwner, finished_iff.2 h.memberRules.finished,
+  rw [singleOwner_iff.2 h.memberRules.singleOwner,
     recurrenceShaped_iff.2 h.memberRules.recurrenceShaped,
     commonAxis_iff.2 h.memberRules.commonAxis, noSelfRead_iff.2 h.noSelfRead,
     stepKeyed_iff.2 h.stepKeyed]
@@ -380,8 +372,6 @@ theorem check_ok_iff_accepted : (∃ plan, g.check = .ok plan) ↔ g.Accepted :=
 /-- The plan returned by the checker is the group's plan order. -/
 theorem check_ok_planOrder {plan : Plan size} (h : g.check = .ok plan) : g.PlanOrder plan.order := by
   unfold check at h
-  split at h
-  · cases h
   split at h
   · cases h
   split at h
@@ -419,26 +409,19 @@ theorem check_error_reported {violation : Violation size} (h : g.check = .error 
     cases h
     refine ⟨singleOwner_iff.1 h1, by simpa using List.find?_some hx, fun y hy => ?_⟩
     simpa using find?_finRange_least hx y hy
-  rename_i h2
-  split at h
-  · rename_i x hx
-    cases h
-    refine ⟨singleOwner_iff.1 h1, finished_iff.1 h2, by simpa using List.find?_some hx,
-      fun y hy => ?_⟩
-    simpa using find?_finRange_least hx y hy
   rename_i h3
   split at h
   · rename_i x hx
     cases h
     have hfirst : ∀ y : Fin size, (⟨0, y.pos⟩ : Fin size) = ⟨0, x.pos⟩ := fun _ => rfl
-    refine ⟨singleOwner_iff.1 h1, finished_iff.1 h2, recurrenceShaped_iff.1 h3, ?_, fun y hy => ?_⟩
+    refine ⟨singleOwner_iff.1 h1, recurrenceShaped_iff.1 h3, ?_, fun y hy => ?_⟩
     · simpa [axisMatchesFirst] using List.find?_some hx
     · have := find?_finRange_least hx y hy
       simp only [axisMatchesFirst, Bool.not_eq_false', decide_eq_true_eq] at this
       rw [this, hfirst y]
   rename_i h4
   have hmember : g.MemberRules :=
-    ⟨singleOwner_iff.1 h1, finished_iff.1 h2, recurrenceShaped_iff.1 h3, commonAxis_iff.1 h4⟩
+    ⟨singleOwner_iff.1 h1, recurrenceShaped_iff.1 h3, commonAxis_iff.1 h4⟩
   split at h
   · rename_i r hr
     cases h

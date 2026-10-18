@@ -136,6 +136,10 @@ pub enum PlannedBody<'p> {
 pub enum ComputedBody<'p> {
     /// An unfinished node: running it records the TODO.
     Todo,
+    /// A finished member of a recurrence group that also has unfinished
+    /// members: every member reaches them, so running it records BLOCKED by
+    /// them without evaluating. Only a group's planned steps carry it.
+    BlockedInGroup(NonEmpty<ResolvedDeclName>),
     /// A param default or a node formula, in the scope of the DAG that owns
     /// the declaration.
     Expression {
@@ -218,6 +222,7 @@ impl std::fmt::Debug for PlannedDeclaration<'_> {
                 "kind",
                 &match &self.body {
                     PlannedBody::Computed(ComputedBody::Todo) => "todo",
+                    PlannedBody::Computed(ComputedBody::BlockedInGroup(_)) => "blocked in group",
                     PlannedBody::Computed(ComputedBody::Expression { tree: Ok(_), .. }) => {
                         "executable"
                     }
@@ -705,9 +710,10 @@ type ComputedEntry<'p> = (
 
 /// Add the members of the recurrence group `plan`, scheduled as group
 /// `membership`, to `computed`. A group whose members all have executable
-/// bodies runs as one unit and joins `groups`; otherwise, as in a template that
-/// is only run through its instances, its members are steps that report their
-/// bodies.
+/// bodies runs as one unit and joins `groups`. A group with unfinished members
+/// does not run: those members are TODO and the others are blocked by them.
+/// Otherwise, as in a template that is only run through its instances, its
+/// members are steps that report their bodies.
 fn plan_recurrence<'p>(
     plan: &'p RecurrenceGroupPlan,
     members: Vec<PlannedDeclaration<'p>>,
@@ -715,13 +721,34 @@ fn plan_recurrence<'p>(
     computed: &mut Vec<ComputedEntry<'p>>,
     groups: &mut Vec<PlannedGroup<'p>>,
 ) -> Result<(), StepIndexError> {
+    let unfinished = members
+        .iter()
+        .filter(|declaration| matches!(declaration.body, PlannedBody::Computed(ComputedBody::Todo)))
+        .map(|declaration| declaration.key.clone())
+        .collect::<Vec<_>>();
+    if let Ok(unfinished) = NonEmpty::try_from_vec(unfinished) {
+        for declaration in members {
+            let body = match &declaration.body {
+                PlannedBody::Computed(ComputedBody::Todo) => ComputedBody::Todo,
+                PlannedBody::Computed(ComputedBody::Expression { .. }) => {
+                    ComputedBody::BlockedInGroup(unfinished.clone())
+                }
+                PlannedBody::Computed(ComputedBody::BlockedInGroup(_)) | PlannedBody::Supplied => {
+                    return Err(StepIndexError::NotAFormulaMember(declaration.key.clone()));
+                }
+            };
+            computed.push((declaration, body, Some((membership, None))));
+        }
+        return Ok(());
+    }
     let first_step = computed.len();
     let mut planned = Vec::with_capacity(members.len());
     let mut axis = None::<IndexAxis>;
     for declaration in members {
         let body = match &declaration.body {
             PlannedBody::Computed(body @ ComputedBody::Expression { .. }) => body.clone(),
-            PlannedBody::Computed(ComputedBody::Todo) | PlannedBody::Supplied => {
+            PlannedBody::Computed(ComputedBody::Todo | ComputedBody::BlockedInGroup(_))
+            | PlannedBody::Supplied => {
                 return Err(StepIndexError::NotAFormulaMember(declaration.key.clone()));
             }
         };

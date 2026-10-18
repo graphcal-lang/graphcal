@@ -57,8 +57,6 @@ impl std::fmt::Display for CycleMember {
 pub enum RecurrenceRejection {
     /// R1: the cycle reads `other`, which another DAG declares.
     MixedOwners { other: DeclName },
-    /// R2: the member is an unfinished `todo` node.
-    Unfinished,
     /// R3: the member is not a top-level `for` or `unfold`.
     NotRecurrenceShape,
     /// R4: the member steps along another axis than `first`.
@@ -200,7 +198,6 @@ impl RecurrenceRejection {
             Self::MixedOwners { other } => {
                 format!("this cycle reads `{other}`, declared in another DAG")
             }
-            Self::Unfinished => "unfinished node in a cycle".to_owned(),
             Self::NotRecurrenceShape => "not a top-level `for` or `unfold`".to_owned(),
             Self::AxisMismatch { first } => {
                 format!("steps along another axis than `{first}`")
@@ -229,9 +226,6 @@ impl RecurrenceRejection {
         match self {
             Self::MixedOwners { .. } => {
                 "a recurrence cannot span declarations of different DAGs".to_owned()
-            }
-            Self::Unfinished => {
-                "a recurrence needs formulas to check the step offsets of its reads".to_owned()
             }
             Self::NotRecurrenceShape => "every declaration in a cycle with an `unfold` must be a top-level `for` or `unfold` over the recurrence axis".to_owned(),
             Self::AxisMismatch { .. } => {

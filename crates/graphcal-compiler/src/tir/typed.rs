@@ -1536,11 +1536,9 @@ impl HirPolicyChecker<'_> {
             crate::hir::expr::ExprKind::VariantLiteral(variant) => {
                 self.check_variant_literal(variant, check_pub_bind_literals)
             }
-            crate::hir::expr::ExprKind::TodoHole(hole) => hole
-                .interface
-                .value
-                .iter()
-                .try_for_each(|target| self.check_graph_ref(target, target.span, phase)),
+            crate::hir::expr::ExprKind::TodoHole(hole) => {
+                hole.interface.value.iter().try_for_each(recurse)
+            }
             crate::hir::expr::ExprKind::BinOp { lhs, rhs, .. } => {
                 recurse(lhs)?;
                 recurse(rhs)

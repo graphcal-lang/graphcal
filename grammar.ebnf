@@ -890,9 +890,13 @@ todo_hole
      "{", [ todo_dependency, { ",", todo_dependency }, [ "," ] ], "}";
 
 todo_dependency
-   = "@", ident_path;
+   = "@", ident_path, [ "[", IDENT, { ",", IDENT }, [ "," ], "]" ]
+   | IDENT;
 
-(* `todo` is contextual: only `todo < … > {` selects a hole, so `todo`
+(* An entry is a read `@y`, an element read `@y[t, …]` keyed by locals in
+   scope, or a local `s`; a local documents intent and is not a graph
+   dependency. Entries are checked like the reads they name.
+   `todo` is contextual: only `todo < … > {` selects a hole, so `todo`
    remains an ordinary identifier elsewhere. A hole stands for an unfinished
    formula of the written type, which carries no domain constraints. It is
    accepted only in runtime `node` formulas; a node whose formula contains a

@@ -353,12 +353,8 @@ impl<'a> HirRefCollector<'a> {
                 );
             }
             hir::expr::ExprKind::TodoHole(hole) => {
-                for target in &hole.interface.value {
-                    Self::reference(
-                        table,
-                        target.span,
-                        SymbolKey::Declaration(target.value.clone()),
-                    );
+                for entry in &hole.interface.value {
+                    self.walk(entry, table);
                 }
             }
             hir::expr::ExprKind::ConstRef(const_ref) => {

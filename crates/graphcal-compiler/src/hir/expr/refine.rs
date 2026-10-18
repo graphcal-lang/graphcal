@@ -158,16 +158,7 @@ where
             let TodoHole { ty, interface } = *hole;
             ExprKind::TodoHole(Box::new(TodoHole {
                 ty,
-                interface: Spanned::new(
-                    interface
-                        .value
-                        .into_iter()
-                        .map(|Spanned { value, span }| {
-                            Spanned::new(refinement.decl_ref(value), span)
-                        })
-                        .collect(),
-                    interface.span,
-                ),
+                interface: Spanned::new(refine_all(interface.value, refinement)?, interface.span),
             }))
         }
         ExprKind::VariantLiteral(value) => ExprKind::VariantLiteral(value),

@@ -68,7 +68,6 @@ theorem Accepted.axisCoordinate (kind : AxisId → AxisKind) (htyped : g.UnfoldA
     | unfoldOver b => exact ⟨b, rfl⟩
     | forOver _ => simp [hdef, Definition.shape?] at hu
     | otherFormula => simp [hdef, Definition.shape?] at hu
-    | unfinished => simp [hdef, Definition.shape?] at hu
   obtain ⟨b, hb⟩ := hunfold
   intro x axis hx
   have haxis := h.memberRules.commonAxis x u

@@ -73,13 +73,11 @@ def ownerMatchesFirst (g : Group size) (x : Fin size) : Bool :=
 def axisMatchesFirst (g : Group size) (x : Fin size) : Bool :=
   decide ((g.member x).definition.axis? = (g.member ⟨0, x.pos⟩).definition.axis?)
 
-/-- Check a candidate group: R1–R6 in order, then R7 by greedy placement. -/
+/-- Check a candidate group: R1 and R3–R6 in order, then R7 by greedy
+placement. -/
 def check (g : Group size) : Except (Violation size) (Plan size) :=
   match (List.finRange size).find? (fun x => !g.ownerMatchesFirst x) with
   | some x => .error (.mixedOwners x)
-  | none =>
-  match (List.finRange size).find? (fun x => decide ((g.member x).definition = .unfinished)) with
-  | some x => .error (.unfinishedMember x)
   | none =>
   match (List.finRange size).find? (fun x => decide (g.shape? x = none)) with
   | some x => .error (.notRecurrenceShape x)

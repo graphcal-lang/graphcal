@@ -116,8 +116,8 @@ impl<V: Concreteness> TExpr<V> {
             | TExprKind::GraphRef(_)
             | TExprKind::Const(_)
             | TExprKind::Local(_)
-            | TExprKind::Variant { .. }
-            | TExprKind::TodoHole(_) => Vec::new(),
+            | TExprKind::Variant { .. } => Vec::new(),
+            TExprKind::TodoHole { interface, .. } => interface.iter().collect(),
             TExprKind::Quantity(operation) => unbox(operation.operands()),
             TExprKind::Int(operation) => unbox(operation.operands()),
             TExprKind::Bool(operation) => unbox(operation.operands()),
@@ -310,10 +310,13 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         variant: IndexVariantRef,
         key: V::Discharged<KeyValue>,
     },
-    /// A `todo<T> { … }` hole. A formula containing one is unfinished and is
-    /// never evaluated, so a concrete tree carries an uninhabited
-    /// [`ExecutableHole`]; its interface lives on the HIR body's dependencies.
-    TodoHole(V::Discharged<ExecutableHole>),
+    /// A `todo<T> { … }` hole with its checked interface entries. A formula
+    /// containing one is unfinished and is never evaluated, so a concrete
+    /// tree would carry an [`ExecutableHole`], which is uninhabited.
+    TodoHole {
+        interface: Vec<TExpr<V>>,
+        executable: V::Discharged<ExecutableHole>,
+    },
     /// An inline call of the DAG `slot` names in the call targets of the
     /// body that holds this node.
     DagCall {
