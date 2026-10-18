@@ -4,6 +4,82 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.39
+
+This release replaces whole-node `todo { … }` with typed `todo<T> { … }` holes, which can stand in for any part of a node formula, and rejects recursive algebraic types.
+It also extends batch evaluation: sessions can carry quantities in chosen units, indexed, datetime, complex, and algebraic values, and keys over every index kind, and a wrapper file's re-exported include outputs become output ports.
+
+**Some existing Graphcal source programs need to be modified.** Unfinished nodes must name the type of their hole, and recursive types no longer compile. See [Breaking Changes](#breaking-changes).
+The batch evaluation protocol version is now 2, so clients built for alpha.38 must be updated. See [Batch Evaluation](#batch-evaluation).
+
+### Breaking Changes
+
+- `todo { … }` is replaced by the typed hole expression `todo<T> { … }`. Rewrite `node x: T = todo { … };` as `node x: T = todo<T> { … };`. (_#2138_)
+- A nominal type can no longer refer to itself, directly, through other types, through generic arguments such as `Box<List>`, or through generic defaults. Such programs are rejected with S034, which gives the cycle path. Graphcal has no recursion, so recursive values could only be built and inspected to a depth written in the source. This reverses #1257, which made recursive values evaluate. (_#2137_)
+
+  ```text
+  graphcal::S034
+    × type `Expr` refers to itself through `Add.lhs` -> `Term` -> `Wrap.expr`
+  ```
+
+### Typed `todo` Holes
+
+- A hole `todo<T> { … }` can replace a whole formula or any part of one, such as `@mass * todo<Acceleration> { @g0 }`. Its type is written explicitly, and the rest of the formula is still type-checked. (_#2138_)
+
+  ```graphcal
+  node v_exhaust: Velocity = todo<Velocity> { @isp, @g0 };
+  ```
+
+- The braces list the possible direct dependencies of the missing part: a reference `@y`, an element `@y[t, …]` keyed by local variables in scope, or a local variable such as `s`, which documents intent without being a graph dependency. Element entries let an unfinished recurrence state which step it reads. (_#2138_)
+- Holes are allowed only in `node` formulas (G010), and the hole type may not carry a domain constraint (C009). A node whose formula contains a hole is TODO, and its dependents are BLOCKED. (_#2138_)
+- A recurrence group with an unfinished member is accepted when its reads satisfy the usual rules. A member that is entirely a hole is rejected, and a hole inside a `for` or `unfold` member is checked through its listed entries. The group is not evaluated: its unfinished members are TODO, and its finished members are BLOCKED. The Lean specification under `formal/Graphcal/Graph/RecurrenceGroup/` is updated accordingly. (_#2138_)
+- The formatter and language server support holes. The language server reports one diagnostic per hole and finds references inside hole entries. (_#2138_)
+
+### Batch Evaluation
+
+- `pub` items of a selective include (`include m(...)::{ pub x, pub y as z }`) that are runtime nodes are now output ports, under their local names and in source order. A wrapper file that fixes parameters no longer has to re-declare every output. Private brace items, re-exported constants, and members of whole-instance includes (`include ... as alias`) are not ports. (_#2131_)
+- `graphcal model serve --unit NAME=UNIT` carries a quantity port in a chosen unit instead of its SI unit. The option can be repeated. `UNIT` is a unit expression resolved in the served file, as if written after `->` there, and must have a fixed scale. A runtime unit, an unknown unit, or a syntax error stops the server at startup with exit code 2. The server publishes each chosen unit's SI scale in the stream metadata, and domains are converted to the chosen unit. In Rust, use `SessionBuilder::vary_in` and `output_in`. (_#2132_)
+- Ports of the following types are now supported instead of listed as unsupported. `--unit` applies to complex values and indexed values of quantities as well as quantities, and a domain bounds every element of an indexed parameter. (_#2134_)
+
+  | Graphcal type | Wire `kind` | Arrow |
+  | --- | --- | --- |
+  | `T[I]` (any depth) | `indexed` | `FixedSizeList` per axis |
+  | `Datetime<S>` | `datetime` | `Float64` seconds since J2000, read in `S` |
+  | `Complex<D>` | `complex` | `Struct{re, im}` in the port's unit |
+  | Record type | `algebraic` | `Struct` of its fields |
+  | Union type | `algebraic` | `Struct{constructor, variants}`, with only the active constructor non-null |
+
+- `Key<I>` is now supported for every index kind. A key over a named index travels as the variant name, as before. A key over `Fin(N)` travels as its position from 0, and a key over a coordinate index as its SI coordinate, which must equal one of the index's coordinates exactly. In Rust, use `InputHandle::position` and `InputHandle::coordinate`. (_#2136_)
+- A port whose dimension has no base unit stays unsupported, and the reason now names the base dimension that needs a `base unit`. (_#2136_)
+- The protocol version is now 2. The describe document and the Arrow encoding changed with the unit, value, and key support above. (_#2136_)
+- Rust API changes in `graphcal-model-protocol` and `graphcal-model-client`: `ModelInterface::configure` takes a unit resolver (`CanonicalUnitsOnly` for SI-only sessions), `KeyType` carries the `Axis` it selects from, `Value::Key` carries a `KeyValue`, `VariantPosition` is renamed `KeyPosition`, and on the client `KeyVariant` is renamed `KeyEntry` and `variants()` is renamed `entries()`. (_#2132_, _#2134_, _#2136_)
+
+### Bug Fixes
+
+- `type Holder<T: Type = Holder> { ... }` no longer crashes `graphcal check` with a stack overflow. It now reports S034. (_#2137_)
+
+### Documentation
+
+- The Batch Evaluation page and CLI reference describe `--unit`, the supported types and their wire layout, and the key forms. The wrapper example uses the `::{ pub failure, pub margin }` form instead of re-declaring outputs. (_#2131_, _#2132_, _#2134_, _#2136_)
+- The "Unfinished nodes" section describes typed holes, and the "Recursive Algebraic Types" section is replaced by a short statement of the rule. (_#2137_, _#2138_)
+
+### Editor Support
+
+- The tree-sitter grammar, Zed extension, and VS Code extension support `todo<T> { … }` (graphcal-lang/tree-sitter-graphcal#99, graphcal-lang/zed-graphcal#42, graphcal-lang/vscode-graphcal#154). (_#2138_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- Updated JavaScript tooling: pnpm to v12.14.0, `@playwright/test` to v1.64.1, and `@axe-core/playwright` to v4.14.0. (_#2140_, _#2129_, _#2139_)
+- Updated the `voidzero-dev/setup-vp` action to v1.21.2. (_#2130_)
+
+### Internal
+
+- Recursive-type handling is removed: S030, the recursion guard in concrete obligations, and the cycle detection in the model schema graph. The new check runs when a module is added to the project type store, so every later phase sees an acyclic type graph. (_#2137_)
+- A concrete (executable) body cannot contain a hole by construction, so the evaluator has no case for holes. (_#2138_)
+- Added the v0.0.1-alpha.39 notes to `CHANGELOG.md` and bumped the workspace version to v0.0.1-alpha.39. (_#2141_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.38...v0.0.1-alpha.39>
+
 ## v0.0.1-alpha.38
 
 This release replaces the Tenax-specific model server with a general batch evaluation protocol, so sampling studies, scenario discovery, and optimizers can evaluate a Graphcal model many times from another process.
