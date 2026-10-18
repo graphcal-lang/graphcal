@@ -1,9 +1,13 @@
 //! The JSON values of the `graphcal` schema and field metadata keys.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::domain::Domain;
 use crate::fingerprint::InterfaceFingerprint;
+use crate::label::PortName;
+use crate::unit_scale::SiScale;
 use crate::wire_type::WireType;
 
 /// The metadata key used on schemas and fields.
@@ -20,7 +24,7 @@ pub enum StreamKind {
 }
 
 /// The value of a schema's `graphcal` metadata key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaMetadata {
     /// The protocol version.
@@ -29,6 +33,9 @@ pub struct SchemaMetadata {
     pub interface_fingerprint: InterfaceFingerprint,
     /// Which stream the schema describes.
     pub stream: StreamKind,
+    /// The scale of every port the session carries in a chosen unit.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub si_scales: BTreeMap<PortName, SiScale>,
 }
 
 /// The value of a field's `graphcal` metadata key.

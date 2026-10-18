@@ -751,7 +751,7 @@ Prepare a model once and evaluate request batches from stdin, writing one
 result batch per request to stdout as Arrow IPC streams.
 
 ```bash
-graphcal model serve <FILE> --input <NAME>... --output <NAME>... \
+graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=UNIT>]... \
     (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) [--root <ROOT>]
 ```
 
@@ -762,6 +762,7 @@ graphcal model serve <FILE> --input <NAME>... --output <NAME>... \
 | `<FILE>` | Entry `.gcl` file |
 | `--input <NAME>` | Parameter to vary in requests; repeatable and required. Parameters not listed keep their defaults |
 | `--output <NAME>` | Public node to return in results; repeatable and required |
+| `--unit <NAME=UNIT>` | Carry the selected quantity port `NAME` in `UNIT`, a fixed-scale unit expression of the entry file; repeatable |
 | `--expect-fingerprint <FINGERPRINT>` | Refuse to start unless the interface fingerprint from `graphcal model describe` matches |
 | `--skip-fingerprint-check` | Serve without checking the fingerprint |
 | `--root <ROOT>` | Explicit project root |

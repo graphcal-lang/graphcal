@@ -102,3 +102,62 @@ fn client_reports_a_changed_interface_from_the_server() {
         "{error}"
     );
 }
+
+#[test]
+fn client_sessions_carry_quantities_in_server_resolved_units() {
+    use graphcal_model_protocol::{Domain, UnitSpelling};
+
+    let dir = tempfile::tempdir().unwrap();
+    let model = Model::describe(command(dir.path())).unwrap();
+    let load = model.input::<Quantity>("load").unwrap();
+    let mode = model.input::<Key>("mode").unwrap();
+    let margin = model.output::<Quantity>("margin").unwrap();
+    let unit = |spelling: &str| UnitSpelling::new(spelling).unwrap();
+    let mut session = model
+        .session()
+        .vary_in(&load, unit("cm"))
+        .vary(&mode)
+        .output_in(&margin, unit("mm"))
+        .spawn()
+        .unwrap();
+    let Some(Domain::Quantity(bounds)) = session.schema().inputs()[0].domain() else {
+        panic!("load has a quantity domain");
+    };
+    assert_eq!(bounds.max().map(|max| max.get()), Some(1000.0));
+    let request = session
+        .batch()
+        .column(&load, [100.0, 2000.0])
+        .unwrap()
+        .column(&mode, std::iter::repeat_n(mode.variant("A").unwrap(), 2))
+        .unwrap()
+        .build()
+        .unwrap();
+    let result = session.evaluate(&request).unwrap();
+    assert_eq!(result.column(&margin).unwrap()[0], Some(8000.0));
+    assert!(matches!(
+        result.failure(1),
+        Some(RowFailure::InputOutOfDomain { parameter, .. }) if parameter.as_str() == "load"
+    ));
+    session.shutdown().unwrap();
+
+    let error = model
+        .session()
+        .vary_in(&load, unit("s"))
+        .vary(&mode)
+        .output(&margin)
+        .spawn()
+        .unwrap_err();
+    assert!(
+        matches!(&error, ClientError::ServerStopped { stderr, .. } if stderr.contains("cannot carry port `load`")),
+        "{error}"
+    );
+    assert!(matches!(
+        model
+            .session()
+            .vary_in(&load, unit("cm"))
+            .vary(&mode)
+            .output(&margin)
+            .schema(),
+        Err(ClientError::Session(_))
+    ));
+}

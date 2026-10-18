@@ -65,8 +65,8 @@ node:
 - `wire` is how values travel. Quantities, `Int`, `Bool`, and `Key<I>` over a
   named index are supported. Other types are listed with
   `"kind": "unsupported"` and a reason, never silently omitted.
-- `unit` is the unit of every value of that port, always the canonical SI unit.
-  Convert values before sending them: a load of 9 kN is sent as `9000.0`.
+- `unit` is the port's canonical SI unit. Values travel in it unless a
+  session chooses another unit for the port (see below).
 - `domain` is in the same unit. A value outside it fails only its own row.
 - `interface_fingerprint` identifies this interface. Formulas may change
   without changing it; adding, removing, or retyping a port changes it.
@@ -87,6 +87,19 @@ graphcal model serve reliability.gcl \
 since it was described. Pass `--skip-fingerprint-check` instead when you start
 a server by hand. One of the two is required.
 
+To send or receive a quantity in another unit, add `--unit NAME=UNIT` for that
+port. The unit is a unit expression resolved in the served file, as if written
+after `->` there. It must measure the port's dimension and have a fixed scale:
+base, `const`, and prelude units qualify, runtime units do not. The session's
+domains are converted into the chosen unit:
+
+```bash
+graphcal model serve reliability.gcl \
+    --input load --input mode --output failure --output margin \
+    --unit load=kN --unit margin=kN \
+    --expect-fingerprint sha256:…
+```
+
 The server reads request batches on stdin and writes results on stdout as
 Arrow IPC streams, so it is driven by a client rather than a terminal.
 
@@ -97,18 +110,23 @@ internal. Handles are typed, so each column takes values of the port's kind:
 
 ```rust
 use graphcal_model_client::{Bool, GraphcalCommand, Key, Model, Quantity};
-use graphcal_model_protocol::RowOutcome;
+use graphcal_model_protocol::{RowOutcome, UnitSpelling};
 
 let model = Model::describe(GraphcalCommand::new("reliability.gcl"))?;
 let load = model.input::<Quantity>("load")?;
 let mode = model.input::<Key>("mode")?;
 let failure = model.output::<Bool>("failure")?;
 
-let mut session = model.session().vary(&load).vary(&mode).output(&failure).spawn()?;
+let mut session = model
+    .session()
+    .vary_in(&load, UnitSpelling::new("kN")?)
+    .vary(&mode)
+    .output(&failure)
+    .spawn()?;
 let degraded = mode.variant("Degraded")?;
 let request = session
     .batch()
-    .column(&load, [2_000.0, 9_000.0])?
+    .column(&load, [2.0, 9.0])?
     .column(&mode, [degraded.clone(), degraded])?
     .build()?;
 let result = session.evaluate(&request)?;
@@ -166,9 +184,12 @@ with exit code `1` instead of reporting a row.
 Clients in other languages talk to `graphcal model serve` directly:
 
 1. Run `graphcal model describe` and select ports.
-2. Start `graphcal model serve` with `--input`, `--output`, and
-   `--expect-fingerprint`.
-3. Read the result-stream schema from stdout before writing to stdin.
+2. Start `graphcal model serve` with `--input`, `--output`, any `--unit`
+   choices, and `--expect-fingerprint`.
+3. Read the result-stream schema from stdout before writing to stdin. Its
+   schema-level metadata lists `si_scales`: the size of each chosen unit in
+   the canonical SI unit. The request schema carries the same metadata, and
+   its domains are converted into the chosen units.
 4. Write one request stream on stdin. For each request batch, read one result
    batch.
 5. Close the request stream; the server finishes the result stream and exits

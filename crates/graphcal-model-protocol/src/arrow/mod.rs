@@ -27,4 +27,4 @@ mod schema;
 pub use metadata::{FieldMetadata, METADATA_KEY, SchemaMetadata, StreamKind};
 pub use request::RequestDecodeError;
 pub use result::ResultDecodeError;
-pub use schema::{SchemaMismatch, request_schema, result_schema, validate_schema};
+pub use schema::{SchemaMismatch, request_schema, result_schema, si_scales, validate_schema};

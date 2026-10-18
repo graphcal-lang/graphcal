@@ -1,31 +1,69 @@
-//! Session configuration: which parameters a client varies and which outputs
-//! it reads.
+//! Session configuration: which parameters a client varies, which outputs
+//! it reads, and the unit each quantity port travels in.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use thiserror::Error;
 
-use crate::domain::Domain;
+use crate::domain::{Bounds, Domain};
 use crate::fingerprint::InterfaceFingerprint;
+use crate::finite::FiniteF64;
 use crate::interface::ModelInterface;
-use crate::label::PortName;
-use crate::wire_type::{PortWire, WireType};
+use crate::label::{PortName, UnitSpelling};
+use crate::unit_scale::SiScale;
+use crate::wire_type::{PortWire, QuantityType, WireType};
 
-/// The parameters a session varies and the outputs it reads.
+/// A unit a session chooses for one selected quantity port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitChoice {
+    port: PortName,
+    unit: UnitSpelling,
+}
+
+impl UnitChoice {
+    /// The selected port.
+    #[must_use]
+    pub const fn port(&self) -> &PortName {
+        &self.port
+    }
+
+    /// The unit its values travel in.
+    #[must_use]
+    pub const fn unit(&self) -> &UnitSpelling {
+        &self.unit
+    }
+}
+
+/// The parameters a session varies, the outputs it reads, and the units it
+/// chooses for some of them.
 ///
 /// Order is irrelevant: a configured session lists both in the interface's
-/// declaration order.
+/// declaration order. A quantity port without a unit choice travels in its
+/// canonical SI unit.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SessionSpec {
     inputs: Vec<PortName>,
     outputs: Vec<PortName>,
+    units: Vec<UnitChoice>,
 }
 
 impl SessionSpec {
-    /// A session varying `inputs` and reading `outputs`.
+    /// A session varying `inputs` and reading `outputs` in their canonical
+    /// units.
     #[must_use]
     pub const fn new(inputs: Vec<PortName>, outputs: Vec<PortName>) -> Self {
-        Self { inputs, outputs }
+        Self {
+            inputs,
+            outputs,
+            units: Vec::new(),
+        }
+    }
+
+    /// Carry the values of the selected quantity port `port` in `unit`.
+    #[must_use]
+    pub fn with_unit(mut self, port: PortName, unit: UnitSpelling) -> Self {
+        self.units.push(UnitChoice { port, unit });
+        self
     }
 
     /// The parameters to vary.
@@ -38,6 +76,44 @@ impl SessionSpec {
     #[must_use]
     pub fn outputs(&self) -> &[PortName] {
         &self.outputs
+    }
+
+    /// The chosen units.
+    #[must_use]
+    pub fn units(&self) -> &[UnitChoice] {
+        &self.units
+    }
+}
+
+/// Resolves a chosen unit spelling of one port to its [`SiScale`].
+///
+/// Only the model implementation knows its units, so a model server supplies
+/// the resolver; a client reuses the scales the server published (see
+/// [`crate::arrow::si_scales`]). The resolver also checks that the unit
+/// measures the port's dimension.
+pub trait UnitResolver {
+    /// The scale of `unit` for `port`.
+    ///
+    /// # Errors
+    ///
+    /// Returns why `unit` cannot carry `port`'s values.
+    fn si_scale(&mut self, port: &PortName, unit: &UnitSpelling) -> Result<SiScale, String>;
+}
+
+impl<F: FnMut(&PortName, &UnitSpelling) -> Result<SiScale, String>> UnitResolver for F {
+    fn si_scale(&mut self, port: &PortName, unit: &UnitSpelling) -> Result<SiScale, String> {
+        self(port, unit)
+    }
+}
+
+/// A resolver that rejects every unit choice, for sessions in canonical
+/// units only.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CanonicalUnitsOnly;
+
+impl UnitResolver for CanonicalUnitsOnly {
+    fn si_scale(&mut self, _port: &PortName, unit: &UnitSpelling) -> Result<SiScale, String> {
+        Err(format!("no unit resolver is available for `{unit}`"))
     }
 }
 
@@ -62,6 +138,20 @@ pub enum SessionError {
     UnsupportedOutput { name: PortName, reason: String },
     #[error("parameter `{name}` has no default, so the session must vary it")]
     MissingDefault { name: PortName },
+    #[error("a unit is chosen more than once for port `{name}`")]
+    DuplicateUnit { name: PortName },
+    #[error("a unit is chosen for port `{name}`, which the session does not select")]
+    UnitForUnselectedPort { name: PortName },
+    #[error("a unit is chosen for port `{name}`, which is not a quantity")]
+    UnitForNonQuantity { name: PortName },
+    #[error("unit `{unit}` cannot carry port `{name}`: {reason}")]
+    UnresolvedUnit {
+        name: PortName,
+        unit: UnitSpelling,
+        reason: String,
+    },
+    #[error("the domain of parameter `{name}` is not representable in its chosen unit")]
+    UnrepresentableDomain { name: PortName },
 }
 
 /// The position of a varied parameter within a [`SessionSchema`].
@@ -94,6 +184,7 @@ pub struct SessionInput {
     name: PortName,
     wire: WireType,
     domain: Option<Domain>,
+    si_scale: Option<SiScale>,
 }
 
 impl SessionInput {
@@ -109,19 +200,26 @@ impl SessionInput {
         &self.wire
     }
 
-    /// The declared domain. Values outside it are row failures, not
-    /// protocol errors.
+    /// The declared domain in the wire unit. Values outside it are row
+    /// failures, not protocol errors.
     #[must_use]
     pub const fn domain(&self) -> Option<&Domain> {
         self.domain.as_ref()
     }
+
+    /// The scale of the chosen unit, or `None` for the canonical SI unit.
+    #[must_use]
+    pub const fn si_scale(&self) -> Option<SiScale> {
+        self.si_scale
+    }
 }
 
 /// One read output of a session.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SessionOutput {
     name: PortName,
     wire: WireType,
+    si_scale: Option<SiScale>,
 }
 
 impl SessionOutput {
@@ -135,6 +233,12 @@ impl SessionOutput {
     #[must_use]
     pub const fn wire(&self) -> &WireType {
         &self.wire
+    }
+
+    /// The scale of the chosen unit, or `None` for the canonical SI unit.
+    #[must_use]
+    pub const fn si_scale(&self) -> Option<SiScale> {
+        self.si_scale
     }
 }
 
@@ -197,17 +301,123 @@ impl SessionSchema {
     pub fn output(&self, slot: OutputSlot) -> Option<&SessionOutput> {
         self.outputs.get(slot.0)
     }
+
+    /// The selection this schema was configured from.
+    #[must_use]
+    pub fn spec(&self) -> SessionSpec {
+        let chosen = |name: &PortName, wire: &WireType, scale: Option<SiScale>| match (wire, scale)
+        {
+            (WireType::Quantity(quantity), Some(_)) => {
+                quantity.unit().cloned().map(|unit| UnitChoice {
+                    port: name.clone(),
+                    unit,
+                })
+            }
+            _ => None,
+        };
+        SessionSpec {
+            inputs: self.inputs.iter().map(|input| input.name.clone()).collect(),
+            outputs: self
+                .outputs
+                .iter()
+                .map(|output| output.name.clone())
+                .collect(),
+            units: self
+                .inputs
+                .iter()
+                .filter_map(|input| chosen(&input.name, &input.wire, input.si_scale))
+                .chain(
+                    self.outputs
+                        .iter()
+                        .filter_map(|output| chosen(&output.name, &output.wire, output.si_scale)),
+                )
+                .collect(),
+        }
+    }
+}
+
+/// The wire type and scale of a port carried in the unit `choice`, or in its
+/// canonical unit when there is no choice.
+fn chosen_wire(
+    name: &PortName,
+    wire: &WireType,
+    choice: Option<&UnitSpelling>,
+    resolver: &mut impl UnitResolver,
+) -> Result<(WireType, Option<SiScale>), SessionError> {
+    let Some(unit) = choice else {
+        return Ok((wire.clone(), None));
+    };
+    let WireType::Quantity(quantity) = wire else {
+        return Err(SessionError::UnitForNonQuantity { name: name.clone() });
+    };
+    let scale = resolver
+        .si_scale(name, unit)
+        .map_err(|reason| SessionError::UnresolvedUnit {
+            name: name.clone(),
+            unit: unit.clone(),
+            reason,
+        })?;
+    let quantity =
+        QuantityType::new(quantity.dimension().clone(), Some(unit.clone())).map_err(|error| {
+            SessionError::UnresolvedUnit {
+                name: name.clone(),
+                unit: unit.clone(),
+                reason: error.to_string(),
+            }
+        })?;
+    Ok((WireType::Quantity(quantity), Some(scale)))
+}
+
+/// The unit chosen for each selected port, rejecting repeated choices and
+/// choices for ports outside the selection.
+fn unit_choices<'s>(
+    spec: &'s SessionSpec,
+    varied: &HashSet<&PortName>,
+    read: &HashSet<&PortName>,
+) -> Result<HashMap<&'s PortName, &'s UnitSpelling>, SessionError> {
+    let mut choices = HashMap::with_capacity(spec.units.len());
+    for choice in &spec.units {
+        if !varied.contains(&choice.port) && !read.contains(&choice.port) {
+            return Err(SessionError::UnitForUnselectedPort {
+                name: choice.port.clone(),
+            });
+        }
+        if choices.insert(&choice.port, &choice.unit).is_some() {
+            return Err(SessionError::DuplicateUnit {
+                name: choice.port.clone(),
+            });
+        }
+    }
+    Ok(choices)
+}
+
+/// `domain` (in the canonical unit) in the unit of `scale`.
+fn converted_domain(domain: Domain, scale: Option<SiScale>) -> Option<Domain> {
+    let (Domain::Quantity(bounds), Some(scale)) = (domain, scale) else {
+        return Some(domain);
+    };
+    let convert =
+        |bound: Option<&FiniteF64>| bound.map(|bound| scale.from_si(*bound)).transpose().ok();
+    let (min, max) = (convert(bounds.min())?, convert(bounds.max())?);
+    Bounds::new(min, max).ok().map(Domain::Quantity)
 }
 
 impl ModelInterface {
-    /// Configure a session that varies and reads the ports `spec` selects.
+    /// Configure a session that varies and reads the ports `spec` selects,
+    /// resolving its unit choices with `units`.
     ///
     /// # Errors
     ///
     /// Returns [`SessionError`] when the selection is empty, repeats or
     /// names an unknown port, selects a port the protocol cannot carry, or
-    /// leaves a parameter without a default unvaried.
-    pub fn configure(&self, spec: &SessionSpec) -> Result<SessionSchema, SessionError> {
+    /// leaves a parameter without a default unvaried; or when a unit choice
+    /// repeats, names an unselected or non-quantity port, does not resolve,
+    /// or cannot express the parameter's domain.
+    pub fn configure(
+        &self,
+        spec: &SessionSpec,
+        mut units: impl UnitResolver,
+    ) -> Result<SessionSchema, SessionError> {
         if spec.inputs.is_empty() {
             return Err(SessionError::NoInputs);
         }
@@ -232,6 +442,7 @@ impl ModelInterface {
                 return Err(SessionError::UnknownOutput { name: name.clone() });
             }
         }
+        let choices = unit_choices(spec, &varied, &read)?;
 
         let mut inputs = Vec::with_capacity(spec.inputs.len());
         for parameter in self.parameters() {
@@ -244,11 +455,26 @@ impl ModelInterface {
                 continue;
             }
             match parameter.wire() {
-                PortWire::Supported(wire) => inputs.push(SessionInput {
-                    name: parameter.name().clone(),
-                    wire: wire.clone(),
-                    domain: parameter.domain().copied(),
-                }),
+                PortWire::Supported(wire) => {
+                    let choice = choices.get(parameter.name()).copied();
+                    let (wire, si_scale) = chosen_wire(parameter.name(), wire, choice, &mut units)?;
+                    let domain = parameter
+                        .domain()
+                        .map(|domain| {
+                            converted_domain(*domain, si_scale).ok_or_else(|| {
+                                SessionError::UnrepresentableDomain {
+                                    name: parameter.name().clone(),
+                                }
+                            })
+                        })
+                        .transpose()?;
+                    inputs.push(SessionInput {
+                        name: parameter.name().clone(),
+                        wire,
+                        domain,
+                        si_scale,
+                    });
+                }
                 PortWire::Unsupported { reason } => {
                     return Err(SessionError::UnsupportedInput {
                         name: parameter.name().clone(),
@@ -263,10 +489,15 @@ impl ModelInterface {
                 continue;
             }
             match output.wire() {
-                PortWire::Supported(wire) => outputs.push(SessionOutput {
-                    name: output.name().clone(),
-                    wire: wire.clone(),
-                }),
+                PortWire::Supported(wire) => {
+                    let choice = choices.get(output.name()).copied();
+                    let (wire, si_scale) = chosen_wire(output.name(), wire, choice, &mut units)?;
+                    outputs.push(SessionOutput {
+                        name: output.name().clone(),
+                        wire,
+                        si_scale,
+                    });
+                }
                 PortWire::Unsupported { reason } => {
                     return Err(SessionError::UnsupportedOutput {
                         name: output.name().clone(),
@@ -298,7 +529,10 @@ pub mod tests {
     /// Varies `load` and `mode`; reads `failure` and `margin`.
     pub fn sample_session() -> SessionSchema {
         sample_interface()
-            .configure(&spec(&["mode", "load"], &["margin", "failure"]))
+            .configure(
+                &spec(&["mode", "load"], &["margin", "failure"]),
+                CanonicalUnitsOnly,
+            )
             .unwrap()
     }
 
@@ -348,15 +582,103 @@ pub mod tests {
             ),
         ];
         for (spec, expected) in cases {
-            assert_eq!(interface.configure(&spec), Err(expected));
+            assert_eq!(
+                interface.configure(&spec, CanonicalUnitsOnly),
+                Err(expected)
+            );
         }
         assert!(matches!(
-            interface.configure(&spec(&["load", "mode", "history"], &["failure"])),
+            interface.configure(
+                &spec(&["load", "mode", "history"], &["failure"]),
+                CanonicalUnitsOnly
+            ),
             Err(SessionError::UnsupportedInput { .. })
         ));
         assert!(matches!(
-            interface.configure(&spec(&["load", "mode"], &["series"])),
+            interface.configure(&spec(&["load", "mode"], &["series"]), CanonicalUnitsOnly),
             Err(SessionError::UnsupportedOutput { .. })
+        ));
+    }
+
+    fn unit(spelling: &str) -> UnitSpelling {
+        UnitSpelling::new(spelling).unwrap()
+    }
+
+    fn kilometres(_: &PortName, unit: &UnitSpelling) -> Result<SiScale, String> {
+        match unit.as_str() {
+            "km" => Ok(SiScale::new(1000.0).unwrap()),
+            "tiny" => Ok(SiScale::new(f64::MIN_POSITIVE).unwrap()),
+            other => Err(format!("`{other}` is not a length unit")),
+        }
+    }
+
+    #[test]
+    fn chosen_units_rescale_wires_and_domains() {
+        let spec = spec(&["load", "mode"], &["margin", "failure"])
+            .with_unit(name("load"), unit("km"))
+            .with_unit(name("margin"), unit("km"));
+        let session = sample_interface().configure(&spec, kilometres).unwrap();
+        let load = &session.inputs()[0];
+        let WireType::Quantity(quantity) = load.wire() else {
+            panic!("load is a quantity");
+        };
+        assert_eq!(quantity.unit().map(UnitSpelling::as_str), Some("km"));
+        assert_eq!(load.si_scale().map(SiScale::get), Some(1000.0));
+        let Some(Domain::Quantity(bounds)) = load.domain() else {
+            panic!("load has a quantity domain");
+        };
+        assert_eq!(bounds.max().map(|max| max.get()), Some(0.01));
+        assert_eq!(
+            session.outputs()[1].si_scale().map(SiScale::get),
+            Some(1000.0)
+        );
+        assert_eq!(session.outputs()[0].si_scale(), None);
+        assert_eq!(session.spec().units(), spec.units());
+        assert_eq!(
+            sample_interface().configure(&session.spec(), kilometres),
+            Ok(session)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_unit_choices() {
+        let interface = sample_interface();
+        let base = || spec(&["load", "mode"], &["failure", "margin"]);
+        let cases = [
+            (
+                base().with_unit(name("count"), unit("km")),
+                SessionError::UnitForUnselectedPort {
+                    name: name("count"),
+                },
+            ),
+            (
+                base()
+                    .with_unit(name("load"), unit("km"))
+                    .with_unit(name("load"), unit("km")),
+                SessionError::DuplicateUnit { name: name("load") },
+            ),
+            (
+                base().with_unit(name("mode"), unit("km")),
+                SessionError::UnitForNonQuantity { name: name("mode") },
+            ),
+            (
+                base().with_unit(name("load"), unit("tiny")),
+                SessionError::UnrepresentableDomain { name: name("load") },
+            ),
+        ];
+        for (spec, expected) in cases {
+            assert_eq!(interface.configure(&spec, kilometres), Err(expected));
+        }
+        assert!(matches!(
+            interface.configure(&base().with_unit(name("load"), unit("s")), kilometres),
+            Err(SessionError::UnresolvedUnit { ref reason, .. }) if reason.contains("not a length")
+        ));
+        assert!(matches!(
+            interface.configure(
+                &base().with_unit(name("load"), unit("km")),
+                CanonicalUnitsOnly
+            ),
+            Err(SessionError::UnresolvedUnit { .. })
         ));
     }
 }

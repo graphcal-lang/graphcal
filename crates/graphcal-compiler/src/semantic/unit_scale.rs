@@ -265,7 +265,7 @@ impl From<RatioError> for UnitResolveError {
 ///
 /// Returns a [`UnitResolveError`] naming the unknown or dynamic-scale unit,
 /// the invalid compound scale, or the exponent overflow.
-pub(crate) fn resolve_unit_expr_with<'a>(
+pub fn resolve_unit_expr_with<'a>(
     expr: &UnitExpr,
     mut lookup: impl FnMut(&UnitRef) -> Option<&'a UnitInfo>,
 ) -> Result<(Dimension, PositiveFiniteScale), UnitResolveError> {

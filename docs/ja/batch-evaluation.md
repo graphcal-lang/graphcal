@@ -58,7 +58,7 @@ graphcal model describe reliability.gcl
 ```
 
 - `wire` は値の受け渡し方です。対応しているのは物理量、`Int`、`Bool`、名前付きインデックス上の `Key<I>` です。それ以外の型も一覧には載り、`"kind": "unsupported"` と理由が付きます。黙って除外されることはありません。
-- `unit` はそのポートのすべての値の単位で、常に SI の基準単位です。値は送る前に換算します。たとえば 9 kN の荷重は `9000.0` として送ります。
+- `unit` はそのポートの SI の基準単位です。セッションでそのポートに別の単位を選ばない限り、値はこの単位でやりとりします（後述）。
 - `domain` も同じ単位で表されます。値域外の値は、その行だけを失敗させます。
 - `interface_fingerprint` はこのインターフェースを識別します。式を変えても指紋は変わりませんが、ポートの追加・削除・型の変更では変わります。
 
@@ -74,6 +74,15 @@ graphcal model serve reliability.gcl \
 
 `--expect-fingerprint` を付けると、モデルが記述時から変わっていた場合にサーバは起動を拒否します。手作業でサーバを起動するときは、代わりに `--skip-fingerprint-check` を付けます。どちらか一方の指定が必須です。
 
+物理量を別の単位で送受信するには、そのポートに `--unit NAME=UNIT` を付けます。単位は serve するファイルの中で `->` の後に書いた場合と同じように解決される単位式です。ポートの次元を測る単位で、かつ倍率が固定されている必要があります。基本単位、`const` 単位、プレリュードの単位は使えますが、実行時単位は使えません。セッションの値域は選んだ単位に換算されます。
+
+```bash
+graphcal model serve reliability.gcl \
+    --input load --input mode --output failure --output margin \
+    --unit load=kN --unit margin=kN \
+    --expect-fingerprint sha256:…
+```
+
 サーバは stdin からリクエストのバッチを読み、stdout に結果を Arrow IPC ストリームとして書きます。端末から直接操作するものではなく、クライアントから駆動します。
 
 ## 3. Rust から評価する { #3-evaluate-from-rust }
@@ -82,18 +91,23 @@ graphcal model serve reliability.gcl \
 
 ```rust
 use graphcal_model_client::{Bool, GraphcalCommand, Key, Model, Quantity};
-use graphcal_model_protocol::RowOutcome;
+use graphcal_model_protocol::{RowOutcome, UnitSpelling};
 
 let model = Model::describe(GraphcalCommand::new("reliability.gcl"))?;
 let load = model.input::<Quantity>("load")?;
 let mode = model.input::<Key>("mode")?;
 let failure = model.output::<Bool>("failure")?;
 
-let mut session = model.session().vary(&load).vary(&mode).output(&failure).spawn()?;
+let mut session = model
+    .session()
+    .vary_in(&load, UnitSpelling::new("kN")?)
+    .vary(&mode)
+    .output(&failure)
+    .spawn()?;
 let degraded = mode.variant("Degraded")?;
 let request = session
     .batch()
-    .column(&load, [2_000.0, 9_000.0])?
+    .column(&load, [2.0, 9.0])?
     .column(&mode, [degraded.clone(), degraded])?
     .build()?;
 let result = session.evaluate(&request)?;
@@ -141,8 +155,8 @@ include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded)
 他の言語のクライアントは `graphcal model serve` と直接やりとりします。
 
 1. `graphcal model describe` を実行し、ポートを選ぶ。
-2. `--input`、`--output`、`--expect-fingerprint` を付けて `graphcal model serve` を起動する。
-3. stdin に書き込む前に、stdout から結果ストリームのスキーマを読む。
+2. `--input`、`--output`、必要な `--unit`、`--expect-fingerprint` を付けて `graphcal model serve` を起動する。
+3. stdin に書き込む前に、stdout から結果ストリームのスキーマを読む。スキーマ全体のメタデータの `si_scales` には、選んだ各単位が SI の基準単位でいくつ分かが載っている。リクエストのスキーマにも同じメタデータが入り、その値域は選んだ単位に換算されている。
 4. stdin に1本のリクエストストリームを書く。リクエストのバッチを1つ送るごとに、結果のバッチを1つ読む。
 5. リクエストストリームを閉じると、サーバは結果ストリームを終えて終了コード `0` で終了する。
 

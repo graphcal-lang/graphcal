@@ -3,7 +3,8 @@
 //! A prepared project publishes its [`ModelInterface`]; a configured
 //! [`SessionSchema`] then resolves to a [`ModelSession`] that evaluates
 //! request batches into result batches. Quantities travel in their canonical
-//! SI unit at scale one.
+//! SI unit at scale one unless the session chooses another unit for them
+//! (see [`PreparedProject::model_unit_scale`]).
 
 use std::sync::Arc;
 
@@ -16,8 +17,8 @@ use graphcal_model_protocol::{
     BaseDimensionName, Bounds, Dimension, Domain, Exponent, FiniteF64, IndexName, InputColumn,
     InterfaceError, InterfaceFingerprint, KeyType, LabelError, ModelInterface, OutputDescription,
     ParameterDescription, ParameterError, PortName, PortWire, QuantityType, RequestBatch,
-    ResultBatch, ResultBatchBuilder, RowFailure, RowOutcome, SessionSchema, UnitSpelling, Value,
-    VariantName, WireType,
+    ResultBatch, ResultBatchBuilder, RowFailure, RowOutcome, SessionError, SessionOutput,
+    SessionSchema, SessionSpec, SiScale, UnitSpelling, Value, VariantName, WireType,
 };
 
 use super::{
@@ -30,7 +31,8 @@ use crate::binding_error::BindingError;
 /// How one varied parameter is bound from its request column.
 #[derive(Debug, Clone)]
 enum InputBinding {
-    Quantity,
+    /// A quantity in the unit of the scale, or in SI without one.
+    Quantity(Option<SiScale>),
     Int,
     Bool,
     /// The variants of the parameter's index, in the key type's order.
@@ -79,6 +81,8 @@ pub enum ModelInterfaceError {
 pub enum ModelSessionError {
     #[error(transparent)]
     Interface(#[from] ModelInterfaceError),
+    #[error("invalid session: {0}")]
+    Session(#[from] SessionError),
     #[error(
         "the session was configured for interface {session}, but the model's interface is {model}"
     )]
@@ -86,6 +90,10 @@ pub enum ModelSessionError {
         session: InterfaceFingerprint,
         model: InterfaceFingerprint,
     },
+    /// The fingerprints agree, yet the model resolves the session's
+    /// selection differently, e.g. to other unit scales.
+    #[error("the session schema differs from the one this model configures for its selection")]
+    SchemaMismatch,
     /// The fingerprints agree, yet the model lacks a session port.
     #[error("internal model session invariant failed: the model has no port `{name}`")]
     MissingPort { name: PortName },
@@ -121,13 +129,31 @@ impl PreparedProject {
         Ok(ModelInterface::new(parameters, outputs)?)
     }
 
+    /// Configure the session `spec` selects over [`Self::model_interface`],
+    /// resolving its unit choices with [`Self::model_unit_scale`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelSessionError::Session`] for an invalid selection or
+    /// unit choice.
+    pub fn session_schema(&self, spec: &SessionSpec) -> Result<SessionSchema, ModelSessionError> {
+        Ok(self
+            .model_interface()?
+            .configure(spec, |port: &PortName, unit: &UnitSpelling| {
+                self.model_unit_scale(port, unit)
+                    .map_err(|error| error.to_string())
+            })?)
+    }
+
     /// Resolve `schema`, configured over [`Self::model_interface`], for
     /// evaluation.
     ///
     /// # Errors
     ///
     /// Returns [`ModelSessionError::FingerprintMismatch`] when the schema was
-    /// configured over another interface.
+    /// configured over another interface, and
+    /// [`ModelSessionError::SchemaMismatch`] when it is not the schema
+    /// [`Self::session_schema`] configures for its own selection.
     pub fn model_session(
         &self,
         schema: Arc<SessionSchema>,
@@ -138,6 +164,9 @@ impl PreparedProject {
                 session: schema.interface_fingerprint(),
                 model,
             });
+        }
+        if self.session_schema(&schema.spec())? != *schema {
+            return Err(ModelSessionError::SchemaMismatch);
         }
         let missing = |name: &PortName| ModelSessionError::MissingPort { name: name.clone() };
         let inputs = schema
@@ -150,7 +179,7 @@ impl PreparedProject {
                     .find(|port| port.name.as_str() == input.name().as_str())
                     .ok_or_else(|| missing(input.name()))?;
                 let binding = match input.wire() {
-                    WireType::Quantity(_) => InputBinding::Quantity,
+                    WireType::Quantity(_) => InputBinding::Quantity(input.si_scale()),
                     WireType::Int => InputBinding::Int,
                     WireType::Bool => InputBinding::Bool,
                     WireType::Key(_) => InputBinding::Key(
@@ -212,7 +241,7 @@ impl PreparedProject {
                 Err(failure) => RowOutcome::Failure(failure),
                 Ok(bindings) => {
                     match self.evaluate_row(&bindings, &session.outputs, |runtime, position| {
-                        Self::wire_value(runtime, session.schema.outputs()[position].wire())
+                        Self::wire_value(runtime, &session.schema.outputs()[position])
                     })? {
                         ModelRowOutcome::Success(values) => RowOutcome::Success(values),
                         ModelRowOutcome::Failure(failure) => {
@@ -236,8 +265,20 @@ impl PreparedProject {
         let mut builder = self.binding_builder();
         for (input, column) in session.inputs.iter().zip(request.columns()) {
             let bound = match (&input.binding, column) {
-                (InputBinding::Quantity, InputColumn::Quantity(values)) => {
-                    builder.bind_quantity(input.position, values[row].get())
+                (InputBinding::Quantity(scale), InputColumn::Quantity(values)) => {
+                    let value = values[row];
+                    match scale.map_or(Ok(value), |scale| scale.to_si(value)) {
+                        Ok(si) => builder.bind_quantity(input.position, si.get()),
+                        Err(_) => {
+                            return Ok(Err(RowFailure::InputOutOfDomain {
+                                parameter: input.name.clone(),
+                                message: format!(
+                                    "{} in the chosen unit overflows when converted to SI",
+                                    value.get()
+                                ),
+                            }));
+                        }
+                    }
                 }
                 (InputBinding::Int, InputColumn::Int(values)) => {
                     builder.bind_integer(input.position, values[row])
@@ -264,13 +305,19 @@ impl PreparedProject {
         Ok(Ok(builder.finish()?))
     }
 
-    /// The protocol value of an output's runtime value.
-    fn wire_value(runtime: &RuntimeValue, wire: &WireType) -> Result<Value, OutputProjectionError> {
-        Ok(match wire {
-            WireType::Quantity(_) => Value::Quantity(
-                FiniteF64::new(public_projection::project_quantity(runtime)?.get())
-                    .map_err(|_| OutputProjectionError::Unrepresentable)?,
-            ),
+    /// The protocol value of an output's runtime value, in the output's unit.
+    fn wire_value(
+        runtime: &RuntimeValue,
+        output: &SessionOutput,
+    ) -> Result<Value, OutputProjectionError> {
+        Ok(match output.wire() {
+            WireType::Quantity(_) => {
+                let si = FiniteF64::new(public_projection::project_quantity(runtime)?.get());
+                Value::Quantity(
+                    si.and_then(|si| output.si_scale().map_or(Ok(si), |scale| scale.from_si(si)))
+                        .map_err(|_| OutputProjectionError::Unrepresentable)?,
+                )
+            }
             WireType::Int => Value::Int(public_projection::project_int(runtime)?),
             WireType::Bool => Value::Bool(public_projection::project_bool(runtime)?),
             WireType::Key(key) => Value::Key(

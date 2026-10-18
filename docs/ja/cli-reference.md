@@ -711,7 +711,7 @@ graphcal model describe <FILE> [--root <ROOT>]
 モデルを一度だけ準備し、stdin から受け取ったリクエストのバッチを評価します。リクエストごとに1つの結果のバッチを stdout に書きます。どちらも Arrow IPC ストリームです。
 
 ```bash
-graphcal model serve <FILE> --input <NAME>... --output <NAME>... \
+graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=UNIT>]... \
     (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) [--root <ROOT>]
 ```
 
@@ -722,6 +722,7 @@ graphcal model serve <FILE> --input <NAME>... --output <NAME>... \
 | `<FILE>` | エントリの `.gcl` ファイル |
 | `--input <NAME>` | リクエストで変化させるパラメータ。繰り返し指定可能で、必須です。指定しないパラメータはデフォルト値のままです |
 | `--output <NAME>` | 結果で返す public なノード。繰り返し指定可能で、必須です |
+| `--unit <NAME=UNIT>` | 選んだ物理量ポート `NAME` の値を `UNIT` でやりとりします。`UNIT` はエントリファイルで解決される倍率固定の単位式です。繰り返し指定可能です |
 | `--expect-fingerprint <FINGERPRINT>` | `graphcal model describe` で得たインターフェースの指紋と一致しない場合、起動を拒否します |
 | `--skip-fingerprint-check` | 指紋を検査せずに起動します |
 | `--root <ROOT>` | 明示的なプロジェクトルート |
