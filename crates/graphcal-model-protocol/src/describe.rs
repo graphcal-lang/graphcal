@@ -117,14 +117,14 @@ mod tests {
     fn round_trips_and_checks_version_and_fingerprint() {
         let document = DescribeDocument::new("0.0.1", sample_interface());
         let json = serde_json::to_value(&document).unwrap();
-        assert_eq!(json["protocol_version"], 1);
+        assert_eq!(json["protocol_version"], PROTOCOL_VERSION);
         assert_eq!(
             serde_json::from_value::<DescribeDocument>(json.clone()).unwrap(),
             document
         );
 
         let mut wrong_version = json.clone();
-        wrong_version["protocol_version"] = 2.into();
+        wrong_version["protocol_version"] = (PROTOCOL_VERSION + 1).into();
         assert!(serde_json::from_value::<DescribeDocument>(wrong_version).is_err());
 
         let mut wrong_fingerprint = json;

@@ -1,6 +1,8 @@
-//! Fixed index axes of indexed wire values.
+//! Fixed index axes of indexed wire values and keys, and the keys that
+//! select one of their entries.
 
 use std::collections::HashSet;
+use std::fmt;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -111,6 +113,101 @@ impl Axis {
     pub const fn is_empty(&self) -> bool {
         false
     }
+
+    /// The key of the entry at `position`, when it is in range.
+    #[must_use]
+    pub fn key(&self, position: usize) -> Option<KeyRef<'_>> {
+        match &self.kind {
+            AxisKind::Named { variants } => variants.get(position).map(KeyRef::Variant),
+            AxisKind::Finite { size } => (position < *size).then_some(KeyRef::Position(position)),
+            AxisKind::Coordinate { coordinates, .. } => {
+                coordinates.get(position).copied().map(KeyRef::Coordinate)
+            }
+        }
+    }
+
+    /// The position of the entry `key` selects: a variant by name, a `Fin`
+    /// position in range, or a coordinate equal to one of the axis's. A key
+    /// of another axis kind selects no entry.
+    #[must_use]
+    pub fn position(&self, key: KeyRef<'_>) -> Option<usize> {
+        match (&self.kind, key) {
+            (AxisKind::Named { variants }, KeyRef::Variant(name)) => {
+                variants.iter().position(|variant| variant == name)
+            }
+            (AxisKind::Finite { size }, KeyRef::Position(position)) => {
+                (position < *size).then_some(position)
+            }
+            (AxisKind::Coordinate { coordinates, .. }, KeyRef::Coordinate(coordinate)) => {
+                coordinates
+                    .iter()
+                    .position(|candidate| *candidate == coordinate)
+            }
+            _ => None,
+        }
+    }
+}
+
+/// A key: one entry of an axis, as the protocol identifies it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyValue {
+    /// A variant of a named axis.
+    Variant(VariantName),
+    /// A zero-based position of a `Fin` axis.
+    Position(usize),
+    /// A coordinate of a coordinate axis, in the canonical SI unit.
+    Coordinate(FiniteF64),
+}
+
+impl KeyValue {
+    /// A borrowed view of this key.
+    #[must_use]
+    pub const fn as_key_ref(&self) -> KeyRef<'_> {
+        match self {
+            Self::Variant(variant) => KeyRef::Variant(variant),
+            Self::Position(position) => KeyRef::Position(*position),
+            Self::Coordinate(coordinate) => KeyRef::Coordinate(*coordinate),
+        }
+    }
+}
+
+impl fmt::Display for KeyValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_key_ref().fmt(f)
+    }
+}
+
+/// A borrowed [`KeyValue`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum KeyRef<'a> {
+    /// A variant of a named axis.
+    Variant(&'a VariantName),
+    /// A zero-based position of a `Fin` axis.
+    Position(usize),
+    /// A coordinate of a coordinate axis, in the canonical SI unit.
+    Coordinate(FiniteF64),
+}
+
+impl KeyRef<'_> {
+    /// An owned copy of this key.
+    #[must_use]
+    pub fn to_key_value(self) -> KeyValue {
+        match self {
+            Self::Variant(variant) => KeyValue::Variant(variant.clone()),
+            Self::Position(position) => KeyValue::Position(position),
+            Self::Coordinate(coordinate) => KeyValue::Coordinate(coordinate),
+        }
+    }
+}
+
+impl fmt::Display for KeyRef<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Variant(variant) => write!(f, "variant `{variant}`"),
+            Self::Position(position) => write!(f, "position {position}"),
+            Self::Coordinate(coordinate) => write!(f, "coordinate {}", coordinate.get()),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -212,6 +309,48 @@ mod tests {
         assert_eq!(serde_json::from_str::<Axis>(&json).unwrap(), axis);
         assert!(
             serde_json::from_str::<Axis>(r#"{"index":"Fin(0)","kind":"finite","size":0}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn keys_select_entries_of_their_own_axis_kind() {
+        let named = Axis::new(
+            IndexName::new("Phase").unwrap(),
+            AxisKind::Named {
+                variants: vec![variant("Climb"), variant("Cruise")],
+            },
+        )
+        .unwrap();
+        let finite = Axis::new(
+            IndexName::new("Fin(3)").unwrap(),
+            AxisKind::Finite { size: 3 },
+        )
+        .unwrap();
+        let coordinate = |value: f64| FiniteF64::new(value).unwrap();
+        let grid = Axis::new(
+            IndexName::new("Step").unwrap(),
+            AxisKind::Coordinate {
+                dimension: Dimension::default(),
+                coordinates: vec![coordinate(0.0), coordinate(0.5)],
+            },
+        )
+        .unwrap();
+
+        let cruise = variant("Cruise");
+        assert_eq!(named.position(KeyRef::Variant(&cruise)), Some(1));
+        assert_eq!(named.key(1), Some(KeyRef::Variant(&cruise)));
+        assert_eq!(named.position(KeyRef::Position(1)), None);
+
+        assert_eq!(finite.position(KeyRef::Position(2)), Some(2));
+        assert_eq!(finite.position(KeyRef::Position(3)), None);
+        assert_eq!(finite.key(3), None);
+
+        assert_eq!(grid.position(KeyRef::Coordinate(coordinate(0.5))), Some(1));
+        assert_eq!(grid.position(KeyRef::Coordinate(coordinate(0.25))), None);
+        assert_eq!(grid.key(0), Some(KeyRef::Coordinate(coordinate(0.0))));
+        assert_eq!(
+            KeyValue::Coordinate(coordinate(0.5)).to_string(),
+            "coordinate 0.5"
         );
     }
 }

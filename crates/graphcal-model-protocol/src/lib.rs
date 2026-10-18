@@ -33,7 +33,7 @@ mod value;
 mod version;
 mod wire_type;
 
-pub use axis::{Axis, AxisError, AxisKind};
+pub use axis::{Axis, AxisError, AxisKind, KeyRef, KeyValue};
 pub use batch::{
     InputColumn, OutputColumn, RequestBatch, RequestBatchError, ResultBatch, ResultBatchBuilder,
     ResultBatchError, RowValues,
@@ -61,6 +61,5 @@ pub use value::{ComplexValue, Value, ValueRef};
 pub use version::PROTOCOL_VERSION;
 pub use wire_type::{
     AlgebraicType, AlgebraicTypeError, ConstructorPosition, ConstructorType, FieldType,
-    IndexedType, KeyType, KeyTypeError, PortWire, QuantityType, QuantityTypeError, VariantPosition,
-    WireType,
+    IndexedType, KeyPosition, KeyType, PortWire, QuantityType, QuantityTypeError, WireType,
 };

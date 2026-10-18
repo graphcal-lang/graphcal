@@ -9,7 +9,7 @@ use crate::label::PortName;
 use crate::outcome::{RowFailure, RowOutcome};
 use crate::session::{InputSlot, OutputSlot, SessionSchema};
 use crate::value::{ComplexValue, Value, ValueRef};
-use crate::wire_type::{VariantPosition, WireType};
+use crate::wire_type::{KeyPosition, WireType};
 
 /// The values of one varied parameter across a batch.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,8 +20,8 @@ pub enum InputColumn {
     Int(Vec<i64>),
     /// Boolean values.
     Bool(Vec<bool>),
-    /// Variant positions within the parameter's key type.
-    Key(Vec<VariantPosition>),
+    /// Entry positions within the parameter's key type.
+    Key(Vec<KeyPosition>),
     /// Complex values in the parameter's wire unit.
     Complex(Vec<ComplexValue>),
     /// Seconds since J2000 in the parameter's time scale.
@@ -58,9 +58,7 @@ impl InputColumn {
             }
             (Self::Int(values), WireType::Int) => ValueRef::Int(*values.get(row)?),
             (Self::Bool(values), WireType::Bool) => ValueRef::Bool(*values.get(row)?),
-            (Self::Key(values), WireType::Key(key)) => {
-                ValueRef::Key(key.variant(*values.get(row)?)?)
-            }
+            (Self::Key(values), WireType::Key(key)) => ValueRef::Key(key.key(*values.get(row)?)?),
             (Self::Complex(values), WireType::Complex(_)) => ValueRef::Complex(*values.get(row)?),
             (Self::Datetime(values), WireType::Datetime(_)) => {
                 ValueRef::Datetime(*values.get(row)?)
@@ -88,8 +86,8 @@ pub enum RequestBatchError {
     },
     #[error("a request batch must contain at least one row")]
     Empty,
-    #[error("parameter `{input}` has an out-of-range variant at row {row}")]
-    VariantOutOfRange { input: PortName, row: usize },
+    #[error("parameter `{input}` has an out-of-range key at row {row}")]
+    KeyOutOfRange { input: PortName, row: usize },
     #[error("parameter `{input}` has a value of another shape at row {row}")]
     ShapeMismatch { input: PortName, row: usize },
 }
@@ -112,7 +110,7 @@ impl RequestBatch {
     /// # Errors
     ///
     /// Returns [`RequestBatchError`] when the columns do not match the
-    /// session's inputs, differ in length, are empty, or name a variant
+    /// session's inputs, differ in length, are empty, or name a key
     /// outside its key type.
     pub fn new(
         schema: Arc<SessionSchema>,
@@ -150,9 +148,9 @@ impl RequestBatch {
                 (WireType::Key(key), InputColumn::Key(positions)) => {
                     if let Some(row) = positions
                         .iter()
-                        .position(|position| key.variant(*position).is_none())
+                        .position(|position| key.key(*position).is_none())
                     {
-                        return Err(RequestBatchError::VariantOutOfRange {
+                        return Err(RequestBatchError::KeyOutOfRange {
                             input: input_name(),
                             row,
                         });
@@ -221,8 +219,8 @@ pub enum OutputColumn {
     Int(Vec<Option<i64>>),
     /// Boolean values.
     Bool(Vec<Option<bool>>),
-    /// Variant positions within the output's key type.
-    Key(Vec<Option<VariantPosition>>),
+    /// Entry positions within the output's key type.
+    Key(Vec<Option<KeyPosition>>),
     /// Complex values in the output's wire unit.
     Complex(Vec<Option<ComplexValue>>),
     /// Seconds since J2000 in the output's time scale.
@@ -262,8 +260,8 @@ impl OutputColumn {
             | (Self::Datetime(values), Value::Datetime(value), _) => values.push(Some(*value)),
             (Self::Int(values), Value::Int(value), _) => values.push(Some(*value)),
             (Self::Bool(values), Value::Bool(value), _) => values.push(Some(*value)),
-            (Self::Key(values), Value::Key(variant), WireType::Key(key)) => {
-                let Some(position) = key.position(variant.as_str()) else {
+            (Self::Key(values), Value::Key(value), WireType::Key(key)) => {
+                let Some(position) = key.position(value.as_key_ref()) else {
                     return false;
                 };
                 values.push(Some(position));
@@ -289,7 +287,7 @@ impl OutputColumn {
             (Self::Int(values), WireType::Int) => ValueRef::Int((*values.get(row)?)?),
             (Self::Bool(values), WireType::Bool) => ValueRef::Bool((*values.get(row)?)?),
             (Self::Key(values), WireType::Key(key)) => {
-                ValueRef::Key(key.variant((*values.get(row)?)?)?)
+                ValueRef::Key(key.key((*values.get(row)?)?)?)
             }
             (Self::Complex(values), WireType::Complex(_)) => {
                 ValueRef::Complex((*values.get(row)?)?)
@@ -495,6 +493,7 @@ impl<'a> RowValues<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::axis::{KeyRef, KeyValue};
     use crate::label::VariantName;
     use crate::session::tests::sample_session;
 
@@ -510,14 +509,14 @@ mod tests {
     fn request_batches_match_session_inputs() {
         let batch = request(vec![
             InputColumn::Quantity(vec![finite(1.0), finite(2.0)]),
-            InputColumn::Key(vec![VariantPosition::new(1), VariantPosition::new(0)]),
+            InputColumn::Key(vec![KeyPosition::new(1), KeyPosition::new(0)]),
         ])
         .unwrap();
         assert_eq!(batch.rows(), 2);
         let mode = batch.schema().input_slot("mode").unwrap();
         assert!(matches!(
             batch.value(mode, 0),
-            Some(ValueRef::Key(variant)) if variant.as_str() == "B"
+            Some(ValueRef::Key(KeyRef::Variant(variant))) if variant.as_str() == "B"
         ));
 
         assert!(matches!(
@@ -527,14 +526,14 @@ mod tests {
         assert!(matches!(
             request(vec![
                 InputColumn::Int(vec![1]),
-                InputColumn::Key(vec![VariantPosition::new(0)]),
+                InputColumn::Key(vec![KeyPosition::new(0)]),
             ]),
             Err(RequestBatchError::KindMismatch { .. })
         ));
         assert!(matches!(
             request(vec![
                 InputColumn::Quantity(vec![finite(1.0)]),
-                InputColumn::Key(vec![VariantPosition::new(0), VariantPosition::new(0)]),
+                InputColumn::Key(vec![KeyPosition::new(0), KeyPosition::new(0)]),
             ]),
             Err(RequestBatchError::LengthMismatch { .. })
         ));
@@ -548,9 +547,9 @@ mod tests {
         assert!(matches!(
             request(vec![
                 InputColumn::Quantity(vec![finite(1.0)]),
-                InputColumn::Key(vec![VariantPosition::new(2)]),
+                InputColumn::Key(vec![KeyPosition::new(2)]),
             ]),
-            Err(RequestBatchError::VariantOutOfRange { row: 0, .. })
+            Err(RequestBatchError::KeyOutOfRange { row: 0, .. })
         ));
     }
 
@@ -576,7 +575,7 @@ mod tests {
         assert!(matches!(
             builder.push(RowOutcome::Success(vec![
                 Value::Bool(true),
-                Value::Key(VariantName::new("A").unwrap()),
+                Value::Key(KeyValue::Variant(VariantName::new("A").unwrap())),
             ])),
             Err(ResultBatchError::KindMismatch { .. })
         ));

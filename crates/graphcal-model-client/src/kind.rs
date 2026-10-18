@@ -4,8 +4,8 @@ use std::fmt;
 use std::marker::PhantomData;
 
 use graphcal_model_protocol::{
-    AlgebraicType, Axis, ComplexValue, DatetimeType, FiniteF64, InputColumn, KeyType, PortName,
-    QuantityType, Value, ValueRef, VariantName, VariantPosition, WireType,
+    AlgebraicType, Axis, ComplexValue, DatetimeType, FiniteF64, InputColumn, KeyPosition, KeyType,
+    KeyValue, PortName, QuantityType, Value, ValueRef, WireType,
 };
 
 use crate::error::ClientError;
@@ -101,8 +101,9 @@ pub enum Int {}
 #[derive(Debug, Clone, Copy)]
 pub enum Bool {}
 
-/// A categorical key: supplied as a [`KeyVariant`] of the same port,
-/// returned as the variant name.
+/// A key of an index: supplied as a [`KeyEntry`] of the same port, returned
+/// as a [`KeyValue`] (a variant name, a `Fin` position, or a coordinate in
+/// the canonical SI unit).
 #[derive(Debug, Clone, Copy)]
 pub enum Key {}
 
@@ -301,22 +302,24 @@ impl Kind for Bool {
     }
 }
 
-/// One variant of a key parameter, validated against that parameter.
+/// One entry of a key parameter's axis, validated against that parameter.
 ///
-/// Obtain it from [`InputHandle::variant`](crate::InputHandle::variant); a
-/// variant of one parameter cannot be supplied for another.
+/// Obtain it from [`InputHandle::variant`](crate::InputHandle::variant),
+/// [`InputHandle::position`](crate::InputHandle::position), or
+/// [`InputHandle::coordinate`](crate::InputHandle::coordinate); an entry of
+/// one parameter cannot be supplied for another.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KeyVariant {
+pub struct KeyEntry {
     port: PortIdentity,
-    position: VariantPosition,
+    position: KeyPosition,
 }
 
-impl KeyVariant {
-    pub(crate) const fn new(port: PortIdentity, position: VariantPosition) -> Self {
+impl KeyEntry {
+    pub(crate) const fn new(port: PortIdentity, position: KeyPosition) -> Self {
         Self { port, position }
     }
 
-    /// The parameter the variant belongs to.
+    /// The parameter the entry belongs to.
     #[must_use]
     pub const fn parameter(&self) -> &PortName {
         self.port.name()
@@ -324,13 +327,13 @@ impl KeyVariant {
 }
 
 impl Key {
-    fn position(port: &PortIdentity, variant: &KeyVariant) -> Result<VariantPosition, ClientError> {
-        if variant.port == *port {
-            Ok(variant.position)
+    fn position(port: &PortIdentity, entry: &KeyEntry) -> Result<KeyPosition, ClientError> {
+        if entry.port == *port {
+            Ok(entry.position)
         } else {
-            Err(ClientError::ForeignVariant {
+            Err(ClientError::ForeignKey {
                 input: port.name().clone(),
-                owner: variant.port.name().clone(),
+                owner: entry.port.name().clone(),
             })
         }
     }
@@ -338,8 +341,8 @@ impl Key {
 
 impl Kind for Key {
     type Detail = KeyType;
-    type Input = KeyVariant;
-    type Output = VariantName;
+    type Input = KeyEntry;
+    type Output = KeyValue;
 
     const NAME: &'static str = "key";
 
@@ -358,9 +361,8 @@ impl Kind for Key {
     ) -> Result<Value, ClientError> {
         let position = Self::position(port, &input)?;
         detail
-            .variant(position)
-            .cloned()
-            .map(Value::Key)
+            .key(position)
+            .map(|key| Value::Key(key.to_key_value()))
             .ok_or_else(|| ClientError::KindMismatch {
                 name: port.name().clone(),
                 expected: Self::NAME,
@@ -369,7 +371,7 @@ impl Kind for Key {
 
     fn read(value: ValueRef<'_>) -> Option<Self::Output> {
         match value {
-            ValueRef::Key(variant) => Some(variant.clone()),
+            ValueRef::Key(key) => Some(key.to_key_value()),
             _ => None,
         }
     }
@@ -381,7 +383,7 @@ impl Kind for Key {
     ) -> Result<InputColumn, ClientError> {
         values
             .iter()
-            .map(|variant| Self::position(port, variant))
+            .map(|entry| Self::position(port, entry))
             .collect::<Result<_, _>>()
             .map(InputColumn::Key)
     }

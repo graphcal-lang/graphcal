@@ -5,10 +5,10 @@ use std::collections::HashSet;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::axis::Axis;
+use crate::axis::{Axis, KeyRef};
 use crate::datetime_type::DatetimeType;
 use crate::dimension::Dimension;
-use crate::label::{ConstructorName, FieldName, IndexName, TypeName, UnitSpelling, VariantName};
+use crate::label::{ConstructorName, FieldName, TypeName, UnitSpelling};
 
 /// A real quantity: its dimension and the unit its values are expressed in.
 ///
@@ -83,133 +83,64 @@ impl From<QuantityType> for QuantityTypeRepr {
     }
 }
 
-/// The position of a variant within a [`KeyType`]'s declaration-order list.
+/// The position of an entry within a [`KeyType`]'s axis.
 ///
 /// A position is only meaningful together with the key type it came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct VariantPosition(usize);
+pub struct KeyPosition(usize);
 
-impl VariantPosition {
+impl KeyPosition {
     pub(crate) const fn new(position: usize) -> Self {
         Self(position)
     }
 
-    /// The zero-based declaration-order position.
+    /// The zero-based position in axis order.
     #[must_use]
     pub const fn get(self) -> usize {
         self.0
     }
 }
 
-/// A categorical key over the variants of one named index.
+/// A key selecting one entry of a fixed axis.
 ///
-/// Variants are listed in declaration order. Their positions are not
-/// semantic identities on the wire: values are always resolved by name.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(try_from = "KeyTypeRepr", into = "KeyTypeRepr")]
+/// Keys travel as the protocol identifies entries: a named axis's variant
+/// by name, a `Fin` axis's position, or a coordinate axis's coordinate in
+/// the canonical SI unit. Positions within a named or coordinate axis are
+/// not semantic identities on the wire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeyType {
-    index: IndexName,
-    variants: Vec<VariantName>,
-}
-
-/// Why a variant list does not form a [`KeyType`].
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum KeyTypeError {
-    #[error("index `{index}` has no variants")]
-    Empty { index: IndexName },
-    #[error("index `{index}` repeats variant `{variant}`")]
-    DuplicateVariant {
-        index: IndexName,
-        variant: VariantName,
-    },
-    #[error("index `{index}` has {count} variants, more than an Int32 dictionary can encode")]
-    TooManyVariants { index: IndexName, count: usize },
+    axis: Axis,
 }
 
 impl KeyType {
-    /// A key over `variants` of `index`, in declaration order.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`KeyTypeError`] for an empty or repeated variant list, or one
-    /// too long for an Int32 dictionary.
-    pub fn new(index: IndexName, variants: Vec<VariantName>) -> Result<Self, KeyTypeError> {
-        if variants.is_empty() {
-            return Err(KeyTypeError::Empty { index });
-        }
-        if i32::try_from(variants.len()).is_err() {
-            return Err(KeyTypeError::TooManyVariants {
-                index,
-                count: variants.len(),
-            });
-        }
-        let mut seen = HashSet::with_capacity(variants.len());
-        if let Some(variant) = variants.iter().find(|variant| !seen.insert(*variant)) {
-            return Err(KeyTypeError::DuplicateVariant {
-                variant: variant.clone(),
-                index,
-            });
-        }
-        Ok(Self { index, variants })
-    }
-
-    /// The index the key ranges over.
+    /// A key over the entries of `axis`.
     #[must_use]
-    pub const fn index(&self) -> &IndexName {
-        &self.index
+    pub const fn new(axis: Axis) -> Self {
+        Self { axis }
     }
 
-    /// The variants in declaration order.
+    /// The axis whose entries the key selects.
     #[must_use]
-    pub fn variants(&self) -> &[VariantName] {
-        &self.variants
+    pub const fn axis(&self) -> &Axis {
+        &self.axis
     }
 
-    /// Every variant with its position, in declaration order.
-    pub fn entries(&self) -> impl ExactSizeIterator<Item = (VariantPosition, &VariantName)> {
-        self.variants
-            .iter()
-            .enumerate()
-            .map(|(position, variant)| (VariantPosition::new(position), variant))
+    /// Every position, in axis order.
+    pub fn positions(&self) -> impl ExactSizeIterator<Item = KeyPosition> + use<> {
+        (0..self.axis.len()).map(KeyPosition::new)
     }
 
-    /// The position of the variant spelled `name`.
+    /// The position of the entry `key` selects, if any.
     #[must_use]
-    pub fn position(&self, name: &str) -> Option<VariantPosition> {
-        self.variants
-            .iter()
-            .position(|variant| variant.as_str() == name)
-            .map(VariantPosition::new)
+    pub fn position(&self, key: KeyRef<'_>) -> Option<KeyPosition> {
+        self.axis.position(key).map(KeyPosition::new)
     }
 
-    /// The variant at `position`, when it is in range.
+    /// The key of the entry at `position`, when it is in range.
     #[must_use]
-    pub fn variant(&self, position: VariantPosition) -> Option<&VariantName> {
-        self.variants.get(position.get())
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct KeyTypeRepr {
-    index: IndexName,
-    variants: Vec<VariantName>,
-}
-
-impl TryFrom<KeyTypeRepr> for KeyType {
-    type Error = KeyTypeError;
-
-    fn try_from(repr: KeyTypeRepr) -> Result<Self, Self::Error> {
-        Self::new(repr.index, repr.variants)
-    }
-}
-
-impl From<KeyType> for KeyTypeRepr {
-    fn from(key: KeyType) -> Self {
-        Self {
-            index: key.index,
-            variants: key.variants,
-        }
+    pub fn key(&self, position: KeyPosition) -> Option<KeyRef<'_>> {
+        self.axis.key(position.get())
     }
 }
 
@@ -632,8 +563,9 @@ impl From<PortWire> for WireRepr {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::axis::AxisKind;
     use crate::dimension::Exponent;
-    use crate::label::BaseDimensionName;
+    use crate::label::{BaseDimensionName, IndexName, VariantName};
 
     fn variant(name: &str) -> VariantName {
         VariantName::new(name).unwrap()
@@ -653,23 +585,37 @@ mod tests {
     }
 
     #[test]
-    fn key_types_reject_repeated_variants() {
-        let index = IndexName::new("Mode").unwrap();
-        assert!(matches!(
-            KeyType::new(index.clone(), vec![variant("A"), variant("A")]),
-            Err(KeyTypeError::DuplicateVariant { .. })
-        ));
-        assert!(matches!(
-            KeyType::new(index.clone(), Vec::new()),
-            Err(KeyTypeError::Empty { .. })
-        ));
-        let key = KeyType::new(index, vec![variant("B"), variant("A")]).unwrap();
-        assert_eq!(key.position("A").map(VariantPosition::get), Some(1));
-        let entries = key
-            .entries()
-            .map(|(position, variant)| (position.get(), variant.as_str()))
-            .collect::<Vec<_>>();
-        assert_eq!(entries, [(0, "B"), (1, "A")]);
+    fn key_types_select_axis_entries_and_serialize_their_axis() {
+        let axis = Axis::new(
+            IndexName::new("Mode").unwrap(),
+            AxisKind::Named {
+                variants: vec![variant("B"), variant("A")],
+            },
+        )
+        .unwrap();
+        let key = KeyType::new(axis);
+        let a = variant("A");
+        let position = key.position(KeyRef::Variant(&a)).unwrap();
+        assert_eq!(position.get(), 1);
+        assert_eq!(key.key(position), Some(KeyRef::Variant(&a)));
+        assert_eq!(key.positions().len(), 2);
+
+        let json = serde_json::to_string(&WireType::Key(key.clone())).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kind":"key","axis":{"kind":"named","index":"Mode","variants":["B","A"]}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<WireType>(&json).unwrap(),
+            WireType::Key(key)
+        );
+        assert!(
+            serde_json::from_str::<WireType>(
+                r#"{"kind":"key","axis":{"kind":"finite","index":"Fin(2)","size":2},"extra":1}"#
+            )
+            .is_err(),
+            "unknown fields are rejected"
+        );
     }
 
     #[test]

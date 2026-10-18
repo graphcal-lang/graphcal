@@ -8,10 +8,8 @@
 
 use std::sync::Arc;
 
-use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
 use graphcal_eval::eval::bindings::RuntimeParameterBinding;
 use graphcal_eval::eval_expr::j2000_seconds::seconds_since_j2000;
-use graphcal_eval::runtime_value::IndexAxis;
 use graphcal_model_protocol::{
     Bounds, Domain, FiniteF64, InputColumn, InterfaceError, InterfaceFingerprint, LabelError,
     ModelInterface, OutputDescription, ParameterDescription, ParameterError, PortName,
@@ -21,9 +19,9 @@ use graphcal_model_protocol::{
 
 use super::model_value::{ValueBindError, ValueCodec, ValueCodecError};
 use super::{
-    CheckedType, CompileError, DeclName, Error, IndexVariantName, ModelExecutionError,
-    ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterBindingRow, ParameterDomain,
-    ParameterPort, ParameterPosition, PreparedProject,
+    CompileError, DeclName, Error, ModelExecutionError, ModelOutputPort, ModelRowFailure,
+    ModelRowOutcome, ParameterBindingRow, ParameterDomain, ParameterPort, ParameterPosition,
+    PreparedProject,
 };
 use crate::binding_error::BindingError;
 
@@ -34,10 +32,8 @@ enum InputBinding {
     Quantity(Option<SiScale>),
     Int,
     Bool,
-    /// The variants of the parameter's index, in the key type's order.
-    Key(Vec<IndexVariantName>),
-    /// A complex, datetime, indexed, or algebraic value, converted by the
-    /// parameter's codec.
+    /// A key, complex, datetime, indexed, or algebraic value, converted by
+    /// the parameter's codec.
     Value(ValueCodec),
 }
 
@@ -193,11 +189,8 @@ impl PreparedProject {
                     WireType::Quantity(_) => InputBinding::Quantity(input.si_scale()),
                     WireType::Int => InputBinding::Int,
                     WireType::Bool => InputBinding::Bool,
-                    WireType::Key(_) => InputBinding::Key(
-                        self.named_variants(&port.declared_type)
-                            .ok_or_else(|| missing(input.name()))?,
-                    ),
-                    WireType::Complex(_)
+                    WireType::Key(_)
+                    | WireType::Complex(_)
                     | WireType::Datetime(_)
                     | WireType::Indexed(_)
                     | WireType::Algebraic(_) => InputBinding::Value(
@@ -313,9 +306,6 @@ impl PreparedProject {
                 (InputBinding::Bool, InputColumn::Bool(values)) => {
                     builder.bind_boolean(input.position, values[row])
                 }
-                (InputBinding::Key(variants), InputColumn::Key(positions)) => {
-                    builder.bind_named_key(input.position, &variants[positions[row].get()])
-                }
                 (InputBinding::Value(codec), _) => {
                     let value = request
                         .value(
@@ -404,19 +394,6 @@ impl PreparedProject {
             domain,
             port.has_default,
         )?)
-    }
-
-    /// The variants of a `Key<I>` type over a concrete named index, in
-    /// declaration order.
-    fn named_variants(&self, declared_type: &CheckedType) -> Option<Vec<IndexVariantName>> {
-        let CheckedType::Key(index) = declared_type else {
-            return None;
-        };
-        let axis = IndexAxis::resolve(self.tir(), index)?;
-        match axis.kind() {
-            ConcreteIndexKind::Named { variants } => Some(variants.as_slice().to_vec()),
-            _ => None,
-        }
     }
 }
 

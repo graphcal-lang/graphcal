@@ -276,6 +276,7 @@ impl From<ModelInterface> for InterfaceRepr {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::axis::{Axis, AxisKind};
     use crate::dimension::{Dimension, Exponent};
     use crate::domain::Bounds;
     use crate::finite::FiniteF64;
@@ -300,16 +301,18 @@ pub mod tests {
     }
 
     pub fn mode() -> WireType {
-        WireType::Key(
-            KeyType::new(
+        WireType::Key(KeyType::new(
+            Axis::new(
                 IndexName::new("Mode").unwrap(),
-                vec![
-                    VariantName::new("A").unwrap(),
-                    VariantName::new("B").unwrap(),
-                ],
+                AxisKind::Named {
+                    variants: vec![
+                        VariantName::new("A").unwrap(),
+                        VariantName::new("B").unwrap(),
+                    ],
+                },
             )
             .unwrap(),
-        )
+        ))
     }
 
     /// `load: Length(0..10 m)`, `count: Int = 1`, `mode: Key<Mode>`,

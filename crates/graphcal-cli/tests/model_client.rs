@@ -63,7 +63,12 @@ fn client_evaluates_typed_batches_in_one_server_process() {
             panic!("row 1 succeeds");
         };
         assert_eq!(row.get(&margin).unwrap(), 0.0);
-        assert_eq!(row.get(&same_mode).unwrap().as_str(), "B");
+        assert_eq!(
+            row.get(&same_mode).unwrap(),
+            graphcal_model_protocol::KeyValue::Variant(
+                graphcal_model_protocol::VariantName::new("B").unwrap()
+            )
+        );
         assert!(matches!(
             result.failure(2),
             Some(RowFailure::AssertionFailed { assertion, .. }) if assertion == "positive"
@@ -181,7 +186,9 @@ const RICH_MODEL: &str = "pub index Phase = { Climb, Cruise };\n\
 #[test]
 fn client_carries_indexed_datetime_complex_and_algebraic_values() {
     use graphcal_model_client::{Algebraic, Complex, Datetime, Indexed};
-    use graphcal_model_protocol::{FiniteF64, UnitSpelling, Value, WireType};
+    use graphcal_model_protocol::{
+        FiniteF64, KeyValue, UnitSpelling, Value, VariantName, WireType,
+    };
 
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("rich.gcl");
@@ -242,13 +249,10 @@ fn client_carries_indexed_datetime_complex_and_algebraic_values() {
         [2000.0, 4000.0],
         "km inputs, SI output in metres"
     );
+    let phase = |name: &str| KeyValue::Variant(VariantName::new(name).unwrap());
     assert_eq!(
-        row.get(&phase_keys_out)
-            .unwrap()
-            .iter()
-            .map(graphcal_model_protocol::VariantName::as_str)
-            .collect::<Vec<_>>(),
-        ["Cruise", "Climb"]
+        row.get(&phase_keys_out).unwrap(),
+        [phase("Cruise"), phase("Climb")]
     );
     assert_eq!(row.get(&later).unwrap(), 160.0);
     assert_eq!(row.get(&z2).unwrap(), (2.0, -2.0));
@@ -265,5 +269,82 @@ fn client_carries_indexed_datetime_complex_and_algebraic_values() {
             ..
         })
     ));
+    session.shutdown().unwrap();
+}
+
+const KEY_MODEL: &str = "pub index Step = linspace(0.0 s, 1.0 s, points: 3);\n\
+    param channel: Key<Fin(3)>;\n\
+    param when: Key<Step>;\n\
+    pub node next_channel: Key<Fin(4)> = @channel + 1;\n\
+    pub node when_out: Key<Step> = @when;\n";
+
+#[test]
+fn client_carries_fin_and_coordinate_keys() {
+    use graphcal_model_protocol::{FiniteF64, KeyValue};
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("keys.gcl");
+    std::fs::write(&file, KEY_MODEL).unwrap();
+    let model = Model::describe(GraphcalCommand::new(file).program(env!("CARGO_BIN_EXE_graphcal")))
+        .unwrap();
+    let channel = model.input::<Key>("channel").unwrap();
+    let when = model.input::<Key>("when").unwrap();
+    let next_channel = model.output::<Key>("next_channel").unwrap();
+    let when_out = model.output::<Key>("when_out").unwrap();
+    let half = FiniteF64::new(0.5).unwrap();
+    assert!(matches!(
+        channel.position(3),
+        Err(ClientError::UnknownKey { .. })
+    ));
+    assert!(matches!(
+        when.coordinate(FiniteF64::new(0.25).unwrap()),
+        Err(ClientError::UnknownKey { .. })
+    ));
+    assert!(matches!(
+        channel.variant("A"),
+        Err(ClientError::UnknownVariant { .. })
+    ));
+
+    let mut session = model
+        .session()
+        .vary(&channel)
+        .vary(&when)
+        .output(&next_channel)
+        .output(&when_out)
+        .spawn()
+        .unwrap();
+    let request = session
+        .batch()
+        .column(
+            &channel,
+            [channel.position(0).unwrap(), channel.position(2).unwrap()],
+        )
+        .unwrap()
+        .column(
+            &when,
+            [
+                when.coordinate(half).unwrap(),
+                when.coordinate(half).unwrap(),
+            ],
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+    let result = session.evaluate(&request).unwrap();
+    let outputs = (0..2)
+        .map(|row| {
+            let RowOutcome::Success(row) = result.row(row).unwrap() else {
+                panic!("row {row} succeeds: {:?}", result.failure(row));
+            };
+            (row.get(&next_channel).unwrap(), row.get(&when_out).unwrap())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outputs,
+        [
+            (KeyValue::Position(1), KeyValue::Coordinate(half)),
+            (KeyValue::Position(3), KeyValue::Coordinate(half)),
+        ]
+    );
     session.shutdown().unwrap();
 }

@@ -50,6 +50,8 @@ use super::output::apply_include_debug_names;
 
 #[path = "binding_compile.rs"]
 mod binding_compile;
+#[path = "model_axis.rs"]
+mod model_axis;
 #[path = "model_port.rs"]
 mod model_port;
 #[path = "model_session.rs"]

@@ -2050,6 +2050,11 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["prepare", "prepared", "model_axis"]
+role = "facade"
+
+[[module]]
+package = "project"
 path = ["prepare", "prepared", "model_unit"]
 role = "facade"
 

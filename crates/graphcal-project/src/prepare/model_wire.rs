@@ -6,17 +6,17 @@
 //! with no finite wire schema (a recursive algebraic type) or with an
 //! unsupported part is listed as unsupported, with the reason.
 
-use graphcal_compiler::dimension::{BaseDimId, Dimension as GraphcalDimension};
+use graphcal_compiler::dimension::Dimension as GraphcalDimension;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::time_scale::TimeScale as GraphcalTimeScale;
 use graphcal_model_protocol::{
-    AlgebraicType, Axis, AxisKind, BaseDimensionName, ConstructorName, ConstructorType,
-    DatetimeType, Dimension, Exponent, FieldName, FieldType, FiniteF64, IndexName, IndexedType,
-    KeyType, PortWire, QuantityType, TimeScale, TypeName, UnitSpelling, VariantName, WireType,
+    AlgebraicType, ConstructorName, ConstructorType, DatetimeType, FieldName, FieldType,
+    IndexedType, KeyType, PortWire, QuantityType, TimeScale, TypeName, UnitSpelling, WireType,
 };
 
+use super::model_axis::{axis_wire, protocol_dimension};
 use super::model_session::ModelInterfaceError;
-use super::{ModelIndexKind, ModelIndexSchema, ModelValueSchema, PreparedProject};
+use super::{ModelValueSchema, PreparedProject};
 
 /// A wire type, or why the protocol cannot carry the value.
 type Wire = Result<WireType, String>;
@@ -64,22 +64,9 @@ impl PreparedProject {
             ModelValueSchema::Datetime(scale) => Ok(WireType::Datetime(DatetimeType::new(
                 protocol_time_scale(*scale),
             ))),
-            ModelValueSchema::Key(index) => match index.kind() {
-                ModelIndexKind::Named { variants } => {
-                    let variants = variants
-                        .as_slice()
-                        .iter()
-                        .map(|variant| VariantName::new(variant.as_str()))
-                        .collect::<Result<Vec<_>, _>>()?;
-                    KeyType::new(IndexName::new(index.identity().to_string())?, variants)
-                        .map(WireType::Key)
-                        .map_err(|error| error.to_string())
-                }
-                ModelIndexKind::Finite { .. } | ModelIndexKind::Coordinate { .. } => Err(format!(
-                    "key index `{}` is not a named index",
-                    index.identity()
-                )),
-            },
+            ModelValueSchema::Key(index) => {
+                axis_wire(index)?.map(|axis| WireType::Key(KeyType::new(axis)))
+            }
             ModelValueSchema::Indexed { element, axis } => match axis_wire(axis)? {
                 Err(reason) => Err(reason),
                 Ok(axis) => self
@@ -136,12 +123,25 @@ impl PreparedProject {
         let unit = if dimension.is_dimensionless() {
             None
         } else {
-            let Some(spelling) = graphcal_eval::eval::types::default_unit_label(
-                dimension,
-                &dimensions.base_unit_symbols(),
-            ) else {
+            let symbols = dimensions.base_unit_symbols();
+            let Some(spelling) =
+                graphcal_eval::eval::types::default_unit_label(dimension, &symbols)
+            else {
+                let unitless = dimension
+                    .iter()
+                    .map(|(base, _)| base)
+                    .filter(|base| !symbols.contains_key(*base))
+                    .map(|base| {
+                        format!(
+                            "`{}`",
+                            dimensions.format_dimension(&GraphcalDimension::base(base.clone()))
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 return Ok(Err(format!(
-                    "dimension `{}` has no canonical SI unit",
+                    "dimension `{}` has no canonical unit; declare a `base unit` for base \
+                     dimension {unitless}",
                     dimensions.format_dimension(dimension)
                 )));
             };
@@ -164,71 +164,4 @@ pub(super) const fn protocol_time_scale(scale: GraphcalTimeScale) -> TimeScale {
         GraphcalTimeScale::BDT => TimeScale::Bdt,
         GraphcalTimeScale::QZSST => TimeScale::Qzsst,
     }
-}
-
-/// The protocol dimension of `dimension`, or why it has none.
-fn protocol_dimension(
-    dimension: &GraphcalDimension,
-) -> Result<Result<Dimension, String>, ModelInterfaceError> {
-    let mut exponents = Vec::new();
-    for (base, exponent) in dimension.iter() {
-        let name = match base {
-            BaseDimId::Prelude(prelude) => prelude.as_str().to_owned(),
-            BaseDimId::UserDefined(resolved) => resolved.to_string(),
-        };
-        let Some(exponent) = u32::try_from(exponent.den())
-            .ok()
-            .and_then(|denominator| Exponent::new(exponent.num(), denominator).ok())
-        else {
-            return Ok(Err(format!(
-                "dimension exponent {exponent} is not representable"
-            )));
-        };
-        exponents.push((BaseDimensionName::new(name)?, exponent));
-    }
-    Ok(Ok(exponents.into_iter().collect()))
-}
-
-/// The protocol axis of `index`, or why it has none.
-fn axis_wire(index: &ModelIndexSchema) -> Result<Result<Axis, String>, ModelInterfaceError> {
-    let kind = match index.kind() {
-        ModelIndexKind::Named { variants } => AxisKind::Named {
-            variants: variants
-                .as_slice()
-                .iter()
-                .map(|variant| VariantName::new(variant.as_str()))
-                .collect::<Result<_, _>>()?,
-        },
-        ModelIndexKind::Finite { index } => AxisKind::Finite {
-            size: index.cardinality().get(),
-        },
-        ModelIndexKind::Coordinate {
-            coordinates_si,
-            dimension,
-            ..
-        } => {
-            let dimension = match protocol_dimension(dimension)? {
-                Ok(dimension) => dimension,
-                Err(reason) => return Ok(Err(reason)),
-            };
-            let Ok(coordinates) = coordinates_si
-                .iter()
-                .map(|coordinate| FiniteF64::new(*coordinate))
-                .collect::<Result<Vec<_>, _>>()
-            else {
-                return Ok(Err(format!(
-                    "index `{}` has a non-finite coordinate",
-                    index.identity()
-                )));
-            };
-            AxisKind::Coordinate {
-                dimension,
-                coordinates,
-            }
-        }
-    };
-    Ok(
-        Axis::new(IndexName::new(index.identity().to_string())?, kind)
-            .map_err(|error| error.to_string()),
-    )
 }

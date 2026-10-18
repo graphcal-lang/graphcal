@@ -3,13 +3,14 @@
 use std::marker::PhantomData;
 
 use graphcal_model_protocol::{
-    DescribeDocument, Domain, InterfaceFingerprint, ModelInterface, PortName, PortWire,
+    DescribeDocument, Domain, FiniteF64, InterfaceFingerprint, KeyRef, KeyType, KeyValue,
+    ModelInterface, PortName, PortWire, VariantName,
 };
 
 use crate::command::GraphcalCommand;
 use crate::error::ClientError;
 use crate::identity::{ModelId, PortIdentity};
-use crate::kind::{Indexed, Key, KeyVariant, Kind};
+use crate::kind::{Indexed, Key, KeyEntry, Kind};
 
 /// A Graphcal model whose interface has been described.
 #[derive(Debug, Clone)]
@@ -175,47 +176,124 @@ impl<K: Kind> InputHandle<K> {
     }
 }
 
-impl InputHandle<Key> {
-    /// The variant spelled `name` of this key parameter.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ClientError::UnknownVariant`] when the index has no such
-    /// variant.
-    pub fn variant(&self, name: &str) -> Result<KeyVariant, ClientError> {
-        self.detail
-            .position(name)
-            .map(|position| KeyVariant::new(self.port.clone(), position))
+/// The entries of `key` for parameter `port`.
+#[derive(Debug, Clone, Copy)]
+struct KeyEntries<'a> {
+    port: &'a PortIdentity,
+    key: &'a KeyType,
+}
+
+impl KeyEntries<'_> {
+    fn entry(self, key: KeyRef<'_>) -> Option<KeyEntry> {
+        self.key
+            .position(key)
+            .map(|position| KeyEntry::new(self.port.clone(), position))
+    }
+
+    fn variant(self, name: &str) -> Result<KeyEntry, ClientError> {
+        VariantName::new(name)
+            .ok()
+            .and_then(|variant| self.entry(KeyRef::Variant(&variant)))
             .ok_or_else(|| ClientError::UnknownVariant {
                 input: self.port.name().clone(),
                 variant: name.to_owned(),
             })
     }
 
-    /// Every variant of this key parameter, in declaration order.
-    pub fn variants(&self) -> impl ExactSizeIterator<Item = KeyVariant> + '_ {
+    fn known(self, key: KeyValue) -> Result<KeyEntry, ClientError> {
+        self.entry(key.as_key_ref())
+            .ok_or_else(|| ClientError::UnknownKey {
+                input: self.port.name().clone(),
+                key,
+            })
+    }
+}
+
+impl InputHandle<Key> {
+    const fn entries_of(&self) -> KeyEntries<'_> {
+        KeyEntries {
+            port: &self.port,
+            key: &self.detail,
+        }
+    }
+
+    /// The variant spelled `name` of this parameter's named index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::UnknownVariant`] when the index is not named
+    /// or has no such variant.
+    pub fn variant(&self, name: &str) -> Result<KeyEntry, ClientError> {
+        self.entries_of().variant(name)
+    }
+
+    /// The zero-based `position` of this parameter's `Fin` index.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::UnknownKey`] when the index is not a `Fin`
+    /// index or the position is out of range.
+    pub fn position(&self, position: usize) -> Result<KeyEntry, ClientError> {
+        self.entries_of().known(KeyValue::Position(position))
+    }
+
+    /// The grid point at `coordinate`, in the canonical SI unit, of this
+    /// parameter's coordinate index. The coordinate must equal one of the
+    /// axis's exactly; read them from the key type's axis.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::UnknownKey`] when the index is not a
+    /// coordinate index or has no such coordinate.
+    pub fn coordinate(&self, coordinate: FiniteF64) -> Result<KeyEntry, ClientError> {
+        self.entries_of().known(KeyValue::Coordinate(coordinate))
+    }
+
+    /// Every entry of this parameter's index, in axis order.
+    pub fn entries(&self) -> impl ExactSizeIterator<Item = KeyEntry> + '_ {
         self.detail
-            .entries()
-            .map(|(position, _)| KeyVariant::new(self.port.clone(), position))
+            .positions()
+            .map(|position| KeyEntry::new(self.port.clone(), position))
     }
 }
 
 impl InputHandle<Indexed<Key>> {
+    const fn entries_of(&self) -> KeyEntries<'_> {
+        KeyEntries {
+            port: &self.port,
+            key: self.detail.element(),
+        }
+    }
+
     /// The variant spelled `name` of this parameter's key elements.
     ///
     /// # Errors
     ///
-    /// Returns [`ClientError::UnknownVariant`] when the index has no such
-    /// variant.
-    pub fn variant(&self, name: &str) -> Result<KeyVariant, ClientError> {
-        self.detail
-            .element()
-            .position(name)
-            .map(|position| KeyVariant::new(self.port.clone(), position))
-            .ok_or_else(|| ClientError::UnknownVariant {
-                input: self.port.name().clone(),
-                variant: name.to_owned(),
-            })
+    /// Returns [`ClientError::UnknownVariant`] when the key index is not
+    /// named or has no such variant.
+    pub fn variant(&self, name: &str) -> Result<KeyEntry, ClientError> {
+        self.entries_of().variant(name)
+    }
+
+    /// The zero-based `position` of this parameter's `Fin` key elements.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::UnknownKey`] when the key index is not a `Fin`
+    /// index or the position is out of range.
+    pub fn position(&self, position: usize) -> Result<KeyEntry, ClientError> {
+        self.entries_of().known(KeyValue::Position(position))
+    }
+
+    /// The grid point at `coordinate`, in the canonical SI unit, of this
+    /// parameter's coordinate key elements.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError::UnknownKey`] when the key index is not a
+    /// coordinate index or has no such coordinate.
+    pub fn coordinate(&self, coordinate: FiniteF64) -> Result<KeyEntry, ClientError> {
+        self.entries_of().known(KeyValue::Coordinate(coordinate))
     }
 }
 

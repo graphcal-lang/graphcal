@@ -4326,8 +4326,10 @@ fn model_interface_describes_wire_types_units_and_domains() {
     let PortWire::Supported(WireType::Key(mode)) = wire("mode") else {
         panic!("mode is a key");
     };
-    let variants = mode
-        .variants()
+    let graphcal_model_protocol::AxisKind::Named { variants } = mode.axis().kind() else {
+        panic!("mode ranges over a named index");
+    };
+    let variants = variants
         .iter()
         .map(graphcal_model_protocol::VariantName::as_str)
         .collect::<Vec<_>>();
@@ -4605,7 +4607,8 @@ fn model_unit_choices_must_resolve_to_fixed_scale_units_of_the_port_dimension() 
 #[test]
 fn model_session_reports_each_row_outcome_kind() {
     use graphcal_model_protocol::{
-        FiniteF64, InputColumn, RequestBatch, RowFailure, RowOutcome, ValueRef, WireType,
+        FiniteF64, InputColumn, KeyRef, RequestBatch, RowFailure, RowOutcome, ValueRef,
+        VariantName, WireType,
     };
 
     let project = crate::loader::LoadedProject::from_source(SESSION_MODEL, "model.gcl").unwrap();
@@ -4621,7 +4624,9 @@ fn model_session_reports_each_row_outcome_kind() {
     let WireType::Key(mode) = schema.inputs()[1].wire() else {
         panic!("mode is a key");
     };
-    let b = mode.position("B").unwrap();
+    let b = mode
+        .position(KeyRef::Variant(&VariantName::new("B").unwrap()))
+        .unwrap();
     let x = |value: f64| FiniteF64::new(value).unwrap();
     let request = RequestBatch::new(
         std::sync::Arc::clone(&schema),
@@ -4642,7 +4647,10 @@ fn model_session_reports_each_row_outcome_kind() {
     assert_eq!(get("reciprocal"), ValueRef::Quantity(x(-0.5)));
     assert_eq!(get("is_b"), ValueRef::Bool(true));
     assert_eq!(get("trials"), ValueRef::Int(3));
-    assert!(matches!(get("same_mode"), ValueRef::Key(variant) if variant.as_str() == "B"));
+    assert!(matches!(
+        get("same_mode"),
+        ValueRef::Key(KeyRef::Variant(variant)) if variant.as_str() == "B"
+    ));
 
     assert!(matches!(
         result.row(1),
@@ -10041,6 +10049,26 @@ fn model_interface_carries_indexed_datetime_complex_and_algebraic_ports() {
 }
 
 #[test]
+fn model_interface_names_the_base_dimension_that_needs_a_base_unit() {
+    use graphcal_model_protocol::PortWire;
+
+    let source = r"
+        pub base dim Money;
+        param budget: Money * Length;
+    ";
+    let project = crate::loader::LoadedProject::from_source(source, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let interface = prepared.model_interface().unwrap();
+    let PortWire::Unsupported { reason } = interface.parameter("budget").unwrap().wire() else {
+        panic!("a dimension without a canonical unit is unsupported");
+    };
+    assert!(
+        reason.ends_with("declare a `base unit` for base dimension `Money`"),
+        "{reason}"
+    );
+}
+
+#[test]
 fn model_sessions_round_trip_rich_values_through_evaluation() {
     use graphcal_model_protocol::{
         ComplexValue, ConstructorPosition, FiniteF64, InputColumn, RequestBatch, RowFailure,
@@ -10129,6 +10157,74 @@ fn model_sessions_round_trip_rich_values_through_evaluation() {
         Some(RowOutcome::Failure(RowFailure::InputOutOfDomain { ref parameter, .. }))
             if parameter.as_str() == "profile"
     ));
+}
+
+const KEY_MODEL: &str = r"
+    pub index Step = linspace(0.0 s, 1.0 s, points: 3);
+    param channel: Key<Fin(3)>;
+    param when: Key<Step>;
+    pub node channel_number: Int = to_int(@channel);
+    pub node next_channel: Key<Fin(4)> = @channel + 1;
+    pub node when_time: Time = coord(@when);
+    pub node when_out: Key<Step> = @when;
+";
+
+#[test]
+fn model_sessions_carry_fin_keys_as_positions_and_coordinate_keys_as_coordinates() {
+    use graphcal_model_protocol::{
+        AxisKind, FiniteF64, InputColumn, KeyRef, KeyValue, RequestBatch, RowOutcome, Value,
+        WireType,
+    };
+
+    let project = crate::loader::LoadedProject::from_source(KEY_MODEL, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let schema = std::sync::Arc::new(
+        prepared
+            .session_schema(&unit_names(
+                &["channel", "when"],
+                &["channel_number", "next_channel", "when_time", "when_out"],
+            ))
+            .unwrap(),
+    );
+    let (WireType::Key(channel), WireType::Key(when)) =
+        (schema.inputs()[0].wire(), schema.inputs()[1].wire())
+    else {
+        panic!("channel and when are keys");
+    };
+    assert!(matches!(
+        channel.axis().kind(),
+        AxisKind::Finite { size: 3 }
+    ));
+    assert!(matches!(
+        when.axis().kind(),
+        AxisKind::Coordinate { coordinates, .. } if coordinates.len() == 3
+    ));
+    let x = |value: f64| FiniteF64::new(value).unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![
+            InputColumn::Key(vec![channel.position(KeyRef::Position(2)).unwrap()]),
+            InputColumn::Key(vec![when.position(KeyRef::Coordinate(x(0.5))).unwrap()]),
+        ],
+    )
+    .unwrap();
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    let RowOutcome::Success(values) = result.row(0).unwrap() else {
+        panic!("row 0 succeeds: {:?}", result.failure(0));
+    };
+    let get = |name: &str| {
+        values
+            .get(schema.output_slot(name).unwrap())
+            .unwrap()
+            .to_owned_value()
+    };
+    assert_eq!(get("channel_number"), Value::Int(2));
+    assert_eq!(get("next_channel"), Value::Key(KeyValue::Position(3)));
+    assert_eq!(get("when_time"), Value::Quantity(x(0.5)));
+    assert_eq!(get("when_out"), Value::Key(KeyValue::Coordinate(x(0.5))));
 }
 
 fn unit_names(inputs: &[&str], outputs: &[&str]) -> graphcal_model_protocol::SessionSpec {

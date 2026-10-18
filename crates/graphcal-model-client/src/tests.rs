@@ -1,9 +1,9 @@
 //! Tests of the client's typed, process-free parts.
 
 use graphcal_model_protocol::{
-    BaseDimensionName, DescribeDocument, Dimension, Exponent, IndexName, KeyType, ModelInterface,
-    OutputDescription, ParameterDescription, PortName, PortWire, QuantityType, UnitSpelling,
-    VariantName, WireType,
+    Axis, AxisKind, BaseDimensionName, DescribeDocument, Dimension, Exponent, IndexName, KeyType,
+    ModelInterface, OutputDescription, ParameterDescription, PortName, PortWire, QuantityType,
+    UnitSpelling, VariantName, WireType,
 };
 
 use crate::{Bool, ClientError, GraphcalCommand, Int, Key, Model, Quantity};
@@ -23,16 +23,18 @@ fn model() -> Model {
         )
         .unwrap(),
     );
-    let mode = WireType::Key(
-        KeyType::new(
+    let mode = WireType::Key(KeyType::new(
+        Axis::new(
             IndexName::new("Mode").unwrap(),
-            vec![
-                VariantName::new("A").unwrap(),
-                VariantName::new("B").unwrap(),
-            ],
+            AxisKind::Named {
+                variants: vec![
+                    VariantName::new("A").unwrap(),
+                    VariantName::new("B").unwrap(),
+                ],
+            },
         )
         .unwrap(),
-    );
+    ));
     let interface = ModelInterface::new(
         vec![
             ParameterDescription::new(
@@ -102,10 +104,10 @@ fn handles_are_typed_by_port_kind() {
 }
 
 #[test]
-fn key_variants_belong_to_their_parameter() {
+fn key_entries_belong_to_their_parameter() {
     let model = model();
     let mode = model.input::<Key>("mode").unwrap();
-    assert_eq!(mode.variants().len(), 2);
+    assert_eq!(mode.entries().len(), 2);
     assert!(matches!(
         mode.variant("C"),
         Err(ClientError::UnknownVariant { .. })
@@ -118,7 +120,11 @@ fn key_variants_belong_to_their_parameter() {
         vec![mode.variant("A").unwrap(), foreign],
     )
     .unwrap_err();
-    assert!(matches!(error, ClientError::ForeignVariant { .. }));
+    assert!(matches!(error, ClientError::ForeignKey { .. }));
+    assert!(matches!(
+        mode.position(0),
+        Err(ClientError::UnknownKey { .. })
+    ));
 }
 
 fn mode_port(handle: &crate::InputHandle<Key>) -> &crate::PortIdentity {

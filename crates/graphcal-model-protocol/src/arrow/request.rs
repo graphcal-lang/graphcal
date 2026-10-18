@@ -7,18 +7,16 @@ use arrow_schema::ArrowError;
 use thiserror::Error;
 
 use super::schema::request_schema;
-use super::value_array::{
-    DictionaryError, ValueDecodeError, decode, decode_dictionary, encode, key_array,
-};
+use super::value_array::{ValueDecodeError, decode, decode_key_positions, encode, key_array};
 use crate::batch::{InputColumn, RequestBatch, RequestBatchError};
 use crate::finite::FiniteF64;
 use crate::label::PortName;
 use crate::session::SessionSchema;
 use crate::value::Value;
-use crate::wire_type::{KeyType, VariantPosition, WireType};
+use crate::wire_type::WireType;
 
 /// Why a received record batch is not a valid request.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum RequestDecodeError {
     #[error("the request has {received} columns; the session varies {expected} parameters")]
     ColumnCount { expected: usize, received: usize },
@@ -28,14 +26,6 @@ pub enum RequestDecodeError {
     Nulls { input: PortName, count: usize },
     #[error("parameter `{input}` has a non-finite value at row {row}")]
     NonFinite { input: PortName, row: usize },
-    #[error("parameter `{input}` has unknown variant `{variant}` at row {row}")]
-    UnknownVariant {
-        input: PortName,
-        variant: String,
-        row: usize,
-    },
-    #[error("parameter `{input}` has an invalid dictionary key at row {row}")]
-    DictionaryKey { input: PortName, row: usize },
     #[error("the column for parameter `{input}` {source}")]
     Value {
         input: PortName,
@@ -200,17 +190,23 @@ fn decode_column(
             InputColumn::Structured(all_values(input, wire, array)?)
         }
         WireType::Key(key) => {
-            let positions = decode_keys(input, key, array)?
-                .into_iter()
-                .enumerate()
-                .map(|(row, position)| {
-                    position.ok_or_else(|| RequestDecodeError::DictionaryKey {
-                        input: input.clone(),
-                        row,
+            let positions =
+                decode_key_positions(key, array).map_err(|source| RequestDecodeError::Value {
+                    input: input.clone(),
+                    source,
+                })?;
+            InputColumn::Key(
+                positions
+                    .into_iter()
+                    .enumerate()
+                    .map(|(row, position)| {
+                        position.ok_or_else(|| RequestDecodeError::Value {
+                            input: input.clone(),
+                            source: ValueDecodeError::Null { row },
+                        })
                     })
-                })
-                .collect::<Result<_, _>>()?;
-            InputColumn::Key(positions)
+                    .collect::<Result<_, _>>()?,
+            )
         }
     })
 }
@@ -237,40 +233,14 @@ fn all_values(
         .collect()
 }
 
-/// Resolve every dictionary entry of a key column by value; a null row
-/// decodes as `None`.
-pub(super) fn decode_keys(
-    input: &PortName,
-    key: &KeyType,
-    array: &dyn Array,
-) -> Result<Vec<Option<VariantPosition>>, RequestDecodeError> {
-    let positions = decode_dictionary(array, |label| key.position(label).map(VariantPosition::get))
-        .map_err(|error| match error {
-            DictionaryError::ArrowType => RequestDecodeError::ArrowType {
-                input: input.clone(),
-            },
-            DictionaryError::Key { row } => RequestDecodeError::DictionaryKey {
-                input: input.clone(),
-                row,
-            },
-            DictionaryError::Unknown { name, row } => RequestDecodeError::UnknownVariant {
-                input: input.clone(),
-                variant: name,
-                row,
-            },
-        })?;
-    Ok(positions
-        .into_iter()
-        .map(|position| position.map(VariantPosition::new))
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     use arrow_array::types::Int32Type;
     use arrow_array::{DictionaryArray, Int32Array, StringArray};
 
     use super::*;
+    use crate::axis::KeyRef;
+    use crate::label::VariantName;
     use crate::session::tests::sample_session;
 
     fn finite(value: f64) -> FiniteF64 {
@@ -282,8 +252,11 @@ mod tests {
         let WireType::Key(mode) = schema.inputs()[1].wire() else {
             panic!("mode is a key");
         };
-        let b = mode.position("B").unwrap();
-        let a = mode.position("A").unwrap();
+        let variant = |name: &str| {
+            mode.position(KeyRef::Variant(&VariantName::new(name).unwrap()))
+                .unwrap()
+        };
+        let (b, a) = (variant("B"), variant("A"));
         RequestBatch::new(
             schema,
             vec![
@@ -347,7 +320,10 @@ mod tests {
                 Arc::clone(batch.schema()),
                 &record(vec![1.0], vec!["C"])
             ),
-            Err(RequestDecodeError::UnknownVariant { .. })
+            Err(RequestDecodeError::Value {
+                source: ValueDecodeError::UnknownVariant { .. },
+                ..
+            })
         ));
     }
 }

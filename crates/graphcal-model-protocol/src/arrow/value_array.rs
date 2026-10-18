@@ -12,16 +12,17 @@ use arrow_array::builder::NullBufferBuilder;
 use arrow_array::types::Int32Type;
 use arrow_array::{
     Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray, Float64Array, Int32Array,
-    Int64Array, StringArray, StructArray,
+    Int64Array, StringArray, StructArray, UInt32Array,
 };
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use thiserror::Error;
 
+use crate::axis::{AxisKind, KeyRef, KeyValue};
 use crate::finite::FiniteF64;
 use crate::label::VariantName;
 use crate::value::{ComplexValue, Value};
 use crate::wire_type::{AlgebraicType, ConstructorPosition, ConstructorType};
-use crate::wire_type::{KeyType, VariantPosition, WireType};
+use crate::wire_type::{KeyPosition, KeyType, WireType};
 
 const LIST_ITEM_FIELD: &str = "item";
 const REAL_FIELD: &str = "re";
@@ -32,7 +33,7 @@ const VARIANTS_FIELD: &str = "variants";
 /// Why an Arrow array does not hold values of a wire type.
 ///
 /// Rows are rows of the top-level column.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[derive(Debug, Clone, PartialEq, Error)]
 pub enum ValueDecodeError {
     #[error("does not have its Arrow type")]
     ArrowType,
@@ -42,6 +43,10 @@ pub enum ValueDecodeError {
     Null { row: usize },
     #[error("has unknown variant `{name}` at row {row}")]
     UnknownVariant { name: String, row: usize },
+    #[error("has position {position} outside its axis at row {row}")]
+    UnknownPosition { position: u32, row: usize },
+    #[error("has coordinate {coordinate} that is not on its axis at row {row}")]
+    UnknownCoordinate { coordinate: f64, row: usize },
     #[error("has unknown constructor `{name}` at row {row}")]
     UnknownConstructor { name: String, row: usize },
     #[error("has an invalid dictionary key at row {row}")]
@@ -59,6 +64,14 @@ impl ValueDecodeError {
             Self::Null { row } => Self::Null { row: outer(row) },
             Self::UnknownVariant { name, row } => Self::UnknownVariant {
                 name,
+                row: outer(row),
+            },
+            Self::UnknownPosition { position, row } => Self::UnknownPosition {
+                position,
+                row: outer(row),
+            },
+            Self::UnknownCoordinate { coordinate, row } => Self::UnknownCoordinate {
+                coordinate,
                 row: outer(row),
             },
             Self::UnknownConstructor { name, row } => Self::UnknownConstructor {
@@ -126,7 +139,11 @@ pub(super) fn data_type(wire: &WireType) -> DataType {
         WireType::Complex(_) => DataType::Struct(complex_fields()),
         WireType::Int => DataType::Int64,
         WireType::Bool => DataType::Boolean,
-        WireType::Key(_) => dictionary_type(),
+        WireType::Key(key) => match key.axis().kind() {
+            AxisKind::Named { .. } => dictionary_type(),
+            AxisKind::Finite { .. } => DataType::UInt32,
+            AxisKind::Coordinate { .. } => DataType::Float64,
+        },
         WireType::Indexed(indexed) => DataType::FixedSizeList(
             list_item_field(indexed.element()),
             axis_size(indexed.axis().len()),
@@ -138,7 +155,8 @@ pub(super) fn data_type(wire: &WireType) -> DataType {
     }
 }
 
-/// `Axis` and `AlgebraicType` guarantee that their sizes fit in `i32`.
+/// `Axis` and `AlgebraicType` guarantee that their sizes fit in `i32`, so
+/// also in `u32`.
 fn axis_size(len: usize) -> i32 {
     i32::try_from(len).unwrap_or(i32::MAX)
 }
@@ -152,7 +170,12 @@ fn placeholder(wire: &WireType) -> Value {
         WireType::Complex(_) => Value::Complex(ComplexValue { re: zero, im: zero }),
         WireType::Int => Value::Int(0),
         WireType::Bool => Value::Bool(false),
-        WireType::Key(key) => Value::Key(key.variants()[0].clone()),
+        WireType::Key(key) => Value::Key(
+            key.positions()
+                .next()
+                .and_then(|position| key.key(position))
+                .map_or(KeyValue::Position(0), KeyRef::to_key_value),
+        ),
         WireType::Indexed(indexed) => {
             Value::Indexed(vec![placeholder(indexed.element()); indexed.axis().len()])
         }
@@ -234,8 +257,8 @@ pub(super) fn encode(
                 .iter()
                 .enumerate()
                 .map(|(row, value)| match value {
-                    Value::Key(variant) => key
-                        .position(variant.as_str())
+                    Value::Key(value) => key
+                        .position(value.as_key_ref())
                         .map(|position| is_valid(row).then_some(position))
                         .ok_or_else(mismatch),
                     _ => Err(mismatch()),
@@ -394,33 +417,131 @@ fn encode_constructor(
     )
 }
 
-/// A `Dictionary<Int32, Utf8>` array over every variant of `key`, in
-/// declaration order.
+/// The array of `key`'s entries at `positions`: a `Dictionary<Int32,
+/// Utf8>` over every variant of a named axis, the `UInt32` positions of a
+/// `Fin` axis, or the `Float64` SI coordinates of a coordinate axis.
 pub(super) fn key_array(
     key: &KeyType,
-    positions: impl Iterator<Item = Option<VariantPosition>>,
+    positions: impl Iterator<Item = Option<KeyPosition>>,
 ) -> Result<ArrayRef, ArrowError> {
-    let dictionary = Arc::new(StringArray::from_iter_values(
-        key.variants().iter().map(VariantName::as_str),
-    ));
-    let codes = positions
+    let positions = positions
         .map(|position| {
             position
                 .map(|position| {
-                    // `KeyType` guarantees the variant count fits in `i32`.
-                    i32::try_from(position.get()).map_err(|_| {
-                        ArrowError::InvalidArgumentError(format!(
-                            "variant position {} exceeds Int32",
-                            position.get()
-                        ))
-                    })
+                    (position.get() < key.axis().len())
+                        .then(|| position.get())
+                        .ok_or_else(|| {
+                            ArrowError::InvalidArgumentError(format!(
+                                "key position {} is outside its axis",
+                                position.get()
+                            ))
+                        })
                 })
                 .transpose()
         })
-        .collect::<Result<Int32Array, _>>()?;
-    Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
-        codes, dictionary,
-    )?))
+        .collect::<Result<Vec<_>, _>>()?;
+    // `Axis` guarantees that every position fits in `i32`, so also in `u32`.
+    Ok(match key.axis().kind() {
+        AxisKind::Named { variants } => Arc::new(DictionaryArray::<Int32Type>::try_new(
+            positions
+                .iter()
+                .map(|position| {
+                    position.map(|position| i32::try_from(position).unwrap_or(i32::MAX))
+                })
+                .collect::<Int32Array>(),
+            Arc::new(StringArray::from_iter_values(
+                variants.iter().map(VariantName::as_str),
+            )),
+        )?),
+        AxisKind::Finite { .. } => Arc::new(
+            positions
+                .iter()
+                .map(|position| {
+                    position.map(|position| u32::try_from(position).unwrap_or(u32::MAX))
+                })
+                .collect::<UInt32Array>(),
+        ),
+        AxisKind::Coordinate { coordinates, .. } => Arc::new(
+            positions
+                .iter()
+                .map(|position| position.map(|position| coordinates[position].get()))
+                .collect::<Float64Array>(),
+        ),
+    })
+}
+
+/// The positions of the keys in `array`, a [`key_array`] of `key`; a null
+/// row decodes as `None`.
+///
+/// # Errors
+///
+/// Returns [`ValueDecodeError`] for another Arrow type, an invalid
+/// dictionary code, or a key that selects no entry of the axis.
+pub(super) fn decode_key_positions(
+    key: &KeyType,
+    array: &dyn Array,
+) -> Result<Vec<Option<KeyPosition>>, ValueDecodeError> {
+    let lookup = |row: usize, entry: KeyRef<'_>| {
+        key.position(entry).ok_or_else(|| match entry {
+            KeyRef::Variant(variant) => ValueDecodeError::UnknownVariant {
+                name: variant.as_str().to_owned(),
+                row,
+            },
+            KeyRef::Position(position) => ValueDecodeError::UnknownPosition {
+                position: u32::try_from(position).unwrap_or(u32::MAX),
+                row,
+            },
+            KeyRef::Coordinate(coordinate) => ValueDecodeError::UnknownCoordinate {
+                coordinate: coordinate.get(),
+                row,
+            },
+        })
+    };
+    match key.axis().kind() {
+        AxisKind::Named { .. } => Ok(decode_dictionary(array, |label| {
+            VariantName::new(label)
+                .ok()
+                .and_then(|variant| key.position(KeyRef::Variant(&variant)))
+                .map(KeyPosition::get)
+        })
+        .map_err(|error| match error {
+            DictionaryError::ArrowType => ValueDecodeError::ArrowType,
+            DictionaryError::Key { row } => ValueDecodeError::DictionaryKey { row },
+            DictionaryError::Unknown { name, row } => {
+                ValueDecodeError::UnknownVariant { name, row }
+            }
+        })?
+        .into_iter()
+        .map(|position| position.map(KeyPosition::new))
+        .collect()),
+        AxisKind::Finite { .. } => downcast::<UInt32Array>(array)?
+            .iter()
+            .enumerate()
+            .map(|(row, position)| {
+                position
+                    .map(|position| {
+                        lookup(
+                            row,
+                            KeyRef::Position(usize::try_from(position).unwrap_or(usize::MAX)),
+                        )
+                    })
+                    .transpose()
+            })
+            .collect(),
+        AxisKind::Coordinate { .. } => downcast::<Float64Array>(array)?
+            .iter()
+            .enumerate()
+            .map(|(row, coordinate)| {
+                coordinate
+                    .map(|coordinate| {
+                        let coordinate = FiniteF64::new(coordinate)
+                            .map_err(|_| ValueDecodeError::NonFinite { row })?;
+                        lookup(row, KeyRef::Coordinate(coordinate))
+                    })
+                    .transpose()
+            })
+            .collect(),
+    }
 }
 
 /// An entry of a `Dictionary<Int32, Utf8>` that resolves to no label.
@@ -549,24 +670,14 @@ pub(super) fn decode(
             .iter()
             .map(|value| value.map(Value::Bool))
             .collect(),
-        WireType::Key(key) => {
-            decode_dictionary(array, |label| key.position(label).map(VariantPosition::get))
-                .map_err(|error| match error {
-                    DictionaryError::ArrowType => ValueDecodeError::ArrowType,
-                    DictionaryError::Key { row } => ValueDecodeError::DictionaryKey { row },
-                    DictionaryError::Unknown { name, row } => {
-                        ValueDecodeError::UnknownVariant { name, row }
-                    }
-                })?
-                .into_iter()
-                .map(|position| {
-                    position
-                        .and_then(|position| key.variants().get(position))
-                        .cloned()
-                        .map(Value::Key)
-                })
-                .collect()
-        }
+        WireType::Key(key) => decode_key_positions(key, array)?
+            .into_iter()
+            .map(|position| {
+                position
+                    .and_then(|position| key.key(position))
+                    .map(|key| Value::Key(key.to_key_value()))
+            })
+            .collect(),
         WireType::Complex(_) => {
             let parts = downcast::<StructArray>(array)?;
             let [re, im] = parts.columns() else {
@@ -932,6 +1043,73 @@ mod tests {
         let encoded = batch.to_record_batch().unwrap();
         let decoded = ResultBatch::from_record_batch(schema, &encoded).unwrap();
         assert_eq!(decoded, batch);
+    }
+
+    #[test]
+    fn fin_and_coordinate_keys_travel_as_positions_and_coordinates() {
+        let fin = KeyType::new(
+            Axis::new(
+                IndexName::new("Fin(3)").unwrap(),
+                AxisKind::Finite { size: 3 },
+            )
+            .unwrap(),
+        );
+        let grid = KeyType::new(
+            Axis::new(
+                IndexName::new("Step").unwrap(),
+                AxisKind::Coordinate {
+                    dimension: crate::dimension::Dimension::dimensionless(),
+                    coordinates: vec![finite(0.0), finite(0.25)],
+                },
+            )
+            .unwrap(),
+        );
+        let fin_wire = WireType::Key(fin);
+        let grid_wire = WireType::Key(grid);
+        assert_eq!(data_type(&fin_wire), DataType::UInt32);
+        assert_eq!(data_type(&grid_wire), DataType::Float64);
+
+        let fin_values = [
+            Value::Key(KeyValue::Position(2)),
+            Value::Key(KeyValue::Position(0)),
+        ];
+        let encoded = encode(&fin_wire, &fin_values, Some(&[true, false])).unwrap();
+        assert_eq!(
+            encoded.as_any().downcast_ref::<UInt32Array>().unwrap(),
+            &UInt32Array::from(vec![Some(2), None])
+        );
+        assert_eq!(
+            decode(&fin_wire, encoded.as_ref()).unwrap(),
+            [Some(fin_values[0].clone()), None]
+        );
+
+        let grid_values = [Value::Key(KeyValue::Coordinate(finite(0.25)))];
+        let encoded = encode(&grid_wire, &grid_values, None).unwrap();
+        assert_eq!(
+            decode(&grid_wire, encoded.as_ref()).unwrap(),
+            [Some(grid_values[0].clone())]
+        );
+
+        assert!(encode(&fin_wire, &[Value::Key(KeyValue::Position(3))], None).is_err());
+        assert_eq!(
+            decode(&fin_wire, &UInt32Array::from(vec![3])),
+            Err(ValueDecodeError::UnknownPosition {
+                position: 3,
+                row: 0
+            })
+        );
+        assert_eq!(
+            decode(&grid_wire, &Float64Array::from(vec![0.0, 0.2])),
+            Err(ValueDecodeError::UnknownCoordinate {
+                coordinate: 0.2,
+                row: 1
+            })
+        );
+        assert_eq!(
+            decode(&grid_wire, &Float64Array::from(vec![f64::NAN])),
+            Err(ValueDecodeError::NonFinite { row: 0 })
+        );
+        assert!(!Value::Key(KeyValue::Position(0)).conforms_to(&grid_wire));
     }
 
     #[test]
