@@ -21,10 +21,10 @@ pub use model_schema::{
 pub use prepared::{
     ExternalValue, InclusiveBounds, InclusiveBoundsError, ModelDefinitionError,
     ModelExecutionError, ModelInterfaceError, ModelOutputPort, ModelRowFailure, ModelRowOutcome,
-    ModelSession, ModelSessionError, ParameterBindingBuilder, ParameterBindingRow, ParameterDomain,
-    ParameterPort, ParameterPosition, ParameterValue, PreparedModel, PreparedProject,
-    StructuredBindingError, StructuredBindingErrorKind, StructuredBindingPathSegment,
-    StructuredValueExpr,
+    ModelSession, ModelSessionError, ModelUnitError, ParameterBindingBuilder, ParameterBindingRow,
+    ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,
+    PreparedProject, StructuredBindingError, StructuredBindingErrorKind,
+    StructuredBindingPathSegment, StructuredValueExpr,
 };
 
 /// Prepare a loaded project once for repeated typed evaluation.

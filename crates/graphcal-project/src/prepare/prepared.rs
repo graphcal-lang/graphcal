@@ -54,6 +54,8 @@ mod binding_compile;
 mod model_port;
 #[path = "model_session.rs"]
 mod model_session;
+#[path = "model_unit.rs"]
+mod model_unit;
 
 use binding_compile::build_parameter_ports;
 pub use binding_compile::{
@@ -67,6 +69,7 @@ pub use model_port::{
     PreparedModel,
 };
 pub use model_session::{ModelInterfaceError, ModelSession, ModelSessionError};
+pub use model_unit::ModelUnitError;
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
 

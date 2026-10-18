@@ -112,9 +112,7 @@ mod tests {
 
     fn session(project: &PreparedProject) -> ModelSession {
         let schema = project
-            .model_interface()
-            .unwrap()
-            .configure(&SessionSpec::new(
+            .session_schema(&SessionSpec::new(
                 vec![PortName::new("load").unwrap()],
                 vec![PortName::new("failure").unwrap()],
             ))

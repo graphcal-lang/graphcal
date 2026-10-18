@@ -7,14 +7,17 @@ use std::thread::JoinHandle;
 
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
-use graphcal_model_protocol::arrow::{request_schema, result_schema, validate_schema};
-use graphcal_model_protocol::{PortName, RequestBatch, ResultBatch, SessionSchema, SessionSpec};
+use graphcal_model_protocol::arrow::{request_schema, result_schema, si_scales, validate_schema};
+use graphcal_model_protocol::{
+    CanonicalUnitsOnly, PortName, RequestBatch, ResultBatch, SessionSchema, SessionSpec, SiScale,
+    UnitSpelling,
+};
 
 use crate::batch::{BatchBuilder, Request};
 use crate::error::ClientError;
 use crate::evaluation::Evaluation;
 use crate::identity::{ModelId, SessionId};
-use crate::kind::Kind;
+use crate::kind::{Kind, Quantity};
 use crate::model::{InputHandle, Model, OutputHandle};
 
 impl Model {
@@ -24,13 +27,15 @@ impl Model {
     }
 }
 
-/// Selects the parameters a session varies and the outputs it reads.
+/// Selects the parameters a session varies, the outputs it reads, and the
+/// units of its quantity ports.
 #[derive(Debug)]
 #[must_use]
 pub struct SessionBuilder<'m> {
     model: &'m Model,
     inputs: Vec<PortName>,
     outputs: Vec<PortName>,
+    units: Vec<(PortName, UnitSpelling)>,
     foreign: Option<PortName>,
 }
 
@@ -40,6 +45,7 @@ impl<'m> SessionBuilder<'m> {
             model,
             inputs: Vec::new(),
             outputs: Vec::new(),
+            units: Vec::new(),
             foreign: None,
         }
     }
@@ -56,48 +62,89 @@ impl<'m> SessionBuilder<'m> {
         self
     }
 
-    fn record(&mut self, port: &crate::identity::PortIdentity, input: bool) {
+    /// Vary the quantity `input`, supplying its values in `unit`.
+    ///
+    /// `unit` is a Graphcal unit expression in the model's entry file with a
+    /// fixed scale, such as `kN`; the server resolves it when the session
+    /// starts.
+    pub fn vary_in(mut self, input: &InputHandle<Quantity>, unit: UnitSpelling) -> Self {
+        if self.record(input.port(), true) {
+            self.units.push((input.name().clone(), unit));
+        }
+        self
+    }
+
+    /// Return the quantity `output` in `unit` (see [`Self::vary_in`]).
+    pub fn output_in(mut self, output: &OutputHandle<Quantity>, unit: UnitSpelling) -> Self {
+        if self.record(output.port(), false) {
+            self.units.push((output.name().clone(), unit));
+        }
+        self
+    }
+
+    /// Select `port`; returns whether it belongs to this model.
+    fn record(&mut self, port: &crate::identity::PortIdentity, input: bool) -> bool {
         if port.ensure_model(self.model.id()).is_err() {
             self.foreign.get_or_insert_with(|| port.name().clone());
-        } else if input {
+            return false;
+        }
+        if input {
             self.inputs.push(port.name().clone());
         } else {
             self.outputs.push(port.name().clone());
         }
+        true
+    }
+
+    fn spec(&self) -> Result<SessionSpec, ClientError> {
+        if let Some(name) = &self.foreign {
+            return Err(ClientError::ForeignHandle { name: name.clone() });
+        }
+        Ok(self.units.iter().fold(
+            SessionSpec::new(self.inputs.clone(), self.outputs.clone()),
+            |spec, (port, unit)| spec.with_unit(port.clone(), unit.clone()),
+        ))
     }
 
     /// The session schema this selection configures, without starting a
     /// server.
     ///
+    /// Only the server resolves units, so a selection that chooses a unit
+    /// has a schema only once [`Self::spawn`] starts its server.
+    ///
     /// # Errors
     ///
-    /// Returns [`ClientError`] for a handle of another model or an invalid
-    /// selection.
+    /// Returns [`ClientError`] for a handle of another model, an invalid
+    /// selection, or a unit choice.
     pub fn schema(&self) -> Result<SessionSchema, ClientError> {
-        if let Some(name) = &self.foreign {
-            return Err(ClientError::ForeignHandle { name: name.clone() });
-        }
         Ok(self
             .model
             .interface()
-            .configure(&SessionSpec::new(self.inputs.clone(), self.outputs.clone()))?)
+            .configure(&self.spec()?, CanonicalUnitsOnly)?)
     }
 
     /// Start `graphcal model serve` for this session.
     ///
     /// The server refuses to start unless the model's interface still has
-    /// the described fingerprint.
+    /// the described fingerprint. It resolves the chosen units and publishes
+    /// their scales in its result-stream schema; the session adopts them
+    /// after checking the schema as a whole.
     ///
     /// # Errors
     ///
     /// Returns [`ClientError`] for an invalid selection, a server that cannot
     /// start, or an unexpected result-stream schema.
     pub fn spawn(self) -> Result<Session, ClientError> {
-        let schema = Arc::new(self.schema()?);
+        let spec = self.spec()?;
+        let interface = self.model.interface();
+        // Every check that needs no unit scale runs before the server starts.
+        interface.configure(&spec, |_: &PortName, _: &UnitSpelling| {
+            SiScale::new(1.0).map_err(|error| error.to_string())
+        })?;
         let mut child = self
             .model
             .command()
-            .serve(&schema)
+            .serve(&spec, self.model.fingerprint())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -112,8 +159,8 @@ impl<'m> SessionBuilder<'m> {
             })
         });
         let mut process = ServerProcess { child, stderr };
-        match process.open_streams(&schema) {
-            Ok((requests, results)) => Ok(Session {
+        match process.open_streams(interface, &spec) {
+            Ok((schema, requests, results)) => Ok(Session {
                 id: SessionId::fresh(),
                 model: self.model.id(),
                 schema,
@@ -134,16 +181,28 @@ struct ServerProcess {
 }
 
 impl ServerProcess {
+    /// Read the server's result-stream schema, configure `spec` with the
+    /// unit scales it publishes, and open the request stream.
     fn open_streams(
         &mut self,
-        schema: &SessionSchema,
-    ) -> Result<(StreamWriter<ChildStdin>, Results), ClientError> {
+        interface: &graphcal_model_protocol::ModelInterface,
+        spec: &SessionSpec,
+    ) -> Result<(Arc<SessionSchema>, StreamWriter<ChildStdin>, Results), ClientError> {
         let stdout = self.child.stdout.take().ok_or_else(missing_pipe)?;
         let results = StreamReader::try_new(BufReader::new(stdout), None)?;
-        validate_schema(&result_schema(schema), results.schema().as_ref())?;
+        let scales = si_scales(results.schema().as_ref())?;
+        let schema = Arc::new(
+            interface.configure(spec, |port: &PortName, _: &UnitSpelling| {
+                scales
+                    .get(port)
+                    .copied()
+                    .ok_or_else(|| "the model server published no scale for it".to_owned())
+            })?,
+        );
+        validate_schema(&result_schema(&schema), results.schema().as_ref())?;
         let stdin = self.child.stdin.take().ok_or_else(missing_pipe)?;
-        let requests = StreamWriter::try_new(stdin, &request_schema(schema))?;
-        Ok((requests, results))
+        let requests = StreamWriter::try_new(stdin, &request_schema(&schema))?;
+        Ok((schema, requests, results))
     }
 
     /// Wait for the server to stop and report `error`, preferring the

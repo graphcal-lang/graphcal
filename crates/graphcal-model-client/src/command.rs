@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use graphcal_model_protocol::{InterfaceFingerprint, SessionSchema};
+use graphcal_model_protocol::{InterfaceFingerprint, SessionSpec};
 
 /// The `graphcal` executable and the model file it serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,18 +58,24 @@ impl GraphcalCommand {
         self.base("describe")
     }
 
-    /// `graphcal model serve` for `session`, refusing any other interface.
-    pub(crate) fn serve(&self, session: &SessionSchema) -> Command {
+    /// `graphcal model serve` for `spec`, refusing any interface but the
+    /// one with `fingerprint`.
+    pub(crate) fn serve(&self, spec: &SessionSpec, fingerprint: InterfaceFingerprint) -> Command {
         let mut command = self.base("serve");
-        for input in session.inputs() {
-            command.arg("--input").arg(input.name().as_str());
+        for input in spec.inputs() {
+            command.arg("--input").arg(input.as_str());
         }
-        for output in session.outputs() {
-            command.arg("--output").arg(output.name().as_str());
+        for output in spec.outputs() {
+            command.arg("--output").arg(output.as_str());
+        }
+        for choice in spec.units() {
+            command
+                .arg("--unit")
+                .arg(format!("{}={}", choice.port(), choice.unit()));
         }
         command
             .arg("--expect-fingerprint")
-            .arg(fingerprint_argument(session.interface_fingerprint()));
+            .arg(fingerprint_argument(fingerprint));
         command
     }
 }
@@ -96,6 +102,40 @@ mod tests {
         assert_eq!(
             arguments,
             ["model", "describe", "model.gcl", "--root", "/project"]
+        );
+    }
+
+    #[test]
+    fn serve_passes_the_selection_units_and_fingerprint() {
+        use graphcal_model_protocol::{PortName, UnitSpelling};
+
+        let name = |name: &str| PortName::new(name).unwrap();
+        let spec = SessionSpec::new(vec![name("load")], vec![name("margin")])
+            .with_unit(name("load"), UnitSpelling::new("kN").unwrap());
+        let fingerprint = InterfaceFingerprint::parse(
+            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        )
+        .unwrap();
+        let command = GraphcalCommand::new("model.gcl").serve(&spec, fingerprint);
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arguments,
+            [
+                "model",
+                "serve",
+                "model.gcl",
+                "--input",
+                "load",
+                "--output",
+                "margin",
+                "--unit",
+                "load=kN",
+                "--expect-fingerprint",
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            ]
         );
     }
 }

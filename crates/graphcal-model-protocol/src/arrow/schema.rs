@@ -1,13 +1,15 @@
 //! Building and validating the Arrow schemas of a session.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use arrow_schema::{DataType, Field, Fields, Metadata, Schema, SchemaRef};
 use thiserror::Error;
 
 use super::metadata::{FieldMetadata, METADATA_KEY, SchemaMetadata, StreamKind};
+use crate::label::PortName;
 use crate::session::SessionSchema;
+use crate::unit_scale::SiScale;
 use crate::version::PROTOCOL_VERSION;
 use crate::wire_type::WireType;
 
@@ -41,11 +43,46 @@ pub(super) fn data_type(wire: &WireType) -> DataType {
 }
 
 fn schema_metadata(session: &SessionSchema, stream: StreamKind) -> HashMap<String, String> {
+    let inputs = session
+        .inputs()
+        .iter()
+        .map(|input| (input.name(), input.si_scale()));
+    let outputs = session
+        .outputs()
+        .iter()
+        .map(|output| (output.name(), output.si_scale()));
     metadata(&SchemaMetadata {
         protocol_version: PROTOCOL_VERSION,
         interface_fingerprint: session.interface_fingerprint(),
         stream,
+        si_scales: inputs
+            .chain(outputs)
+            .filter_map(|(name, scale)| scale.map(|scale| (name.clone(), scale)))
+            .collect(),
     })
+}
+
+/// The unit scales a received stream schema publishes, by port.
+///
+/// A client reads them from the server's result-stream schema to configure
+/// the same session the server resolved (see
+/// [`UnitResolver`](crate::UnitResolver)), then validates the schema as a
+/// whole with [`validate_schema`].
+///
+/// # Errors
+///
+/// Returns [`SchemaMismatch::SchemaMetadata`] when the schema carries no
+/// valid `graphcal` metadata.
+pub fn si_scales(schema: &Schema) -> Result<BTreeMap<PortName, SiScale>, SchemaMismatch> {
+    schema
+        .metadata()
+        .get(METADATA_KEY)
+        .and_then(|value| serde_json::from_str::<SchemaMetadata>(value).ok())
+        .map(|metadata| metadata.si_scales)
+        .ok_or_else(|| SchemaMismatch::SchemaMetadata {
+            expected: "valid graphcal schema metadata".to_owned(),
+            received: describe_metadata(schema.metadata()),
+        })
 }
 
 /// The schema of `session`'s request stream.
@@ -275,6 +312,29 @@ mod tests {
             validate_schema(&expected, &received),
             Err(SchemaMismatch::SchemaMetadata { .. })
         ));
+    }
+
+    #[test]
+    fn stream_schemas_publish_chosen_unit_scales() {
+        use crate::interface::tests::{name, sample_interface};
+
+        assert_eq!(
+            si_scales(&result_schema(&sample_session())),
+            Ok(BTreeMap::new())
+        );
+        let spec = crate::SessionSpec::new(vec![name("load"), name("mode")], vec![name("margin")])
+            .with_unit(name("margin"), crate::UnitSpelling::new("km").unwrap());
+        let kilo = SiScale::new(1000.0).unwrap();
+        let session = sample_interface()
+            .configure(&spec, |_: &PortName, _: &crate::UnitSpelling| Ok(kilo))
+            .unwrap();
+        for schema in [request_schema(&session), result_schema(&session)] {
+            assert_eq!(
+                si_scales(&schema),
+                Ok(BTreeMap::from([(name("margin"), kilo)]))
+            );
+        }
+        assert!(si_scales(&Schema::empty()).is_err());
     }
 
     #[test]

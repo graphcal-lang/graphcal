@@ -222,6 +222,11 @@ enum ModelCommands {
         /// Public node to return in results; repeat for multiple outputs
         #[arg(long, required = true, value_name = "NAME")]
         output: Vec<String>,
+        /// Carry a selected quantity port in a unit with a fixed scale,
+        /// written as a Graphcal unit expression of the entry file (e.g.
+        /// `load=kN`); repeat for multiple ports
+        #[arg(long, value_name = "NAME=UNIT", value_parser = model::parse_unit_choice)]
+        unit: Vec<model::UnitChoiceArgument>,
         /// Refuse to start unless the interface fingerprint from
         /// `graphcal model describe` matches
         #[arg(long, value_name = "FINGERPRINT", value_parser = parse_fingerprint)]
@@ -427,25 +432,7 @@ fn run_command(cli: Cli) {
             root,
             instance,
         } => run_view(&file, root.as_deref(), instance),
-        Commands::Model { command } => match command {
-            ModelCommands::Describe { file, root } => run_model_describe(&file, root.as_deref()),
-            ModelCommands::Serve {
-                file,
-                input,
-                output,
-                expect_fingerprint,
-                skip_fingerprint_check: _,
-                root,
-            } => {
-                // The required argument group admits exactly one of the two
-                // fingerprint flags.
-                let fingerprint = expect_fingerprint.map_or(
-                    model::FingerprintCheck::Skip,
-                    model::FingerprintCheck::Expect,
-                );
-                run_model_serve(&file, &input, &output, &fingerprint, root.as_deref());
-            }
-        },
+        Commands::Model { command } => run_model_command(command),
         Commands::Deps { command } => match command {
             DepsCommands::Lock { root } => {
                 run_deps_lock(root.as_deref());
@@ -725,14 +712,38 @@ fn run_model_describe(file: &Path, root: Option<&Path>) {
     }
 }
 
+fn run_model_command(command: ModelCommands) {
+    match command {
+        ModelCommands::Describe { file, root } => run_model_describe(&file, root.as_deref()),
+        ModelCommands::Serve {
+            file,
+            input,
+            output,
+            unit,
+            expect_fingerprint,
+            skip_fingerprint_check: _,
+            root,
+        } => {
+            // The required argument group admits exactly one of the two
+            // fingerprint flags.
+            let fingerprint = expect_fingerprint.map_or(
+                model::FingerprintCheck::Skip,
+                model::FingerprintCheck::Expect,
+            );
+            run_model_serve(&file, &input, &output, &unit, &fingerprint, root.as_deref());
+        }
+    }
+}
+
 fn run_model_serve(
     file: &Path,
     inputs: &[String],
     outputs: &[String],
+    units: &[model::UnitChoiceArgument],
     fingerprint: &model::FingerprintCheck,
     root: Option<&Path>,
 ) {
-    if let Err(error) = model::serve(file, inputs, outputs, fingerprint, root) {
+    if let Err(error) = model::serve(file, inputs, outputs, units, fingerprint, root) {
         eprintln!("error: {error}");
         process::exit(error.exit_code());
     }

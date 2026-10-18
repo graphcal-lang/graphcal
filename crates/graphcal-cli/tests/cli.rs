@@ -7386,7 +7386,35 @@ fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
 fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
-    let cases: [(&[&str], &str); 4] = [
+    let cases: [(&[&str], &str); 6] = [
+        (
+            &[
+                "--input",
+                "load",
+                "--input",
+                "mode",
+                "--output",
+                "failure",
+                "--unit",
+                "load=s",
+                "--skip-fingerprint-check",
+            ],
+            "cannot carry port `load`",
+        ),
+        (
+            &[
+                "--input",
+                "load",
+                "--input",
+                "mode",
+                "--output",
+                "failure",
+                "--unit",
+                "load",
+                "--skip-fingerprint-check",
+            ],
+            "expected NAME=UNIT",
+        ),
         (
             &[
                 "--input",
@@ -7494,10 +7522,13 @@ fn model_serve_subprocess_answers_request_batches() {
     let schema = Arc::new(
         document
             .interface()
-            .configure(&SessionSpec::new(
-                vec![name("mode"), name("load")],
-                vec![name("margin"), name("failure")],
-            ))
+            .configure(
+                &SessionSpec::new(
+                    vec![name("mode"), name("load")],
+                    vec![name("margin"), name("failure")],
+                ),
+                graphcal_model_protocol::CanonicalUnitsOnly,
+            )
             .unwrap(),
     );
 

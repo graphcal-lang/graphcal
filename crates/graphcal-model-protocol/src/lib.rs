@@ -3,8 +3,9 @@
 //! A model exposes a [`ModelInterface`]: its parameters and public outputs
 //! with their wire types, units, and domains. `graphcal model describe`
 //! publishes it as a [`DescribeDocument`]. A client selects the parameters it
-//! varies and the outputs it reads with a [`SessionSpec`]; configuring the
-//! interface yields the [`SessionSchema`] that both sides of one
+//! varies and the outputs it reads with a [`SessionSpec`], optionally choosing
+//! the unit of quantity ports; configuring the interface with a
+//! [`UnitResolver`] yields the [`SessionSchema`] that both sides of one
 //! `graphcal model serve` process share. Request and result batches
 //! ([`RequestBatch`], [`ResultBatch`]) are validated against that schema.
 //!
@@ -25,6 +26,7 @@ mod interface;
 mod label;
 mod outcome;
 mod session;
+mod unit_scale;
 mod value;
 mod version;
 mod wire_type;
@@ -44,8 +46,10 @@ pub use interface::{
 pub use label::{BaseDimensionName, IndexName, LabelError, PortName, UnitSpelling, VariantName};
 pub use outcome::{RowFailure, RowOutcome, RowStatus, UnknownRowStatus};
 pub use session::{
-    InputSlot, OutputSlot, SessionError, SessionInput, SessionOutput, SessionSchema, SessionSpec,
+    CanonicalUnitsOnly, InputSlot, OutputSlot, SessionError, SessionInput, SessionOutput,
+    SessionSchema, SessionSpec, UnitChoice, UnitResolver,
 };
+pub use unit_scale::{SiScale, SiScaleError};
 pub use value::{Value, ValueRef};
 pub use version::PROTOCOL_VERSION;
 pub use wire_type::{

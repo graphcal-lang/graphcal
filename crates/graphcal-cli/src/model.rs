@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use graphcal_model_protocol::{
-    DescribeDocument, InterfaceFingerprint, LabelError, PortName, SessionError, SessionSpec,
+    DescribeDocument, InterfaceFingerprint, LabelError, PortName, SessionSpec, UnitSpelling,
 };
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::{build_rooted_filesystem, load_project};
@@ -20,6 +20,25 @@ pub enum FingerprintCheck {
     Expect(InterfaceFingerprint),
     /// Serve whatever interface the model has.
     Skip,
+}
+
+/// One `--unit NAME=UNIT` argument of `serve`.
+#[derive(Debug, Clone)]
+pub struct UnitChoiceArgument {
+    port: PortName,
+    unit: UnitSpelling,
+}
+
+/// Parse a `--unit NAME=UNIT` argument; the unit itself is resolved against
+/// the model later.
+pub fn parse_unit_choice(argument: &str) -> Result<UnitChoiceArgument, String> {
+    let (port, unit) = argument
+        .split_once('=')
+        .ok_or_else(|| format!("expected NAME=UNIT, got `{argument}`"))?;
+    Ok(UnitChoiceArgument {
+        port: PortName::new(port.trim()).map_err(|error| error.to_string())?,
+        unit: UnitSpelling::new(unit.trim()).map_err(|error| error.to_string())?,
+    })
 }
 
 /// Print the model's describe document as JSON on stdout.
@@ -39,6 +58,7 @@ pub fn serve(
     file: &Path,
     inputs: &[String],
     outputs: &[String],
+    units: &[UnitChoiceArgument],
     fingerprint: &FingerprintCheck,
     root: Option<&Path>,
 ) -> Result<(), ModelServeError> {
@@ -48,7 +68,10 @@ pub fn serve(
             .map(|name| PortName::new(name.as_str()))
             .collect::<Result<Vec<_>, _>>()
     };
-    let spec = SessionSpec::new(names(inputs)?, names(outputs)?);
+    let spec = units.iter().fold(
+        SessionSpec::new(names(inputs)?, names(outputs)?),
+        |spec, choice| spec.with_unit(choice.port.clone(), choice.unit.clone()),
+    );
     let prepared = prepare(file, root)?;
     let interface = prepared.model_interface()?;
     if let FingerprintCheck::Expect(expected) = fingerprint {
@@ -60,7 +83,7 @@ pub fn serve(
             });
         }
     }
-    let schema = interface.configure(&spec)?;
+    let schema = prepared.session_schema(&spec)?;
     let session = prepared.model_session(Arc::new(schema))?;
     graphcal_model_server::serve_stdio(&prepared, &session).map_err(ModelServeError::Serve)
 }
@@ -95,8 +118,6 @@ pub enum ModelServeError {
         expected: InterfaceFingerprint,
         actual: InterfaceFingerprint,
     },
-    #[error("invalid session: {0}")]
-    Session(#[from] SessionError),
     #[error(transparent)]
     ModelSession(#[from] ModelSessionError),
     #[error("cannot encode the describe document: {0}")]
@@ -116,7 +137,6 @@ impl ModelServeError {
             | Self::Compile(_)
             | Self::Interface(_)
             | Self::FingerprintMismatch { .. }
-            | Self::Session(_)
             | Self::ModelSession(_)
             | Self::Json(_) => 2,
         }

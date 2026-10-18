@@ -4448,14 +4448,155 @@ fn session_over(
     };
     std::sync::Arc::new(
         prepared
-            .model_interface()
-            .unwrap()
-            .configure(&graphcal_model_protocol::SessionSpec::new(
+            .session_schema(&graphcal_model_protocol::SessionSpec::new(
                 names(inputs),
                 names(outputs),
             ))
             .unwrap(),
     )
+}
+
+const UNIT_MODEL: &str = r"
+    const unit kilonewton: Force = 1000.0 N;
+    unit league: Length = 4828.032 m;
+    param load: Force(min: 0.0 N, max: 10000.0 N);
+    pub node margin: Force = 10000.0 N - @load;
+    pub node reach: Length = 2.0 m;
+    pub node trials: Int = 3;
+";
+
+fn unit_spec(units: &[(&str, &str)]) -> graphcal_model_protocol::SessionSpec {
+    use graphcal_model_protocol::{PortName, SessionSpec, UnitSpelling};
+
+    units.iter().fold(
+        SessionSpec::new(
+            vec![PortName::new("load").unwrap()],
+            vec![
+                PortName::new("margin").unwrap(),
+                PortName::new("reach").unwrap(),
+                PortName::new("trials").unwrap(),
+            ],
+        ),
+        |spec, (port, unit)| {
+            spec.with_unit(
+                PortName::new(*port).unwrap(),
+                UnitSpelling::new(*unit).unwrap(),
+            )
+        },
+    )
+}
+
+#[test]
+fn model_sessions_carry_quantities_in_chosen_units() {
+    use graphcal_model_protocol::{
+        Domain, FiniteF64, InputColumn, RequestBatch, RowOutcome, ValueRef,
+    };
+
+    let project = crate::loader::LoadedProject::from_source(UNIT_MODEL, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let schema = std::sync::Arc::new(
+        prepared
+            .session_schema(&unit_spec(&[
+                ("load", "kilonewton"),
+                ("margin", "kN"),
+                ("reach", "cm"),
+            ]))
+            .unwrap(),
+    );
+    let Some(Domain::Quantity(bounds)) = schema.inputs()[0].domain() else {
+        panic!("load has a quantity domain");
+    };
+    assert_eq!(bounds.max().map(|max| max.get()), Some(10.0));
+
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let x = |value: f64| FiniteF64::new(value).unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![x(3.0), x(f64::MAX)])],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    let RowOutcome::Success(values) = result.row(0).unwrap() else {
+        panic!("row 0 succeeds");
+    };
+    let get = |name: &str| values.get(schema.output_slot(name).unwrap()).unwrap();
+    assert_eq!(get("margin"), ValueRef::Quantity(x(7.0)));
+    assert_eq!(get("reach"), ValueRef::Quantity(x(200.0)));
+    assert_eq!(get("trials"), ValueRef::Int(3));
+    assert!(matches!(
+        result.row(1),
+        Some(RowOutcome::Failure(
+            graphcal_model_protocol::RowFailure::InputOutOfDomain { .. }
+        ))
+    ));
+}
+
+#[test]
+fn model_unit_choices_must_resolve_to_fixed_scale_units_of_the_port_dimension() {
+    use graphcal_model_protocol::{PortName, SessionError, UnitSpelling};
+
+    let project = crate::loader::LoadedProject::from_source(UNIT_MODEL, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let scale = |port: &str, unit: &str| {
+        prepared.model_unit_scale(
+            &PortName::new(port).unwrap(),
+            &UnitSpelling::new(unit).unwrap(),
+        )
+    };
+    assert_eq!(
+        scale("load", "kilonewton").map(graphcal_model_protocol::SiScale::get),
+        Ok(1000.0)
+    );
+    assert_eq!(
+        scale("reach", "km").map(graphcal_model_protocol::SiScale::get),
+        Ok(1000.0)
+    );
+    assert_eq!(
+        scale("load", "kg*m/s^2").map(graphcal_model_protocol::SiScale::get),
+        Ok(1.0)
+    );
+    assert!(matches!(
+        scale("load", "m"),
+        Err(ModelUnitError::DimensionMismatch { .. })
+    ));
+    assert!(matches!(
+        scale("reach", "league"),
+        Err(ModelUnitError::RuntimeUnit { .. })
+    ));
+    assert!(matches!(
+        scale("load", "parsec_x"),
+        Err(ModelUnitError::UnknownUnit { .. })
+    ));
+    assert!(matches!(
+        scale("load", "kN *"),
+        Err(ModelUnitError::Syntax { .. })
+    ));
+    assert!(matches!(
+        scale("trials", "kN"),
+        Err(ModelUnitError::NotQuantityPort { .. })
+    ));
+    assert!(matches!(
+        prepared.session_schema(&unit_spec(&[("load", "m")])),
+        Err(ModelSessionError::Session(
+            SessionError::UnresolvedUnit { .. }
+        ))
+    ));
+
+    let interface = prepared.model_interface().unwrap();
+    let forged = interface
+        .configure(
+            &unit_spec(&[("load", "kilonewton")]),
+            |_: &PortName, _: &UnitSpelling| {
+                graphcal_model_protocol::SiScale::new(1.0).map_err(|error| error.to_string())
+            },
+        )
+        .unwrap();
+    assert!(matches!(
+        prepared.model_session(std::sync::Arc::new(forged)),
+        Err(ModelSessionError::SchemaMismatch)
+    ));
 }
 
 #[test]
