@@ -236,6 +236,9 @@ impl UnfrozenIR {
     /// Add a node alias: a synthetic node declaration that references another node/param.
     ///
     /// Used for selective instantiated imports where `delta_v` aliases `prefix.delta_v`.
+    /// The alias is an entry-interface node of this DAG, ordered by `span`
+    /// among its source declarations and after earlier aliases of the same
+    /// include.
     pub fn add_node_alias(
         &mut self,
         name: DeclName,
@@ -245,9 +248,20 @@ impl UnfrozenIR {
         body_resolution_owner: crate::dag_id::DagId,
         span: Span,
     ) {
+        let identity = projection_alias(&body_resolution_owner, name);
+        let position = self
+            .source_declarations
+            .partition_point(|declaration| declaration.span().offset() <= span.offset());
+        self.source_declarations.insert(
+            position,
+            crate::hir::source_interface::SourceDeclaration::Node {
+                identity: identity.clone(),
+                span,
+            },
+        );
         self.decls.push(Decl::Node(entry::NodeEntry {
             doc: None,
-            identity: projection_alias(&body_resolution_owner, name),
+            identity,
             type_ann: InScope::new(type_ann, type_resolution_owner),
             definition: InScope::new(
                 crate::node_definition::NodeDefinition::Formula(expr),

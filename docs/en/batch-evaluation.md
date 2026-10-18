@@ -137,15 +137,14 @@ import plant.reliability::{ index Mode };
 
 param load: Force(min: 0.0 N, max: 10_000.0 N);
 
-include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded) as aged;
-
-pub node failure: Bool = @aged::failure;
-pub node margin: Force = @aged::margin;
+include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded)
+    ::{ pub failure, pub margin };
 ```
 
 The fixed values are ordinary Graphcal expressions, so their units and types
-are checked like any other binding. Outputs are the public nodes declared in
-the served file itself, so the wrapper declares them again.
+are checked like any other binding. Marking an included output `pub` in the
+brace list re-exports it, and a re-exported node is an output of the wrapper
+just like a `pub node` it declares itself.
 
 ## Row outcomes
 

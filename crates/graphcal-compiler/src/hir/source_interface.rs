@@ -11,6 +11,8 @@ use crate::syntax::span::Span;
 /// Include elaboration can merge additional declarations into a [`HirDag`](crate::ir::model::HirDag).
 /// This record deliberately excludes those merged declarations, preserving the
 /// distinction between an entry DAG's own ports and its internal instances.
+/// A node alias a selective include item materializes is authored by the
+/// including DAG, so it is a [`Self::Node`] at its include's position.
 ///
 /// Each record carries the canonical identity the resolver declared for it,
 /// so the checked interface is attached by identity, not by spelling.
@@ -28,6 +30,17 @@ pub enum SourceDeclaration {
         identity: ResolvedIndexName,
         span: Span,
     },
+}
+
+impl SourceDeclaration {
+    #[must_use]
+    pub(crate) const fn span(&self) -> Span {
+        match self {
+            Self::Parameter { span, .. } | Self::Node { span, .. } | Self::Index { span, .. } => {
+                *span
+            }
+        }
+    }
 }
 
 /// Canonical identity of one Static input declaration authored by a template.
