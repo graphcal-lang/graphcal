@@ -34,7 +34,7 @@ pub enum SourceDeclaration {
 
 impl SourceDeclaration {
     #[must_use]
-    pub(crate) const fn span(&self) -> Span {
+    pub const fn span(&self) -> Span {
         match self {
             Self::Parameter { span, .. } | Self::Node { span, .. } | Self::Index { span, .. } => {
                 *span

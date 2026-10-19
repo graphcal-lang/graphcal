@@ -2256,7 +2256,7 @@ fn assert_missing_dag_bindings(
 }
 
 #[test]
-fn prepared_interface_contains_only_direct_hir_source_declarations() {
+fn prepared_interface_lists_direct_declarations_and_instance_members() {
     let (_directory, root) = write_pipeline_project(
         &[
             (
@@ -2287,12 +2287,17 @@ fn prepared_interface_contains_only_direct_hir_source_declarations() {
     assert_eq!(
         outputs
             .iter()
-            .map(|output| output.name().as_str())
+            .map(|output| output.name().clone())
             .collect::<Vec<_>>(),
-        ["private_output", "public_output"]
+        [
+            member_name(&["nested"], "nested_output"),
+            scoped_name("private_output"),
+            scoped_name("public_output")
+        ]
     );
-    assert!(!outputs[0].is_public());
-    assert!(outputs[1].is_public());
+    assert!(outputs[0].is_public());
+    assert!(!outputs[1].is_public());
+    assert!(outputs[2].is_public());
 }
 
 #[test]
@@ -3843,7 +3848,7 @@ fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
     let first_row = first.finish().unwrap();
     let first_result = prepared.evaluate(&first_row).unwrap();
     assert_eq!(find_int_value(&first_result, "total"), 3);
-    let recursive_model = prepared.model(&[DeclName::expect_valid("echo")]).unwrap();
+    let recursive_model = prepared.model(&[scoped_name("echo")]).unwrap();
     let ModelValueSchema::Algebraic(type_id) = recursive_model.outputs()[0].value_schema() else {
         panic!("echo schema was not algebraic");
     };
@@ -4354,12 +4359,14 @@ fn model_interface_describes_wire_types_units_and_domains() {
     assert_eq!(outputs, ["selected"], "private nodes are not outputs");
 }
 
-/// The model interface is the file's public value surface: `pub` node items
-/// of selective includes are output ports in source order, under their local
-/// names and through multi-hop facades. Private items, consts, and
-/// whole-instance members are not.
+/// The model interface lists the file's public value surface and the public
+/// nodes it reads through whole-instance includes: `pub` node items of
+/// selective includes are output ports under their local names and through
+/// multi-hop facades, and public nodes of an aliased include are ports under
+/// `alias::name`, each at its include's position. Private items, consts, and
+/// instance params are not.
 #[test]
-fn model_interface_lists_selectively_reexported_nodes_as_outputs() {
+fn model_interface_lists_reexported_nodes_and_instance_members_as_outputs() {
     use graphcal_model_protocol::{FiniteF64, InputColumn, RequestBatch, RowOutcome, ValueRef};
 
     let (_directory, root) = write_pipeline_project(
@@ -4399,16 +4406,38 @@ fn model_interface_lists_selectively_reexported_nodes_as_outputs() {
         .collect::<Vec<_>>();
     assert_eq!(
         outputs,
-        ["first", "failure", "twice", "facade_margin", "last"]
+        [
+            "first",
+            "failure",
+            "twice",
+            "facade_margin",
+            "whole::margin",
+            "whole::failure",
+            "whole::doubled",
+            "last"
+        ]
     );
     assert_eq!(interface.output("twice").unwrap().graphcal_type(), "Force");
-    assert!(prepared.model(&[DeclName::expect_valid("twice")]).is_ok());
+    assert_eq!(
+        interface.output("whole::doubled").unwrap().graphcal_type(),
+        "Force"
+    );
+    assert!(prepared.model(&[scoped_name("twice")]).is_ok());
+    assert!(
+        prepared
+            .model(&[member_name(&["whole"], "doubled")])
+            .is_ok()
+    );
     assert!(matches!(
-        prepared.model(&[DeclName::expect_valid("hidden_margin")]),
+        prepared.model(&[scoped_name("hidden_margin")]),
         Err(ModelDefinitionError::PrivateOutput { .. })
     ));
 
-    let schema = session_over(&prepared, &["load"], &["twice", "facade_margin", "failure"]);
+    let schema = session_over(
+        &prepared,
+        &["load"],
+        &["twice", "facade_margin", "failure", "whole::doubled"],
+    );
     let session = prepared
         .model_session(std::sync::Arc::clone(&schema))
         .unwrap();
@@ -4431,6 +4460,100 @@ fn model_interface_lists_selectively_reexported_nodes_as_outputs() {
         ValueRef::Quantity(FiniteF64::new(7.0).unwrap())
     );
     assert_eq!(get("failure"), ValueRef::Bool(false));
+    assert_eq!(
+        get("whole::doubled"),
+        ValueRef::Quantity(FiniteF64::new(6.0).unwrap())
+    );
+}
+
+/// A member reached through an aliased include of an inline `dag` or of a
+/// facade's selective re-export is an output port too, and its quantity can
+/// travel in a chosen unit like any other output.
+#[test]
+fn model_sessions_read_instance_members_of_inline_dags_and_facades() {
+    use graphcal_model_protocol::{
+        FiniteF64, InputColumn, PortName, RequestBatch, RowOutcome, SessionSpec, UnitSpelling,
+        ValueRef,
+    };
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "param x: Length;\n\
+                 pub node y: Length = @x * 2.0;\n",
+            ),
+            (
+                "facade.gcl",
+                "param x: Length;\n\
+                 include pipeline.lib(x: @x)::{ pub y as doubled };\n\
+                 node private_node: Length = @doubled;\n",
+            ),
+            (
+                "main.gcl",
+                "pub dag triple {\n\
+                     param x: Length;\n\
+                     pub node y: Length = @x * 3.0;\n\
+                     node hidden: Length = @x;\n\
+                 }\n\
+                 param len: Length = 1.0 m;\n\
+                 include triple(x: @len) as t;\n\
+                 include pipeline.facade(x: @len) as f;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let interface = prepared.model_interface().unwrap();
+    assert_eq!(
+        interface
+            .outputs()
+            .iter()
+            .map(|output| output.name().as_str())
+            .collect::<Vec<_>>(),
+        ["t::y", "f::doubled"]
+    );
+    assert_eq!(
+        interface
+            .parameters()
+            .iter()
+            .map(|parameter| parameter.name().as_str())
+            .collect::<Vec<_>>(),
+        ["len"],
+        "instance params are bound by the include, not entry inputs"
+    );
+
+    let name = |name: &str| PortName::new(name).unwrap();
+    let schema = std::sync::Arc::new(
+        prepared
+            .session_schema(
+                &SessionSpec::new(vec![name("len")], vec![name("t::y"), name("f::doubled")])
+                    .with_unit(name("t::y"), UnitSpelling::new("cm").unwrap()),
+            )
+            .unwrap(),
+    );
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![FiniteF64::new(2.0).unwrap()])],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    let RowOutcome::Success(values) = result.row(0).unwrap() else {
+        panic!("the row succeeds");
+    };
+    let get = |name: &str| values.get(schema.output_slot(name).unwrap()).unwrap();
+    assert_eq!(
+        get("t::y"),
+        ValueRef::Quantity(FiniteF64::new(600.0).unwrap())
+    );
+    assert_eq!(
+        get("f::doubled"),
+        ValueRef::Quantity(FiniteF64::new(4.0).unwrap())
+    );
 }
 
 const SESSION_MODEL: &str = r"
@@ -4700,7 +4823,7 @@ fn generic_model_interface_accepts_types_the_batch_protocol_cannot_carry() {
     )
     .unwrap();
     let prepared = prepare_from_project(&project).unwrap();
-    assert!(prepared.model(&[DeclName::expect_valid("same")]).is_ok());
+    assert!(prepared.model(&[scoped_name("same")]).is_ok());
     assert!(matches!(
         prepared
             .model_interface()
@@ -4727,7 +4850,7 @@ fn evaluate_included_model_row(leaf: &str, x: &str) -> ModelRowOutcome {
     );
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
     let prepared = prepare_from_project(&project).unwrap();
-    let model = prepared.model(&[DeclName::expect_valid("ok")]).unwrap();
+    let model = prepared.model(&[scoped_name("ok")]).unwrap();
     let mut bindings = prepared.binding_builder();
     bindings
         .bind_expression(&DeclName::expect_valid("x"), &parse_expr(x))
@@ -4812,7 +4935,7 @@ fn private_include_failures_are_labelled_by_the_include_scope() {
         let (_directory, root) = write_private_failure_project(include);
         let project = crate::loader::load_project(&root, None, &fs()).unwrap();
         let prepared = prepare_from_project(&project).unwrap();
-        let model = prepared.model(&[DeclName::expect_valid("ok")]).unwrap();
+        let model = prepared.model(&[scoped_name("ok")]).unwrap();
         let mut bindings = prepared.binding_builder();
         bindings
             .bind_expression(&DeclName::expect_valid("x"), &parse_expr("0.0"))

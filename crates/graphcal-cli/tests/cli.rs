@@ -7646,6 +7646,109 @@ fn model_serve_subprocess_answers_request_batches() {
     assert!(stderr.is_empty(), "unexpected server stderr: {stderr}");
 }
 
+#[test]
+fn model_serve_returns_public_nodes_of_an_aliased_include() {
+    use std::process::Stdio;
+    use std::sync::Arc;
+
+    use arrow_ipc::reader::StreamReader;
+    use arrow_ipc::writer::StreamWriter;
+    use graphcal_model_protocol::arrow::request_schema;
+    use graphcal_model_protocol::{
+        FiniteF64, InputColumn, PortName, RequestBatch, ResultBatch, RowOutcome, SessionSpec,
+        UnitSpelling, ValueRef,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "model.gcl",
+        "pub dag triple {\n\
+             param x: Length;\n\
+             pub node y: Length = @x * 3.0;\n\
+             node hidden: Length = @x;\n\
+         }\n\
+         param len: Length = 1.0 m;\n\
+         include triple(x: @len) as t;\n",
+    );
+    let document = describe_batch_model(&model);
+    let outputs = document
+        .interface()
+        .outputs()
+        .iter()
+        .map(|output| output.name().as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(outputs, ["t::y"]);
+
+    let rejected = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args([
+            "--input",
+            "len",
+            "--output",
+            "t::hidden",
+            "--skip-fingerprint-check",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(rejected.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&rejected.stderr);
+    assert!(
+        stderr.contains("no public output named `t::hidden`"),
+        "{stderr}"
+    );
+
+    let name = |name: &str| PortName::new(name).unwrap();
+    let schema = Arc::new(
+        document
+            .interface()
+            .configure(
+                &SessionSpec::new(vec![name("len")], vec![name("t::y")])
+                    .with_unit(name("t::y"), UnitSpelling::new("cm").unwrap()),
+                |_: &PortName, _: &UnitSpelling| {
+                    Ok(graphcal_model_protocol::SiScale::new(0.01).unwrap())
+                },
+            )
+            .unwrap(),
+    );
+    let mut child = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args(["--input", "len", "--output", "t::y", "--unit", "t::y=cm"])
+        .arg("--expect-fingerprint")
+        .arg(document.interface_fingerprint().to_string())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn the Graphcal model server");
+    let mut results = StreamReader::try_new(child.stdout.take().unwrap(), None).unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut requests = StreamWriter::try_new(&mut stdin, &request_schema(&schema)).unwrap();
+    let request = RequestBatch::new(
+        Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![FiniteF64::new(2.0).unwrap()])],
+    )
+    .unwrap();
+    requests.write(&request.to_record_batch().unwrap()).unwrap();
+    let result =
+        ResultBatch::from_record_batch(Arc::clone(&schema), &results.next().unwrap().unwrap())
+            .unwrap();
+    let RowOutcome::Success(row) = result.row(0).unwrap() else {
+        panic!("the row succeeds");
+    };
+    assert_eq!(
+        row.get(schema.output_slot("t::y").unwrap()),
+        Some(ValueRef::Quantity(FiniteF64::new(600.0).unwrap()))
+    );
+    requests.finish().unwrap();
+    drop(requests);
+    drop(stdin);
+    assert!(results.next().is_none());
+    assert!(child.wait().unwrap().success());
+}
+
 // --- graphcal report build (experimental auto-reports, #1410) ---
 
 const REPORT_MODEL: &str = "\

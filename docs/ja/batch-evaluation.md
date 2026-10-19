@@ -148,6 +148,8 @@ include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded)
 
 固定値は通常の Graphcal の式なので、単位と型は他の束縛と同じように検査されます。波括弧のリストで `pub` を付けた include の出力は再エクスポートされ、ラッパー自身で宣言した `pub node` と同じく出力になります。
 
+`include plant.reliability(...) as r;` のように、波括弧のリストの代わりに別名を付けて include すると、モデルの public なノードはすべて、別名の下でラッパーの出力になります（`r::failure` と `r::margin`）。
+
 ## 行ごとの結果 { #row-outcomes }
 
 リクエストの各行は、リクエストと同じ順序で必ず1つの結果を返します。

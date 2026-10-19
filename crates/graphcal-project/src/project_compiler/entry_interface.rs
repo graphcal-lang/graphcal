@@ -10,6 +10,7 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::Visibility;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::IndexName;
+use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::CheckedTir;
 use graphcal_compiler::tir::typed::declaration_view::{DeclarationView, ValueDeclaration};
@@ -49,17 +50,21 @@ impl CheckedEntryParameter {
     }
 }
 
-/// One checked directly authored entry-DAG node in source order.
+/// One checked entry-DAG output in source order: a node the entry DAG
+/// declares, or a public node member of one of its whole-instance includes
+/// (`include lib(..) as l` exposes `l::x`), at the include's position.
 #[derive(Debug)]
 pub struct CheckedEntryOutput {
-    name: DeclName,
+    name: ScopedName,
     declared_type: CheckedType,
     visibility: Visibility,
     runtime_key: ResolvedDeclName,
 }
 
 impl CheckedEntryOutput {
-    pub const fn name(&self) -> &DeclName {
+    /// The name the entry source reads the output by: local for a declared
+    /// node, qualified by the include alias for an instance member.
+    pub const fn name(&self) -> &ScopedName {
         &self.name
     }
 
@@ -129,6 +134,63 @@ fn missing_interface_fact_internal_error(
     ))
 }
 
+/// The public node members of the entry DAG's whole-instance includes, each
+/// with the source offset of its include, in source order.
+///
+/// A whole-instance include (`include lib(..) as l`) lets the entry source
+/// read every node `lib` exports, including its `pub` re-exports, as `l::x`.
+/// Params and consts of the instance are not outputs, as they are not for
+/// the entry DAG itself. A selective include has no source-visible scope;
+/// its `pub` items are entry nodes of their own.
+fn instance_member_outputs(
+    tir: &CheckedTir,
+    source: SourceId,
+) -> Result<Vec<(usize, CheckedEntryOutput)>, PipelineError> {
+    let mut members = Vec::new();
+    for record in tir.root().semantic_instances() {
+        let scope = record.instance.id().scope();
+        if scope.alias().is_none() {
+            continue;
+        }
+        let Some(instance) = tir.dag_registry().semantic_instance(record) else {
+            return Err(missing_interface_fact_internal_error(
+                format!(
+                    "include instance `{}` is absent from checked TIR",
+                    record.instance.id().owner()
+                ),
+                source,
+                record.include_span,
+            ));
+        };
+        let dag = instance.dag();
+        let mut nodes = dag
+            .declarations()
+            .filter(|declaration| dag.projectable_outputs().contains(declaration.name()))
+            .filter_map(|declaration| {
+                declaration
+                    .value()
+                    .filter(|value| value.category == ValueDeclCategory::Node)
+                    .map(|value| (declaration, value))
+            })
+            .collect::<Vec<_>>();
+        // Spans are in the template's source, the order its author wrote.
+        nodes.sort_by_key(|(_, value)| value.span.offset());
+        members.extend(nodes.into_iter().map(|(declaration, value)| {
+            (
+                record.include_span.offset(),
+                CheckedEntryOutput {
+                    name: ScopedName::in_scope(scope.clone(), declaration.name().clone()),
+                    declared_type: value.annotation.checked().declared().clone(),
+                    visibility: Visibility::Public,
+                    runtime_key: declaration.identity().clone(),
+                },
+            )
+        }));
+    }
+    members.sort_by_key(|(offset, _)| *offset);
+    Ok(members)
+}
+
 /// Attach checked types and runtime identities to HIR source-interface records.
 pub(super) fn build_checked_entry_interface(
     source_declarations: &[SourceDeclaration],
@@ -139,8 +201,14 @@ pub(super) fn build_checked_entry_interface(
     let mut parameters = Vec::new();
     let mut outputs = Vec::new();
     let mut required_index = None;
+    let mut members = instance_member_outputs(tir, source)?.into_iter().peekable();
 
     for declaration in source_declarations {
+        while let Some((_, member)) =
+            members.next_if(|(offset, _)| *offset <= declaration.span().offset())
+        {
+            outputs.push(member);
+        }
         match declaration {
             SourceDeclaration::Parameter { identity, span } => {
                 let Some(ValueDeclaration {
@@ -185,7 +253,7 @@ pub(super) fn build_checked_entry_interface(
                 };
                 let name = identity.leaf();
                 outputs.push(CheckedEntryOutput {
-                    name: name.clone(),
+                    name: ScopedName::local(name.clone()),
                     declared_type: annotation.checked().declared().clone(),
                     visibility: if external_surface.is_explicit_export(name) {
                         Visibility::Public
@@ -212,6 +280,7 @@ pub(super) fn build_checked_entry_interface(
             }
         }
     }
+    outputs.extend(members.map(|(_, member)| member));
 
     Ok(CheckedEntryInterface {
         parameters,

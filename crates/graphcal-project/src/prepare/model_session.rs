@@ -21,7 +21,7 @@ use super::model_value::{ValueBindError, ValueCodec, ValueCodecError};
 use super::{
     CompileError, DeclName, Error, ModelExecutionError, ModelOutputPort, ModelRowFailure,
     ModelRowOutcome, ParameterBindingRow, ParameterDomain, ParameterPort, ParameterPosition,
-    PreparedProject,
+    PreparedProject, ScopedName,
 };
 use crate::binding_error::BindingError;
 
@@ -108,8 +108,9 @@ pub enum ModelSessionError {
 
 impl PreparedProject {
     /// The protocol interface: every entry parameter and public root node in
-    /// declaration order. Ports the protocol cannot carry are listed as
-    /// unsupported, with the reason.
+    /// declaration order, including the public nodes of whole-instance
+    /// includes under their `alias::name` spelling. Ports the protocol
+    /// cannot carry are listed as unsupported, with the reason.
     ///
     /// # Errors
     ///
@@ -127,7 +128,7 @@ impl PreparedProject {
             .filter(|port| port.is_public)
             .map(|port| {
                 Ok(OutputDescription::new(
-                    port_name(&port.name)?,
+                    output_port_name(&port.name)?,
                     self.type_label(&port.declared_type),
                     self.port_wire(&port.value_schema)?,
                 ))
@@ -211,7 +212,7 @@ impl PreparedProject {
             .map(|output| {
                 self.output_ports
                     .iter()
-                    .find(|port| port.is_public && port.name.as_str() == output.name().as_str())
+                    .find(|port| port.is_public && port.name.to_string() == output.name().as_str())
                     .cloned()
                     .ok_or_else(|| missing(output.name()))
             })
@@ -406,6 +407,12 @@ fn codec_error(name: &PortName, error: &ValueCodecError) -> ModelSessionError {
 
 fn port_name(name: &DeclName) -> Result<PortName, LabelError> {
     PortName::new(name.as_str())
+}
+
+/// The wire name of an output: its source spelling, such as `margin` or, for
+/// an instance member, `l::margin`.
+fn output_port_name(name: &ScopedName) -> Result<PortName, LabelError> {
+    PortName::new(name.to_string())
 }
 
 fn protocol_failure(failure: &ModelRowFailure) -> RowFailure {

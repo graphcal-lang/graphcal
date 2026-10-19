@@ -178,6 +178,10 @@ are checked like any other binding. Marking an included output `pub` in the
 brace list re-exports it, and a re-exported node is an output of the wrapper
 just like a `pub node` it declares itself.
 
+An include with an alias instead of a brace list, such as
+`include plant.reliability(...) as r;`, makes every public node of the model
+an output of the wrapper under the alias: `r::failure` and `r::margin`.
+
 ## Row outcomes
 
 Every request row produces exactly one outcome, in request order:

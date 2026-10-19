@@ -119,7 +119,7 @@ impl PreparedProject {
             .or_else(|| {
                 self.output_ports
                     .iter()
-                    .find(|output| output.is_public && output.name.as_str() == port.as_str())
+                    .find(|output| output.is_public && output.name.to_string() == port.as_str())
                     .map(|output| &output.declared_type)
             })
     }

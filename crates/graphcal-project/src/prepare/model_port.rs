@@ -4,8 +4,8 @@ use graphcal_eval::eval::runtime::{RootFailure, RootOutcome};
 
 use super::{
     Arc, CheckedType, CompileError, DeclName, Error, HashSet, ModelSchemaGraph, ModelValueSchema,
-    ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName, Span, TimeScale,
-    Value,
+    ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName, ScopedName, Span,
+    TimeScale, Value,
 };
 
 /// Inclusive lower and upper bounds for one external input family.
@@ -133,10 +133,11 @@ impl ParameterPort {
     }
 }
 
-/// One directly declared root node available to model-output selection.
+/// One root node available to model-output selection: a node the entry DAG
+/// declares, or a public node member of one of its whole-instance includes.
 #[derive(Debug, Clone)]
 pub struct ModelOutputPort {
-    pub(super) name: DeclName,
+    pub(super) name: ScopedName,
     pub(super) declared_type: CheckedType,
     pub(super) value_schema: ModelValueSchema,
     pub(super) is_public: bool,
@@ -144,9 +145,10 @@ pub struct ModelOutputPort {
 }
 
 impl ModelOutputPort {
-    /// Source-level node name.
+    /// Source-level node name: local for a declared node, qualified by the
+    /// include alias for an instance member (`l::x`).
     #[must_use]
-    pub const fn name(&self) -> &DeclName {
+    pub const fn name(&self) -> &ScopedName {
         &self.name
     }
 
@@ -162,7 +164,8 @@ impl ModelOutputPort {
         &self.value_schema
     }
 
-    /// Whether the source node is explicitly public.
+    /// Whether the source node is explicitly public; instance members are
+    /// public in their template.
     #[must_use]
     pub const fn is_public(&self) -> bool {
         self.is_public
@@ -202,7 +205,7 @@ impl PreparedProject {
     /// Select a transport-independent recursive typed model interface.
     pub fn model(
         &self,
-        requested_outputs: &[DeclName],
+        requested_outputs: &[ScopedName],
     ) -> Result<PreparedModel, ModelDefinitionError> {
         if requested_outputs.is_empty() {
             return Err(ModelDefinitionError::NoOutputs);
@@ -213,11 +216,12 @@ impl PreparedProject {
                 return Err(ModelDefinitionError::DuplicateOutput { name: name.clone() });
             }
             let Some(port) = self.output_ports.iter().find(|port| &port.name == name) else {
-                let actual_kind = self
-                    .tir()
-                    .root()
-                    .declarations()
-                    .find_map(|entry| (entry.name() == name).then_some(entry.category()));
+                let actual_kind = name.as_bare().and_then(|name| {
+                    self.tir()
+                        .root()
+                        .declarations()
+                        .find_map(|entry| (entry.name() == name).then_some(entry.category()))
+                });
                 return Err(actual_kind.map_or_else(
                     || ModelDefinitionError::UnknownOutput { name: name.clone() },
                     |actual_kind| ModelDefinitionError::OutputNotNode {
@@ -405,12 +409,12 @@ pub enum ModelExecutionError {
     #[error(
         "internal model projection invariant failed: selected output `{name}` has no runtime value"
     )]
-    MissingOutputValue { name: DeclName },
+    MissingOutputValue { name: ScopedName },
     /// A selected output's value has no representation in its wire type.
     #[error(
         "internal model projection invariant failed: selected output `{name}` has no wire representation"
     )]
-    UnrepresentableOutput { name: DeclName },
+    UnrepresentableOutput { name: ScopedName },
     #[error("the request batch belongs to another model session")]
     SessionMismatch,
     /// An evaluated row does not fit the session's result batch.
@@ -424,14 +428,14 @@ pub enum ModelDefinitionError {
     #[error("at least one output is required")]
     NoOutputs,
     #[error("selected output `{name}` occurs more than once")]
-    DuplicateOutput { name: DeclName },
+    DuplicateOutput { name: ScopedName },
     #[error("entry DAG has no declaration named `{name}`")]
-    UnknownOutput { name: DeclName },
+    UnknownOutput { name: ScopedName },
     #[error("selected output `{name}` is a {actual_kind}, not a node")]
     OutputNotNode {
-        name: DeclName,
+        name: ScopedName,
         actual_kind: graphcal_compiler::declaration_category::DeclCategory,
     },
     #[error("selected output `{name}` is private")]
-    PrivateOutput { name: DeclName },
+    PrivateOutput { name: ScopedName },
 }

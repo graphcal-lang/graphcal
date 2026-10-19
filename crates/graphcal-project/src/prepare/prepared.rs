@@ -413,7 +413,8 @@ impl PreparedProject {
         &self.schema_graph
     }
 
-    /// Direct root nodes in source declaration order.
+    /// Root nodes in source declaration order: the entry DAG's own nodes and
+    /// the public nodes of its whole-instance includes.
     #[must_use]
     pub fn output_ports(&self) -> &[ModelOutputPort] {
         &self.output_ports
