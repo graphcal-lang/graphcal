@@ -257,6 +257,24 @@ fn client_carries_indexed_datetime_complex_and_algebraic_values() {
     assert_eq!(row.get(&later).unwrap(), 160.0);
     assert_eq!(row.get(&z2).unwrap(), (2.0, -2.0));
     assert_eq!(row.get(&shape_out).unwrap(), circle);
+
+    // Selecting every supported output reads the same values, without typed
+    // output handles.
+    let mut every_output = model
+        .session()
+        .vary_in(&profile, UnitSpelling::new("km").unwrap())
+        .vary(&phase_keys)
+        .vary(&at)
+        .vary(&z)
+        .vary(&shape)
+        .output_all_supported()
+        .spawn()
+        .unwrap();
+    let all = every_output
+        .evaluate(&every_output.request(request.batch().clone()).unwrap())
+        .unwrap();
+    assert_eq!(all.batch().values(), result.batch().values());
+    every_output.shutdown().unwrap();
     assert!(matches!(
         session.schema().inputs()[0].wire(),
         WireType::Indexed(_)

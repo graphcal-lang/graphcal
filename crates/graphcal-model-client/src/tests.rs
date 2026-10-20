@@ -132,6 +132,64 @@ fn mode_port(handle: &crate::InputHandle<Key>) -> &crate::PortIdentity {
 }
 
 #[test]
+fn sessions_can_read_every_supported_output() {
+    let interface = ModelInterface::new(
+        vec![
+            ParameterDescription::new(
+                name("load"),
+                "Int",
+                PortWire::Supported(WireType::Int),
+                None,
+                false,
+            )
+            .unwrap(),
+        ],
+        vec![
+            OutputDescription::new(name("failure"), "Bool", PortWire::Supported(WireType::Bool)),
+            OutputDescription::new(
+                name("trace"),
+                "Trace",
+                PortWire::Unsupported {
+                    reason: "not supported".to_owned(),
+                },
+            ),
+            OutputDescription::new(name("count"), "Int", PortWire::Supported(WireType::Int)),
+        ],
+    )
+    .unwrap();
+    let model = Model::from_document(
+        GraphcalCommand::new("model.gcl"),
+        DescribeDocument::new("test", interface),
+    );
+    let load = model.input::<Int>("load").unwrap();
+    let schema = model
+        .session()
+        .vary(&load)
+        .output_all_supported()
+        .schema()
+        .unwrap();
+    let outputs = schema
+        .outputs()
+        .iter()
+        .map(|output| output.name().as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(outputs, ["failure", "count"]);
+
+    let failure = model.output::<Bool>("failure").unwrap();
+    assert!(matches!(
+        model
+            .session()
+            .vary(&load)
+            .output(&failure)
+            .output_all_supported()
+            .schema(),
+        Err(ClientError::Session(
+            graphcal_model_protocol::SessionError::DuplicateOutput { .. }
+        ))
+    ));
+}
+
+#[test]
 fn sessions_reject_handles_of_another_model() {
     let model = model();
     let other = Model::from_document(GraphcalCommand::new("model.gcl"), model.document().clone());
