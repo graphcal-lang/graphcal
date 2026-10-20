@@ -35,8 +35,8 @@ mod wire_type;
 
 pub use axis::{Axis, AxisError, AxisKind, KeyRef, KeyValue};
 pub use batch::{
-    InputColumn, OutputColumn, RequestBatch, RequestBatchError, ResultBatch, ResultBatchBuilder,
-    ResultBatchError, RowValues,
+    InputColumn, OutputColumn, OutputValues, OutputValuesBuilder, OutputValuesError, RequestBatch,
+    RequestBatchError, ResultBatch, ResultBatchBuilder, RowValues,
 };
 pub use datetime_type::{DatetimeType, TimeScale};
 pub use describe::{DescribeDocument, DescribeDocumentError};

@@ -209,8 +209,8 @@ impl RequestBatch {
     }
 }
 
-/// The values of one read output across a result batch; `None` exactly in
-/// failed rows.
+/// The values of one read output across a batch of output values; `None`
+/// exactly in rows without values.
 #[derive(Debug, Clone, PartialEq)]
 pub enum OutputColumn {
     /// Quantity values in the output's wire unit.
@@ -303,26 +303,26 @@ impl OutputColumn {
     }
 }
 
-/// Why a row cannot be added to a result batch.
+/// Why rows cannot form output values for a session.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub enum ResultBatchError {
+pub enum OutputValuesError {
     #[error("the session reads {expected} outputs, but {found} values were given")]
     ValueCount { expected: usize, found: usize },
     #[error("the value of output `{output}` does not have its wire type")]
     KindMismatch { output: PortName },
-    #[error("a result batch must contain at least one row")]
+    #[error("output values must contain at least one row")]
     Empty,
 }
 
-/// Accumulates row outcomes into a [`ResultBatch`].
+/// Accumulates rows into [`OutputValues`].
 #[derive(Debug, Clone)]
-pub struct ResultBatchBuilder {
+pub struct OutputValuesBuilder {
     schema: Arc<SessionSchema>,
-    failures: Vec<Option<RowFailure>>,
+    present: Vec<bool>,
     columns: Vec<OutputColumn>,
 }
 
-impl ResultBatchBuilder {
+impl OutputValuesBuilder {
     /// An empty builder for `schema`'s outputs.
     #[must_use]
     pub fn new(schema: Arc<SessionSchema>) -> Self {
@@ -333,15 +333,142 @@ impl ResultBatchBuilder {
             .collect();
         Self {
             schema,
-            failures: Vec::new(),
+            present: Vec::new(),
             columns,
+        }
+    }
+
+    /// The session schema the values are built for.
+    #[must_use]
+    pub const fn schema(&self) -> &Arc<SessionSchema> {
+        &self.schema
+    }
+
+    /// Append one row: one value per read output in session order, or `None`
+    /// for a row without values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputValuesError`] when a row has the wrong number of values
+    /// or a value does not have its output's wire type. The builder is
+    /// unchanged on error.
+    pub fn push(&mut self, values: Option<Vec<Value>>) -> Result<(), OutputValuesError> {
+        let Some(values) = values else {
+            for column in &mut self.columns {
+                column.push_none();
+            }
+            self.present.push(false);
+            return Ok(());
+        };
+        let outputs = self.schema.outputs();
+        if values.len() != outputs.len() {
+            return Err(OutputValuesError::ValueCount {
+                expected: outputs.len(),
+                found: values.len(),
+            });
+        }
+        if let Some(output) = outputs
+            .iter()
+            .zip(&values)
+            .find_map(|(output, value)| (!value.conforms_to(output.wire())).then_some(output))
+        {
+            return Err(OutputValuesError::KindMismatch {
+                output: output.name().clone(),
+            });
+        }
+        for ((column, output), value) in self.columns.iter_mut().zip(outputs).zip(&values) {
+            // Conformance was checked above, so every push succeeds.
+            let _pushed = column.push(output.wire(), value);
+        }
+        self.present.push(true);
+        Ok(())
+    }
+
+    /// The finished values.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`OutputValuesError::Empty`] when no row was pushed.
+    pub fn finish(self) -> Result<OutputValues, OutputValuesError> {
+        if self.present.is_empty() {
+            return Err(OutputValuesError::Empty);
+        }
+        Ok(OutputValues {
+            schema: self.schema,
+            present: self.present,
+            columns: self.columns,
+        })
+    }
+}
+
+/// The values of a session's read outputs across a non-empty batch of rows.
+///
+/// A row either has a value for every read output or has none; why a row has
+/// no values (a failed evaluation, for instance) is recorded by the batch
+/// that holds the values, not here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutputValues {
+    schema: Arc<SessionSchema>,
+    present: Vec<bool>,
+    columns: Vec<OutputColumn>,
+}
+
+impl OutputValues {
+    /// The session schema the values belong to.
+    #[must_use]
+    pub const fn schema(&self) -> &Arc<SessionSchema> {
+        &self.schema
+    }
+
+    /// The number of rows (at least one).
+    #[must_use]
+    pub const fn rows(&self) -> usize {
+        self.present.len()
+    }
+
+    /// The values of `row`: `None` when `row` is out of range, and
+    /// `Some(None)` when the row has no values.
+    #[must_use]
+    pub fn row(&self, row: usize) -> Option<Option<RowValues<'_>>> {
+        self.present
+            .get(row)
+            .map(|present| present.then_some(RowValues { values: self, row }))
+    }
+
+    /// Every output column in session order.
+    #[must_use]
+    pub fn columns(&self) -> &[OutputColumn] {
+        &self.columns
+    }
+
+    /// The column of the read output at `slot`.
+    #[must_use]
+    pub fn column(&self, slot: OutputSlot) -> Option<&OutputColumn> {
+        self.columns.get(slot.get())
+    }
+}
+
+/// Accumulates row outcomes into a [`ResultBatch`].
+#[derive(Debug, Clone)]
+pub struct ResultBatchBuilder {
+    values: OutputValuesBuilder,
+    failures: Vec<Option<RowFailure>>,
+}
+
+impl ResultBatchBuilder {
+    /// An empty builder for `schema`'s outputs.
+    #[must_use]
+    pub fn new(schema: Arc<SessionSchema>) -> Self {
+        Self {
+            values: OutputValuesBuilder::new(schema),
+            failures: Vec::new(),
         }
     }
 
     /// The session schema the batch is built for.
     #[must_use]
     pub const fn schema(&self) -> &Arc<SessionSchema> {
-        &self.schema
+        self.values.schema()
     }
 
     /// Append one row outcome; a success lists one value per read output in
@@ -349,36 +476,17 @@ impl ResultBatchBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`ResultBatchError`] when a success has the wrong number of
+    /// Returns [`OutputValuesError`] when a success has the wrong number of
     /// values or a value does not have its output's wire type. The builder
     /// is unchanged on error.
-    pub fn push(&mut self, outcome: RowOutcome<Vec<Value>>) -> Result<(), ResultBatchError> {
+    pub fn push(&mut self, outcome: RowOutcome<Vec<Value>>) -> Result<(), OutputValuesError> {
         match outcome {
             RowOutcome::Success(values) => {
-                let outputs = self.schema.outputs();
-                if values.len() != outputs.len() {
-                    return Err(ResultBatchError::ValueCount {
-                        expected: outputs.len(),
-                        found: values.len(),
-                    });
-                }
-                if let Some(output) = outputs.iter().zip(&values).find_map(|(output, value)| {
-                    (!value.conforms_to(output.wire())).then_some(output)
-                }) {
-                    return Err(ResultBatchError::KindMismatch {
-                        output: output.name().clone(),
-                    });
-                }
-                for ((column, output), value) in self.columns.iter_mut().zip(outputs).zip(&values) {
-                    // Conformance was checked above, so every push succeeds.
-                    let _pushed = column.push(output.wire(), value);
-                }
+                self.values.push(Some(values))?;
                 self.failures.push(None);
             }
             RowOutcome::Failure(failure) => {
-                for column in &mut self.columns {
-                    column.push_none();
-                }
+                self.values.push(None)?;
                 self.failures.push(Some(failure));
             }
         }
@@ -389,32 +497,45 @@ impl ResultBatchBuilder {
     ///
     /// # Errors
     ///
-    /// Returns [`ResultBatchError::Empty`] when no row was pushed.
-    pub fn finish(self) -> Result<ResultBatch, ResultBatchError> {
-        if self.failures.is_empty() {
-            return Err(ResultBatchError::Empty);
-        }
+    /// Returns [`OutputValuesError::Empty`] when no row was pushed.
+    pub fn finish(self) -> Result<ResultBatch, OutputValuesError> {
         Ok(ResultBatch {
-            schema: self.schema,
+            values: self.values.finish()?,
             failures: self.failures,
-            columns: self.columns,
         })
     }
 }
 
 /// One result: a row outcome for every request row, in request order.
+///
+/// A row has output values exactly when it succeeded.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResultBatch {
-    schema: Arc<SessionSchema>,
+    values: OutputValues,
     failures: Vec<Option<RowFailure>>,
-    columns: Vec<OutputColumn>,
 }
 
 impl ResultBatch {
+    /// A batch of `values` whose rows failed as `failures` lists, or `None`
+    /// when the two disagree in length or in which rows have values.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn from_parts(
+        values: OutputValues,
+        failures: Vec<Option<RowFailure>>,
+    ) -> Option<Self> {
+        let consistent = values.present.len() == failures.len()
+            && values
+                .present
+                .iter()
+                .zip(&failures)
+                .all(|(present, failure)| *present == failure.is_none());
+        consistent.then_some(Self { values, failures })
+    }
+
     /// The session schema the batch belongs to.
     #[must_use]
     pub const fn schema(&self) -> &Arc<SessionSchema> {
-        &self.schema
+        self.values.schema()
     }
 
     /// The number of rows (at least one).
@@ -433,7 +554,10 @@ impl ResultBatch {
 
     fn outcome(&self, row: usize, failure: Option<&RowFailure>) -> RowOutcome<RowValues<'_>> {
         failure.map_or(
-            RowOutcome::Success(RowValues { batch: self, row }),
+            RowOutcome::Success(RowValues {
+                values: &self.values,
+                row,
+            }),
             |failure| RowOutcome::Failure(failure.clone()),
         )
     }
@@ -452,23 +576,17 @@ impl ResultBatch {
         self.failures.get(row)?.as_ref()
     }
 
-    /// Every output column in session order.
+    /// The output values, present exactly in successful rows.
     #[must_use]
-    pub fn columns(&self) -> &[OutputColumn] {
-        &self.columns
-    }
-
-    /// The column of the read output at `slot`.
-    #[must_use]
-    pub fn column(&self, slot: OutputSlot) -> Option<&OutputColumn> {
-        self.columns.get(slot.get())
+    pub const fn values(&self) -> &OutputValues {
+        &self.values
     }
 }
 
-/// The outputs of one successful row.
+/// The output values of one row that has them.
 #[derive(Debug, Clone, Copy)]
 pub struct RowValues<'a> {
-    batch: &'a ResultBatch,
+    values: &'a OutputValues,
     row: usize,
 }
 
@@ -482,8 +600,8 @@ impl<'a> RowValues<'a> {
     /// The value of the output at `slot`.
     #[must_use]
     pub fn get(self, slot: OutputSlot) -> Option<ValueRef<'a>> {
-        let output = self.batch.schema.output(slot)?;
-        self.batch
+        let output = self.values.schema.output(slot)?;
+        self.values
             .columns
             .get(slot.get())?
             .value(output.wire(), self.row)
@@ -570,14 +688,14 @@ mod tests {
             .unwrap();
         assert!(matches!(
             builder.push(RowOutcome::Success(vec![Value::Bool(true)])),
-            Err(ResultBatchError::ValueCount { .. })
+            Err(OutputValuesError::ValueCount { .. })
         ));
         assert!(matches!(
             builder.push(RowOutcome::Success(vec![
                 Value::Bool(true),
                 Value::Key(KeyValue::Variant(VariantName::new("A").unwrap())),
             ])),
-            Err(ResultBatchError::KindMismatch { .. })
+            Err(OutputValuesError::KindMismatch { .. })
         ));
         let batch = builder.finish().unwrap();
         assert_eq!(batch.rows(), 2);
@@ -589,7 +707,7 @@ mod tests {
         assert_eq!(values.get(margin), Some(ValueRef::Quantity(finite(3.0))));
         assert!(matches!(batch.row(1), Some(RowOutcome::Failure(_))));
         assert_eq!(
-            batch.column(margin),
+            batch.values().column(margin),
             Some(&OutputColumn::Quantity(vec![Some(finite(3.0)), None]))
         );
         assert!(

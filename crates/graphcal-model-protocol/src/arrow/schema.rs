@@ -74,10 +74,12 @@ pub fn si_scales(schema: &Schema) -> Result<BTreeMap<PortName, SiScale>, SchemaM
         })
 }
 
-/// The schema of `session`'s request stream.
+/// The fields of `session`'s varied parameters in session order: one
+/// non-nullable field per parameter, named after it and carrying its wire
+/// type and domain as `graphcal` metadata.
 #[must_use]
-pub fn request_schema(session: &SessionSchema) -> SchemaRef {
-    let fields = session
+pub fn input_fields(session: &SessionSchema) -> Fields {
+    session
         .inputs()
         .iter()
         .map(|input| {
@@ -88,14 +90,23 @@ pub fn request_schema(session: &SessionSchema) -> SchemaRef {
                 }),
             )
         })
-        .collect::<Vec<_>>();
+        .collect()
+}
+
+/// The schema of `session`'s request stream.
+#[must_use]
+pub fn request_schema(session: &SessionSchema) -> SchemaRef {
     Arc::new(Schema::new_with_metadata(
-        fields,
+        input_fields(session),
         schema_metadata(session, StreamKind::Request),
     ))
 }
 
-pub(super) fn output_fields(session: &SessionSchema) -> Fields {
+/// The fields of `session`'s read outputs in session order: one nullable
+/// field per output, named after it and carrying its wire type as
+/// `graphcal` metadata.
+#[must_use]
+pub fn output_fields(session: &SessionSchema) -> Fields {
     session
         .outputs()
         .iter()

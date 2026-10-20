@@ -415,7 +415,7 @@ pub enum ModelExecutionError {
     SessionMismatch,
     /// An evaluated row does not fit the session's result batch.
     #[error("internal model session invariant failed: {0}")]
-    ResultBatch(#[from] graphcal_model_protocol::ResultBatchError),
+    ResultBatch(#[from] graphcal_model_protocol::OutputValuesError),
 }
 
 /// Why outputs cannot be selected for a prepared model.

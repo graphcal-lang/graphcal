@@ -824,7 +824,7 @@ mod tests {
 
     use super::*;
     use crate::axis::{Axis, AxisKind};
-    use crate::batch::{InputColumn, RequestBatch, ResultBatch, ResultBatchBuilder};
+    use crate::batch::{InputColumn, OutputValues, RequestBatch, ResultBatch, ResultBatchBuilder};
     use crate::datetime_type::{DatetimeType, TimeScale};
     use crate::domain::{Bounds, Domain};
     use crate::interface::tests::{length, name};
@@ -1002,7 +1002,10 @@ mod tests {
             encoded.schema().field(0).data_type(),
             DataType::FixedSizeList(_, 3)
         ));
-        let decoded = RequestBatch::from_record_batch(schema, &encoded).unwrap();
+        let decoded = RequestBatch::from_record_batch(Arc::clone(&schema), &encoded).unwrap();
+        assert_eq!(decoded, batch);
+        let encoded = batch.to_struct_array().unwrap();
+        let decoded = RequestBatch::from_struct_array(schema, &encoded).unwrap();
         assert_eq!(decoded, batch);
     }
 
@@ -1041,8 +1044,11 @@ mod tests {
             .unwrap();
         let batch = builder.finish().unwrap();
         let encoded = batch.to_record_batch().unwrap();
-        let decoded = ResultBatch::from_record_batch(schema, &encoded).unwrap();
+        let decoded = ResultBatch::from_record_batch(Arc::clone(&schema), &encoded).unwrap();
         assert_eq!(decoded, batch);
+        let values = batch.values().to_struct_array().unwrap();
+        let decoded = OutputValues::from_struct_array(schema, &values).unwrap();
+        assert_eq!(&decoded, batch.values());
     }
 
     #[test]
