@@ -62,6 +62,26 @@ impl<'m> SessionBuilder<'m> {
         self
     }
 
+    /// Return every public output the protocol can carry, in declaration
+    /// order.
+    ///
+    /// Outputs that the model's interface (see [`Model::interface`]) lists as
+    /// unsupported are not selected. Use this to record every result of a
+    /// session; read the values from the session's result batches, since no
+    /// typed handle is involved. Selecting an output again, here or with
+    /// [`Self::output`], makes the selection invalid.
+    pub fn output_all_supported(mut self) -> Self {
+        self.outputs.extend(
+            self.model
+                .interface()
+                .outputs()
+                .iter()
+                .filter(|output| output.wire().supported().is_some())
+                .map(|output| output.name().clone()),
+        );
+        self
+    }
+
     /// Vary the quantity-like `input`, supplying its quantities in `unit`.
     ///
     /// `unit` is a Graphcal unit expression in the model's entry file with a
