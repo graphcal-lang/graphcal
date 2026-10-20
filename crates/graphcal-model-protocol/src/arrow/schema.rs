@@ -27,11 +27,14 @@ fn json<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string(value).unwrap_or_default()
 }
 
-fn metadata<T: serde::Serialize>(value: &T) -> HashMap<String, String> {
+pub(super) fn metadata<T: serde::Serialize>(value: &T) -> HashMap<String, String> {
     HashMap::from([(METADATA_KEY.to_owned(), json(value))])
 }
 
-fn schema_metadata(session: &SessionSchema, stream: StreamKind) -> HashMap<String, String> {
+pub(super) fn schema_metadata(
+    session: &SessionSchema,
+    stream: StreamKind,
+) -> HashMap<String, String> {
     let inputs = session
         .inputs()
         .iter()
@@ -181,7 +184,11 @@ pub fn validate_schema(expected: &Schema, received: &Schema) -> Result<(), Schem
     fields_match("", expected.fields(), received.fields())
 }
 
-fn fields_match(parent: &str, expected: &Fields, received: &Fields) -> Result<(), SchemaMismatch> {
+pub(super) fn fields_match(
+    parent: &str,
+    expected: &Fields,
+    received: &Fields,
+) -> Result<(), SchemaMismatch> {
     if expected.len() != received.len() {
         return Err(SchemaMismatch::FieldCount {
             path: if parent.is_empty() {

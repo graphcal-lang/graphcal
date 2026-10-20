@@ -15,12 +15,19 @@
 //!   `subject` (the failed assertion or out-of-domain parameter), and
 //!   `message` (the diagnostic).
 //!
+//! An application can also store a session record, such as an experiment
+//! log: its own fields beside a non-nullable `inputs` struct (one child per
+//! varied parameter) and an `outputs` struct laid out as in a result. The
+//! record's schema metadata lets [`RecordSchema::decode`] restore the session
+//! schema without the model.
+//!
 //! Wire types map to `Float64` (quantity), `Int64` (int), `Boolean` (bool),
 //! and `Dictionary<Int32, Utf8>` (key). Received keys are resolved by their
 //! dictionary value, never by dictionary code.
 
 mod metadata;
 mod output;
+mod record;
 mod request;
 mod result;
 mod schema;
@@ -28,6 +35,10 @@ mod value_array;
 
 pub use metadata::{FieldMetadata, METADATA_KEY, SchemaMetadata, StreamKind};
 pub use output::OutputDecodeError;
+pub use record::{
+    RecordPart, RecordSchema, RecordSchemaError, record_inputs_field, record_metadata,
+    record_outputs_field,
+};
 pub use request::RequestDecodeError;
 pub use result::ResultDecodeError;
 pub use schema::{
