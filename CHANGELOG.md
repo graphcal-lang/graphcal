@@ -4,6 +4,24 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.41
+
+This release lets a batch evaluation session read every output of a model without naming each one.
+It contains no language changes.
+
+No existing Graphcal source programs need to be modified.
+The batch evaluation protocol version stays 2, and the request and result wire formats are unchanged.
+
+### Batch Evaluation
+
+- `SessionBuilder::output_all_supported()` in `graphcal-model-client` selects every public output the protocol can carry, in declaration order, without typed output handles. An application that records every result of a session can now read indexed and algebraic outputs whose handle types it cannot choose in advance. Outputs listed as unsupported in the model's interface are skipped, and selecting an output twice is still rejected. (_#2154_)
+
+### Internal
+
+- Bumped the workspace version to v0.0.1-alpha.41 (_#2155_) and added these notes to `CHANGELOG.md` (_#2157_).
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.40...v0.0.1-alpha.41>
+
 ## v0.0.1-alpha.40
 
 This release lets applications that store batch evaluations encode and decode output values and read a stored session back without the model.
