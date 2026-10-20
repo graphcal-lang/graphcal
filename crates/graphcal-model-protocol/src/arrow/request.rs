@@ -2,11 +2,13 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch};
+use arrow_array::{
+    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StructArray,
+};
 use arrow_schema::ArrowError;
 use thiserror::Error;
 
-use super::schema::request_schema;
+use super::schema::{input_fields, request_schema};
 use super::value_array::{ValueDecodeError, decode, decode_key_positions, encode, key_array};
 use crate::batch::{InputColumn, RequestBatch, RequestBatchError};
 use crate::finite::FiniteF64;
@@ -22,6 +24,8 @@ pub enum RequestDecodeError {
     ColumnCount { expected: usize, received: usize },
     #[error("the column for parameter `{input}` does not have its Arrow type")]
     ArrowType { input: PortName },
+    #[error("the inputs struct contains {count} null row(s)")]
+    StructNulls { count: usize },
     #[error("the column for parameter `{input}` contains {count} null value(s)")]
     Nulls { input: PortName, count: usize },
     #[error("parameter `{input}` has a non-finite value at row {row}")]
@@ -43,8 +47,22 @@ impl RequestBatch {
     /// Returns an [`ArrowError`] only if Arrow rejects arrays built from the
     /// schema's own field types, which indicates a bug.
     pub fn to_record_batch(&self) -> Result<RecordBatch, ArrowError> {
-        let columns = self
-            .schema()
+        RecordBatch::try_new(request_schema(self.schema()), self.arrays()?)
+    }
+
+    /// Encode the batch as a struct with one child per varied parameter (see
+    /// [`input_fields`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ArrowError`] only if Arrow rejects arrays built from the
+    /// fields' own types, which indicates a bug.
+    pub fn to_struct_array(&self) -> Result<StructArray, ArrowError> {
+        StructArray::try_new(input_fields(self.schema()), self.arrays()?, None)
+    }
+
+    fn arrays(&self) -> Result<Vec<ArrayRef>, ArrowError> {
+        self.schema()
             .inputs()
             .iter()
             .zip(self.columns())
@@ -79,8 +97,7 @@ impl RequestBatch {
                     (InputColumn::Structured(values), wire) => encode(wire, values, None)?,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        RecordBatch::try_new(request_schema(self.schema()), columns)
+            .collect()
     }
 
     /// Decode a received record batch as a request of `schema`.
@@ -96,16 +113,45 @@ impl RequestBatch {
         schema: Arc<SessionSchema>,
         batch: &RecordBatch,
     ) -> Result<Self, RequestDecodeError> {
-        if batch.num_columns() != schema.inputs().len() {
+        Self::from_arrays(schema, batch.columns())
+    }
+
+    /// Decode a received struct array as a request of `schema`.
+    ///
+    /// The struct's fields must already have been validated against
+    /// [`input_fields`]. Keys are resolved by their dictionary value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RequestDecodeError`] for a null struct row, a column of the
+    /// wrong type, a null, a non-finite quantity, an unknown variant, or an
+    /// empty array.
+    pub fn from_struct_array(
+        schema: Arc<SessionSchema>,
+        array: &StructArray,
+    ) -> Result<Self, RequestDecodeError> {
+        if array.null_count() > 0 {
+            return Err(RequestDecodeError::StructNulls {
+                count: array.null_count(),
+            });
+        }
+        Self::from_arrays(schema, array.columns())
+    }
+
+    fn from_arrays(
+        schema: Arc<SessionSchema>,
+        arrays: &[ArrayRef],
+    ) -> Result<Self, RequestDecodeError> {
+        if arrays.len() != schema.inputs().len() {
             return Err(RequestDecodeError::ColumnCount {
                 expected: schema.inputs().len(),
-                received: batch.num_columns(),
+                received: arrays.len(),
             });
         }
         let columns = schema
             .inputs()
             .iter()
-            .zip(batch.columns())
+            .zip(arrays)
             .map(|(input, array)| decode_column(input.name(), input.wire(), array.as_ref()))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self::new(schema, columns)?)
@@ -275,6 +321,24 @@ mod tests {
         let decoded =
             RequestBatch::from_record_batch(Arc::clone(batch.schema()), &encoded).unwrap();
         assert_eq!(decoded, batch);
+    }
+
+    #[test]
+    fn requests_round_trip_as_struct_arrays() {
+        let batch = sample_batch();
+        let encoded = batch.to_struct_array().unwrap();
+        assert_eq!(encoded.len(), 2);
+        assert_eq!(encoded.fields(), &input_fields(batch.schema()));
+        let decoded =
+            RequestBatch::from_struct_array(Arc::clone(batch.schema()), &encoded).unwrap();
+        assert_eq!(decoded, batch);
+
+        let (fields, columns, _) = encoded.into_parts();
+        let nulls = StructArray::new(fields, columns, Some(vec![true, false].into()));
+        assert!(matches!(
+            RequestBatch::from_struct_array(Arc::clone(batch.schema()), &nulls),
+            Err(RequestDecodeError::StructNulls { count: 1 })
+        ));
     }
 
     #[test]

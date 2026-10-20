@@ -20,13 +20,18 @@
 //! dictionary value, never by dictionary code.
 
 mod metadata;
+mod output;
 mod request;
 mod result;
 mod schema;
 mod value_array;
 
 pub use metadata::{FieldMetadata, METADATA_KEY, SchemaMetadata, StreamKind};
+pub use output::OutputDecodeError;
 pub use request::RequestDecodeError;
 pub use result::ResultDecodeError;
-pub use schema::{SchemaMismatch, request_schema, result_schema, si_scales, validate_schema};
+pub use schema::{
+    SchemaMismatch, input_fields, output_fields, request_schema, result_schema, si_scales,
+    validate_schema,
+};
 pub use value_array::ValueDecodeError;
