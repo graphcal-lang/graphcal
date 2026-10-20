@@ -9,6 +9,18 @@ use crate::domain::Domain;
 use crate::label::PortName;
 use crate::wire_type::{PortWire, WireType};
 
+/// Whether a parameter of `wire` can declare `domain`: quantity bounds need a
+/// quantity, integer bounds an integer, and datetime bounds a datetime, as
+/// `wire`'s innermost element.
+pub fn domain_fits(wire: &WireType, domain: &Domain) -> bool {
+    matches!(
+        (wire.leaf(), domain),
+        (WireType::Quantity(_), Domain::Quantity(_))
+            | (WireType::Int, Domain::Int(_))
+            | (WireType::Datetime(_), Domain::Datetime(_))
+    )
+}
+
 /// One model parameter, in declaration order.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "ParameterRepr", into = "ParameterRepr")]
@@ -45,12 +57,10 @@ impl ParameterDescription {
         domain: Option<Domain>,
         has_default: bool,
     ) -> Result<Self, ParameterError> {
-        let consistent = match (wire.supported().map(WireType::leaf), &domain) {
-            (_, None)
-            | (Some(WireType::Quantity(_)), Some(Domain::Quantity(_)))
-            | (Some(WireType::Int), Some(Domain::Int(_)))
-            | (Some(WireType::Datetime(_)), Some(Domain::Datetime(_))) => true,
-            (_, Some(_)) => false,
+        let consistent = match (wire.supported(), &domain) {
+            (_, None) => true,
+            (Some(wire), Some(domain)) => domain_fits(wire, domain),
+            (None, Some(_)) => false,
         };
         if !consistent {
             return Err(ParameterError::DomainKindMismatch { name });

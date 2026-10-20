@@ -13,7 +13,7 @@ use crate::wire_type::WireType;
 /// The metadata key used on schemas and fields.
 pub const METADATA_KEY: &str = "graphcal";
 
-/// Which of a session's two streams a schema describes.
+/// Which kind of session stream a schema describes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamKind {
@@ -21,6 +21,10 @@ pub enum StreamKind {
     Request,
     /// Server-to-client result batches.
     Result,
+    /// A stored session record: request rows joined with their output
+    /// values, written by an application rather than exchanged with a
+    /// server (see [`RecordSchema`](super::RecordSchema)).
+    Record,
 }
 
 /// The value of a schema's `graphcal` metadata key.
@@ -54,7 +58,9 @@ pub enum FieldMetadata {
         /// The wire type of its values.
         wire: WireType,
     },
-    /// The result's struct of read outputs.
+    /// A record's struct of varied parameter values.
+    Inputs,
+    /// The result's or a record's struct of read outputs.
     Outputs,
     /// The result's struct of row outcomes.
     Outcome,

@@ -188,6 +188,23 @@ pub struct SessionInput {
 }
 
 impl SessionInput {
+    /// A varied parameter restored from a stored description, whose domain
+    /// and scale have already been checked against `wire`.
+    #[cfg(feature = "arrow")]
+    pub(crate) const fn restored(
+        name: PortName,
+        wire: WireType,
+        domain: Option<Domain>,
+        si_scale: Option<SiScale>,
+    ) -> Self {
+        Self {
+            name,
+            wire,
+            domain,
+            si_scale,
+        }
+    }
+
     /// The parameter name.
     #[must_use]
     pub const fn name(&self) -> &PortName {
@@ -223,6 +240,21 @@ pub struct SessionOutput {
 }
 
 impl SessionOutput {
+    /// A read output restored from a stored description, whose scale has
+    /// already been checked against `wire`.
+    #[cfg(feature = "arrow")]
+    pub(crate) const fn restored(
+        name: PortName,
+        wire: WireType,
+        si_scale: Option<SiScale>,
+    ) -> Self {
+        Self {
+            name,
+            wire,
+            si_scale,
+        }
+    }
+
     /// The output name.
     #[must_use]
     pub const fn name(&self) -> &PortName {
@@ -244,8 +276,12 @@ impl SessionOutput {
 
 /// The request and result shape that both sides of one session share.
 ///
-/// Only [`ModelInterface::configure`] builds it, so its inputs and outputs
-/// are always supported, unique, and in declaration order.
+/// [`ModelInterface::configure`] builds it for a live session, so its inputs
+/// and outputs are supported, unique, and in declaration order. A schema
+/// restored from a stored session record (see
+/// `arrow::RecordSchema::decode`, with the `arrow` feature) has unique,
+/// supported inputs and outputs in the record's order, and carries the
+/// recorded interface fingerprint without the interface to check it against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSchema {
     interface_fingerprint: InterfaceFingerprint,
@@ -254,6 +290,43 @@ pub struct SessionSchema {
 }
 
 impl SessionSchema {
+    /// A schema restored from a stored description of its ports.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SessionError`] when there is no input or no output, or when
+    /// two inputs or two outputs share a name.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn restore(
+        interface_fingerprint: InterfaceFingerprint,
+        inputs: Vec<SessionInput>,
+        outputs: Vec<SessionOutput>,
+    ) -> Result<Self, SessionError> {
+        if inputs.is_empty() {
+            return Err(SessionError::NoInputs);
+        }
+        if outputs.is_empty() {
+            return Err(SessionError::NoOutputs);
+        }
+        let mut seen = HashSet::with_capacity(inputs.len());
+        if let Some(input) = inputs.iter().find(|input| !seen.insert(&input.name)) {
+            return Err(SessionError::DuplicateInput {
+                name: input.name.clone(),
+            });
+        }
+        let mut seen = HashSet::with_capacity(outputs.len());
+        if let Some(output) = outputs.iter().find(|output| !seen.insert(&output.name)) {
+            return Err(SessionError::DuplicateOutput {
+                name: output.name.clone(),
+            });
+        }
+        Ok(Self {
+            interface_fingerprint,
+            inputs,
+            outputs,
+        })
+    }
+
     /// The fingerprint of the interface the session was configured over.
     #[must_use]
     pub const fn interface_fingerprint(&self) -> InterfaceFingerprint {
