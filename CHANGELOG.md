@@ -4,6 +4,34 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.40
+
+This release lets applications that store batch evaluations encode and decode output values and read a stored session back without the model.
+It contains no language changes.
+
+No existing Graphcal source programs need to be modified.
+The batch evaluation protocol version stays 2, and the request and result wire formats are unchanged.
+
+### Batch Evaluation
+
+- Output values can be encoded and decoded on their own, without the protocol's row outcomes, so an application can store them with its own outcome vocabulary. `OutputValues` holds one nullable column per output, absent exactly in rows without values, and `OutputValues::to_struct_array` and `from_struct_array` convert it to and from an Arrow struct array. `RequestBatch` gains the same pair, and `input_fields` and `output_fields` are now public. (_#2146_)
+- A session record, a stored stream of request rows joined with their output values, can be read back without the model. `record_inputs_field`, `record_outputs_field`, and `record_metadata` build its schema: an `inputs` struct and an `outputs` struct beside any application fields. `RecordSchema::decode` restores the recorded `SessionSchema` and checks its port names, domains, unit scales, and protocol version. A restored session keeps the record's port order and carries the recorded fingerprint. (_#2147_)
+- Rust API changes in `graphcal-model-protocol`: `ResultBatchError` is replaced by `OutputValuesError`, `ResultBatch::columns()` and `column()` are replaced by `ResultBatch::values()`, and `ResultDecodeError` reports output decoding errors through `OutputDecodeError` and a status that disagrees with the values as `MissingValues` or `UnexpectedValues`. (_#2146_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- Updated Rust crate `tokio` to v1.54.0. (_#2152_)
+- Updated Vite+ to v1.3.0. (_#2145_)
+- Updated `zensical` to v0.0.70. (_#2149_)
+- Updated GitHub Actions: `taiki-e/install-action` to v2.87.28 and `leanprover/lean-action` to v1.6.2. (_#2144_, _#2150_)
+- Refreshed lock files. (_#2143_)
+
+### Internal
+
+- Added the v0.0.1-alpha.40 notes to `CHANGELOG.md` and bumped the workspace version to v0.0.1-alpha.40. (_#2151_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.39...v0.0.1-alpha.40>
+
 ## v0.0.1-alpha.39
 
 This release replaces whole-node `todo { … }` with typed `todo<T> { … }` holes, which can stand in for any part of a node formula, and rejects recursive algebraic types.
