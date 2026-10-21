@@ -176,6 +176,49 @@ param samples: Int[Fin(40)] = for i: Fin(40) { 1 };`);
     assert.deepEqual(exceptions, [], "structured controls must not throw browser exceptions");
     await close();
   }
+  {
+    // Inputs are shown and slid in the units their `.gcl` literals use.
+    const source = join(temporary, "units.gcl");
+    const output = join(temporary, "units.html");
+    writeFileSync(source, `param hp: Length(min: 0.0 km, max: 35786.0 km) = 200.0 km;
+param inc: Angle(min: 0.0 deg, max: 60.0 deg) = 30.0 deg;
+param p_bus: Power(min: 0.0 W, max: 5000.0 W) = 250.0 W;
+param isp: Time(min: 200.0 s, max: 500.0 s) = 320.0 s;
+pub node hp_twice: Length = 2.0 * @hp;
+pub node inc_half: Angle = 0.5 * @inc;
+pub node p_double: Power = 2.0 * @p_bus;
+pub node isp_double: Time = 2.0 * @isp;`);
+    const built = spawnSync("target/debug/graphcal", ["report", "build", source, "--output", output], { encoding: "utf8", timeout: 30000 });
+    assert.equal(built.status, 0, built.stderr);
+    const { evaluate, wait, exceptions, close } = await openReport(output);
+    const results = `JSON.stringify(["hp_twice", "inc_half", "p_double", "isp_double"].map(name => document.querySelector('[data-decl="' + name + '"] [data-role="value"]')?.textContent.trim()))`;
+    await wait(`document.querySelector('.hydration-status')?.textContent.startsWith('Up to date')`);
+    assert.deepEqual(JSON.parse(await evaluate(results)), ["400000 m", "0.2617994 rad", "500 m^2*kg/s^3", "640 s"],
+      "the verified baseline keeps the published results");
+    const row = name => `document.querySelector('.outline-row[data-parameter="${name}"]')`;
+    const expected = {
+      hp: ["[km]", "0 to 35786 km", "200.0 km", 200, "1789.3 km"],
+      inc: ["[deg]", "0 to 60 deg", "30.0 deg", 30, "3.0 deg"],
+      p_bus: ["[W]", "0 to 5000 W", "250.0 W", 250, "250.0 W"],
+      isp: ["[s]", "200 to 500 s", "320.0 s", 320, "215.0 s"],
+    };
+    for (const [name, [unit, hint, literal, position, dragged]] of Object.entries(expected)) {
+      assert.equal(await evaluate(`${row(name)}.querySelector('.outline-unit').textContent`), unit, `${name} unit badge`);
+      assert.equal(await evaluate(`${row(name)}.querySelector('.outline-hint').textContent`), hint, `${name} range`);
+      assert.equal(await evaluate(`${row(name)}.querySelector('.outline-value').value`), literal, `${name} initial literal`);
+      const slider = `document.querySelector('[data-decl="${name}"] .control-slider')`;
+      assert.equal(await evaluate(`${slider}.classList.contains('is-unplaced')`), false, `${name} slider is placed`);
+      assert.equal(await evaluate(`Number(${slider}.value)`), position, `${name} slider position`);
+      await evaluate(`(() => {
+        const slider = ${slider};
+        slider.value = String(Number(slider.min) + 10 * (Number(slider.max) - Number(slider.min)) / 200);
+        slider.dispatchEvent(new Event('input', { bubbles: true }));
+      })()`);
+      assert.equal(await evaluate(`document.querySelector('[data-decl="${name}"] .control-field').value`), dragged, `${name} dragged literal`);
+    }
+    assert.deepEqual(exceptions, [], "display-unit controls must not throw browser exceptions");
+    await close();
+  }
   await testReportOutline({ temporary, openReport });
   await testReportLayout({ temporary, openReport });
   console.log("Chrome: initial failure, success/failure/recovery, mixed plots, missing targets/assets, renderer rejection, late completion and reset passed");

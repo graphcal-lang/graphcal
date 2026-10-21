@@ -164,9 +164,9 @@
     });
   }
 
-  // Describe a root parameter's declared domain. Quantity bounds and `unit` are
-  // both canonical SI from the engine, so they are shown together unconverted.
-  function controlHint(control) {
+  // Describe a root parameter's declared domain. Quantity bounds are shown in
+  // the parameter's display unit (see `displayUnitFor`).
+  function controlHint(control, unit) {
     if (!control) return "";
     function between(lower, upper, unit) {
       var suffix = unit ? " " + unit : "";
@@ -177,9 +177,9 @@
     }
     if (control.kind === "quantity") {
       return between(
-        typeof control.lower_si === "number" ? String(control.lower_si) : null,
-        typeof control.upper_si === "number" ? String(control.upper_si) : null,
-        control.unit || "",
+        typeof control.lower_si === "number" ? String(displayNumber(control.lower_si, unit.scale)) : null,
+        typeof control.upper_si === "number" ? String(displayNumber(control.upper_si, unit.scale)) : null,
+        unit.label,
       );
     }
     if (control.kind === "integer") {
@@ -217,6 +217,32 @@
   function cardFor(name) {
     return document.querySelector('#inputs [data-decl="' + selectorEscape(name) + '"]');
   }
+
+  // The number that, written before a unit of `scale`, evaluates back to
+  // exactly `si`, with the fewest significant digits: `60 deg`, never the
+  // `59.99999999999999` that dividing out the scale can give. A literal
+  // multiplies its number by the scale, so the check does too. Mirrors
+  // `exact_display_real` in graphcal-wasm's output view.
+  function displayNumber(si, scale) {
+    var quotient = si / scale;
+    for (var digits = 1; digits <= 17; digits += 1) {
+      var candidate = Number(quotient.toPrecision(digits));
+      if (candidate * scale === si) return candidate;
+    }
+    return quotient;
+  }
+
+  // The unit a root quantity parameter is shown and slid in: the unit of its
+  // as-published value (its default's or baseline binding's literal), else the
+  // canonical SI unit. `scale` is the SI value of one `label`.
+  function displayUnitFor(port, paramView) {
+    var canonical = { label: port.control.unit || "", scale: 1 };
+    if (port.control.kind !== "quantity" || !paramView || paramView.kind !== "quantity") return canonical;
+    var scale = paramView.unit_scale;
+    if (typeof scale !== "number" || !(scale > 0) || !isFinite(scale)) return canonical;
+    return { label: paramView.unit || "", scale: scale };
+  }
+  var displayUnits = new Map();
 
   // Format a number as a valid Graphcal real literal: integral values need
   // an explicit decimal point (`1200 kg` is not a quantity literal,
@@ -295,6 +321,7 @@
     holder.appendChild(field);
 
     var control = root ? port.control : null;
+    var shownUnit = root ? displayUnits.get(port.name) : null;
     var integerLower = control && typeof control.lower === "string" ? Number(control.lower) : NaN;
     var integerUpper = control && typeof control.upper === "string" ? Number(control.upper) : NaN;
     var boundedQuantity = control && control.kind === "quantity" &&
@@ -303,33 +330,55 @@
     var boundedInteger = control && control.kind === "integer" &&
       Number.isSafeInteger(integerLower) && Number.isSafeInteger(integerUpper) &&
       Number.isSafeInteger(integerUpper - integerLower) && integerUpper > integerLower;
+    // Quantity sliders run in the display unit, between bounds that evaluate
+    // back to exactly the declared SI bounds.
+    var sliderLower = boundedQuantity ? displayNumber(control.lower_si, shownUnit.scale) : integerLower;
+    var sliderUpper = boundedQuantity ? displayNumber(control.upper_si, shownUnit.scale) : integerUpper;
+    // A quantity slider is continuous so its thumb sits at any typed value;
+    // dragged positions are rounded at this resolution instead.
+    var sliderResolution = (sliderUpper - sliderLower) / 200;
     // Move the slider only when the typed literal is a plain number in the
-    // slider's own (canonical SI) unit; any other spelling leaves it untouched
-    // rather than guessing a conversion.
+    // display unit or the canonical SI unit, whose scales the engine supplied;
+    // any other spelling leaves it untouched rather than guessing a conversion.
     // An unplaceable value hides the thumb: a range input would otherwise show
     // its midpoint (or a snapped number) as if it were the current value.
     function syncSlider() {
       var match = /^\s*(-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*(.*?)\s*$/.exec(field.value);
-      var expectedUnit = boundedQuantity && control.unit ? control.unit : "";
-      var placed = Boolean(match) && match[2] === expectedUnit;
+      var expectedUnit = boundedQuantity ? shownUnit.label : "";
+      var position = null;
+      if (match && match[2] === expectedUnit) position = Number(match[1]);
+      else if (match && boundedQuantity && control.unit && match[2] === control.unit) {
+        position = Number(match[1]) / shownUnit.scale;
+      }
+      var placed = position !== null;
       // Unplaced sliders rest at their minimum so the track shows no filled portion.
-      slider.value = placed ? match[1] : slider.min;
+      slider.value = placed ? String(position) : slider.min;
       slider.classList.toggle("is-unplaced", !placed);
       slider.title = placed
         ? ""
         : "The slider can only show values written in " + (expectedUnit || "plain numbers") + ". Dragging replaces this value.";
     }
+    // The literal for a slider position: endpoints are the exact bounds, and
+    // interior positions are rounded to four significant digits of the
+    // resolution, so floating-point residue never reaches the field.
+    function sliderNumber() {
+      var position = Number(slider.value);
+      if (position <= sliderLower) return sliderLower;
+      if (position >= sliderUpper) return sliderUpper;
+      var decimals = Math.min(20, Math.max(0, 3 - Math.floor(Math.log10(sliderResolution))));
+      return Math.min(sliderUpper, Math.max(sliderLower, Number(position.toFixed(decimals))));
+    }
     if (boundedQuantity || boundedInteger) {
       slider = element("input", "control-slider");
       slider.type = "range";
       slider.setAttribute("aria-label", label + " slider");
-      slider.min = String(boundedQuantity ? control.lower_si : integerLower);
-      slider.max = String(boundedQuantity ? control.upper_si : integerUpper);
-      slider.step = boundedQuantity ? String((control.upper_si - control.lower_si) / 200) : "1";
+      slider.min = String(sliderLower);
+      slider.max = String(sliderUpper);
+      slider.step = boundedQuantity ? "any" : "1";
       syncSlider();
       slider.addEventListener("input", function () {
         draft.expr = boundedQuantity
-          ? numberLiteral(Number(slider.value)) + (control.unit ? " " + control.unit : "")
+          ? numberLiteral(sliderNumber()) + (shownUnit.label ? " " + shownUnit.label : "")
           : slider.value;
         field.value = draft.expr;
         slider.classList.remove("is-unplaced");
@@ -338,18 +387,23 @@
       });
       holder.appendChild(slider);
     }
-    // The canonical SI unit (or [-] for dimensionless) is the field's dimensional
-    // cue. It is not a display unit: any unit of the same dimension is accepted.
+    // The badge names the unit the field is shown in: the display unit of a
+    // root quantity, else the canonical SI unit (or [-] for dimensionless). Any
+    // unit of the same dimension is accepted.
     var quantity = schema.kind === "quantity" || schema.kind === "complex";
+    var badgeUnit = shownUnit && shownUnit.label ? shownUnit.label : schema.unit;
+    var unitTitle = badgeUnit ? "Shown in " + badgeUnit + ". Dimensionless." : "Dimensionless";
+    if (schema.unit && badgeUnit !== schema.unit) {
+      unitTitle = "Shown in " + badgeUnit + ". Any unit of the dimension of " + schema.unit +
+        " (canonical SI unit) is accepted.";
+    } else if (schema.unit) {
+      unitTitle = "Dimension of " + schema.unit + " (canonical SI unit). Any unit of this dimension is accepted.";
+    }
     registerField(port, field, "literal", labels, path, identity, false, {
-      hint: root ? controlHint(port.control) : "",
+      hint: root ? controlHint(port.control, shownUnit) : "",
       slider: slider,
-      unit: quantity ? "[" + (schema.unit || "-") + "]" : "",
-      unitTitle: quantity
-        ? schema.unit
-          ? "Dimension of " + schema.unit + " (canonical SI unit). Any unit of this dimension is accepted."
-          : "Dimensionless"
-        : "",
+      unit: quantity ? "[" + (badgeUnit || "-") + "]" : "",
+      unitTitle: quantity ? unitTitle : "",
     });
   }
 
@@ -475,6 +529,7 @@
     card.className += " card--interactive";
     var description = card.querySelector ? card.querySelector(".card-doc") : null;
     parameterDescriptions.set(port.name, description ? description.textContent : "");
+    displayUnits.set(port.name, displayUnitFor(port, paramView));
     var holder = element("div", "control");
     var editorHolder = element("div", "control-editor");
     var errorLine = element("p", "control-error");

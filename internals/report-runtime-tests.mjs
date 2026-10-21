@@ -360,21 +360,48 @@ for (const [lower, upper, slider] of [
 console.log("integer controls: exact i64 bounds, one-sided domains and safe sliders passed");
 
 {
-  // Slider bounds are canonical SI; a literal in another unit must not be
-  // placed by its bare number (2.0 km once showed as 0 on a 0–5000 m slider).
+  // Sliders run in the unit of the as-published value, here the default's
+  // `km` rather than the bounds' `m`, between bounds converted exactly.
   const run = runtime("param range: Length(min: 0.0 m, max: 5000.0 m) = 2.0 km;");
   const slider = run.descendants(run.cards.get("range")).find(child => child.classList.contains("control-slider"));
-  assert.ok(slider.classList.contains("is-unplaced"), "a non-canonical literal leaves the slider unplaced");
-  assert.equal(Number(slider.value), Number(slider.min), "an unplaced slider rests at its minimum instead of a guessed value");
-  run.edit("range", "1500.0 m");
-  assert.equal(Number(slider.value), 1500, "typed canonical literals move the slider");
+  assert.equal(run.field("range").value, "2.0 km");
+  assert.deepEqual([slider.min, slider.max, slider.step], ["0", "5", "any"]);
+  assert.equal(Number(slider.value), 2, "a display-unit literal places the slider");
   assert.ok(!slider.classList.contains("is-unplaced"));
-  slider.value = "2000";
+  run.edit("range", "1500.0 m");
+  assert.equal(Number(slider.value), 1.5, "a canonical-unit literal is placed by the engine's scale");
+  assert.ok(!slider.classList.contains("is-unplaced"));
+  run.edit("range", "1.0 mi");
+  assert.ok(slider.classList.contains("is-unplaced"), "other units are not converted by guesswork");
+  assert.equal(Number(slider.value), Number(slider.min), "an unplaced slider rests at its minimum instead of a guessed value");
+  slider.value = String(0.025 * 3);
   slider.events.input();
-  assert.equal(run.field("range").value, "2000.0 m", "dragging writes a canonical literal");
+  assert.equal(run.field("range").value, "0.075 km", "dragging writes a display-unit literal without float residue");
+  slider.value = slider.max;
+  slider.events.input();
+  assert.equal(run.field("range").value, "5.0 km");
+  run.apply("range");
+  assert.equal(value(run.evaluate(), "range").si_value, 5000, "the upper endpoint evaluates to the declared bound");
   run.prepared.free();
 }
-console.log("quantity sliders: only canonical-unit literals are placed; others show an unplaced track");
+{
+  // An angle shown in degrees: the bounds, the seeded literal and every
+  // slider literal reproduce the declared SI values exactly.
+  const run = runtime("param inc: Angle(min: 0.0 deg, max: 60.0 deg) = 30.0 deg;");
+  const slider = run.descendants(run.cards.get("inc")).find(child => child.classList.contains("control-slider"));
+  assert.equal(run.field("inc").value, "30.0 deg");
+  assert.deepEqual([slider.min, slider.max], ["0", "60"]);
+  assert.equal(Number(slider.value), 30);
+  slider.value = String(0.3 * 10);
+  slider.events.input();
+  assert.equal(run.field("inc").value, "3.0 deg");
+  slider.value = slider.max;
+  slider.events.input();
+  run.apply("inc");
+  assert.equal(value(run.evaluate(), "inc").literal, "60.0 deg");
+  run.prepared.free();
+}
+console.log("quantity sliders: display-unit bounds, exact endpoints and residue-free literals passed");
 
 for (const [prefix, index, files] of [
   ["pub index Mode = { Nominal, Safe };", "Mode", []],
