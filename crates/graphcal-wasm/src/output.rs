@@ -203,6 +203,9 @@ pub enum ValueView {
         value: f64,
         si_value: f64,
         unit: Option<String>,
+        /// SI value of one `unit`, so a client can show SI amounts (such as
+        /// declared bounds) in the value's own unit.
+        unit_scale: f64,
     },
     Complex {
         display: String,
@@ -376,12 +379,14 @@ impl ValueView {
         unit: Option<String>,
     ) -> Result<Self, DisplayProjectionError> {
         let value = quantity_display_value(si_value, display_unit)?;
+        let scale = unit_scale(display_unit);
         Ok(Self::Quantity {
             display: display_number_with_unit(value, unit.as_deref()),
-            literal: quantity_literal(value, unit.as_deref()),
+            literal: quantity_literal(exact_display_real(si_value.get(), scale), unit.as_deref()),
             value,
             si_value: si_value.get(),
             unit,
+            unit_scale: scale,
         })
     }
 
@@ -392,9 +397,14 @@ impl ValueView {
     ) -> Result<Self, DisplayProjectionError> {
         let real = quantity_display_value(si_value.real_part(), display_unit)?;
         let imaginary = quantity_display_value(si_value.imaginary_part(), display_unit)?;
+        let scale = unit_scale(display_unit);
         Ok(Self::Complex {
             display: display_complex_with_unit(real, imaginary, unit.as_deref()),
-            literal: complex_literal(real, imaginary, unit.as_deref()),
+            literal: complex_literal(
+                exact_display_real(si_value.re(), scale),
+                exact_display_real(si_value.im(), scale),
+                unit.as_deref(),
+            ),
             real,
             imaginary,
             si_real: si_value.re(),
@@ -402,6 +412,29 @@ impl ValueView {
             unit,
         })
     }
+}
+
+/// SI value of one display unit; values without one are shown in SI.
+fn unit_scale(display_unit: Option<&DisplayUnit>) -> f64 {
+    display_unit.map_or(1.0, |unit| unit.scale.get())
+}
+
+/// The number to write before a unit of `scale` so that the literal evaluates
+/// back to exactly `si_value`: the one with the fewest significant digits, so
+/// `30.0 deg` stays `30.0 deg` rather than the `29.999999999999996 deg` the
+/// SI round trip divides out. A literal scales its number by multiplication,
+/// as checked here; when no decimal reproduces `si_value`, the plain quotient
+/// is the closest literal.
+#[expect(
+    clippy::float_cmp,
+    reason = "the literal must evaluate to bitwise the same SI value, not a nearby one"
+)]
+fn exact_display_real(si_value: f64, scale: f64) -> f64 {
+    let quotient = si_value / scale;
+    (0..17)
+        .filter_map(|digits| format!("{quotient:.digits$e}").parse::<f64>().ok())
+        .find(|candidate| candidate * scale == si_value)
+        .unwrap_or(quotient)
 }
 
 fn source_real(value: f64) -> String {
@@ -652,6 +685,45 @@ mod tests {
             DeclarationOutcomeView::Value {
                 value: ValueView::Indexed { entries, .. }, ..
             } if entries.len() == 2 && entries[0].display_key == "A"
+        ));
+    }
+
+    #[test]
+    fn quantity_literal_reproduces_the_si_value_in_its_display_unit() {
+        let result = compile_and_eval(
+            "param inc: Angle = 30.0 deg;\nparam hp: Length = 200.0 km;\nnode tilt: Complex<Angle> = complex(30.0 deg, 60.0 deg) -> deg;",
+        )
+        .unwrap();
+        let view = EvaluationView::from(&result);
+        let value = |name: &str| {
+            view.values
+                .iter()
+                .find(|declaration| declaration.name == name)
+                .and_then(|declaration| match &declaration.outcome {
+                    DeclarationOutcomeView::Value { value, .. } => Some(value.clone()),
+                    _ => None,
+                })
+                .unwrap()
+        };
+
+        let ValueView::Quantity {
+            literal,
+            si_value,
+            unit_scale,
+            ..
+        } = value("inc")
+        else {
+            panic!("expected a quantity");
+        };
+        assert_eq!(literal, "30.0 deg");
+        assert_eq!((30.0 * unit_scale).to_bits(), si_value.to_bits());
+        assert!(matches!(
+            value("hp"),
+            ValueView::Quantity { literal, unit_scale, .. } if literal == "200.0 km" && unit_scale.to_bits() == 1000.0_f64.to_bits()
+        ));
+        assert!(matches!(
+            value("tilt"),
+            ValueView::Complex { literal, .. } if literal == "complex(30.0 deg, 60.0 deg)"
         ));
     }
 

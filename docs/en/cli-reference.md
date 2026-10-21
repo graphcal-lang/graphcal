@@ -565,9 +565,11 @@ Algebraic values provide a constructor selector and recursively render each
 constructor field; fixed-axis indexed values render every entry recursively,
 in pages for larger axes. Leaf controls continue to accept closed literals, so
 quantities, exact integers, keys, datetimes, and nested combinations retain
-their checked types and units. Each quantity field shows its canonical SI unit
-(for example, `[kg]`) as a dimension cue; any unit of that dimension is accepted,
-but a slider can only place values written in that unit. Readers bind closed typed values under the same rules as
+their checked types and units. A parameter's quantity field, range, and slider
+use the unit of its published value (for example, `[km]` for a default of
+`200.0 km`); nested quantity fields show the canonical SI unit (for example,
+`[kg]`). Any unit of the same dimension is accepted, but a slider can only
+place values written in its unit or the SI unit. Readers bind closed typed values under the same rules as
 `eval --param` — wrong or missing units are rejected at the exact nested field
 or entry, values must satisfy declared domains, and expressions are never
 injected into the prepared model. **Auto run** is enabled by default: after a
