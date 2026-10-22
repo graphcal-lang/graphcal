@@ -4,6 +4,38 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.42
+
+This release shows interactive report inputs in the units their values are written in, instead of canonical SI units.
+It also updates `rustls-webpki` and `webpki-root-certs` to fix security advisories. It contains no language changes.
+
+No existing Graphcal source programs need to be modified.
+
+### Interactive Reports
+
+- A quantity input now shows its unit tag, range hint, and slider in the unit of its default or baseline literal. For example, a parameter written as `30.0 deg` shows `[deg]` and a range in degrees instead of `[rad]` and `0 to 1.0471975511965976 rad`. An input without a published value still uses its canonical SI unit. (_#2165_)
+- Input fields start with the literal as written, such as `30.0 deg` instead of `29.999999999999996 deg`. Quantity and complex values are printed with the shortest number that converts back to exactly the same SI value. (_#2165_)
+- Sliders are placed for values written in the display unit or in the SI unit, and dragging a slider writes the value in the display unit. Before, only literals in the canonical SI unit placed the slider, and dragging rewrote the field in SI units. Slider endpoints convert exactly to the declared bounds. (_#2165_)
+
+### Security
+
+- Updated `rustls-webpki` to v0.103.16 and `webpki-root-certs` to v1.0.10 to fix RUSTSEC-2026-0382 and RUSTSEC-2026-0383, which let certificate verification trust distrusted intermediates. Graphcal uses them when it fetches Git dependencies over HTTPS. (_#2159_)
+
+### Documentation
+
+- The CLI reference no longer says that quantity fields in reports show the SI unit. (_#2165_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- Updated Rust crate `tokio` to v1.54.1, because v1.54.0 was yanked. (_#2166_)
+- Updated Node.js to v24.22.0. (_#2158_)
+
+### Internal
+
+- Bumped the workspace version to v0.0.1-alpha.42 and added these notes to `CHANGELOG.md`. (_#2167_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.41...v0.0.1-alpha.42>
+
 ## v0.0.1-alpha.41
 
 This release lets a batch evaluation session read every output of a model without naming each one.
