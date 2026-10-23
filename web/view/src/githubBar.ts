@@ -1,37 +1,25 @@
-// The bar's GitHub parts: where the sheet is read from, and the token.
+// The bar's GitHub parts: where the sheet is read from, and the extension it
+// is read through (a link to install it, when it is missing).
+import { INSTALL_URL } from "./extension.ts";
 import type { GitHubHost } from "./githubHost.ts";
-import { LoginDialog, type TokenStore } from "./login.ts";
 import { describeRoute } from "./route.ts";
 
-/** `owner/repo @ ref` on the left; `sign in` / `signed in` on the right. */
-export function mountGitHubBar(
-  host: GitHubHost,
-  tokens: TokenStore,
-  originEl: HTMLElement,
-  slotEl: HTMLElement,
-): void {
-  const dialog = new LoginDialog(tokens);
-  const login = document.createElement("button");
-  login.type = "button";
-  login.className = "bar-login";
-  login.addEventListener("click", () => dialog.open());
-  slotEl.replaceChildren(login);
-  slotEl.hidden = false;
+/** `owner/repo @ ref` on the left; the extension's state on the right. */
+export function mountGitHubBar(host: GitHubHost, originEl: HTMLElement, slotEl: HTMLElement): void {
+  const install = document.createElement("a");
+  install.className = "bar-install";
+  install.href = INSTALL_URL;
+  install.target = "_blank";
+  install.rel = "noopener";
+  install.textContent = "Install the Graphcal extension";
+  install.title = "the viewer reads GitHub through the extension, with your GitHub sign-in";
+  slotEl.replaceChildren(install);
   originEl.hidden = false;
 
-  const renderLogin = (wantsToken: boolean): void => {
-    const signedIn = tokens.get() !== null;
-    login.textContent = signedIn ? "GitHub · signed in" : "GitHub · sign in";
-    login.title = signedIn
-      ? "a token is stored in this browser; click to replace or forget it"
-      : "paste a token to read private repositories";
-    login.classList.toggle("wanted", wantsToken);
-  };
   host.onState((state) => {
     originEl.textContent = describeRoute(state.route, state.ref);
     originEl.title = `${state.route.owner}/${state.route.repo}`;
     originEl.classList.toggle("loading", state.loading);
-    renderLogin(state.wantsToken);
+    slotEl.hidden = !state.needsExtension;
   });
-  tokens.onChange(() => renderLogin(false));
 }
