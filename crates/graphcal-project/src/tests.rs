@@ -4611,6 +4611,43 @@ fn model_unit_choices_must_resolve_to_fixed_scale_units_of_the_port_dimension() 
 }
 
 #[test]
+fn model_units_resolve_to_their_dimension_and_scale() {
+    use graphcal_model_protocol::UnitSpelling;
+
+    let project = crate::loader::LoadedProject::from_source(UNIT_MODEL, "model.gcl").unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let resolve = |unit: &str| prepared.resolve_model_unit(&UnitSpelling::new(unit).unwrap());
+    let interface = prepared.model_interface().unwrap();
+    let wire = |port: &str| {
+        interface
+            .output(port)
+            .unwrap()
+            .wire()
+            .supported()
+            .unwrap()
+            .quantity()
+            .unwrap()
+            .clone()
+    };
+
+    let kilonewton = resolve("kilonewton").unwrap();
+    assert_eq!(kilonewton.si_scale().get(), 1000.0);
+    assert!(kilonewton.measures(&wire("margin")));
+    assert!(!kilonewton.measures(&wire("reach")));
+    let hour = resolve("h").unwrap();
+    assert_eq!(hour.si_scale().get(), 3600.0);
+    assert_eq!(resolve("km/h").unwrap().si_scale().get(), 1000.0 / 3600.0);
+    assert!(matches!(
+        resolve("league"),
+        Err(ModelUnitError::RuntimeUnit { .. })
+    ));
+    assert!(matches!(
+        resolve("parsec_x"),
+        Err(ModelUnitError::UnknownUnit { .. })
+    ));
+}
+
+#[test]
 fn model_session_reports_each_row_outcome_kind() {
     use graphcal_model_protocol::{
         FiniteF64, InputColumn, KeyRef, RequestBatch, RowFailure, RowOutcome, ValueRef,

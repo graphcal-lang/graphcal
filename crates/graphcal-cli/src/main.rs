@@ -207,6 +207,18 @@ enum ModelCommands {
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Print the dimension and SI scale of fixed-scale unit expressions as
+    /// protocol JSON
+    Unit {
+        /// Path to the entry .gcl file, whose scope resolves the units
+        file: PathBuf,
+        /// Unit expression, e.g. `h` or `km/s`; repeat for several
+        #[arg(required = true, value_name = "UNIT", value_parser = model::parse_unit_spelling)]
+        units: Vec<graphcal_model_protocol::UnitSpelling>,
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Evaluate request batches over stdin/stdout Arrow IPC streams
     #[command(group(
         clap::ArgGroup::new("fingerprint")
@@ -715,6 +727,12 @@ fn run_model_describe(file: &Path, root: Option<&Path>) {
 fn run_model_command(command: ModelCommands) {
     match command {
         ModelCommands::Describe { file, root } => run_model_describe(&file, root.as_deref()),
+        ModelCommands::Unit { file, units, root } => {
+            if let Err(error) = model::resolve_units(&file, &units, root.as_deref()) {
+                eprintln!("error: {error}");
+                process::exit(error.exit_code());
+            }
+        }
         ModelCommands::Serve {
             file,
             input,

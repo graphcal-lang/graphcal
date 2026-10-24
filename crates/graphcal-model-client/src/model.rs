@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use graphcal_model_protocol::{
     DescribeDocument, Domain, FiniteF64, InterfaceFingerprint, KeyRef, KeyType, KeyValue,
-    ModelInterface, PortName, PortWire, VariantName,
+    ModelInterface, PortName, PortWire, ResolvedUnit, UnitSpelling, VariantName,
 };
 
 use crate::command::GraphcalCommand;
@@ -54,6 +54,43 @@ impl Model {
     #[must_use]
     pub const fn document(&self) -> &DescribeDocument {
         &self.document
+    }
+
+    /// Run `graphcal model unit` to resolve unit expressions in the scope of
+    /// the model's entry file, in order.
+    ///
+    /// Use the result to convert quantities read in their canonical SI unit,
+    /// such as fields of a structured output, into units of your choice; a
+    /// [`ResolvedUnit`] converts only quantities of its own dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] when the executable cannot run, a unit does
+    /// not resolve to a fixed-scale unit, or the printed document is
+    /// invalid.
+    pub fn resolve_units(&self, units: &[UnitSpelling]) -> Result<Vec<ResolvedUnit>, ClientError> {
+        let output = self
+            .command
+            .unit(units)
+            .output()
+            .map_err(ClientError::Spawn)?;
+        if !output.status.success() {
+            return Err(ClientError::Units {
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        let resolved: Vec<ResolvedUnit> =
+            serde_json::from_slice(&output.stdout).map_err(ClientError::UnitsDocument)?;
+        if resolved.len() != units.len()
+            || resolved
+                .iter()
+                .zip(units)
+                .any(|(resolved, unit)| resolved.unit() != unit)
+        {
+            return Err(ClientError::UnitsMismatch);
+        }
+        Ok(resolved)
     }
 
     /// The model interface.

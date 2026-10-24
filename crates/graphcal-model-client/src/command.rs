@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use graphcal_model_protocol::{InterfaceFingerprint, SessionSpec};
+use graphcal_model_protocol::{InterfaceFingerprint, SessionSpec, UnitSpelling};
 
 /// The `graphcal` executable and the model file it serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +56,14 @@ impl GraphcalCommand {
     /// `graphcal model describe`.
     pub(crate) fn describe(&self) -> Command {
         self.base("describe")
+    }
+
+    /// `graphcal model unit` for `units`.
+    pub(crate) fn unit(&self, units: &[UnitSpelling]) -> Command {
+        let mut command = self.base("unit");
+        command.arg("--");
+        command.args(units.iter().map(UnitSpelling::as_str));
+        command
     }
 
     /// `graphcal model serve` for `spec`, refusing any interface but the

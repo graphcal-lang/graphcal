@@ -82,6 +82,33 @@ fn client_evaluates_typed_batches_in_one_server_process() {
 }
 
 #[test]
+fn client_resolves_units_in_the_scope_of_the_model() {
+    use graphcal_model_protocol::{FiniteF64, UnitSpelling};
+
+    let dir = tempfile::tempdir().unwrap();
+    let model = Model::describe(command(dir.path())).unwrap();
+    let unit = |unit: &str| UnitSpelling::new(unit).unwrap();
+    let resolved = model.resolve_units(&[unit("km"), unit("h")]).unwrap();
+    assert_eq!(resolved[0].si_scale().get(), 1000.0);
+    assert_eq!(resolved[1].si_scale().get(), 3600.0);
+
+    let margin = model.interface().output("margin").unwrap();
+    let length = margin.wire().supported().unwrap().quantity().unwrap();
+    let value = FiniteF64::new(2500.0).unwrap();
+    assert_eq!(
+        resolved[0].from_si(length, value),
+        Some(Ok(FiniteF64::new(2.5).unwrap()))
+    );
+    assert_eq!(resolved[1].from_si(length, value), None);
+
+    let error = model.resolve_units(&[unit("parsec_x")]).unwrap_err();
+    assert!(
+        matches!(&error, ClientError::Units { stderr, .. } if stderr.contains("parsec_x")),
+        "{error}"
+    );
+}
+
+#[test]
 fn client_reports_a_changed_interface_from_the_server() {
     let dir = tempfile::tempdir().unwrap();
     let command = command(dir.path());
