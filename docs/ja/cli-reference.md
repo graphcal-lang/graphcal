@@ -713,6 +713,7 @@ graphcal model describe <FILE> [--root <ROOT>]
 
 ```bash
 graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=UNIT>]... \
+    [--param <NAME=VALUE>]... [--params-json <JSON> | --params-json-file <FILE>] \
     (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) [--root <ROOT>]
 ```
 
@@ -721,9 +722,10 @@ graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=U
 | 項目 | 説明 |
 |------|-------------|
 | `<FILE>` | エントリの `.gcl` ファイル |
-| `--input <NAME>` | リクエストで変化させるパラメータ。繰り返し指定可能で、必須です。指定しないパラメータはデフォルト値のままです |
+| `--input <NAME>` | リクエストで変化させるパラメータ。繰り返し指定可能で、必須です。指定しないパラメータは、固定しない限りデフォルト値のままです |
 | `--output <NAME>` | 結果で返す public なノード。繰り返し指定可能で、必須です |
 | `--unit <NAME=UNIT>` | 選んだ物理量ポート `NAME` の値を `UNIT` でやりとりします。`UNIT` はエントリファイルで解決される倍率固定の単位式です。繰り返し指定可能です |
+| `--param`、`--params-json`、`--params-json-file` | 変化させないパラメータを、すべての行でこれらの値に固定します。形式は `eval` と同じです。`--params-json-file -` は使えません |
 | `--expect-fingerprint <FINGERPRINT>` | `graphcal model describe` で得たインターフェースの指紋と一致しない場合、起動を拒否します |
 | `--skip-fingerprint-check` | 指紋を検査せずに起動します |
 | `--root <ROOT>` | 明示的なプロジェクトルート |

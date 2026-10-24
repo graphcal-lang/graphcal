@@ -20,8 +20,8 @@ use graphcal_model_protocol::{
 use super::model_value::{ValueBindError, ValueCodec, ValueCodecError};
 use super::{
     CompileError, DeclName, Error, ModelExecutionError, ModelOutputPort, ModelRowFailure,
-    ModelRowOutcome, ParameterBindingRow, ParameterDomain, ParameterPort, ParameterPosition,
-    PreparedProject,
+    ModelRowOutcome, ParameterBindingBuilder, ParameterBindingRow, ParameterDomain, ParameterPort,
+    ParameterPosition, PreparedProject,
 };
 use crate::binding_error::BindingError;
 
@@ -44,11 +44,45 @@ struct SessionInputPort {
     binding: InputBinding,
 }
 
+/// Values of parameters a session does not vary, bound to every row of every
+/// request instead of the parameters' defaults.
+///
+/// Obtained from [`ParameterBindingBuilder::into_fixed`], so each value has
+/// been checked against its parameter's type and domain.
+#[derive(Debug, Clone)]
+pub struct FixedParameters {
+    plan_id: u64,
+    values: Vec<(ParameterPosition, RuntimeParameterBinding)>,
+}
+
+impl ParameterBindingBuilder<'_> {
+    /// The values bound so far, to fix them for a model session (see
+    /// [`PreparedProject::model_session_with`]).
+    ///
+    /// Unlike [`Self::finish`], parameters may be left unbound: a session
+    /// varies them or evaluates their defaults.
+    #[must_use]
+    pub fn into_fixed(self) -> FixedParameters {
+        let values = self
+            .project
+            .parameter_ports
+            .iter()
+            .zip(self.slots)
+            .filter_map(|(port, slot)| slot.map(|binding| (port.position, binding)))
+            .collect();
+        FixedParameters {
+            plan_id: self.project.plan_id,
+            values,
+        }
+    }
+}
+
 /// A configured session resolved against the prepared project it belongs to.
 #[derive(Debug, Clone)]
 pub struct ModelSession {
     plan_id: u64,
     schema: Arc<SessionSchema>,
+    fixed: Vec<(ParameterPosition, RuntimeParameterBinding)>,
     inputs: Vec<SessionInputPort>,
     outputs: Vec<ModelOutputPort>,
     /// The codec of each output, in session order.
@@ -87,6 +121,8 @@ pub enum ModelSessionError {
     Interface(#[from] ModelInterfaceError),
     #[error("invalid session: {0}")]
     Session(#[from] SessionError),
+    #[error("the fixed parameter values belong to another prepared project")]
+    ForeignFixedParameters,
     #[error(
         "the session was configured for interface {session}, but the model's interface is {model}"
     )]
@@ -165,6 +201,27 @@ impl PreparedProject {
         &self,
         schema: Arc<SessionSchema>,
     ) -> Result<ModelSession, ModelSessionError> {
+        self.model_session_with(schema, self.binding_builder().into_fixed())
+    }
+
+    /// Resolve `schema` like [`Self::model_session`], binding the parameters
+    /// `fixed` holds to its values in every row. `schema` must be configured
+    /// with those parameters fixed (see [`SessionSpec::with_fixed`]).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelSessionError::ForeignFixedParameters`] when `fixed`
+    /// belongs to another prepared project, and otherwise the errors of
+    /// [`Self::model_session`]; a fixed parameter that `schema` also varies
+    /// is an invalid session.
+    pub fn model_session_with(
+        &self,
+        schema: Arc<SessionSchema>,
+        fixed: FixedParameters,
+    ) -> Result<ModelSession, ModelSessionError> {
+        if fixed.plan_id != self.plan_id {
+            return Err(ModelSessionError::ForeignFixedParameters);
+        }
         let model = InterfaceFingerprint::of(&self.model_interface()?);
         if schema.interface_fingerprint() != model {
             return Err(ModelSessionError::FingerprintMismatch {
@@ -172,7 +229,15 @@ impl PreparedProject {
                 model,
             });
         }
-        if self.session_schema(&schema.spec())? != *schema {
+        let spec = fixed
+            .values
+            .iter()
+            .map(|(position, _)| port_name(&self.parameter_ports[position.index].name))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(ModelInterfaceError::from)?
+            .into_iter()
+            .fold(schema.spec(), SessionSpec::with_fixed);
+        if self.session_schema(&spec)? != *schema {
             return Err(ModelSessionError::SchemaMismatch);
         }
         let missing = |name: &PortName| ModelSessionError::MissingPort { name: name.clone() };
@@ -227,6 +292,7 @@ impl PreparedProject {
         Ok(ModelSession {
             plan_id: self.plan_id,
             schema,
+            fixed: fixed.values,
             inputs,
             outputs,
             output_codecs,
@@ -283,6 +349,9 @@ impl PreparedProject {
         row: usize,
     ) -> Result<Result<ParameterBindingRow, RowFailure>, ModelExecutionError> {
         let mut builder = self.binding_builder();
+        for (position, binding) in &session.fixed {
+            builder.insert(*position, binding.clone())?;
+        }
         for (input, column) in session.inputs.iter().zip(request.columns()) {
             let bound = match (&input.binding, column) {
                 (InputBinding::Quantity(scale), InputColumn::Quantity(values)) => {

@@ -75,7 +75,7 @@ graphcal model describe reliability.gcl
 
 ## 2. セッションを開始する { #2-start-a-session }
 
-セッションでは、変化させるパラメータ（`--input`）と読み出す出力（`--output`）を指定します。変化させないパラメータはデフォルト値のままです。そのため、デフォルト値のないパラメータは必ず変化させる対象に含めます。
+セッションでは、変化させるパラメータ（`--input`）と読み出す出力（`--output`）を指定します。変化させないパラメータは、セッションで固定しない限りデフォルト値のままです（[値でパラメータを固定する](#fix-parameters-with-values)を参照）。そのため、デフォルト値のないパラメータは変化させるか固定します。
 
 ```bash
 graphcal model serve reliability.gcl \
@@ -133,9 +133,20 @@ session.shutdown()?;
 
 [Tenax](https://github.com/shunichironomura/tenax) はこのクライアントを使って Graphcal モデルをサンプリングし、PRIM によるシナリオ探索を行います。
 
+## 値でパラメータを固定する { #fix-parameters-with-values }
+
+変化させないパラメータをデフォルト以外の値で評価したいとき、またはデフォルト値のないパラメータに値を与えたいときは、`graphcal eval` と同じ形で `serve` に値を渡します。`--param NAME=VALUE`、`--params-json`、`--params-json-file` のいずれかを使います。stdin はリクエストに使うため、`--params-json-file -` は使えません。サーバーは起動時に値を検査し、すべての行で使います。固定したパラメータを同時に変化させることはできません。Rust からは `SessionBuilder::fix_from_json_file` で JSON ファイルを渡します。
+
+```bash
+graphcal model serve reliability.gcl \
+    --input load --output failure --output margin \
+    --params-json-file scenario.json \
+    --expect-fingerprint sha256:…
+```
+
 ## ラッパーファイルでパラメータを固定する { #fix-parameters-with-a-wrapper-file }
 
-一部のパラメータをデフォルト以外の値に固定したいときは、モデルを include する小さなラッパーを書き、そのラッパーを serve します。別のファイルを `include` するにはパッケージが必要です（[複数ファイルのプロジェクト](language/multi-file.md)を参照）。ここでは、モデルを `plant` という名前のパッケージの `src/plant/reliability.gcl` に置いています。
+一部のパラメータを Graphcal で計算した値に固定したいときは、モデルを include する小さなラッパーを書き、そのラッパーを serve します。別のファイルを `include` するにはパッケージが必要です（[複数ファイルのプロジェクト](language/multi-file.md)を参照）。ここでは、モデルを `plant` という名前のパッケージの `src/plant/reliability.gcl` に置いています。
 
 ```graphcal title="src/plant/aging.gcl"
 import plant.reliability::{ index Mode };

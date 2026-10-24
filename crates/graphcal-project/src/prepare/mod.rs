@@ -19,7 +19,7 @@ pub use model_schema::{
     ModelValueSchema,
 };
 pub use prepared::{
-    ExternalValue, InclusiveBounds, InclusiveBoundsError, ModelDefinitionError,
+    ExternalValue, FixedParameters, InclusiveBounds, InclusiveBoundsError, ModelDefinitionError,
     ModelExecutionError, ModelInterfaceError, ModelOutputPort, ModelRowFailure, ModelRowOutcome,
     ModelSession, ModelSessionError, ModelUnitError, ParameterBindingBuilder, ParameterBindingRow,
     ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,

@@ -40,11 +40,17 @@ impl UnitChoice {
 /// Order is irrelevant: a configured session lists both in the interface's
 /// declaration order. A quantity port without a unit choice travels in its
 /// canonical SI unit.
+///
+/// A parameter the session does not vary keeps its default, unless the
+/// session fixes it: the model server then binds it to a value it was given
+/// when it started, for every row. Fixed parameters do not travel in
+/// requests, so they are not part of the [`SessionSchema`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SessionSpec {
     inputs: Vec<PortName>,
     outputs: Vec<PortName>,
     units: Vec<UnitChoice>,
+    fixed: Vec<PortName>,
 }
 
 impl SessionSpec {
@@ -56,7 +62,16 @@ impl SessionSpec {
             inputs,
             outputs,
             units: Vec::new(),
+            fixed: Vec::new(),
         }
+    }
+
+    /// Fix the unvaried parameter `port` to a value the model server is
+    /// given outside requests, instead of its default.
+    #[must_use]
+    pub fn with_fixed(mut self, port: PortName) -> Self {
+        self.fixed.push(port);
+        self
     }
 
     /// Carry the values of the selected quantity port `port` in `unit`.
@@ -82,6 +97,12 @@ impl SessionSpec {
     #[must_use]
     pub fn units(&self) -> &[UnitChoice] {
         &self.units
+    }
+
+    /// The parameters fixed to values given to the model server.
+    #[must_use]
+    pub fn fixed(&self) -> &[PortName] {
+        &self.fixed
     }
 }
 
@@ -136,8 +157,14 @@ pub enum SessionError {
     UnsupportedInput { name: PortName, reason: String },
     #[error("output `{name}` cannot be read: {reason}")]
     UnsupportedOutput { name: PortName, reason: String },
-    #[error("parameter `{name}` has no default, so the session must vary it")]
+    #[error("parameter `{name}` has no default, so the session must vary or fix it")]
     MissingDefault { name: PortName },
+    #[error("parameter `{name}` is fixed more than once")]
+    DuplicateFixed { name: PortName },
+    #[error("the model has no parameter named `{name}` to fix")]
+    UnknownFixed { name: PortName },
+    #[error("parameter `{name}` is both varied and fixed")]
+    VariedAndFixed { name: PortName },
     #[error("a unit is chosen more than once for port `{name}`")]
     DuplicateUnit { name: PortName },
     #[error("a unit is chosen for port `{name}`, which the session does not select")]
@@ -375,7 +402,8 @@ impl SessionSchema {
         self.outputs.get(slot.0)
     }
 
-    /// The selection this schema was configured from.
+    /// The selection this schema was configured from, without the
+    /// parameters the session fixed, which the schema does not record.
     #[must_use]
     pub fn spec(&self) -> SessionSpec {
         let chosen = |name: &PortName, wire: &WireType, scale: Option<SiScale>| {
@@ -402,6 +430,7 @@ impl SessionSchema {
                         .filter_map(|output| chosen(&output.name, &output.wire, output.si_scale)),
                 )
                 .collect(),
+            fixed: Vec::new(),
         }
     }
 }
@@ -465,6 +494,28 @@ fn converted_domain(domain: Domain, scale: Option<SiScale>) -> Option<Domain> {
 }
 
 impl ModelInterface {
+    /// The parameters `spec` fixes, rejecting repeated, unknown, and varied
+    /// ones.
+    fn fixed_parameters<'s>(
+        &self,
+        spec: &'s SessionSpec,
+        varied: &HashSet<&PortName>,
+    ) -> Result<HashSet<&'s PortName>, SessionError> {
+        let mut fixed = HashSet::with_capacity(spec.fixed.len());
+        for name in &spec.fixed {
+            if !fixed.insert(name) {
+                return Err(SessionError::DuplicateFixed { name: name.clone() });
+            }
+            if self.parameter(name.as_str()).is_none() {
+                return Err(SessionError::UnknownFixed { name: name.clone() });
+            }
+            if varied.contains(name) {
+                return Err(SessionError::VariedAndFixed { name: name.clone() });
+            }
+        }
+        Ok(fixed)
+    }
+
     /// Configure a session that varies and reads the ports `spec` selects,
     /// resolving its unit choices with `units`.
     ///
@@ -472,7 +523,8 @@ impl ModelInterface {
     ///
     /// Returns [`SessionError`] when the selection is empty, repeats or
     /// names an unknown port, selects a port the protocol cannot carry, or
-    /// leaves a parameter without a default unvaried; or when a unit choice
+    /// leaves a parameter without a default neither varied nor fixed; when a
+    /// fixed parameter repeats, is unknown, or is also varied; or when a unit choice
     /// repeats, names an unselected or non-quantity port, does not resolve,
     /// or cannot express the parameter's domain.
     pub fn configure(
@@ -505,11 +557,12 @@ impl ModelInterface {
             }
         }
         let choices = unit_choices(spec, &varied, &read)?;
+        let fixed = self.fixed_parameters(spec, &varied)?;
 
         let mut inputs = Vec::with_capacity(spec.inputs.len());
         for parameter in self.parameters() {
             if !varied.contains(parameter.name()) {
-                if !parameter.has_default() {
+                if !parameter.has_default() && !fixed.contains(parameter.name()) {
                     return Err(SessionError::MissingDefault {
                         name: parameter.name().clone(),
                     });
@@ -618,6 +671,45 @@ pub mod tests {
             session.interface_fingerprint(),
             InterfaceFingerprint::of(&sample_interface())
         );
+    }
+
+    #[test]
+    fn a_fixed_parameter_needs_no_default_and_is_not_in_the_schema() {
+        let interface = sample_interface();
+        let fixed = spec(&["load"], &["failure"]).with_fixed(name("mode"));
+        let session = interface.configure(&fixed, CanonicalUnitsOnly).unwrap();
+        assert_eq!(
+            session
+                .inputs()
+                .iter()
+                .map(|input| input.name().as_str())
+                .collect::<Vec<_>>(),
+            ["load"]
+        );
+        assert_eq!(session.spec().fixed(), []);
+
+        let cases = [
+            (
+                spec(&["load"], &["failure"])
+                    .with_fixed(name("mode"))
+                    .with_fixed(name("mode")),
+                SessionError::DuplicateFixed { name: name("mode") },
+            ),
+            (
+                spec(&["load", "mode"], &["failure"]).with_fixed(name("nope")),
+                SessionError::UnknownFixed { name: name("nope") },
+            ),
+            (
+                spec(&["load", "mode"], &["failure"]).with_fixed(name("load")),
+                SessionError::VariedAndFixed { name: name("load") },
+            ),
+        ];
+        for (spec, expected) in cases {
+            assert_eq!(
+                interface.configure(&spec, CanonicalUnitsOnly),
+                Err(expected)
+            );
+        }
     }
 
     #[test]

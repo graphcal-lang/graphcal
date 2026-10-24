@@ -65,6 +65,15 @@ pub struct ParameterArgs {
 }
 
 impl ParameterArgs {
+    /// Whether the JSON parameter document is read from stdin
+    /// (`--params-json-file -`).
+    #[must_use]
+    pub fn reads_stdin(&self) -> bool {
+        self.params_json_file
+            .as_deref()
+            .is_some_and(|path| path == Path::new("-"))
+    }
+
     fn json_source(&self) -> Result<Option<ParameterJsonSource>, OverrideParseError> {
         match (&self.params_json, &self.params_json_file) {
             (Some(_), Some(_)) => Err(OverrideParseError::ConflictingJsonSources),

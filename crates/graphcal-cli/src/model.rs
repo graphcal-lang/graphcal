@@ -7,6 +7,8 @@ use std::sync::Arc;
 use graphcal_model_protocol::{
     DescribeDocument, InterfaceFingerprint, LabelError, PortName, SessionSpec, UnitSpelling,
 };
+
+use crate::overrides::ParsedOverrides;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::{build_rooted_filesystem, load_project};
 use graphcal_project::prepare::{ModelInterfaceError, ModelSessionError, PreparedProject};
@@ -50,15 +52,22 @@ pub fn describe(file: &Path, root: Option<&Path>) -> Result<(), ModelServeError>
     Ok(())
 }
 
+/// The ports a `serve` session selects, and the values it fixes for
+/// parameters it does not vary.
+pub struct SessionSelection<'a> {
+    pub inputs: &'a [String],
+    pub outputs: &'a [String],
+    pub units: &'a [UnitChoiceArgument],
+    pub fixed: &'a ParsedOverrides,
+}
+
 /// Prepare and serve one session of the model over stdin and stdout.
 ///
 /// Setup errors occur before any stdout bytes. A [`ModelServeError::Serve`]
 /// may occur after the result-stream schema has been written.
 pub fn serve(
     file: &Path,
-    inputs: &[String],
-    outputs: &[String],
-    units: &[UnitChoiceArgument],
+    selection: &SessionSelection<'_>,
     fingerprint: &FingerprintCheck,
     root: Option<&Path>,
 ) -> Result<(), ModelServeError> {
@@ -68,8 +77,18 @@ pub fn serve(
             .map(|name| PortName::new(name.as_str()))
             .collect::<Result<Vec<_>, _>>()
     };
-    let spec = units.iter().fold(
-        SessionSpec::new(names(inputs)?, names(outputs)?),
+    let mut fixed_names = selection
+        .fixed
+        .values
+        .keys()
+        .map(|name| PortName::new(name.as_str()))
+        .collect::<Result<Vec<_>, _>>()?;
+    fixed_names.sort();
+    let spec = selection.units.iter().fold(
+        fixed_names.into_iter().fold(
+            SessionSpec::new(names(selection.inputs)?, names(selection.outputs)?),
+            SessionSpec::with_fixed,
+        ),
         |spec, choice| spec.with_unit(choice.port.clone(), choice.unit.clone()),
     );
     let prepared = prepare(file, root)?;
@@ -84,7 +103,11 @@ pub fn serve(
         }
     }
     let schema = prepared.session_schema(&spec)?;
-    let session = prepared.model_session(Arc::new(schema))?;
+    let mut fixed = prepared.binding_builder();
+    for (name, value) in &selection.fixed.values {
+        value.bind(name, &mut fixed)?;
+    }
+    let session = prepared.model_session_with(Arc::new(schema), fixed.into_fixed())?;
     graphcal_model_server::serve_stdio(&prepared, &session).map_err(ModelServeError::Serve)
 }
 

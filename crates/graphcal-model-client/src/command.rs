@@ -59,8 +59,14 @@ impl GraphcalCommand {
     }
 
     /// `graphcal model serve` for `spec`, refusing any interface but the
-    /// one with `fingerprint`.
-    pub(crate) fn serve(&self, spec: &SessionSpec, fingerprint: InterfaceFingerprint) -> Command {
+    /// one with `fingerprint`, with the values of its fixed parameters in
+    /// the JSON document `fixed`.
+    pub(crate) fn serve(
+        &self,
+        spec: &SessionSpec,
+        fingerprint: InterfaceFingerprint,
+        fixed: Option<&PathBuf>,
+    ) -> Command {
         let mut command = self.base("serve");
         for input in spec.inputs() {
             command.arg("--input").arg(input.as_str());
@@ -72,6 +78,9 @@ impl GraphcalCommand {
             command
                 .arg("--unit")
                 .arg(format!("{}={}", choice.port(), choice.unit()));
+        }
+        if let Some(fixed) = fixed {
+            command.arg("--params-json-file").arg(fixed);
         }
         command
             .arg("--expect-fingerprint")
@@ -116,7 +125,7 @@ mod tests {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         )
         .unwrap();
-        let command = GraphcalCommand::new("model.gcl").serve(&spec, fingerprint);
+        let command = GraphcalCommand::new("model.gcl").serve(&spec, fingerprint, None);
         let arguments = command
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())

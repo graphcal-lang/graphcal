@@ -36,6 +36,13 @@ pub enum ClientError {
     ForeignKey { input: PortName, owner: PortName },
     #[error(transparent)]
     Session(#[from] SessionError),
+    #[error("cannot read the fixed parameter values in {}: {reason}", .path.display())]
+    FixedParameters {
+        path: std::path::PathBuf,
+        reason: String,
+    },
+    #[error("a session takes one JSON document of fixed parameter values")]
+    FixedParametersTwice,
     #[error("parameter `{name}` is not varied by this session")]
     NotVaried { name: PortName },
     #[error("output `{name}` is not read by this session")]
