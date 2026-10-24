@@ -929,87 +929,18 @@ body {
   top: 0;
 }
 
-/* ---- GitHub: origin and token ---- */
-.bar-login {
+/* ---- GitHub: origin and the extension ---- */
+.bar-install {
   padding: 1px 6px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--power);
   border-radius: 3px;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
+  color: var(--power);
   font-size: 11px;
-  cursor: pointer;
+  text-decoration: none;
   white-space: nowrap;
 }
-.bar-login:hover {
-  color: var(--text);
-  border-color: var(--muted);
-}
-.bar-login.wanted {
-  color: var(--power);
-  border-color: var(--power);
-}
-.login {
-  width: min(440px, calc(100vw - 32px));
-  padding: 20px 22px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--node);
-  color: var(--text);
-  font: 12px/1.5 var(--sans);
-}
-.login::backdrop {
-  background: rgba(0, 0, 0, 0.5);
-}
-.login-form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  margin: 0;
-}
-.login-title {
-  margin: 0;
-  font: 600 14px/1.3 var(--sans);
-}
-.login-text {
-  margin: 0;
-  color: var(--muted);
-}
-.login-input {
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--canvas);
-  color: var(--text);
-  font: 12px var(--mono);
-}
-.login-input:focus {
-  outline: none;
-  border-color: var(--sel);
-}
-.login-row {
-  display: flex;
-  gap: 8px;
-}
-.login-row button {
-  padding: 4px 10px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-}
-.login-row button:hover {
-  border-color: var(--muted);
-}
-.login-use {
+.bar-install:hover {
   background: var(--sel-bg);
-  border-color: var(--sel) !important;
-}
-.login-forget {
-  margin-left: auto;
-  color: var(--power);
 }
 
 /* ---- the work area: explorer | code | split | sheet ---- */

@@ -1,19 +1,8 @@
 // The base side of a comparison, from what was read at the base ref: which
 // repository files differ, and per project file its text and its model, or
 // why the base could not give them. Pure: the host reads, this assembles.
-import type { TreeEntry } from "./github.ts";
 import type { BaseSide, Compare } from "./host.ts";
 import type { ViewModel } from "./model.ts";
-
-/** Repository paths whose content differs between the two trees (added, removed or changed). */
-export function changedPaths(head: readonly TreeEntry[], base: readonly TreeEntry[]): Set<string> {
-  const headSha = new Map(head.map((e) => [e.path, e.sha]));
-  const baseSha = new Map(base.map((e) => [e.path, e.sha]));
-  const changed = new Set<string>();
-  for (const [path, sha] of headSha) if (baseSha.get(path) !== sha) changed.add(path);
-  for (const path of baseSha.keys()) if (!headSha.has(path)) changed.add(path);
-  return changed;
-}
 
 /** What was read at the base ref. */
 export type BaseRead =

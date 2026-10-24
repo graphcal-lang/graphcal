@@ -84,11 +84,7 @@ const REF_LIST_LABEL = { branches: "branches", tags: "tags", pulls: "pull reques
 
 /** Why a list is missing from the ref menu, naming the token permission when that is the likely cause. */
 export function refsFailureNote(failure: RefsFailure): string {
-  const label = REF_LIST_LABEL[failure.list];
-  if (failure.list === "pulls" && (failure.kind === "forbidden" || failure.kind === "not_found")) {
-    return `${label} are not listed: the token needs Pull requests: Read-only`;
-  }
-  return `${label} are not listed: ${failure.message}`;
+  return `${REF_LIST_LABEL[failure.list]} are not listed: ${failure.message}`;
 }
 
 /** The ref part of the explorer, when the host reads a repository. */

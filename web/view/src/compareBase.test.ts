@@ -1,22 +1,11 @@
 import { describe, expect, test } from "vite-plus/test";
-import { changedPaths, compareOf } from "./compareBase.ts";
-import type { TreeEntry } from "./github.ts";
+import { compareOf } from "./compareBase.ts";
 import type { ViewModel } from "./model.ts";
-
-function entries(shas: Record<string, string>): TreeEntry[] {
-  return Object.entries(shas).map(([path, sha]) => ({ path, type: "blob", sha, size: 1 }));
-}
 
 /** A model of `file`; only its file matters to the lookup. */
 function modelOf(file: string): ViewModel {
   return { module: { id: file, file }, target: { kind: "module" } } as unknown as ViewModel;
 }
-
-test("changedPaths lists added, removed and changed paths", () => {
-  const head = entries({ "a.gcl": "1", "b.gcl": "2", "new.gcl": "3" });
-  const base = entries({ "a.gcl": "1", "b.gcl": "9", "gone.gcl": "4" });
-  expect([...changedPaths(head, base)].sort()).toEqual(["b.gcl", "gone.gcl", "new.gcl"]);
-});
 
 describe("compareOf", () => {
   const evaluated = modelOf("src/p/a.gcl");

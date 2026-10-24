@@ -1,9 +1,10 @@
 // The web viewer's host: the project around a `.gcl` file is read from GitHub
-// with the viewer's own token, kept in memory, and projected by the in-browser
-// engine. Nothing is written back; edits are a what-if over the sources read,
-// and `reset` returns to them. The address bar follows the shown file.
+// through the browser extension, kept in memory, and projected by the
+// in-browser engine. Nothing is written back; edits are a what-if over the
+// sources read, and `reset` returns to them. The address bar follows the
+// shown file.
 import { changedFiles, patchOf, type Patch } from "./diff.ts";
-import { changedPaths, compareOf, type BaseRead } from "./compareBase.ts";
+import { compareOf, type BaseRead } from "./compareBase.ts";
 import {
   loadEngine,
   packageLayout,
@@ -13,9 +14,8 @@ import {
   type ProjectFile,
 } from "./engine.ts";
 import { errorMessage } from "./errors.ts";
-import { GitHub, GitHubError, type Commit, type Refs, type Tree } from "./github.ts";
+import { GitHubError, type Commit, type GitHub, type Refs, type Tree } from "./github.ts";
 import type { BaseSide, Compare, EditResult, Host, NoteKind } from "./host.ts";
-import type { TokenStore } from "./login.ts";
 import type { ViewModel } from "./model.ts";
 import { ModelCache } from "./modelCache.ts";
 import { acceptEdit, projectionNote, type ViewProjection } from "./projection.ts";
@@ -47,8 +47,8 @@ export interface GitHubState {
   /** The ref GitHub resolved the route to (the default branch, when the route names none). */
   ref: string | null;
   loading: boolean;
-  /** Whether the current GitHub failure asks for a token. */
-  wantsToken: boolean;
+  /** Whether the current failure is that the browser has no Graphcal extension. */
+  needsExtension: boolean;
 }
 
 /** Fetch at most `limit` at a time. */
@@ -111,15 +111,13 @@ function settle<T>(promise: Promise<T>): Promise<PromiseSettledResult<T>> {
   );
 }
 
-/** Reads a file of `tree` by its blob's hash, so a push since cannot change what is read. */
-function blobReader(github: GitHub, route: Route, tree: Tree): (path: string) => Promise<string> {
-  const shas = new Map(tree.entries.filter((e) => e.type === "blob").map((e) => [e.path, e.sha]));
-  return (path) => {
-    const sha = shas.get(path);
-    return sha === undefined
-      ? Promise.reject(new Error(`${path} is not in the tree`))
-      : github.blob(route.owner, route.repo, sha);
-  };
+/** Reads a file of the repository at `commit`, so a push since cannot change what is read. */
+function fileReader(
+  github: GitHub,
+  route: Route,
+  commit: Commit,
+): (path: string) => Promise<string> {
+  return (path) => github.read(route.owner, route.repo, commit, path);
 }
 
 /** The base model of one project file, or why it has none. */
@@ -139,33 +137,29 @@ async function baseModel(file: string, request: ProjectFile[]): Promise<BaseSide
 /**
  * The project at the base commit: the same files, read and projected there.
  * The file may not exist at the base (a new file): then every node is new.
- * A blob the head holds too is not fetched again. Never rejects: a base that
- * cannot be read is a failed base, and the head stays shown.
+ * What changed between the commits is GitHub's compare (what a pull request
+ * from `head` would change). Never rejects: a base that cannot be read is a
+ * failed base, and the head stays shown.
  */
 async function readBase(
   github: GitHub,
   route: Route,
   commit: PromiseSettledResult<Commit>,
-  headTree: Tree,
+  head: Commit,
 ): Promise<BaseRead> {
   try {
     if (commit.status === "rejected") throw commit.reason;
-    const baseTree = await github.tree(route.owner, route.repo, commit.value.treeSha);
-    if (baseTree.truncated) {
-      return {
-        kind: "failed",
-        message: "the repository is too large for GitHub to list in one request",
-      };
-    }
-    const changedFiles = changedPaths(headTree.entries, baseTree.entries);
+    const base = commit.value;
+    const baseTree = await github.tree(route.owner, route.repo, base);
+    const changedFiles = await github.changed(route.owner, route.repo, base.sha, head.sha);
     const sources = new Map<string, string>();
     const models = new Map<string, BaseSide<ViewModel>>();
-    const exists = baseTree.entries.some((e) => e.type === "blob" && e.path === route.path);
+    const exists = baseTree.entries.some((e) => e.path === route.path);
     if (exists) {
       const { plan, files } = await readProject(
         baseTree,
         route.path,
-        blobReader(github, route, baseTree),
+        fileReader(github, route, base),
       );
       for (const [file, text] of files) sources.set(file, text);
       const request = requestOf(sources);
@@ -203,7 +197,8 @@ export class GitHubHost implements Host {
   compare: Compare | null = null;
   edited = false;
   private route: Route;
-  private github: GitHub;
+  /** GitHub through the extension, once it has answered; a load waits for it. */
+  private readonly connection: Promise<GitHub>;
   private sources: Sources | null = null;
   /** The revision of the sources; every edit, load and reset makes a new one. */
   private revision = 0;
@@ -219,17 +214,10 @@ export class GitHubHost implements Host {
   private readonly noteListeners: ((message: string | null, kind: NoteKind) => void)[] = [];
   private readonly stateListeners: ((state: GitHubState) => void)[] = [];
 
-  private readonly tokens: TokenStore;
-
-  constructor(route: Route, tokens: TokenStore) {
+  constructor(route: Route, connection: Promise<GitHub>) {
     this.route = route;
-    this.tokens = tokens;
-    this.github = new GitHub(tokens.get());
-    this.state = { route, ref: headRef(route.at), loading: false, wantsToken: false };
-    tokens.onChange(() => {
-      this.github = new GitHub(tokens.get());
-      void this.load();
-    });
+    this.connection = connection;
+    this.state = { route, ref: headRef(route.at), loading: false, needsExtension: false };
     window.addEventListener("hashchange", () => this.followHash());
     void loadEngine().catch(() => undefined);
     void this.load();
@@ -242,10 +230,10 @@ export class GitHubHost implements Host {
     const generation = ++this.generation;
     const fresh = (): boolean => generation === this.generation;
     const { route } = this;
-    this.setState({ route, ref: headRef(route.at), loading: true, wantsToken: false });
+    this.setState({ route, ref: headRef(route.at), loading: true, needsExtension: false });
     this.note(`reading ${route.owner}/${route.repo}…`, "busy");
     try {
-      const github = this.github;
+      const github = await this.connection;
       const info = await github.repo(route.owner, route.repo);
       const ref = headRef(route.at) ?? info.defaultBranch;
       if (!fresh()) return;
@@ -255,14 +243,11 @@ export class GitHubHost implements Host {
       const baseCommit =
         base === null ? null : settle(github.commit(route.owner, route.repo, base));
       const head = await github.commit(route.owner, route.repo, ref);
-      const tree = await github.tree(route.owner, route.repo, head.treeSha);
+      const tree = await github.tree(route.owner, route.repo, head);
       if (!fresh()) return;
-      if (tree.truncated) {
-        throw new Error("the repository is too large for GitHub to list in one request");
-      }
-      this.files = tree.entries.filter((e) => e.type === "blob").map((e) => e.path);
+      this.files = tree.entries.map((e) => e.path);
       this.compare = null;
-      const { plan, files } = await readProject(tree, route.path, blobReader(github, route, tree));
+      const { plan, files } = await readProject(tree, route.path, fileReader(github, route, head));
       if (!fresh()) return;
       this.sources = new Sources(files, ++this.revision);
       this.loaded = {
@@ -294,7 +279,7 @@ export class GitHubHost implements Host {
       }
       if (base !== null && baseCommit !== null) {
         this.note(`reading ${base}…`, "busy");
-        const read = await readBase(github, route, await baseCommit, tree);
+        const read = await readBase(github, route, await baseCommit, head);
         // Published only by the load that is still current.
         if (!fresh()) return;
         this.compare = compareOf(base, read);
@@ -362,35 +347,26 @@ export class GitHubHost implements Host {
   private fail(error: unknown): void {
     const { route } = this;
     let message = errorMessage(error);
-    let wantsToken = false;
+    let needsExtension = false;
     if (error instanceof GitHubError) {
-      const signedIn = this.tokens.get() !== null;
       switch (error.kind) {
+        case "no_extension":
+          message =
+            "the Graphcal extension is not installed in this browser; install it (top right) and reload";
+          needsExtension = true;
+          break;
         case "not_found":
-          message = signedIn
-            ? `${route.owner}/${route.repo} has no ${route.path} at this ref, or the token cannot read it`
-            : `${route.owner}/${route.repo} was not found; if it is private, sign in with a token`;
-          wantsToken = !signedIn;
-          break;
-        case "ref_not_found":
-          message = error.message;
-          break;
-        case "unauthorized":
-          message = "GitHub rejected the token; paste a new one";
-          wantsToken = true;
-          break;
-        case "rate_limited":
-          message = signedIn ? error.message : `${error.message}; a token raises the limit`;
-          wantsToken = !signedIn;
+          message = `${route.owner}/${route.repo} has no ${route.path} at this ref, or your GitHub account cannot see it`;
           break;
         default:
+          message = error.message;
           break;
       }
     } else if (error instanceof ProjectPlanError) {
       message = error.message;
     }
     this.note(message, "error");
-    this.setState({ ...this.state, loading: false, wantsToken });
+    this.setState({ ...this.state, loading: false, needsExtension });
   }
 
   /** The address changed by hand or by history: same project, just show the file; else reload. */
@@ -481,9 +457,8 @@ export class GitHubHost implements Host {
   /** The branches, tags and pull requests of the repository being read. */
   refs(): Promise<Refs> {
     const { owner, repo } = this.route;
-    const github = this.github;
-    return this.refsCache.get({ owner, repo, token: this.tokens.get() }, () =>
-      github.refs(owner, repo),
+    return this.refsCache.get({ owner, repo }, async () =>
+      (await this.connection).refs(owner, repo),
     );
   }
 

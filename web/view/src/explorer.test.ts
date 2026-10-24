@@ -1,10 +1,10 @@
 import { describe, expect, test } from "vite-plus/test";
 import { fileTree, refsFailureNote, visibleRows } from "./explorer.ts";
 
-test("a missing ref list names the permission it likely needs", () => {
-  expect(refsFailureNote({ list: "pulls", kind: "forbidden", message: "GitHub refused" })).toBe(
-    "pull requests are not listed: the token needs Pull requests: Read-only",
-  );
+test("a missing ref list says why", () => {
+  expect(
+    refsFailureNote({ list: "pulls", kind: null, message: "the extension lists branches only" }),
+  ).toBe("pull requests are not listed: the extension lists branches only");
   expect(refsFailureNote({ list: "tags", kind: "network", message: "GitHub did not answer" })).toBe(
     "tags are not listed: GitHub did not answer",
   );
