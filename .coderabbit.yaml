@@ -1,0 +1,57 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration. Reference: https://docs.coderabbit.ai/reference/configuration
+# CodeRabbit also reads CLAUDE.md / AGENTS.md as coding guidelines.
+language: "en-US"
+
+reviews:
+  profile: "chill"
+  poem: false
+  high_level_summary: true
+
+  # Lockfiles, generated output, and fuzz corpora are not worth reviewing and
+  # count against the per-review file limit.
+  path_filters:
+    - "!**/Cargo.lock"
+    - "!**/pnpm-lock.yaml"
+    - "!target/**"
+    - "!site/**"
+    - "!fuzz/corpus/**"
+    - "!**/*.min.js"
+
+  path_instructions:
+    - path: "crates/**/*.rs"
+      instructions: >-
+        Enforce the "Type Safety: Encode Semantics in Types, Not Conventions"
+        rules in CLAUDE.md: flag flat-string encodings of structured data
+        (e.g. format!("{a}::{b}"), split_once("::")), casing-based dispatch,
+        string-matched control flow on internal identifiers, and zero-value
+        wrapper types. Flag implicit unit/type conversions in the language
+        semantics. Do not repeat issues that clippy or rustfmt already report.
+    - path: "docs/{en,ja}/**/*.md"
+      instructions: >-
+        The English (docs/en) and Japanese (docs/ja) editions must have the
+        same pages, navigation structure, heading IDs, and byte-identical code
+        fences. Flag changes made to only one edition.
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 2
+    ignore_title_keywords:
+      - "WIP"
+    # Dependency-update PRs would quickly exhaust the review rate limit.
+    ignore_usernames:
+      - "renovate[bot]"
+
+  # Already enforced in CI (cargo clippy, actionlint, zizmor, rumdl).
+  tools:
+    clippy:
+      enabled: false
+    actionlint:
+      enabled: false
+    markdownlint:
+      enabled: false
+
+chat:
+  auto_reply: true
