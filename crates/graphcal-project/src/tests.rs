@@ -10233,3 +10233,42 @@ fn unit_names(inputs: &[&str], outputs: &[&str]) -> graphcal_model_protocol::Ses
     };
     graphcal_model_protocol::SessionSpec::new(names(inputs), names(outputs))
 }
+
+#[test]
+fn model_row_failures_name_the_failures_they_originate_from() {
+    use graphcal_model_protocol::{FiniteF64, InputColumn, RequestBatch, RowFailure, RowOutcome};
+
+    let project = crate::loader::LoadedProject::from_source(
+        r"
+        param x: Length(min: 0.0 m, max: 10.0 m);
+        dag stage {
+            param x: Length;
+            node ratio: Dimensionless = 1.0 m / (@x - 5.0 m);
+            node doubled: Dimensionless = @ratio * 2.0;
+            pub node out: Dimensionless = @doubled + 1.0;
+        }
+        include stage(x: @x) as inner;
+        pub node result: Dimensionless = @inner::out;
+        ",
+        "model.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let schema = session_over(&prepared, &["x"], &["result"]);
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![FiniteF64::new(5.0).unwrap()])],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    let Some(RowOutcome::Failure(RowFailure::EvaluationError { message })) = result.row(0) else {
+        panic!("row 0 fails to evaluate");
+    };
+    assert_eq!(
+        message,
+        "result: dependency failed: inner::out; originating failure: inner::ratio (division by zero)"
+    );
+}

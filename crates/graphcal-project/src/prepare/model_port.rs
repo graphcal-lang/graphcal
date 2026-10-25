@@ -1,6 +1,6 @@
 //! Transport-independent model ports and per-row model evaluation.
 
-use graphcal_eval::eval::runtime::{RootFailure, RootOutcome};
+use graphcal_eval::eval::runtime::{FailureOrigin, RootFailure, RootOutcome};
 
 use super::{
     Arc, CheckedType, CompileError, DeclName, Error, HashSet, ModelSchemaGraph, ModelValueSchema,
@@ -329,9 +329,14 @@ impl PreparedProject {
             )
         };
         match failure {
-            RootFailure::Declaration { name, reason } => ModelRowFailure::Declaration {
+            RootFailure::Declaration {
+                name,
+                reason,
+                origins,
+            } => ModelRowFailure::Declaration {
                 name: display(&name),
                 reason,
+                origins,
             },
             RootFailure::Assertion { name, message } => ModelRowFailure::Assertion {
                 name: display(name),
@@ -369,11 +374,14 @@ pub enum ModelRowOutcome<T = Value> {
 /// diagnostic.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ModelRowFailure {
-    /// A declaration failed, or is unavailable.
-    #[error("{name}: {reason}")]
+    /// A declaration failed, or is unavailable. A failure that only
+    /// propagates failed dependencies also names the declarations it
+    /// originates from, so that the row's diagnostic shows the cause.
+    #[error("{name}: {reason}{}", failure_origins(.origins))]
     Declaration {
         name: graphcal_compiler::syntax::module_name::ScopedName,
         reason: graphcal_eval::eval::OutputUnavailable,
+        origins: Vec<FailureOrigin>,
     },
     /// An assertion did not pass.
     #[error("assertion `{name}`: {message}")]
@@ -384,6 +392,23 @@ pub enum ModelRowFailure {
     /// A call reached unfinished formulas of the DAG it invoked.
     #[error("unfinished formulas in invoked DAGs: {}", unfinished_calls(.0))]
     UnfinishedCalls(Vec<graphcal_eval::eval::OutputDeclName>),
+}
+
+fn failure_origins(origins: &[FailureOrigin]) -> String {
+    if origins.is_empty() {
+        return String::new();
+    }
+    let label = if origins.len() == 1 {
+        "originating failure"
+    } else {
+        "originating failures"
+    };
+    let origins = origins
+        .iter()
+        .map(|origin| format!("{} ({})", origin.name, origin.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("; {label}: {origins}")
 }
 
 fn unfinished_calls(calls: &[graphcal_eval::eval::OutputDeclName]) -> String {
