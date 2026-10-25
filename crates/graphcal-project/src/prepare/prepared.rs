@@ -73,7 +73,7 @@ pub use model_port::{
     ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterDomain, ParameterPort,
     PreparedModel,
 };
-pub use model_session::{ModelInterfaceError, ModelSession, ModelSessionError};
+pub use model_session::{FixedParameters, ModelInterfaceError, ModelSession, ModelSessionError};
 pub use model_unit::ModelUnitError;
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);

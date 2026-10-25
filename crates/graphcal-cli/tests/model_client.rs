@@ -366,3 +366,62 @@ fn client_carries_fin_and_coordinate_keys() {
     );
     session.shutdown().unwrap();
 }
+
+#[test]
+fn client_sessions_fix_unvaried_parameters_from_a_json_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = Model::describe(command(dir.path())).unwrap();
+    let load = model.input::<Quantity>("load").unwrap();
+    let margin = model.output::<Quantity>("margin").unwrap();
+    let failure = model.output::<Bool>("failure").unwrap();
+    // `mode` has no default; `factor` is fixed instead of its default.
+    let fixed = dir.path().join("fixed.json");
+    std::fs::write(&fixed, r#"{"mode": "Mode#B", "factor": "1.0"}"#).unwrap();
+
+    let mut session = model
+        .session()
+        .vary(&load)
+        .output(&failure)
+        .output(&margin)
+        .fix_from_json_file(&fixed)
+        .spawn()
+        .unwrap();
+    assert_eq!(session.schema().inputs().len(), 1);
+    let request = session
+        .batch()
+        .column(&load, [5.0, 9.0])
+        .unwrap()
+        .build()
+        .unwrap();
+    let result = session.evaluate(&request).unwrap();
+    assert_eq!(result.column(&failure).unwrap(), [Some(false), Some(true)]);
+    assert_eq!(result.column(&margin).unwrap(), [Some(5.0), Some(1.0)]);
+    session.shutdown().unwrap();
+
+    // A fixed value is checked when the server starts.
+    std::fs::write(&fixed, r#"{"mode": "Mode#B", "factor": "1.0 m"}"#).unwrap();
+    let error = model
+        .session()
+        .vary(&load)
+        .output(&failure)
+        .fix_from_json_file(&fixed)
+        .spawn()
+        .unwrap_err();
+    assert!(
+        matches!(&error, ClientError::ServerStopped { stderr, .. } if stderr.contains("factor")),
+        "{error}"
+    );
+    // A varied parameter cannot also be fixed.
+    std::fs::write(&fixed, r#"{"mode": "Mode#B", "load": "1.0 m"}"#).unwrap();
+    assert!(matches!(
+        model
+            .session()
+            .vary(&load)
+            .output(&failure)
+            .fix_from_json_file(&fixed)
+            .schema(),
+        Err(ClientError::Session(
+            graphcal_model_protocol::SessionError::VariedAndFixed { .. }
+        ))
+    ));
+}

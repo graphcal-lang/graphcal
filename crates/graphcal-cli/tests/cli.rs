@@ -7464,6 +7464,32 @@ fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
 }
 
 #[test]
+fn model_serve_cannot_read_fixed_parameter_values_from_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let output = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args([
+            "--input",
+            "load",
+            "--output",
+            "failure",
+            "--params-json-file",
+            "-",
+            "--skip-fingerprint-check",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "setup failures must not contaminate Arrow stdout"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("reads requests from stdin"));
+}
+
+#[test]
 fn model_describe_and_serve_report_a_port_the_protocol_cannot_carry() {
     // A dimension without a canonical unit has no wire representation.
     let dir = tempfile::tempdir().unwrap();

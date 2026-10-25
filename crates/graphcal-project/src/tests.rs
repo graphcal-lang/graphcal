@@ -4691,6 +4691,84 @@ fn model_session_rejects_a_schema_of_another_interface() {
 }
 
 #[test]
+fn model_sessions_bind_fixed_parameters_in_every_row() {
+    use graphcal_model_protocol::{
+        FiniteF64, InputColumn, PortName, RequestBatch, RowOutcome, SessionError, SessionSpec,
+        ValueRef,
+    };
+
+    let project = crate::loader::LoadedProject::from_source(
+        r"
+        pub type Beam { Beam(length: Length, factor: Dimensionless), }
+        param beam: Beam;
+        param load: Force(min: 0.0 N, max: 100.0 N);
+        pub node moment: Force * Length = @load * @beam.length * @beam.factor;
+        ",
+        "model.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let name = |name: &str| PortName::new(name).unwrap();
+    let spec = SessionSpec::new(vec![name("load")], vec![name("moment")]);
+    assert!(matches!(
+        prepared.session_schema(&spec),
+        Err(ModelSessionError::Session(
+            SessionError::MissingDefault { .. }
+        ))
+    ));
+
+    let schema = std::sync::Arc::new(
+        prepared
+            .session_schema(&spec.with_fixed(name("beam")))
+            .unwrap(),
+    );
+    let mut bindings = prepared.binding_builder();
+    bindings
+        .bind_expression(
+            &DeclName::expect_valid("beam"),
+            &ExternalValue::parse("beam", "Beam(length: 2.0 m, factor: 3.0)").unwrap(),
+        )
+        .unwrap();
+    let fixed = bindings.into_fixed();
+    assert!(matches!(
+        prepared.model_session(std::sync::Arc::clone(&schema)),
+        Err(ModelSessionError::Session(
+            SessionError::MissingDefault { .. }
+        ))
+    ));
+    let session = prepared
+        .model_session_with(std::sync::Arc::clone(&schema), fixed)
+        .unwrap();
+    let x = |value: f64| FiniteF64::new(value).unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![x(1.0), x(10.0)])],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    let moments = result
+        .outcomes()
+        .map(|outcome| match outcome {
+            RowOutcome::Success(values) => values.get(schema.output_slot("moment").unwrap()),
+            RowOutcome::Failure(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        moments,
+        [
+            Some(ValueRef::Quantity(x(6.0))),
+            Some(ValueRef::Quantity(x(60.0)))
+        ]
+    );
+
+    let other = prepare_from_project(&project).unwrap();
+    assert!(matches!(
+        prepared.model_session_with(schema, other.binding_builder().into_fixed()),
+        Err(ModelSessionError::ForeignFixedParameters)
+    ));
+}
+
+#[test]
 fn generic_model_interface_accepts_types_the_batch_protocol_cannot_carry() {
     let project = crate::loader::LoadedProject::from_source(
         "pub base dim Money;\n\

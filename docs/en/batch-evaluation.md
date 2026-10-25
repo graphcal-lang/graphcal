@@ -86,8 +86,9 @@ node:
 ## 2. Start a session
 
 A session names the parameters it varies (`--input`) and the outputs it reads
-(`--output`). Every parameter it does not vary keeps its default, so a
-parameter without a default must be varied:
+(`--output`). Every parameter it does not vary keeps its default unless the
+session fixes it (see [Fix parameters with values](#fix-parameters-with-values)),
+so a parameter without a default must be varied or fixed:
 
 ```bash
 graphcal model serve reliability.gcl \
@@ -156,9 +157,26 @@ session.shutdown()?;
 [Tenax](https://github.com/shunichironomura/tenax) uses this client to sample
 Graphcal models and run PRIM scenario discovery.
 
+## Fix parameters with values
+
+To evaluate parameters a session does not vary at other values than their
+defaults, or to give a value to a parameter that has none, pass the values to
+`serve` the way `graphcal eval` takes them: `--param NAME=VALUE`,
+`--params-json`, or `--params-json-file`. Stdin carries the requests, so
+`--params-json-file -` is not available. The server checks the values when it
+starts and uses them in every row; a fixed parameter cannot also be varied.
+From Rust, `SessionBuilder::fix_from_json_file` passes a JSON file.
+
+```bash
+graphcal model serve reliability.gcl \
+    --input load --output failure --output margin \
+    --params-json-file scenario.json \
+    --expect-fingerprint sha256:…
+```
+
 ## Fix parameters with a wrapper file
 
-To hold some parameters at values other than their defaults, write a small
+To hold some parameters at values computed in Graphcal, write a small
 wrapper that includes the model, and serve the wrapper instead. An `include`
 of another file needs a package (see
 [Multi-File Projects](language/multi-file.md)); here the model is

@@ -234,6 +234,10 @@ enum ModelCommands {
         /// Serve without checking the interface fingerprint
         #[arg(long)]
         skip_fingerprint_check: bool,
+        /// Values of unvaried params, used instead of their defaults in every
+        /// row; stdin is not available as a JSON source
+        #[command(flatten)]
+        parameters: ParameterArgs,
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
@@ -722,6 +726,7 @@ fn run_model_command(command: ModelCommands) {
             unit,
             expect_fingerprint,
             skip_fingerprint_check: _,
+            parameters,
             root,
         } => {
             // The required argument group admits exactly one of the two
@@ -730,22 +735,46 @@ fn run_model_command(command: ModelCommands) {
                 model::FingerprintCheck::Skip,
                 model::FingerprintCheck::Expect,
             );
-            run_model_serve(&file, &input, &output, &unit, &fingerprint, root.as_deref());
+            if parameters.reads_stdin() {
+                eprintln!(
+                    "error: `model serve` reads requests from stdin, so `--params-json-file -` is not available"
+                );
+                process::exit(2);
+            }
+            let overrides = match parse_overrides_with_sources(&parameters) {
+                Ok(overrides) => overrides,
+                Err(error) => report_parameter_error(&error),
+            };
+            run_model_serve(
+                &file,
+                &model::SessionSelection {
+                    inputs: &input,
+                    outputs: &output,
+                    units: &unit,
+                    fixed: &overrides,
+                },
+                &fingerprint,
+                root.as_deref(),
+            );
         }
     }
 }
 
 fn run_model_serve(
     file: &Path,
-    inputs: &[String],
-    outputs: &[String],
-    units: &[model::UnitChoiceArgument],
+    selection: &model::SessionSelection<'_>,
     fingerprint: &model::FingerprintCheck,
     root: Option<&Path>,
 ) {
-    if let Err(error) = model::serve(file, inputs, outputs, units, fingerprint, root) {
-        eprintln!("error: {error}");
-        process::exit(error.exit_code());
+    if let Err(error) = model::serve(file, selection, fingerprint, root) {
+        let code = error.exit_code();
+        match error {
+            model::ModelServeError::Compile(error) => {
+                eprintln!("{:?}", miette::Report::new(error));
+            }
+            other => eprintln!("error: {other}"),
+        }
+        process::exit(code);
     }
 }
 

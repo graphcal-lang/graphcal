@@ -754,6 +754,7 @@ result batch per request to stdout as Arrow IPC streams.
 
 ```bash
 graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=UNIT>]... \
+    [--param <NAME=VALUE>]... [--params-json <JSON> | --params-json-file <FILE>] \
     (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) [--root <ROOT>]
 ```
 
@@ -762,9 +763,10 @@ graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=U
 | Item | Description |
 |------|-------------|
 | `<FILE>` | Entry `.gcl` file |
-| `--input <NAME>` | Parameter to vary in requests; repeatable and required. Parameters not listed keep their defaults |
+| `--input <NAME>` | Parameter to vary in requests; repeatable and required. Parameters not listed keep their defaults unless fixed |
 | `--output <NAME>` | Public node to return in results; repeatable and required |
 | `--unit <NAME=UNIT>` | Carry the selected quantity port `NAME` in `UNIT`, a fixed-scale unit expression of the entry file; repeatable |
+| `--param`, `--params-json`, `--params-json-file` | Fix parameters that are not varied to these values in every row, in the formats of `eval`; `--params-json-file -` is not available |
 | `--expect-fingerprint <FINGERPRINT>` | Refuse to start unless the interface fingerprint from `graphcal model describe` matches |
 | `--skip-fingerprint-check` | Serve without checking the fingerprint |
 | `--root <ROOT>` | Explicit project root |

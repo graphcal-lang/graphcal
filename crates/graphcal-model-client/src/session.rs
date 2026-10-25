@@ -1,6 +1,7 @@
 //! Configuring and running one `graphcal model serve` process.
 
 use std::io::{BufReader, Read, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -36,6 +37,7 @@ pub struct SessionBuilder<'m> {
     inputs: Vec<PortName>,
     outputs: Vec<PortName>,
     units: Vec<(PortName, UnitSpelling)>,
+    fixed: Vec<PathBuf>,
     foreign: Option<PortName>,
 }
 
@@ -46,8 +48,22 @@ impl<'m> SessionBuilder<'m> {
             inputs: Vec::new(),
             outputs: Vec::new(),
             units: Vec::new(),
+            fixed: Vec::new(),
             foreign: None,
         }
+    }
+
+    /// Fix the unvaried parameters named in the JSON document at `path` to
+    /// its values, instead of their defaults, in every row.
+    ///
+    /// The document has the format `graphcal eval --params-json-file`
+    /// reads: one member per parameter, so a record or union parameter
+    /// without a default can be given a value without being varied. The
+    /// server reads and checks the values when the session starts; the
+    /// client reads the parameter names to configure the session.
+    pub fn fix_from_json_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.fixed.push(path.into());
+        self
     }
 
     /// Vary `input` in every request.
@@ -124,10 +140,25 @@ impl<'m> SessionBuilder<'m> {
         if let Some(name) = &self.foreign {
             return Err(ClientError::ForeignHandle { name: name.clone() });
         }
+        let fixed = self
+            .fixed_document()?
+            .map_or_else(|| Ok(Vec::new()), fixed_parameter_names)?;
         Ok(self.units.iter().fold(
-            SessionSpec::new(self.inputs.clone(), self.outputs.clone()),
+            fixed.into_iter().fold(
+                SessionSpec::new(self.inputs.clone(), self.outputs.clone()),
+                SessionSpec::with_fixed,
+            ),
             |spec, (port, unit)| spec.with_unit(port.clone(), unit.clone()),
         ))
+    }
+
+    /// The one JSON document of fixed values, if any.
+    const fn fixed_document(&self) -> Result<Option<&PathBuf>, ClientError> {
+        match self.fixed.as_slice() {
+            [] => Ok(None),
+            [path] => Ok(Some(path)),
+            [..] => Err(ClientError::FixedParametersTwice),
+        }
     }
 
     /// The session schema this selection configures, without starting a
@@ -168,7 +199,7 @@ impl<'m> SessionBuilder<'m> {
         let mut child = self
             .model
             .command()
-            .serve(&spec, self.model.fingerprint())
+            .serve(&spec, self.model.fingerprint(), self.fixed_document()?)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -195,6 +226,24 @@ impl<'m> SessionBuilder<'m> {
             Err(error) => Err(process.failure(error)),
         }
     }
+}
+
+/// The parameter names of the JSON document of fixed values at `path`.
+fn fixed_parameter_names(path: &PathBuf) -> Result<Vec<PortName>, ClientError> {
+    let invalid = |reason: String| ClientError::FixedParameters {
+        path: path.clone(),
+        reason,
+    };
+    let text = std::fs::read_to_string(path).map_err(|error| invalid(error.to_string()))?;
+    let document = serde_json::from_str::<serde_json::Value>(&text)
+        .map_err(|error| invalid(error.to_string()))?;
+    let serde_json::Value::Object(members) = document else {
+        return Err(invalid("the document is not a JSON object".to_owned()));
+    };
+    members
+        .keys()
+        .map(|name| PortName::new(name.as_str()).map_err(|error| invalid(error.to_string())))
+        .collect()
 }
 
 type Results = StreamReader<BufReader<ChildStdout>>;
