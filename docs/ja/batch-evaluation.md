@@ -94,6 +94,8 @@ graphcal model serve reliability.gcl \
     --expect-fingerprint sha256:…
 ```
 
+`--unit` はポート全体の単位を選びます。構造を持つ出力の中の物理量を別の単位で表示するには、[`graphcal model unit`](cli-reference.md#graphcal-model-unit)（Rust からは `Model::resolve_units`）で単位を解決します。単位が測る次元と SI での倍率が得られるので、SI の値を自分で換算します。
+
 サーバは stdin からリクエストのバッチを読み、stdout に結果を Arrow IPC ストリームとして書きます。端末から直接操作するものではなく、クライアントから駆動します。
 
 ## 3. Rust から評価する { #3-evaluate-from-rust }

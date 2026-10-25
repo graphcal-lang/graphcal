@@ -14,10 +14,11 @@ use graphcal_compiler::semantic::unit_scale::{
 };
 use graphcal_compiler::syntax::dimension::UnitRef;
 use graphcal_compiler::syntax::parser::Parser;
-use graphcal_model_protocol::{PortName, SiScale, UnitSpelling};
+use graphcal_model_protocol::{PortName, ResolvedUnit, SiScale, UnitSpelling};
 use thiserror::Error;
 
 use super::PreparedProject;
+use super::model_axis::protocol_dimension;
 
 /// Why a unit cannot carry a quantity port's values.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -38,6 +39,8 @@ pub enum ModelUnitError {
     Overflow,
     #[error("the unit measures `{actual}`, but the port is `{expected}`")]
     DimensionMismatch { expected: String, actual: String },
+    #[error("the unit's dimension has no protocol representation: {reason}")]
+    UnrepresentableDimension { reason: String },
 }
 
 impl PreparedProject {
@@ -57,6 +60,49 @@ impl PreparedProject {
         let Some(expected) = self.port_type(port).and_then(quantity_dimension) else {
             return Err(ModelUnitError::NotQuantityPort { port: port.clone() });
         };
+        let (dimension, scale) = self.fixed_unit(unit)?;
+        if dimension != *expected {
+            let dimensions = &self.tir().registry().dimensions;
+            return Err(ModelUnitError::DimensionMismatch {
+                expected: dimensions.format_dimension(expected),
+                actual: dimensions.format_dimension(&dimension),
+            });
+        }
+        Ok(scale)
+    }
+
+    /// The dimension and scale of `unit`, a unit expression with a fixed
+    /// scale resolved in the entry file's scope, as if written there after
+    /// `->`.
+    ///
+    /// A client uses it to convert quantities it read in their canonical SI
+    /// unit, such as fields of a structured output, into a unit of its
+    /// choice.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModelUnitError`] when `unit` does not parse, is not in
+    /// scope, has no fixed scale, or measures a dimension the protocol cannot
+    /// represent.
+    pub fn resolve_model_unit(&self, unit: &UnitSpelling) -> Result<ResolvedUnit, ModelUnitError> {
+        let (dimension, scale) = self.fixed_unit(unit)?;
+        let dimension = match protocol_dimension(&dimension) {
+            Ok(Ok(dimension)) => dimension,
+            Ok(Err(reason)) => return Err(ModelUnitError::UnrepresentableDimension { reason }),
+            Err(error) => {
+                return Err(ModelUnitError::UnrepresentableDimension {
+                    reason: error.to_string(),
+                });
+            }
+        };
+        Ok(ResolvedUnit::new(unit.clone(), dimension, scale))
+    }
+
+    /// The dimension and scale of the fixed-scale unit expression `unit`.
+    fn fixed_unit(
+        &self,
+        unit: &UnitSpelling,
+    ) -> Result<(graphcal_compiler::dimension::Dimension, SiScale), ModelUnitError> {
         let expr = Parser::new(unit.as_str())
             .parse_standalone_unit_expr()
             .map_err(|error| ModelUnitError::Syntax {
@@ -100,14 +146,8 @@ impl PreparedProject {
                     UnitResolveError::Overflow(_) => ModelUnitError::Overflow,
                 },
             )?;
-        if dimension != *expected {
-            let dimensions = &tir.registry().dimensions;
-            return Err(ModelUnitError::DimensionMismatch {
-                expected: dimensions.format_dimension(expected),
-                actual: dimensions.format_dimension(&dimension),
-            });
-        }
-        SiScale::new(scale.get()).map_err(|_| ModelUnitError::InvalidScale)
+        let scale = SiScale::new(scale.get()).map_err(|_| ModelUnitError::InvalidScale)?;
+        Ok((dimension, scale))
     }
 
     /// The declared type of the parameter or public output named `port`.

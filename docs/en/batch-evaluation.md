@@ -113,6 +113,12 @@ graphcal model serve reliability.gcl \
     --expect-fingerprint sha256:…
 ```
 
+`--unit` chooses the unit of a whole port. To show a quantity inside a
+structured output in another unit, resolve the unit with
+[`graphcal model unit`](cli-reference.md#graphcal-model-unit) (from Rust,
+`Model::resolve_units`), which reports the dimension it measures and its SI
+scale, and convert the SI value yourself.
+
 The server reads request batches on stdin and writes results on stdout as
 Arrow IPC streams, so it is driven by a client rather than a terminal.
 

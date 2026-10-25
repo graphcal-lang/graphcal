@@ -27,6 +27,7 @@ graphcal [OPTIONS] <COMMAND>
 | [`dump`](#graphcal-dump) | コンパイラー/評価器パイプラインの成果物をデバッグ出力します（実験的） |
 | [`graph`](#graphcal-graph) | `.gcl` ファイルの依存関係グラフをエクスポートします（実験的） |
 | [`model describe`](#graphcal-model-describe) | モデルのバッチ評価用インターフェースを出力します |
+| [`model unit`](#graphcal-model-unit) | モデルのスコープで単位式の次元と SI での倍率を出力します |
 | [`model serve`](#graphcal-model-serve) | リクエストのバッチを stdin/stdout の Arrow IPC 経由で評価します |
 | [`report build`](#graphcal-report-build) | モデルから自己完結型の HTML レポートをビルドします（実験的） |
 | [`deps lock`](#graphcal-deps-lock) | 正確なリビジョン指定の Git 依存関係を解決し、`graphcal.lock` を書き出します |
@@ -68,7 +69,7 @@ graphcal deps lock [OPTIONS]
 ハードエラーとなるため、プラグインのバイナリはレビュー可能なロックファイルの差分と一緒にしか
 変更できません。
 
-依存関係を利用するコマンド（`check`、`eval`、`dump`、`graph`、`model describe`、`model serve`、および LSP）は、
+依存関係を利用するコマンド（`check`、`eval`、`dump`、`graph`、`model describe`、`model unit`、`model serve`、および LSP）は、
 パッケージに関して読み取り専用です。これらは `graphcal.lock` とキャッシュされたソースを
 読み取りますが、ロックファイルのエントリを取得、作成、更新することはありません。ロックファイルが
 存在しない、古い、異なる Graphcal または標準ライブラリのバージョンを使用している、あるいは
@@ -704,6 +705,28 @@ graphcal model describe <FILE> [--root <ROOT>]
 プロトコルで受け渡せない型のポートも、理由を付けて unsupported として一覧に載ります。文書の形式は[バッチ評価](batch-evaluation.md)を参照してください。
 
 **終了コード:** `0` 成功、`2` プロジェクトのコンパイルに失敗。
+
+---
+
+## `graphcal model unit` { #graphcal-model-unit }
+
+単位式をエントリファイルの `->` の後に書いたものとして解決し、それぞれの次元と、標準の SI 単位での大きさを JSON の配列で出力します。バッチ評価のクライアントは、構造を持つ出力のフィールドなど SI 単位で受け取った物理量を、好きな単位で表示するために使います。
+
+```bash
+graphcal model unit <FILE> <UNIT>... [--root <ROOT>]
+```
+
+**引数とオプション:**
+
+| 項目 | 説明 |
+|------|-------------|
+| `<FILE>` | エントリの `.gcl` ファイル。このスコープで単位を解決します |
+| `<UNIT>` | 倍率が固定の単位式。`h`、`km/s` など。繰り返し指定可能です |
+| `--root <ROOT>` | 明示的なプロジェクトルート |
+
+倍率が固定されているのは、基本単位、`const` 単位、プレリュードの単位です。実行時単位は使えません。
+
+**終了コード:** `0` 成功、`2` プロジェクトのコンパイルまたは単位の解決に失敗。
 
 ---
 

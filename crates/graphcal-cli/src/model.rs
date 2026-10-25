@@ -11,7 +11,9 @@ use graphcal_model_protocol::{
 use crate::overrides::ParsedOverrides;
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::{build_rooted_filesystem, load_project};
-use graphcal_project::prepare::{ModelInterfaceError, ModelSessionError, PreparedProject};
+use graphcal_project::prepare::{
+    ModelInterfaceError, ModelSessionError, ModelUnitError, PreparedProject,
+};
 use graphcal_project::project_compiler::ProjectCompiler;
 use thiserror::Error;
 
@@ -41,6 +43,36 @@ pub fn parse_unit_choice(argument: &str) -> Result<UnitChoiceArgument, String> {
         port: PortName::new(port.trim()).map_err(|error| error.to_string())?,
         unit: UnitSpelling::new(unit.trim()).map_err(|error| error.to_string())?,
     })
+}
+
+/// Parse a `model unit` argument; the unit itself is resolved against the
+/// model later.
+pub fn parse_unit_spelling(argument: &str) -> Result<UnitSpelling, String> {
+    UnitSpelling::new(argument).map_err(|error| error.to_string())
+}
+
+/// Print the dimension and scale of each of `units`, resolved in the scope
+/// of `file`, as a JSON array on stdout.
+pub fn resolve_units(
+    file: &Path,
+    units: &[UnitSpelling],
+    root: Option<&Path>,
+) -> Result<(), ModelServeError> {
+    let prepared = prepare(file, root)?;
+    let resolved = units
+        .iter()
+        .map(|unit| {
+            prepared
+                .resolve_model_unit(unit)
+                .map_err(|source| ModelServeError::Unit {
+                    unit: unit.clone(),
+                    source,
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let json = serde_json::to_string_pretty(&resolved).map_err(ModelServeError::Json)?;
+    println!("{json}");
+    Ok(())
 }
 
 /// Print the model's describe document as JSON on stdout.
@@ -143,7 +175,12 @@ pub enum ModelServeError {
     },
     #[error(transparent)]
     ModelSession(#[from] ModelSessionError),
-    #[error("cannot encode the describe document: {0}")]
+    #[error("unit `{unit}`: {source}")]
+    Unit {
+        unit: UnitSpelling,
+        source: ModelUnitError,
+    },
+    #[error("cannot encode the JSON document: {0}")]
     Json(serde_json::Error),
     #[error("model server failed: {0}")]
     Serve(graphcal_model_server::ServeError),
@@ -161,6 +198,7 @@ impl ModelServeError {
             | Self::Interface(_)
             | Self::FingerprintMismatch { .. }
             | Self::ModelSession(_)
+            | Self::Unit { .. }
             | Self::Json(_) => 2,
         }
     }

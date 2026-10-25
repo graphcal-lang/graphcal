@@ -15,6 +15,12 @@ pub enum ClientError {
     Describe { status: ExitStatus, stderr: String },
     #[error("graphcal model describe printed an invalid document: {0}")]
     DescribeDocument(#[source] serde_json::Error),
+    #[error("graphcal model unit failed ({status}): {stderr}")]
+    Units { status: ExitStatus, stderr: String },
+    #[error("graphcal model unit printed an invalid document: {0}")]
+    UnitsDocument(#[source] serde_json::Error),
+    #[error("graphcal model unit did not answer the requested units in order")]
+    UnitsMismatch,
     #[error("the model has no parameter named `{name}`")]
     UnknownInput { name: String },
     #[error("the model has no public output named `{name}`")]

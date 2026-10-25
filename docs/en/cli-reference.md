@@ -27,6 +27,7 @@ graphcal [OPTIONS] <COMMAND>
 | [`dump`](#graphcal-dump) | Debug-print compiler/evaluator pipeline artifacts (experimental) |
 | [`graph`](#graphcal-graph) | Export the dependency graph of a `.gcl` file (experimental) |
 | [`model describe`](#graphcal-model-describe) | Print a model's batch-evaluation interface |
+| [`model unit`](#graphcal-model-unit) | Print the dimension and SI scale of unit expressions in a model's scope |
 | [`model serve`](#graphcal-model-serve) | Evaluate request batches over stdin/stdout Arrow IPC |
 | [`report build`](#graphcal-report-build) | Build a self-contained HTML report from a model (experimental) |
 | [`deps lock`](#graphcal-deps-lock) | Resolve exact-rev Git dependencies and write `graphcal.lock` |
@@ -67,7 +68,7 @@ pins each referenced `.wasm` file's SHA-256 as a `[[plugin]]` entry. Loading
 enforces the pins: an unpinned or hash-mismatched plugin is a hard error, so
 plugin binaries can only change together with a reviewable lockfile diff.
 
-Dependency-consuming commands (`check`, `eval`, `dump`, `graph`, `model describe`, `model serve`, and the LSP) are
+Dependency-consuming commands (`check`, `eval`, `dump`, `graph`, `model describe`, `model unit`, `model serve`, and the LSP) are
 read-only with respect to packages: they read `graphcal.lock` and cached
 sources, but they do not fetch, create, or update lockfile entries. If the
 lockfile is missing, stale, uses a different Graphcal or standard-library
@@ -744,6 +745,31 @@ Ports whose type the protocol cannot carry are listed as unsupported, with the
 reason. See [Batch Evaluation](batch-evaluation.md) for the document format.
 
 **Exit codes:** `0` success; `2` the project failed to compile.
+
+---
+
+## `graphcal model unit`
+
+Resolve unit expressions as if written after `->` in the entry file, and print
+each one's dimension and size in the canonical SI unit as a JSON array. A
+batch-evaluation client uses it to show quantities it read in SI units, such as
+fields of a structured output, in units of its choice.
+
+```bash
+graphcal model unit <FILE> <UNIT>... [--root <ROOT>]
+```
+
+**Arguments and options:**
+
+| Item | Description |
+|------|-------------|
+| `<FILE>` | Entry `.gcl` file, whose scope resolves the units |
+| `<UNIT>` | Unit expression with a fixed scale, such as `h` or `km/s`; repeatable |
+| `--root <ROOT>` | Explicit project root |
+
+Base, `const`, and prelude units have a fixed scale; runtime units do not.
+
+**Exit codes:** `0` success; `2` the project failed to compile or a unit did not resolve.
 
 ---
 

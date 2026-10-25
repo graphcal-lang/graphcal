@@ -27,6 +27,7 @@ mod finite;
 mod interface;
 mod label;
 mod outcome;
+mod resolved_unit;
 mod session;
 mod unit_scale;
 mod value;
@@ -52,6 +53,7 @@ pub use label::{
     UnitSpelling, VariantName,
 };
 pub use outcome::{RowFailure, RowOutcome, RowStatus, UnknownRowStatus};
+pub use resolved_unit::ResolvedUnit;
 pub use session::{
     CanonicalUnitsOnly, InputSlot, OutputSlot, SessionError, SessionInput, SessionOutput,
     SessionSchema, SessionSpec, UnitChoice, UnitResolver,
