@@ -46,7 +46,7 @@ pub fn parse_unit_choice(argument: &str) -> Result<UnitChoiceArgument, String> {
 /// Parse a `model unit` argument; the unit itself is resolved against the
 /// model later.
 pub fn parse_unit_spelling(argument: &str) -> Result<UnitSpelling, String> {
-    UnitSpelling::new(argument.trim()).map_err(|error| error.to_string())
+    UnitSpelling::new(argument).map_err(|error| error.to_string())
 }
 
 /// Print the dimension and scale of each of `units`, resolved in the scope

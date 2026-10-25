@@ -101,6 +101,11 @@ fn client_resolves_units_in_the_scope_of_the_model() {
     );
     assert_eq!(resolved[1].from_si(length, value), None);
 
+    // The server answers each unit as the client spelled it.
+    let spaced = model.resolve_units(&[unit(" km ")]).unwrap();
+    assert_eq!(spaced[0].unit(), &unit(" km "));
+    assert_eq!(spaced[0].si_scale().get(), 1000.0);
+
     let error = model.resolve_units(&[unit("parsec_x")]).unwrap_err();
     assert!(
         matches!(&error, ClientError::Units { stderr, .. } if stderr.contains("parsec_x")),
