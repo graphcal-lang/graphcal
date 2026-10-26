@@ -31,7 +31,7 @@ jobs:
           tool: wasm-pack@0.15.0,just@1.58.0
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
         with:
-          version: '1.3.0'
+          version: '1.4.0'
           node-version: '24.22.0'
           working-directory: web/playground
           run-install: false
