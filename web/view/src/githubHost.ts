@@ -71,8 +71,10 @@ async function mapLimit<T, R>(
 
 /**
  * The project around `path` in `tree`, planned within the engine's limits
- * before its sources are read with `read`. A package's manifest is read
- * first, for where its modules live, and not read again.
+ * before its sources are read with `read`, then planned again with the sizes
+ * of what was read (the listing gives none), so files beside the entry that
+ * are too big are left out instead of failing the load. A package's manifest
+ * is read first, for where its modules live, and not read again.
  */
 async function readProject(
   tree: Tree,
@@ -91,15 +93,22 @@ async function readProject(
   } else {
     shape = location;
   }
-  const plan = planProject(tree.entries, shape, limits);
-  const texts = await mapLimit(plan.files, 6, (file) =>
+  const initial = planProject(tree.entries, shape, limits);
+  const texts = await mapLimit(initial.files, 6, (file) =>
     manifest !== null && file.path === manifest.path
       ? Promise.resolve(manifest.text)
       : read(file.path),
   );
+  const textByPath = new Map(initial.files.map((file, i) => [file.path, texts[i] ?? ""]));
+  const encoder = new TextEncoder();
+  const measured = tree.entries.map((entry) => {
+    const text = textByPath.get(entry.path);
+    return text === undefined ? entry : { ...entry, size: encoder.encode(text).length };
+  });
+  const plan = planProject(measured, shape, limits);
   return {
     plan,
-    files: plan.files.map((file, i) => [file.relative, texts[i] ?? ""] as [string, string]),
+    files: plan.files.map((file) => [file.relative, textByPath.get(file.path) ?? ""]),
   };
 }
 
