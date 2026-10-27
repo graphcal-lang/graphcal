@@ -119,7 +119,7 @@ The `@` prefix is the central scoping mechanism:
 
 | Reference | Meaning | Allowed in |
 |-----------|---------|------------|
-| `@name` | Parameter, node, or const node in the graph | `node` expressions, param defaults, `dag` block bodies |
+| `@name` | Parameter, node, or const node in the graph | `node` expressions, param defaults, `dag` block bodies; const nodes only in `const node` expressions |
 | `@dag(args)::out` | Runtime DAG instantiation projecting one output | Runtime expressions, including param defaults |
 | `NAME` | Built-in constant (`PI`, `E`, `TAU`, etc.) | Everywhere |
 | `name` | Local variable (loop variable, match binding) | Expression bodies |
@@ -144,7 +144,7 @@ numeric value silently.
 |---------|-------------|
 | `node` expression | Yes |
 | `param` default value | Yes |
-| `const node` expression | No |
+| `const node` expression | Only for other `const node` values |
 | `dag` block body (inside `node` expressions) | Yes |
 
 ## Evaluation Order
