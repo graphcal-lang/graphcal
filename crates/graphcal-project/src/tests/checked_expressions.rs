@@ -90,7 +90,8 @@ fn normalized_nat_axes_do_not_replay_source_arithmetic() {
 
 #[test]
 fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
-    let source = "type T<N: Nat> { T(x: Int(min: 1 / 0 + to_int(key(Fin(N), 1)))) }".to_string();
+    let source =
+        "type T<N: Nat> { T(x: Int(min: div_trunc(1, 0) + to_int(key(Fin(N), 1)))) }".to_string();
     let tir = compile_to_tir(&source, "readiness.gcl").unwrap();
     let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
     let src = sources.register("readiness.gcl", std::sync::Arc::new(source));

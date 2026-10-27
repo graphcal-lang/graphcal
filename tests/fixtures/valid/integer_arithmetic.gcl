@@ -1,14 +1,28 @@
 // integer_arithmetic.gcl -- Integer-specific arithmetic edge cases
 //
 // integers.gcl already covers the happy path; this fixture pins down
-// the sign behavior of `/` and `%` (which differ between languages),
-// negation of negatives, and chained Int comparisons.
+// the sign behavior of the `div_*` built-ins and `%` (which differ between
+// languages), negation of negatives, and chained Int comparisons.
 param a: Int = -7;
 param b: Int = 3;
 param c: Int = 4;
 
-// Truncation toward zero (Rust semantics): -7 / 3 = -2 (not -3 as in floor-div).
-node div_neg: Int = @a / @b;
+// Each division built-in names its rounding. -7 / 3 = -2.33..., so
+// div_trunc gives -2 (toward zero), div_floor -3, and div_ceil -2.
+node div_trunc_neg: Int = div_trunc(@a, @b);
+node div_floor_neg: Int = div_floor(@a, @b);
+node div_ceil_neg: Int = div_ceil(@a, @b);
+
+// A negative divisor: 7 / -3 = -2.33..., so -2, -3, and -2 again.
+node div_trunc_neg_divisor: Int = div_trunc(-@a, -@b);
+node div_floor_neg_divisor: Int = div_floor(-@a, -@b);
+node div_ceil_neg_divisor: Int = div_ceil(-@a, -@b);
+
+// A positive inexact quotient (7 / 3: floor 2, ceil 3) and an exact one
+// (12 / 3: ceil 4).
+node div_floor_pos: Int = div_floor(-@a, @b);
+node div_ceil_pos: Int = div_ceil(-@a, @b);
+node div_ceil_exact: Int = div_ceil(@c * @b, @b);
 
 // Modulo follows the sign of the dividend: -7 % 3 = -1.
 node mod_neg_dividend: Int = @a % @b;

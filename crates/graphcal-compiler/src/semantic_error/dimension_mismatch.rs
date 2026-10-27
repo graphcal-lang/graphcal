@@ -3,7 +3,7 @@
 //!
 //! [`DimensionError::DimensionMismatch`]: super::dimension::DimensionError::DimensionMismatch
 
-use crate::builtin::{BuiltinFn, ComplexFn, LinearAlgebraFn};
+use crate::builtin::{BuiltinFn, ComplexFn, IntDivisionFn, LinearAlgebraFn};
 use crate::function_signature::IndexBinder;
 use crate::hir::expr::ExternFnRef;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic, TypeSpelling};
@@ -261,6 +261,7 @@ pub enum MismatchRule {
     ToIntDimensionless,
     CoordExtractsCoordinate,
     CoordCoordinateKeysOnly,
+    IntDivisionOperands(IntDivisionFn),
     DatetimeArgument(BuiltinFn),
     DatetimeStringLiteral,
     DatetimeTimezoneLiteral,
@@ -393,6 +394,11 @@ impl std::fmt::Display for MismatchRule {
             }
             Self::CoordCoordinateKeysOnly => f.write_str(
                 "coord() applies to coordinate-axis keys only; named keys are opaque and Fin keys expose to_int()",
+            ),
+            Self::IntDivisionOperands(function) => write!(
+                f,
+                "{}() divides two Int values; divide quantities with `/`",
+                function.as_str()
             ),
             Self::DatetimeArgument(builtin) => {
                 write!(f, "{}() requires a Datetime argument", builtin.as_str())

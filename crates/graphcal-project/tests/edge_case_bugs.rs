@@ -941,24 +941,37 @@ proptest! {
         }
     }
 
-    /// Integer division truncates toward zero (Rust semantics)
+    /// Each integer division built-in rounds the real quotient in its named
+    /// direction, for either divisor sign.
     #[test]
-    fn int_division_truncates_toward_zero(a in -1000i64..1000, b in 1i64..1000) {
+    #[expect(
+        clippy::float_cmp,
+        reason = "both sides are integer-valued binary64 values, which compare exactly"
+    )]
+    fn int_division_builtins_round_the_real_quotient(
+        a in -1000i64..1000,
+        b in prop_oneof![-1000i64..0, 1i64..1000],
+    ) {
         let source = format!(
-            "param a: Int = {a};\nparam b: Int = {b};\nnode q: Int = @a / @b;"
+            "param a: Int = {a};\nparam b: Int = {b};\n\
+             node t: Int = div_trunc(@a, @b);\n\
+             node f: Int = div_floor(@a, @b);\n\
+             node c: Int = div_ceil(@a, @b);"
         );
         let result = compile_and_eval(&source).unwrap();
-        let q = find_int_value(&result, "q");
-        let expected = a / b; // Rust truncates toward zero
-        prop_assert_eq!(q, expected);
+        // Small operands make the binary64 quotient an exact oracle.
+        let quotient = a as f64 / b as f64;
+        prop_assert_eq!(find_int_value(&result, "t") as f64, quotient.trunc());
+        prop_assert_eq!(find_int_value(&result, "f") as f64, quotient.floor());
+        prop_assert_eq!(find_int_value(&result, "c") as f64, quotient.ceil());
     }
 
-    /// Integer modulo satisfies: a == (a / b) * b + (a % b)
+    /// Integer modulo satisfies: a == div_trunc(a, b) * b + (a % b)
     #[test]
     fn int_euclidean_identity(a in -1000i64..1000, b in 1i64..1000) {
         let source = format!(
             "param a: Int = {a};\nparam b: Int = {b};\n\
-             node q: Int = @a / @b;\nnode r: Int = @a % @b;"
+             node q: Int = div_trunc(@a, @b);\nnode r: Int = @a % @b;"
         );
         let result = compile_and_eval(&source).unwrap();
         let q = find_int_value(&result, "q");

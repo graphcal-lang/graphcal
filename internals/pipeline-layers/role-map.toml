@@ -753,6 +753,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["semantic", "int_division"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic", "int_division", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["semantic", "checked_type"]
 role = "contracts"
 

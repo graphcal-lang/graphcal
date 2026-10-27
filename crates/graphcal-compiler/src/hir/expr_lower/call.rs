@@ -31,7 +31,8 @@ pub(super) const fn lowering_arity(function: BuiltinFn) -> Option<usize> {
         | BuiltinFn::Aggregation(_)
         | BuiltinFn::LinearAlgebra(_)
         | BuiltinFn::Datetime(_)
-        | BuiltinFn::Conversion(_) => None,
+        | BuiltinFn::Conversion(_)
+        | BuiltinFn::IntDivision(_) => None,
     }
 }
 
