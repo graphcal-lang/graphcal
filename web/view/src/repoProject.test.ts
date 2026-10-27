@@ -19,12 +19,7 @@ const LIMITS: ProjectLimits = {
 };
 
 function tree(paths: Record<string, number>): TreeEntry[] {
-  const entries: TreeEntry[] = [];
-  for (const [path, size] of Object.entries(paths)) {
-    entries.push({ path, type: "blob", sha: `sha-${path}`, size });
-  }
-  entries.push({ path: "src", type: "tree", sha: "sha-src", size: null });
-  return entries;
+  return Object.entries(paths).map(([path, size]) => ({ path, size }));
 }
 
 /** The shape of a located project, its manifest declaring `name` (default `power_project`) in `src`. */

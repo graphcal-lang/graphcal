@@ -5,7 +5,8 @@
 // its manifest declares; only those, the manifest and the entry are needed.
 // The other `.gcl` files beside the entry come along when they fit, so the
 // explorer can open them without reading the project again. Everything is
-// checked against the browser engine's limits before anything is downloaded.
+// checked against the browser engine's limits before anything is downloaded
+// (as far as the listing gives sizes; the engine checks again when it loads).
 import type { PackageLayout, ProjectLimits } from "./engine.ts";
 import type { TreeEntry } from "./github.ts";
 
@@ -63,10 +64,9 @@ function utf8Length(text: string): number {
   return new TextEncoder().encode(text).length;
 }
 
+/** The files by path, with their sizes when the listing gave them. */
 function blobSizes(entries: readonly TreeEntry[]): Map<string, number | null> {
-  const blobs = new Map<string, number | null>();
-  for (const entry of entries) if (entry.type === "blob") blobs.set(entry.path, entry.size);
-  return blobs;
+  return new Map(entries.map((entry) => [entry.path, entry.size]));
 }
 
 /** The project around `file`: its root, and its manifest if it has one. */

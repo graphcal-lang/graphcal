@@ -12,6 +12,7 @@ import { SourceEditor } from "./editor.ts";
 import { errorMessage } from "./errors.ts";
 import { Explorer, type RefSource } from "./explorer.ts";
 import { FormulaBar } from "./formulaBar.ts";
+import { connectExtension } from "./extension.ts";
 import { mountGitHubBar } from "./githubBar.ts";
 import { GitHubHost } from "./githubHost.ts";
 import { applyPicked, applySelection } from "./highlight.ts";
@@ -19,7 +20,6 @@ import type { Host, NoteKind } from "./host.ts";
 import type { Revised } from "./revisions.ts";
 import { bindInput } from "./inlineInput.ts";
 import { inlaysOf } from "./inlays.ts";
-import { TokenStore } from "./login.ts";
 import { Menu } from "./menu.ts";
 import { instanceOf, isExternal, type ViewModel, type ViewNode } from "./model.ts";
 import { gapKeys, placeHalo, renderView, RULER_WIDTH } from "./render.ts";
@@ -53,11 +53,10 @@ import { drawWires, planRoutes } from "./wires.ts";
  * no address the page only asks for one.
  */
 const route = inVsCode() ? null : parseRoute(location.hash);
-const tokens = new TokenStore();
 const host: Host = inVsCode()
   ? new VsCodeHost()
   : route
-    ? new GitHubHost(route, tokens)
+    ? new GitHubHost(route, connectExtension())
     : new EmptyHost();
 /** The web shell has the explorer, the code pane and the layout toggle; VS Code brings its own. */
 const webShell = !inVsCode() && route !== null;
@@ -748,7 +747,7 @@ panesEl.addEventListener("dblclick", (event) => {
 host.onModels(adoptModels);
 host.onOpen((module) => open([module]));
 host.onNote((message: string | null, kind: NoteKind) => showNote(message, kind));
-if (host instanceof GitHubHost) mountGitHubBar(host, tokens, originEl, githubEl);
+if (host instanceof GitHubHost) mountGitHubBar(host, originEl, githubEl);
 // The canvas changes width with the window, the explorer, the code pane and
 // its split. Every such change asks for a relayout, which happens once per
 // frame and only when the width really changed or a layout waits for the

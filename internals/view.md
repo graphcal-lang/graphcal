@@ -117,20 +117,21 @@ sends what was typed as such an edit on the revision its text is based on.
 
 ## The published viewer
 
-The page holds no data. It reads the project around the named file from the
-GitHub REST API with the viewer's own token (`src/github.ts`, plain `fetch`
-with ETag caching), picks the project's files by the loader's rule
+The page holds no data and reads GitHub through the Graphcal browser
+extension (the `chrome-graphcal` repository): each read is one message to the
+extension (`src/github.ts`, reached as in `src/extension.ts`), which fetches
+github.com with the browser's own GitHub sign-in and answers with the data.
+So a repository the person can open on github.com, private or not, opens in
+the viewer, and there is no token. Without the extension the page says so
+and links to it. The page picks the project's files by the loader's rule
 (`src/repoProject.ts`: the nearest `graphcal.toml` above the file is the root,
 nested projects are left out, the browser engine's size limits are checked
-first), and evaluates in the browser with the Wasm engine. Repository
-permissions are GitHub's: a private repository needs a token that can read
-it, a public one needs none (at GitHub's anonymous rate limit).
+first), and evaluates in the browser with the Wasm engine.
 
-The token is a fine-grained personal access token with Contents: Read-only,
-pasted into the page's dialog (`src/login.ts`), kept in `localStorage`, and
-sent to `api.github.com` only. The page's Content-Security-Policy (injected at
-build in `vite.config.ts`) allows no other connection and no third-party
-script. Edits are a what-if over the sources read; nothing is written back.
+The page's Content-Security-Policy (injected at build in `vite.config.ts`)
+allows no connection but its own origin and no third-party script; extension
+messaging is not a connection. Edits are a what-if over the sources read;
+nothing is written back.
 
 The page arranges a code pane and the sheet (`src/editor.ts`, CodeMirror with
 the playground's lexical colouring): the toggle at the top right shows the
@@ -143,8 +144,9 @@ on, takes a change from the host in under the typing (`src/rebase.ts`), keeps
 typing the host refused, and sends pending typing before it shows another
 file. The breadcrumb at the
 top left opens the explorer (`src/explorer.ts`): the project's files, and for
-a repository the ref being read with a menu of branches, tags and open pull
-requests, which switch `@ref` in the address. Pane arrangement, split width
+a repository the ref being read with a menu of its branches, which switch
+`@ref` in the address. The extension lists branches only; a pull request is
+opened by its head branch. Pane arrangement, split width
 and explorer state are remembered in `localStorage`. The VS Code webview
 shows the sheet alone.
 
@@ -163,8 +165,7 @@ extension's "Graphcal: Apply Changes from Clipboard" puts it into the
 workspace's files as one undoable edit, matching each hunk by its context.
 
 Not supported in the browser, as in the playground: manifests with
-dependencies or plugins, files over 256 KiB, projects over 1 MiB, and
-repositories too large for GitHub to list in one tree request.
+dependencies or plugins, files over 256 KiB, and projects over 1 MiB.
 
 ## Development and publishing
 
