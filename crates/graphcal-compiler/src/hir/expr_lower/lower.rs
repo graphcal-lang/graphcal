@@ -2,9 +2,10 @@
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
+use crate::exact_rational::ExactRational;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
 use crate::resolve::namespace::Namespace;
-use crate::syntax::ast::{InputBindingCategory, UnresolvedRef};
+use crate::syntax::ast::{InputBindingCategory, PowerExponent, UnresolvedRef};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
@@ -24,6 +25,21 @@ use crate::hir::expr::{
 use crate::hir::expr::{CheckedAssertBody, CheckedExpr, Draft};
 use crate::hir::lower::{lower_generic_args, lower_nat_expr};
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
+
+/// The literal an exact power exponent denotes.
+///
+/// The parser has already read the exponent's exact value off its syntax and
+/// recorded it on the operator, so the operand is that value, not an
+/// expression to check: `(3/2)` is the dimensionless number 1.5, never an
+/// `Int` division, and `2`, `-2`, and `(4/2)` are `Int` literals.
+fn exact_exponent_literal(exponent: ExactRational, span: Span) -> Expr<Tolerant> {
+    let kind = if exponent.is_integer() {
+        ExprKind::Integer(exponent.num())
+    } else {
+        ExprKind::Number(exponent.as_f64())
+    };
+    Expr::new(kind, span)
+}
 
 /// Lower a syntax expression into tolerant HIR.
 ///
@@ -289,7 +305,12 @@ impl ExprLowerer<'_> {
             ast::ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
                 op: *op,
                 lhs: Box::new(self.lower_expr(lhs)),
-                rhs: Box::new(self.lower_expr(rhs)),
+                rhs: Box::new(match op {
+                    ast::BinOp::Pow(PowerExponent::Exact(exponent)) => {
+                        exact_exponent_literal(*exponent, rhs.span)
+                    }
+                    _ => self.lower_expr(rhs),
+                }),
             },
             ast::ExprKind::UnaryOp { op, operand } => ExprKind::UnaryOp {
                 op: *op,

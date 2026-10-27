@@ -11,7 +11,7 @@ impl Ratio<i64> {
         clippy::cast_precision_loss,
         reason = "the exact metadata is retained separately; binary64 is the runtime quantity representation"
     )]
-    fn as_f64(self) -> f64 {
+    pub fn as_f64(self) -> f64 {
         self.num() as f64 / self.den() as f64
     }
 
