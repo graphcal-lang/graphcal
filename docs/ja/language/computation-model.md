@@ -117,7 +117,7 @@ assert fuel_positive = @fuel_mass > 0.0 kg;
 
 | 参照 | 意味 | 使用可能な場所 |
 |-----------|---------|------------|
-| `@name` | グラフ内のパラメーター、ノード、または const node | `node` 式、param のデフォルト、`dag` ブロック本体 |
+| `@name` | グラフ内のパラメーター、ノード、または const node | `node` 式、param のデフォルト、`dag` ブロック本体。`const node` 式では const node のみ |
 | `@dag(args)::out` | 1 つの出力を射影するランタイム DAG インスタンス化 | param のデフォルトを含むランタイム式 |
 | `NAME` | 組み込み定数(`PI`、`E`、`TAU` など) | あらゆる場所 |
 | `name` | ローカル変数(ループ変数、match 束縛) | 式本体 |
@@ -141,7 +141,7 @@ assert fuel_positive = @fuel_mass > 0.0 kg;
 |---------|-------------|
 | `node` 式 | はい |
 | `param` のデフォルト値 | はい |
-| `const node` 式 | いいえ |
+| `const node` 式 | 他の `const node` の値に対してのみ |
 | `dag` ブロック本体(`node` 式の内部) | はい |
 
 ## 評価順序 { #evaluation-order }
