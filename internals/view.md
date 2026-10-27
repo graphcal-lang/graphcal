@@ -144,8 +144,9 @@ on, takes a change from the host in under the typing (`src/rebase.ts`), keeps
 typing the host refused, and sends pending typing before it shows another
 file. The breadcrumb at the
 top left opens the explorer (`src/explorer.ts`): the project's files, and for
-a repository the ref being read with a menu of branches, tags and open pull
-requests, which switch `@ref` in the address. Pane arrangement, split width
+a repository the ref being read with a menu of its branches, which switch
+`@ref` in the address. The extension lists branches only; a pull request is
+opened by its head branch. Pane arrangement, split width
 and explorer state are remembered in `localStorage`. The VS Code webview
 shows the sheet alone.
 
@@ -164,8 +165,7 @@ extension's "Graphcal: Apply Changes from Clipboard" puts it into the
 workspace's files as one undoable edit, matching each hunk by its context.
 
 Not supported in the browser, as in the playground: manifests with
-dependencies or plugins, files over 256 KiB, projects over 1 MiB, and
-repositories too large for GitHub to list in one tree request.
+dependencies or plugins, files over 256 KiB, and projects over 1 MiB.
 
 ## Development and publishing
 

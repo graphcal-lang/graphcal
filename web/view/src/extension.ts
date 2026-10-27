@@ -21,7 +21,9 @@ function sender(): Send | null {
 /**
  * GitHub through the installed extension. Rejects with a `no_extension`
  * error when the browser has no extension API, the extension is not
- * installed, or it does not answer in time.
+ * installed, or it does not answer in time. An extension that answers in a
+ * form this page does not know is there but out of date, and rejects with
+ * an `other` error that says to update it.
  */
 export async function connectExtension(): Promise<GitHub> {
   const send = sender();
@@ -32,8 +34,9 @@ export async function connectExtension(): Promise<GitHub> {
     );
   }
   const github = new GitHub(send);
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    setTimeout(
+    timer = setTimeout(
       () => reject(new GitHubError("no_extension", "the Graphcal extension did not answer")),
       HELLO_TIMEOUT_MS,
     );
@@ -41,11 +44,21 @@ export async function connectExtension(): Promise<GitHub> {
   try {
     await Promise.race([github.hello(), timeout]);
   } catch (error) {
-    if (error instanceof GitHubError && error.kind === "no_extension") throw error;
-    throw new GitHubError(
-      "no_extension",
-      "the Graphcal extension is not installed in this browser",
-    );
+    if (!(error instanceof GitHubError)) throw error;
+    switch (error.kind) {
+      case "network":
+        // `sendMessage` rejected: no extension with this id is listening.
+        throw new GitHubError(
+          "no_extension",
+          "the Graphcal extension is not installed in this browser",
+        );
+      case "other":
+        throw new GitHubError("other", `${error.message}; update the Graphcal extension`);
+      default:
+        throw error;
+    }
+  } finally {
+    clearTimeout(timer);
   }
   return github;
 }

@@ -21,7 +21,7 @@ function fakeSend(answers: ((request: Record<string, unknown>) => unknown)[]): {
 }
 
 const ok = (value: unknown) => () => ({ ok: true, value });
-const SHA = "3d833bbf0dbcc8cfd3f0b7b704f1c9e0094ee682";
+const SHA = "0123456789abcdef0123456789abcdef01234567";
 
 describe("GitHub", () => {
   test("each read is one versioned request to the extension", async () => {
