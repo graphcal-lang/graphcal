@@ -29,7 +29,7 @@ The set of bare-callable functions is closed: user code cannot add to it. Extern
 | `cbrt(x)` | `D -> D^(1/3)` | Cube root (dimension divided by 3) |
 | `abs(x)` | `D -> D` or `Complex<D> -> D` | Absolute value or complex magnitude |
 | `sign(x)` | `D -> Dimensionless` | Sign of value (-1.0, 0.0, or 1.0) |
-| `round(x)` | `Dimensionless -> Dimensionless` | Round to nearest integer |
+| `round(x)` | `Dimensionless -> Dimensionless` | Round to nearest integer; a tie rounds away from zero (`round(2.5)` is `3.0`, `round(-2.5)` is `-3.0`) |
 | `trunc(x)` | `Dimensionless -> Dimensionless` | Truncate toward zero |
 | `floor(x)` | `Dimensionless -> Dimensionless` | Round toward negative infinity |
 | `ceil(x)` | `Dimensionless -> Dimensionless` | Round toward positive infinity |
@@ -141,6 +141,38 @@ node nearest: Int = to_int(round(3.7));
 
 Integrality is checked on the represented binary64 value. A conversion cannot
 detect precision that was already lost while computing that value.
+
+### Integer Division Functions
+
+`/` is not defined for two `Int` operands: an integer quotient must be rounded,
+and Graphcal does not choose the direction for you. Each of these functions
+names one.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `div_trunc(a, b)` | `(Int, Int) -> Int` | Quotient rounded toward zero |
+| `div_floor(a, b)` | `(Int, Int) -> Int` | Quotient rounded toward negative infinity |
+| `div_ceil(a, b)` | `(Int, Int) -> Int` | Quotient rounded toward positive infinity |
+
+The quotient is exact for every pair of `Int` values, and a zero divisor is an
+evaluation error. The functions differ only when the division is inexact:
+`div_trunc(-7, 2)` is `-3`, `div_floor(-7, 2)` is `-4`, and `div_ceil(7, 2)` is
+`4`.
+
+```graphcal
+param items: Int = 10;
+param per_rack: Int = 4;
+
+// 3: a partly filled rack still needs a rack.
+node racks: Int = div_ceil(@items, @per_rack);
+// 2: only the completely filled racks.
+node full_racks: Int = div_floor(@items, @per_rack);
+// 2.5: the real quotient.
+node exact_racks: Dimensionless = to_float(@items) / to_float(@per_rack);
+```
+
+To round the quotient to the nearest integer, divide real values and round
+explicitly: `to_int(round(to_float(a) / to_float(b)))`.
 
 ### Index Key Functions
 

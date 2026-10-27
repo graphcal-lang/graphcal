@@ -535,6 +535,8 @@ const node seven: Int = 7;
 ```
 
 Integer arithmetic uses checked operations -- overflow is a runtime error, not silent wraparound.
+`/` is not defined for two `Int` operands; integer division is written with
+`div_trunc`, `div_floor`, or `div_ceil`, which name the rounding direction.
 
 #### Bool
 
@@ -1248,8 +1250,8 @@ This section lists the type of each expression form and the constraints the comp
 |-----------|-------------|------------|
 | `a + b` | type of `a` | Same numeric kind and dimension |
 | `a - b` | type of `a` | Same numeric kind and dimension |
-| `a * b` | numeric kind lifted over `dim(a) * dim(b)` | Supports real×real, real×complex, complex×real, and complex×complex |
-| `a / b` | numeric kind lifted over `dim(a) / dim(b)` | Supports real÷real, real÷complex, complex÷real, and complex÷complex |
+| `a * b` | numeric kind lifted over `dim(a) * dim(b)` | Supports Int×Int, real×real, real×complex, complex×real, and complex×complex |
+| `a / b` | numeric kind lifted over `dim(a) / dim(b)` | Supports real÷real, real÷complex, complex÷real, and complex÷complex; not defined for two `Int` operands (use `div_trunc`, `div_floor`, or `div_ceil`) |
 | `a % b` | `Int` | Both operands must be `Int`; quantity remainder is not defined |
 | `a ^ n` | `dim(a) ^ n` | Real quantities or integers only; `n` is dimensionless and a dimensioned base requires an exact integer or parenthesized rational |
 | `-a` | type and dimension of `a` | Real quantity, complex quantity, or integer |

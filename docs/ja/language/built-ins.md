@@ -29,7 +29,7 @@ icon: material/package-variant
 | `cbrt(x)` | `D -> D^(1/3)` | 立方根（次元は 1/3 倍になる） |
 | `abs(x)` | `D -> D` または `Complex<D> -> D` | 絶対値または複素数の大きさ |
 | `sign(x)` | `D -> Dimensionless` | 値の符号（-1.0、0.0、1.0 のいずれか） |
-| `round(x)` | `Dimensionless -> Dimensionless` | 最も近い整数への丸め |
+| `round(x)` | `Dimensionless -> Dimensionless` | 最も近い整数への丸め。ちょうど中間の値は 0 から遠い方に丸める（`round(2.5)` は `3.0`、`round(-2.5)` は `-3.0`） |
 | `trunc(x)` | `Dimensionless -> Dimensionless` | ゼロ方向への切り捨て |
 | `floor(x)` | `Dimensionless -> Dimensionless` | 負の無限大方向への丸め |
 | `ceil(x)` | `Dimensionless -> Dimensionless` | 正の無限大方向への丸め |
@@ -140,6 +140,38 @@ node nearest: Int = to_int(round(3.7));
 
 整数性の検査は、表現されている binary64 値に対して行われます。その値を
 計算する過程で既に失われた精度を、変換で検出することはできません。
+
+### 整数除算関数 { #integer-division-functions }
+
+`Int` 同士の `/` は定義されていません。整数の商は丸める必要があり、Graphcal
+は丸める方向を代わりに選びません。次の関数は、それぞれ 1 つの方向を名前で
+示します。
+
+| 関数 | シグネチャ | 説明 |
+|----------|-----------|-------------|
+| `div_trunc(a, b)` | `(Int, Int) -> Int` | 商を 0 の方向に丸める |
+| `div_floor(a, b)` | `(Int, Int) -> Int` | 商を負の無限大の方向に丸める |
+| `div_ceil(a, b)` | `(Int, Int) -> Int` | 商を正の無限大の方向に丸める |
+
+商はどの `Int` の組に対しても正確に計算され、除数がゼロの場合は評価エラーに
+なります。3 つの関数の結果が異なるのは割り切れない場合だけで、
+`div_trunc(-7, 2)` は `-3`、`div_floor(-7, 2)` は `-4`、`div_ceil(7, 2)` は
+`4` になります。
+
+```graphcal
+param items: Int = 10;
+param per_rack: Int = 4;
+
+// 3: a partly filled rack still needs a rack.
+node racks: Int = div_ceil(@items, @per_rack);
+// 2: only the completely filled racks.
+node full_racks: Int = div_floor(@items, @per_rack);
+// 2.5: the real quotient.
+node exact_racks: Dimensionless = to_float(@items) / to_float(@per_rack);
+```
+
+商を最も近い整数に丸めるには、実数どうしで割ってから明示的に丸めます。
+`to_int(round(to_float(a) / to_float(b)))` と書いてください。
 
 ### インデックスキー関数 { #index-key-functions }
 
