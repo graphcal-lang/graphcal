@@ -154,8 +154,10 @@ names one.
 | `div_floor(a, b)` | `(Int, Int) -> Int` | Quotient rounded toward negative infinity |
 | `div_ceil(a, b)` | `(Int, Int) -> Int` | Quotient rounded toward positive infinity |
 
-The quotient is exact for every pair of `Int` values, and a zero divisor is an
-evaluation error. The functions differ only when the division is inexact:
+The quotient is computed without rounding error. A zero divisor is an
+evaluation error, and so is the one quotient that does not fit in `Int`:
+`-9223372036854775808` divided by `-1`. The functions differ only when the
+division is inexact:
 `div_trunc(-7, 2)` is `-3`, `div_floor(-7, 2)` is `-4`, and `div_ceil(7, 2)` is
 `4`.
 
@@ -172,7 +174,9 @@ node exact_racks: Dimensionless = to_float(@items) / to_float(@per_rack);
 ```
 
 To round the quotient to the nearest integer, divide real values and round
-explicitly: `to_int(round(to_float(a) / to_float(b)))`.
+explicitly: `to_int(round(to_float(a) / to_float(b)))`. This is exact only while
+`a` is below `2 ^ 52` in magnitude; for larger values, binary64 rounding makes
+the result approximate.
 
 ### Index Key Functions
 
