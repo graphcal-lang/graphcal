@@ -4,6 +4,57 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.43
+
+This release adds two things for applications that serve models in batch: `graphcal model serve` can fix parameters it does not vary to given values, and the new `graphcal model unit` command resolves unit expressions for clients.
+When a row fails only because a declaration it depends on failed, the row's diagnostic now names the declaration where the failure started.
+The web viewer reads GitHub through the Graphcal browser extension and no longer needs a personal access token.
+It contains no language changes.
+
+No existing Graphcal source programs need to be modified.
+The batch evaluation protocol's session schema and wire formats are unchanged.
+
+### Batch Evaluation
+
+- `graphcal model serve` accepts `--param`, `--params-json`, and `--params-json-file`, in the same formats as `graphcal eval`, and binds those values in every row. A session can now leave a parameter without a default unvaried, so a model whose parameters are records without defaults can be served without a wrapper module that bakes the values in. The values are type- and domain-checked once when the session starts. A parameter that is both varied and fixed, an unknown name, or a repeated name is an error. `--params-json-file -` is rejected, because stdin carries the request stream. Fixed parameters are not sent in requests and are not part of the session schema. (_#2180_)
+- The new `graphcal model unit <FILE> <UNIT>...` command resolves unit expressions in the entry file's scope, as if they were written after `->`, and prints each one's dimension and SI scale as JSON. A client that reads a quantity inside a structured output, such as a field of a record result, gets it in SI units, and can use this command to convert it to a display unit without keeping its own unit table. Runtime units and unknown units are errors (exit code 2). (_#2181_)
+
+  ```json
+  [{ "unit": "h", "dimension": { "Time": 1 }, "si_scale": 3600.0 }]
+  ```
+
+- When a row fails only because a declaration it depends on failed, its error message now also names each declaration that failed on its own, with that declaration's message. Before, the message named only the immediate dependency, and finding the cause needed a separate `graphcal eval` with the same inputs. The protocol's row failure kinds are unchanged. (_#2179_)
+
+  ```text
+  result: dependency failed: inner::out; originating failure: inner::ratio (division by zero)
+  ```
+
+- Rust API additions: `SessionSpec::with_fixed` in `graphcal-model-protocol`, `ParameterBindingBuilder::into_fixed`, `FixedParameters`, and `PreparedProject::model_session_with` in `graphcal-project`, and `SessionBuilder::fix_from_json_file` in `graphcal-model-client` (_#2180_). `ResolvedUnit` in `graphcal-model-protocol`, `PreparedProject::resolve_model_unit` in `graphcal-project`, and `Model::resolve_units` in `graphcal-model-client` (_#2181_).
+
+### View (Experimental)
+
+- The web viewer at graphcal.org/view reads GitHub through the **Graphcal for GitHub** Chrome extension and uses the browser's GitHub sign-in, instead of a personal access token. Any repository you can open on github.com, private or public, opens in the viewer with nothing to configure. Without the extension, the viewer shows a notice and an install link. Firefox and Safari are not supported. The ref menu lists branches only, so open a pull request by its head branch. (_#2173_)
+
+### Documentation
+
+- The `@` sigil tables in the computation model page no longer say that `@` is not allowed in `const node` expressions. A `const node` expression may use `@` to reference other `const node` values. (_#2186_)
+- The Batch Evaluation guide has a new section on fixing parameters with values, and the CLI reference documents the new `model serve` options and `graphcal model unit`. (_#2180_, _#2181_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- Updated Rust crates `gix` to v0.90.0 (_#2172_) and `open` to v5.4.5 (_#2169_).
+- Updated CodeMirror (_#2171_), Vite+ to v1.4.0 (_#2183_), pnpm to v12.15.0 (_#2177_), and Node.js to v24.22.1 (_#2184_).
+- Updated `zensical` to v0.0.71. (_#2175_)
+- Updated GitHub Actions: `zizmorcore/zizmor-action` to v0.7.1 (_#2170_, _#2174_), `taiki-e/install-action` to v2.87.29 (_#2176_), and `Swatinem/rust-cache` to v2.9.3 (_#2192_).
+- Refreshed lock files. (_#2182_)
+
+### Internal
+
+- Added a CodeRabbit configuration for AI code review. (_#2178_)
+- Bumped the workspace version to v0.0.1-alpha.43 and added these notes to `CHANGELOG.md`. (_#2193_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.42...v0.0.1-alpha.43>
+
 ## v0.0.1-alpha.42
 
 This release shows interactive report inputs in the units their values are written in, instead of canonical SI units.
