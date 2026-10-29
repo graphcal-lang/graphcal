@@ -1,5 +1,6 @@
 //! Inference of conditionals, unary and binary operators, and display conversions.
 
+use crate::builtin::BuiltinFn;
 use crate::hir::expr::{Expr, ExprKind, ResolvedUnitExpr};
 use crate::outcome::Outcome;
 use crate::semantic_error::dimension::DimensionError;
@@ -12,6 +13,7 @@ use crate::semantic_error::SemanticError;
 use crate::syntax::ast::UnaryOp;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
+use crate::semantic::int_division;
 use crate::tir::dim_check::helpers::expect_quantity;
 use crate::tir::dim_check::infer::rules::{self, Operand};
 
@@ -74,6 +76,13 @@ pub(super) fn try_const_int(expr: &Expr) -> Option<i64> {
             op: UnaryOp::Neg,
             operand,
         } => try_const_int(operand)?.checked_neg(),
+        ExprKind::FnCall { callee, args } => match (callee.value.builtin()?, args.as_slice()) {
+            (BuiltinFn::IntDivision(function), [dividend, divisor]) => {
+                int_division::divide(function, try_const_int(dividend)?, try_const_int(divisor)?)
+                    .ok()
+            }
+            _ => None,
+        },
         ExprKind::BinOp { op, lhs, rhs } => {
             let l = try_const_int(lhs)?;
             let r = try_const_int(rhs)?;
@@ -81,7 +90,6 @@ pub(super) fn try_const_int(expr: &Expr) -> Option<i64> {
                 BinOp::Add => l.checked_add(r),
                 BinOp::Sub => l.checked_sub(r),
                 BinOp::Mul => l.checked_mul(r),
-                BinOp::Div if r != 0 => l.checked_div(r),
                 BinOp::Mod if r == -1 => Some(0),
                 BinOp::Mod if r != 0 => l.checked_rem(r),
                 BinOp::Pow(_) if r >= 0 => u32::try_from(r).ok().and_then(|e| l.checked_pow(e)),

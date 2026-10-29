@@ -149,6 +149,8 @@ define_builtin_family! {
         Datetime(DatetimeFn),
         /// Type-category conversions between `Int`, keys, and quantities.
         Conversion(ConversionFn),
+        /// Integer division with an explicit rounding direction.
+        IntDivision(IntDivisionFn),
     }
 }
 
@@ -173,6 +175,7 @@ impl BuiltinFn {
             Self::LinearAlgebra(function) => BuiltinEntry::Signature(function.signature()),
             Self::Datetime(function) => BuiltinEntry::Bespoke(function.arity()),
             Self::Conversion(_) => BuiltinEntry::Bespoke(BuiltinArity::Exact(1)),
+            Self::IntDivision(function) => BuiltinEntry::Signature(function.signature()),
         }
     }
 
@@ -1182,6 +1185,34 @@ define_builtin_names! {
     }
 }
 
+define_builtin_names! {
+    parse = fn from_spelling;
+    /// Integer division of two `Int` values, each rounding its quotient in
+    /// one named direction. `/` is not defined on two `Int` operands, so a
+    /// rounding policy is always explicit.
+    pub enum IntDivisionFn {
+        /// Rounds the quotient toward zero.
+        Trunc => "div_trunc",
+        /// Rounds the quotient toward negative infinity.
+        Floor => "div_floor",
+        /// Rounds the quotient toward positive infinity.
+        Ceil => "div_ceil",
+    }
+}
+
+impl IntDivisionFn {
+    /// Source-like signature used at LSP/display boundaries.
+    #[must_use]
+    pub const fn signature(self) -> &'static DisplaySignature {
+        const INT: SignatureType = value(SignatureValue::Int);
+        match self {
+            Self::Trunc | Self::Floor | Self::Ceil => {
+                &const { sig(&[], params![a: INT, b: INT], INT) }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -1196,7 +1227,7 @@ mod tests {
     #[test]
     fn every_builtin_function_round_trips_through_its_spelling() {
         let all = BuiltinFn::all().collect::<Vec<_>>();
-        assert_eq!(all.len(), 86);
+        assert_eq!(all.len(), 89);
         for function in &all {
             assert_eq!(BuiltinFn::parse(function.as_str()), Some(*function));
             assert_eq!(function.to_string(), function.as_str());
@@ -1214,6 +1245,7 @@ mod tests {
         assert_eq!(count(|f| matches!(f, BuiltinFn::LinearAlgebra(_))), 10);
         assert_eq!(count(|f| matches!(f, BuiltinFn::Datetime(_))), 25);
         assert_eq!(count(|f| matches!(f, BuiltinFn::Conversion(_))), 3);
+        assert_eq!(count(|f| matches!(f, BuiltinFn::IntDivision(_))), 3);
     }
 
     #[test]
@@ -1273,6 +1305,10 @@ mod tests {
             BuiltinFn::parse("to_int"),
             Some(BuiltinFn::Conversion(super::ConversionFn::ToInt))
         );
+        assert_eq!(
+            BuiltinFn::parse("div_floor"),
+            Some(BuiltinFn::IntDivision(super::IntDivisionFn::Floor))
+        );
     }
 
     #[test]
@@ -1320,6 +1356,7 @@ mod tests {
             ("to_tai", 1),
             ("to_float", 1),
             ("coord", 1),
+            ("div_trunc", 2),
         ] {
             assert_eq!(arity(name), BuiltinArity::Exact(expected), "`{name}`");
         }
@@ -1357,6 +1394,10 @@ mod tests {
                 (BuiltinFn::Conversion(_), BuiltinEntry::Bespoke(arity)) => {
                     assert_eq!(arity, BuiltinArity::Exact(1));
                     assert_eq!(entry.documented_arity(), None);
+                }
+                (BuiltinFn::IntDivision(f), BuiltinEntry::Signature(signature)) => {
+                    assert_eq!(signature, f.signature());
+                    assert_eq!(entry.documented_arity(), Some(2));
                 }
                 (function, entry) => panic!("`{function}` has entry {entry:?}"),
             }
@@ -1537,6 +1578,21 @@ mod tests {
             "det",
             "fn det<D: Dim, I: Index>(a: D[I, I]) -> D^|I|",
             &["a: D[I, I]"],
+        ),
+        (
+            "div_trunc",
+            "fn div_trunc(a: Int, b: Int) -> Int",
+            &["a: Int", "b: Int"],
+        ),
+        (
+            "div_floor",
+            "fn div_floor(a: Int, b: Int) -> Int",
+            &["a: Int", "b: Int"],
+        ),
+        (
+            "div_ceil",
+            "fn div_ceil(a: Int, b: Int) -> Int",
+            &["a: Int", "b: Int"],
         ),
     ];
 

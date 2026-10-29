@@ -2,4 +2,4 @@
 // (existing division_by_zero.gcl covers quantity division).
 param x: Int = 5;
 param y: Int = 0;
-node z: Int = @x / @y;
+node z: Int = div_floor(@x, @y);

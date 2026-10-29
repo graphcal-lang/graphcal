@@ -233,6 +233,8 @@ pub enum DimensionError {
     NonConstUnitInConst { name: UnitRef },
     #[error("dimension exponent overflow")]
     DimensionOverflow,
+    #[error("`/` is not defined for two `Int` operands")]
+    IntOperandDivision,
     #[error("dimension mismatch: expected {expected}, found {found}")]
     DimensionMismatch {
         expected: Box<MismatchOperand>,
@@ -380,6 +382,7 @@ impl DiagnosticKind for DimensionError {
             Self::NonConstUnitInConst { .. } => "graphcal::D018",
             Self::DimensionOverflow => "graphcal::D010",
             Self::DimensionMismatch { .. } => "graphcal::D001",
+            Self::IntOperandDivision => "graphcal::D043",
             Self::IndexedShapeMismatch { .. } => "graphcal::D011",
             Self::LinearAlgebraShapeMismatch { .. } => "graphcal::D022",
             Self::IndexedComparisonOperand { .. } => "graphcal::D019",
@@ -431,6 +434,7 @@ impl DiagnosticKind for DimensionError {
             Self::NonConstUnitInConst { .. } => Some("unit is not const".to_owned()),
             Self::DimensionOverflow => Some("overflow here".to_owned()),
             Self::DimensionMismatch { found, .. } => Some(found.found_label()),
+            Self::IntOperandDivision => Some("both operands are Int".to_owned()),
             Self::IndexedShapeMismatch { rhs, .. } => Some(format!("has type {rhs}")),
             Self::LinearAlgebraShapeMismatch { mismatch, .. } => {
                 Some(format!("found {}", mismatch.found()))
@@ -522,6 +526,7 @@ impl DiagnosticKind for DimensionError {
             Self::NonConstUnitInConst { .. } => Some("`const node` bodies and `const unit` definitions can only use prelude units, `base unit`, or `const unit` declarations; use `node` or plain `unit` for runtime-unit calculations".to_owned()),
             Self::DimensionOverflow => Some("dimension exponents are stored as `i32`; reduce the magnitude of the exponent".to_owned()),
             Self::DimensionMismatch { help, .. } => Some(help.to_string()),
+            Self::IntOperandDivision => Some("integer division must name its rounding. `div_trunc(a, b)` rounds toward zero and reproduces the previous result of `a / b`, but it may not be the rounding you need: `div_floor(a, b)` or `div_ceil(a, b)` is often intended. For a real quotient write `to_float(a) / to_float(b)`. While `a` is below `2 ^ 52` in magnitude, `to_int(round(to_float(a) / to_float(b)))` gives the nearest Int and `to_int(to_float(a) / to_float(b))` fails unless the division is exact; for larger values, binary64 rounding can break both guarantees".to_owned()),
             Self::LinearAlgebraShapeMismatch { function, mismatch } => Some(mismatch.help(*function)),
             Self::FloatPowerExponent { replacement } => Some(replacement.as_ref().map_or_else(
                 || "write the exponent as an exact integer or parenthesized rational".to_owned(),
@@ -571,6 +576,7 @@ impl DiagnosticKind for DimensionError {
             | Self::NonConstUnitInConst { .. }
             | Self::DimensionOverflow
             | Self::DimensionMismatch { .. }
+            | Self::IntOperandDivision
             | Self::IndexedShapeMismatch { .. }
             | Self::LinearAlgebraShapeMismatch { .. }
             | Self::IndexedComparisonOperand { .. }

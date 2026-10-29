@@ -34,10 +34,16 @@ left.
 | `a + b` | Addition | Addition | Dimensions must match |
 | `a - b` | Subtraction | Subtraction | Dimensions must match |
 | `a * b` | Multiplication | Multiplication | Dimensions multiply |
-| `a / b` | Division | Integer division | Dimensions divide |
+| `a / b` | Division | Not defined | Dimensions divide |
 | `a % b` | Not supported | Remainder | `Int` operands only |
 | `a ^ n` | Exponentiation | Integer exponentiation (non-negative exponent) | Dimension raised to power |
 | `-a` | Negation | Negation | Dimension preserved |
+
+`/` is not defined for two `Int` operands, because an integer quotient must be
+rounded and languages disagree on the direction. Name the rounding with
+`div_trunc`, `div_floor`, or `div_ceil` (see
+[Integer Division Functions](built-ins.md#integer-division-functions)), or
+convert first for the real quotient: `to_float(a) / to_float(b)`.
 
 `%` is defined only for `Int % Int`; Graphcal does not implicitly apply an
 IEEE floating-point remainder to real quantities. The result follows truncating

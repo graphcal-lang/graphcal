@@ -1,0 +1,5 @@
+// int_div_overflow.gcl -- The one Int quotient that does not fit in Int is a
+// runtime error, not a wrapped value.
+param min: Int = -9223372036854775808;
+param minus_one: Int = -1;
+node q: Int = div_ceil(@min, @minus_one);

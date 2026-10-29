@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::D043",
+    "labels": [
+      {
+        "length": 6,
+        "location": {
+          "column": 35,
+          "line": 4,
+          "source": "<root>/tests/fixtures/invalid/int_division_operator.gcl"
+        },
+        "offset": 161,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

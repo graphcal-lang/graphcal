@@ -391,6 +391,16 @@ pub(super) fn int<'t>(
             let rhs = operands.int(rhs)?;
             super::arithmetic::int_arith(op, lhs, rhs, ctx, span).map_err(Outcome::Failed)
         }
+        IExpr::Division {
+            function,
+            dividend,
+            divisor,
+        } => {
+            let dividend = operands.int(dividend)?;
+            let divisor = operands.int(divisor)?;
+            super::arithmetic::int_division(function, dividend, divisor, ctx, span)
+                .map_err(Outcome::Failed)
+        }
         IExpr::ExactPower { base, exponent, .. } => {
             let base = operands.int(base)?;
             super::arithmetic::int_power(base, exponent, ctx, span).map_err(Outcome::Failed)

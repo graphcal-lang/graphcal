@@ -1,4 +1,5 @@
-//! Inference of built-in function calls: arity, dispatch, and the linear-algebra and complex families.
+//! Inference of built-in function calls: arity, dispatch, and the linear-algebra, complex, and
+//! integer-division families.
 
 use crate::hir::expr::{Expr, FunctionRef};
 use crate::outcome::Outcome;
@@ -8,7 +9,9 @@ use crate::semantic_error::dimension_mismatch::{
     MismatchOperand, MismatchRule, OperandExpectation,
 };
 
-use crate::builtin::{AggregationFn, BuiltinFn, DatetimeFn, ScalarFn, ValueAggregation};
+use crate::builtin::{
+    AggregationFn, BuiltinFn, DatetimeFn, IntDivisionFn, ScalarFn, ValueAggregation,
+};
 use crate::dimension::{Dimension, Rational};
 use crate::semantic_error::SemanticError;
 use crate::syntax::span::Span;
@@ -99,6 +102,32 @@ impl Infer<'_> {
             }
         })
         .map_err(Outcome::Failed)
+    }
+
+    /// `div_*(a, b)`: both operands are `Int`, and so is the quotient.
+    fn infer_hir_int_division_call(
+        &self,
+        function: IntDivisionFn,
+        args: &[Expr],
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
+        for arg in args {
+            let arg_type = self.infer_arg(arg)?;
+            if arg_type != CheckedType::Int {
+                return Err(SemanticError::located(
+                    self.env.src,
+                    arg.span,
+                    DimensionError::DimensionMismatch {
+                        expected: Box::new(MismatchOperand::Expected(OperandExpectation::Int)),
+                        found: Box::new(MismatchOperand::Type(
+                            arg_type.spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::IntDivisionOperands(function)),
+                    },
+                )
+                .into());
+            }
+        }
+        Ok(CheckedType::Int)
     }
 
     pub(super) fn infer_hir_fn_call(
@@ -225,6 +254,7 @@ impl Infer<'_> {
                 self.infer_hir_linear_algebra_call(function, callee.span, args)
             }
             BuiltinFn::Conversion(kind) => self.infer_hir_type_conversion(kind, args),
+            BuiltinFn::IntDivision(function) => self.infer_hir_int_division_call(function, args),
             BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
                 self.infer_hir_timescale_conversion(builtin, conversion.target(), args)
             }

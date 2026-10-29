@@ -476,8 +476,14 @@ pub(super) fn binop_rule(
             }
         }
         BinOp::Div => {
+            // Integer division has no rounding everyone agrees on, so `/`
+            // refuses to pick one; the `div_*` built-ins name it.
             if matches!(lhs_type, CheckedType::Int) && matches!(rhs_type, CheckedType::Int) {
-                return Ok(CheckedType::Int);
+                return Err(SemanticError::located(
+                    src,
+                    expr_span,
+                    DimensionError::IntOperandDivision,
+                ));
             }
             let (lhs_dim, lhs_complex) = match lhs_type {
                 CheckedType::Complex(dimension) => (dimension.clone(), true),

@@ -745,6 +745,27 @@ fn error_division_by_zero() {
 }
 
 #[test]
+fn error_int_division_operator() {
+    let source = include_str!("../../../tests/fixtures/invalid/int_division_operator.gcl");
+    let rendered = render_error(source, "int_division_operator.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_int_division_by_zero_const() {
+    let source = include_str!("../../../tests/fixtures/invalid/int_division_by_zero_const.gcl");
+    let rendered = render_error(source, "int_division_by_zero_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_int_division_by_zero_runtime() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/int_div_zero.gcl");
+    let rendered = render_node_error(source, "int_div_zero.gcl", "z");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_complex_division_by_zero() {
     let source = include_str!("../../../tests/fixtures/runtime_error/complex_division_by_zero.gcl");
     let rendered = render_node_error(source, "complex_division_by_zero.gcl", "invalid");

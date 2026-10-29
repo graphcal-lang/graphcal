@@ -12,8 +12,8 @@
 //! the tree that holds them.
 
 use crate::builtin::{
-    BuiltinConst, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn, LinearAlgebraFn,
-    ScalarFn, TimeScaleConversionFn,
+    BuiltinConst, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn, IntDivisionFn,
+    LinearAlgebraFn, ScalarFn, TimeScaleConversionFn,
 };
 use crate::exact_rational::ExactRational;
 
@@ -26,13 +26,13 @@ pub enum ArithOp {
     Div,
 }
 
-/// An integer arithmetic operator.
+/// An integer arithmetic operator. Integer division is not an operator: it
+/// is a built-in that names its rounding ([`IExpr::Division`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntArithOp {
     Add,
     Sub,
     Mul,
-    Div,
     Mod,
 }
 
@@ -151,6 +151,12 @@ pub enum IExpr<C> {
         op: IntArithOp,
         lhs: C,
         rhs: C,
+    },
+    /// A `div_*` built-in: the quotient rounded in the direction it names.
+    Division {
+        function: IntDivisionFn,
+        dividend: C,
+        divisor: C,
     },
     /// A power with an exact non-negative integer exponent; the exponent's
     /// syntax stays a child of the node.
@@ -358,6 +364,15 @@ impl<C> IExpr<C> {
                 lhs: f(lhs)?,
                 rhs: f(rhs)?,
             },
+            Self::Division {
+                function,
+                dividend,
+                divisor,
+            } => IExpr::Division {
+                function: *function,
+                dividend: f(dividend)?,
+                divisor: f(divisor)?,
+            },
             Self::ExactPower {
                 base,
                 exponent,
@@ -387,6 +402,9 @@ impl<C> IExpr<C> {
             Self::Literal(_) => Vec::new(),
             Self::Neg(operand) => vec![operand],
             Self::Arith { lhs, rhs, .. } => vec![lhs, rhs],
+            Self::Division {
+                dividend, divisor, ..
+            } => vec![dividend, divisor],
             Self::ExactPower {
                 base,
                 exponent_expr,

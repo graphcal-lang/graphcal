@@ -5099,7 +5099,7 @@ fn eval_nonzero_multiplication_underflow_is_an_error() {
 #[test]
 fn eval_int_division_by_zero() {
     assert_node_error(
-        "param x: Int = 10;\nnode y: Int = @x / 0;",
+        "param x: Int = 10;\nnode y: Int = div_trunc(@x, 0);",
         "y",
         "integer division by zero",
     );

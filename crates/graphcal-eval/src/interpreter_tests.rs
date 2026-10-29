@@ -1364,7 +1364,7 @@ fn eval_integers_milestone() {
     assert_eq!(find_int_value(&result, "int_sum"), 13);
     assert_eq!(find_int_value(&result, "diff"), 7);
     assert_eq!(find_int_value(&result, "prod"), 30);
-    assert_eq!(find_int_value(&result, "quot"), 3); // truncating division
+    assert_eq!(find_int_value(&result, "quot"), 3); // div_trunc
     assert_eq!(find_int_value(&result, "rem"), 1);
     assert_eq!(find_int_value(&result, "power"), 9);
     assert_eq!(find_int_value(&result, "neg_a"), -10);

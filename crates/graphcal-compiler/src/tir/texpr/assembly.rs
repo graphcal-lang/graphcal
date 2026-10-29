@@ -547,14 +547,13 @@ impl BinaryOperation {
             }
             (BinOp::Add, T::Key(_), T::Int) => Self::KeyShift,
             (BinOp::Mod, T::Int, T::Int) => Self::Int(IntArithOp::Mod),
-            (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, T::Int, T::Int) => {
-                Self::Int(match arith? {
-                    ArithOp::Add => IntArithOp::Add,
-                    ArithOp::Sub => IntArithOp::Sub,
-                    ArithOp::Mul => IntArithOp::Mul,
-                    ArithOp::Div => IntArithOp::Div,
-                })
-            }
+            (BinOp::Add | BinOp::Sub | BinOp::Mul, T::Int, T::Int) => Self::Int(match arith? {
+                ArithOp::Add => IntArithOp::Add,
+                ArithOp::Sub => IntArithOp::Sub,
+                ArithOp::Mul => IntArithOp::Mul,
+                // Checking rejects `/` on two `Int` operands.
+                ArithOp::Div => return None,
+            }),
             (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, T::Quantity(_), T::Quantity(_)) => {
                 Self::Quantity(arith?)
             }
@@ -820,6 +819,17 @@ fn builtin_call(
                 _ => return None,
             }
         }
+        BuiltinFn::IntDivision(function) => {
+            let [dividend, divisor] = pair(args)?;
+            if category(&dividend) != Category::Int || category(&divisor) != Category::Int {
+                return None;
+            }
+            TExprKind::Int(IExpr::Division {
+                function,
+                dividend,
+                divisor,
+            })
+        }
         BuiltinFn::Datetime(function) => {
             let arg = single(args)?;
             match (function, category(&arg)) {
@@ -976,7 +986,6 @@ mod tests {
             (BinOp::Add, T::Int, T::Int, "Int(Add)"),
             (BinOp::Sub, T::Int, T::Int, "Int(Sub)"),
             (BinOp::Mul, T::Int, T::Int, "Int(Mul)"),
-            (BinOp::Div, T::Int, T::Int, "Int(Div)"),
             (BinOp::Mod, T::Int, T::Int, "Int(Mod)"),
             (BinOp::Add, quantity(), quantity(), "Quantity(Add)"),
             (BinOp::Sub, quantity(), quantity(), "Quantity(Sub)"),
@@ -1049,6 +1058,7 @@ mod tests {
             (BinOp::Ne, T::Int, indexed),
             (BinOp::Lt, complex(), complex()),
             (BinOp::Lt, T::Int, quantity()),
+            (BinOp::Div, T::Int, T::Int),
             (BinOp::Mod, quantity(), quantity()),
             (BinOp::Mul, key(), T::Int),
             (BinOp::Add, complex(), quantity()),
@@ -1128,7 +1138,7 @@ mod tests {
     fn built_in_calls_select_their_typed_operation() {
         use crate::builtin::{
             AggregationFn, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn,
-            LinearAlgebraFn, ScalarFn, TimeScaleConversionFn, ValueAggregation,
+            IntDivisionFn, LinearAlgebraFn, ScalarFn, TimeScaleConversionFn, ValueAggregation,
         };
         let indexed = CheckedType::Indexed {
             element: Box::new(quantity()),
@@ -1217,6 +1227,11 @@ mod tests {
                 "Quantity::Coordinate",
             ),
             (
+                BuiltinFn::IntDivision(IntDivisionFn::Floor),
+                vec![CheckedType::Int, CheckedType::Int],
+                "Int::Division",
+            ),
+            (
                 BuiltinFn::Datetime(DatetimeFn::Field(DatetimeField::Year)),
                 vec![datetime()],
                 "Int::DatetimeField",
@@ -1253,7 +1268,7 @@ mod tests {
 
     #[test]
     fn built_in_calls_reject_unchecked_argument_types() {
-        use crate::builtin::{AggregationFn, ScalarFn, ValueAggregation};
+        use crate::builtin::{AggregationFn, IntDivisionFn, ScalarFn, ValueAggregation};
         let cases: Vec<(BuiltinFn, Vec<CheckedType<Symbolic>>)> = vec![
             (BuiltinFn::Scalar(ScalarFn::Sqrt), vec![CheckedType::Int]),
             (BuiltinFn::Complex(ComplexFn::Rectangular), vec![quantity()]),
@@ -1276,6 +1291,14 @@ mod tests {
             (
                 BuiltinFn::Conversion(ConversionFn::ToInt),
                 vec![quantity(), quantity()],
+            ),
+            (
+                BuiltinFn::IntDivision(IntDivisionFn::Trunc),
+                vec![quantity(), CheckedType::Int],
+            ),
+            (
+                BuiltinFn::IntDivision(IntDivisionFn::Ceil),
+                vec![CheckedType::Int],
             ),
             (
                 BuiltinFn::Datetime(DatetimeFn::Constructor(DatetimeConstructorFn::Epoch)),

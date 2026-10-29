@@ -1790,6 +1790,62 @@ fn check_power_int_signed_negative_literal_exponent_rejected_with_int_message() 
     );
 }
 
+// --- Integer division names its rounding (issue #2188) ---
+
+#[test]
+fn check_int_operand_division_is_rejected_with_d043() {
+    for source in [
+        "param a: Int = 7;\nnode q: Int = @a / 2;",
+        "const node q: Int = 7 / 2;",
+        "param n: Int = 4;\nnode share: Dimensionless = to_float(1 / @n);",
+    ] {
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SemanticError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::IntOperandDivision),
+                    ..
+                })
+            ),
+            "{source}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn check_int_division_builtins_require_int_operands() {
+    check("param a: Int = 7;\nnode q: Int = div_floor(@a, 2);").unwrap();
+    let err = check("param x: Length = 1.0 m;\nnode q: Int = div_ceil(@x, 2);").unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { help, .. }),
+                ..
+            }) if **help == crate::semantic_error::dimension_mismatch::MismatchRule::IntDivisionOperands(
+                crate::builtin::IntDivisionFn::Ceil
+            )
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_exact_rational_exponent_syntax_is_not_int_division() {
+    // `(4/2)` and `(3/2)` spell exact exponents; they are not `Int / Int`.
+    check("param n: Int = 3;\nnode q: Int = @n ^ (4/2);").unwrap();
+    check("param x: Dimensionless = 4.0;\nnode y: Dimensionless = @x ^ (3/2);").unwrap();
+}
+
+#[test]
+fn check_int_division_builtins_fold_where_a_static_int_is_required() {
+    // Rewriting a constant `a / b` as `div_trunc(a, b)` keeps an exponent
+    // chain or a Fin-key addend static.
+    check("const node i: Int = 2 ^ div_trunc(7, 2);").unwrap();
+    check("node k: Key<Fin(5)> = key(Fin(3), 1) + div_floor(5, 2);").unwrap();
+}
+
 // --- If condition must be dimensionless ---
 
 #[test]

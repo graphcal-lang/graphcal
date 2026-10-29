@@ -1,5 +1,7 @@
+use graphcal_compiler::builtin::IntDivisionFn;
 use graphcal_compiler::exact_rational::ExactRational;
 use graphcal_compiler::finite_value::{FiniteArithmeticError, FiniteQuantity};
+use graphcal_compiler::semantic::int_division::{self, IntDivisionError};
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::operators::{ArithOp, IntArithOp, OrderingOp};
@@ -55,12 +57,6 @@ pub(super) fn int_arith(
         IntArithOp::Add => l.checked_add(r),
         IntArithOp::Sub => l.checked_sub(r),
         IntArithOp::Mul => l.checked_mul(r),
-        IntArithOp::Div => {
-            if r == 0 {
-                return Err(ctx.runtime_error(IntegerFailure::DivisionByZero, span));
-            }
-            l.checked_div(r)
-        }
         IntArithOp::Mod => {
             if r == 0 {
                 return Err(ctx.runtime_error(IntegerFailure::ModuloByZero, span));
@@ -73,6 +69,24 @@ pub(super) fn int_arith(
         }
     }
     .ok_or_else(|| ctx.runtime_error(IntegerFailure::Overflow, span))
+}
+
+/// Evaluate a `div_*` built-in: the quotient rounded in the direction it
+/// names.
+pub(super) fn int_division(
+    function: IntDivisionFn,
+    dividend: i64,
+    divisor: i64,
+    ctx: &EvalSession<'_>,
+    span: Span,
+) -> Result<i64, SemanticError> {
+    int_division::divide(function, dividend, divisor).map_err(|error| {
+        let failure = match error {
+            IntDivisionError::DivisionByZero => IntegerFailure::DivisionByZero,
+            IntDivisionError::Overflow => IntegerFailure::Overflow,
+        };
+        ctx.runtime_error(failure, span)
+    })
 }
 
 /// Raise an integer to an integer power with checked arithmetic.
