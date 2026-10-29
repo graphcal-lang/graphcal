@@ -172,9 +172,9 @@ node exact_racks: Dimensionless = to_float(@items) / to_float(@per_rack);
 ```
 
 商を最も近い整数に丸めるには、実数どうしで割ってから明示的に丸めます。
-`to_int(round(to_float(a) / to_float(b)))` と書いてください。結果が正確なのは
-`a` の絶対値が `2 ^ 52` 未満の場合だけです。それより大きい値では binary64 の
-丸めにより、結果は近似値になります。
+`to_int(round(to_float(a) / to_float(b)))` と書いてください。結果が正確である
+ことが保証されるのは、`a` の絶対値が `2 ^ 52` 未満の場合だけです。それより大きい
+値では、binary64 の丸めにより結果が近似値になることがあります。
 
 ### インデックスキー関数 { #index-key-functions }
 

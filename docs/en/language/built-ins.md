@@ -174,9 +174,9 @@ node exact_racks: Dimensionless = to_float(@items) / to_float(@per_rack);
 ```
 
 To round the quotient to the nearest integer, divide real values and round
-explicitly: `to_int(round(to_float(a) / to_float(b)))`. This is exact only while
-`a` is below `2 ^ 52` in magnitude; for larger values, binary64 rounding makes
-the result approximate.
+explicitly: `to_int(round(to_float(a) / to_float(b)))`. The result is guaranteed
+to be exact only while `a` is below `2 ^ 52` in magnitude; for larger values,
+binary64 rounding can make it approximate.
 
 ### Index Key Functions
 
