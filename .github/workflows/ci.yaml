@@ -445,7 +445,7 @@ jobs:
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.formal.result }}" "${{ needs.qa-corpus.result }}" "${{ needs.windows.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.refactor-metrics.result }}" "${{ needs.typos.result }}" "${{ needs.report-engine-tools.result }}")
+          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.formal.result }}" "${{ needs.qa-corpus.result }}" "${{ needs.windows.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.refactor-metrics.result }}" "${{ needs.typos.result }}" "${{ needs.report-engine-tools.result }}" "${{ needs.actions-lock.result }}")
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more jobs failed"
