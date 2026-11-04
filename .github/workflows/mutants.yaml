@@ -227,10 +227,11 @@ jobs:
             || (github.event_name == 'workflow_dispatch' && inputs.audit-baseline) }}
           MUTANT_PACKAGE: ${{ matrix.shard.package }}
           MUTANT_FILES: ${{ matrix.shard.files }}
-        run: >-
-          ./internals/run-mutants-ratcheted.py
-          --in-place --no-shuffle
-          -p "$MUTANT_PACKAGE" $MUTANT_FILES
+        run: |
+          # shellcheck disable=SC2086 # MUTANT_FILES is a space-separated list of file filters
+          ./internals/run-mutants-ratcheted.py \
+            --in-place --no-shuffle \
+            -p "$MUTANT_PACKAGE" $MUTANT_FILES
 
       - name: Upload shard report
         if: always()
