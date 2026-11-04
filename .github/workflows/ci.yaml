@@ -421,6 +421,21 @@ jobs:
           wasm-bindgen --version
           wasm-opt --version
 
+  prek:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: j178/prek-action@v3.1.0
+        with:
+          # Follow the prek version bundled with the action (updated by Renovate).
+          prek-version: latest-known
+          # no-commit-to-branch fails on pushes to main.
+          extra-args: --all-files --skip=no-commit-to-branch
+
   actions-lock:
     name: Verify actions lockfile
     permissions:
@@ -439,13 +454,13 @@ jobs:
         run: gh actions-lock --verify
 
   ci-gate:
-    needs: [checks, public-surface, dependency-policy, test, formal, qa-corpus, windows, wasm, coverage, msrv, refactor-metrics, typos, report-engine-tools, actions-lock]
+    needs: [checks, public-surface, dependency-policy, test, formal, qa-corpus, windows, wasm, coverage, msrv, refactor-metrics, typos, report-engine-tools, prek, actions-lock]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check results
         run: |
-          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.formal.result }}" "${{ needs.qa-corpus.result }}" "${{ needs.windows.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.refactor-metrics.result }}" "${{ needs.typos.result }}" "${{ needs.report-engine-tools.result }}" "${{ needs.actions-lock.result }}")
+          results=("${{ needs.checks.result }}" "${{ needs.public-surface.result }}" "${{ needs.dependency-policy.result }}" "${{ needs.test.result }}" "${{ needs.formal.result }}" "${{ needs.qa-corpus.result }}" "${{ needs.windows.result }}" "${{ needs.wasm.result }}" "${{ needs.coverage.result }}" "${{ needs.msrv.result }}" "${{ needs.refactor-metrics.result }}" "${{ needs.typos.result }}" "${{ needs.report-engine-tools.result }}" "${{ needs.prek.result }}" "${{ needs.actions-lock.result }}")
           for result in "${results[@]}"; do
             if [[ "$result" != "success" ]]; then
               echo "One or more jobs failed"
