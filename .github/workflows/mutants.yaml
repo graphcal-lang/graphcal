@@ -121,7 +121,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2.9.3
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
@@ -216,7 +216,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2.9.3
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 

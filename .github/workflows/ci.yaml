@@ -59,7 +59,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-hawk@0.1.15
 
@@ -91,11 +91,11 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-deny@0.20.2
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-audit@0.22.2
 
@@ -268,7 +268,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2.9.3
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.87.32
         with:
           tool: wasm-pack@0.15.0
 
@@ -321,7 +321,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2.87.31
+        uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-llvm-cov
 
@@ -352,7 +352,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.87.32
         with:
           tool: cargo-hack
 
