@@ -375,7 +375,7 @@ jobs:
           enable-cache: false
 
       - name: Install Nushell
-        uses: hustcer/setup-nu@v3.27
+        uses: hustcer/setup-nu@v3.29
         with:
           version: "0.115.1"
 
