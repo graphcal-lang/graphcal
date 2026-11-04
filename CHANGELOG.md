@@ -4,6 +4,66 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.44
+
+This release makes `/` on two `Int` operands a compile error and adds `div_trunc`, `div_floor`, and `div_ceil`, which name how the integer quotient is rounded.
+It also updates dependencies and moves CI to a GitHub Actions workflow lockfile and `prek`.
+
+**Some existing Graphcal source programs need to be modified.** A program that divides two `Int` values with `/` no longer compiles. See [Breaking Changes](#breaking-changes).
+
+### Breaking Changes
+
+- `/` is no longer defined for two `Int` operands, and such a division is rejected with D043. Before, `a / b` on `Int` silently truncated toward zero, which is often not the rounding a calculation needs. Every affected program fails to compile, so none changes its result silently. Replace `a / b` with one of the new integer division functions, or with `to_float(a) / to_float(b)` for the real quotient. `div_trunc(a, b)` gives the same result as the old `/`. The D043 help lists these choices. (_#2196_)
+
+  ```text
+  graphcal::D043
+    × `/` is not defined for two `Int` operands
+    help: integer division must name its rounding. `div_trunc(a, b)` rounds toward zero and reproduces the previous result of `a / b`, but it may not be the rounding you need: `div_floor(a, b)` or `div_ceil(a, b)` is often intended. For a real quotient write `to_float(a) / to_float(b)`. ...
+  ```
+
+### Integer Division Functions
+
+- The new built-ins `div_trunc`, `div_floor`, and `div_ceil` divide two `Int` values and round the quotient toward zero, toward negative infinity, and toward positive infinity. They differ only when the division is inexact: `div_trunc(-7, 2)` is `-3`, `div_floor(-7, 2)` is `-4`, and `div_ceil(7, 2)` is `4`. (_#2196_)
+
+  ```graphcal
+  param items: Int = 10;
+  param per_rack: Int = 4;
+
+  // 3: a partly filled rack still needs a rack.
+  node racks: Int = div_ceil(@items, @per_rack);
+  // 2: only the completely filled racks.
+  node full_racks: Int = div_floor(@items, @per_rack);
+  ```
+
+- The quotient is computed exactly. A zero divisor is an evaluation error, and so is `-9223372036854775808` divided by `-1`, whose quotient does not fit in `Int`. In a `const node`, both are compile errors. (_#2196_)
+- Calls with constant arguments can be used where a compile-time `Int` is required, such as `2 ^ div_trunc(6, 2)` or `@v[div_floor(7, 2)]`. (_#2196_)
+- The language server's signature help, hover, and completion include the new functions. (_#2196_)
+- Unit scales such as `(1 / 3) m` still divide as real numbers. (_#2196_)
+
+### Documentation
+
+- The operator tables say that `/` is not defined for two `Int` operands, and the built-in reference has a new "Integer Division Functions" section. (_#2196_)
+- The `round()` entry states that a tie rounds away from zero, so `round(2.5)` is `3.0` and `round(-2.5)` is `-3.0`. The behavior is unchanged. (_#2196_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- Updated Rust crates: `arrow-array`, `arrow-ipc`, and `arrow-schema` to v60.1.0 (_#2197_), `wasm-bindgen` to v0.2.130 and `js-sys` to v0.3.107 (_#2204_), `unicode-width` to v0.2.3 (_#2194_), and `wat` to v1.263.0 (_#2209_).
+- Updated JavaScript tooling: pnpm to v12.16.1 (_#2208_) and `@types/node` to v26.6.6 (_#2211_). CI now uses Node.js v26.13.0. (_#2221_)
+- Updated `zensical` to v0.0.73. (_#2207_, _#2214_)
+- Updated GitHub Actions: `taiki-e/install-action` to v2.87.31 (_#2200_, _#2210_), `astral-sh/setup-uv` to v10.3.2 (_#2199_, _#2202_), `actions/setup-python` to v7.1.0 (_#2201_), `voidzero-dev/setup-vp` to v1.22.0 (_#2205_), `rust-lang/crates-io-auth-action` to v1.0.6 (_#2198_), and `zizmorcore/zizmor-action` to v0.8.1 (_#2206_, _#2223_).
+- Workflows pin their actions in a GitHub Actions workflow lockfile, `.github/workflows/actions.lock`, instead of inline commit hashes. A new CI job checks the lockfile, and Renovate updates it. (_#2223_)
+- The Renovate configuration extends the shared preset in `graphcal-lang/renovate-config`. (_#2225_)
+- Pre-commit hooks run in CI with `prek` instead of on pre-commit.ci. (_#2226_)
+- Refreshed lock files. (_#2213_)
+
+### Internal
+
+- Exact power exponents such as `(3/2)` are lowered to the literal they denote, so they are not type-checked as an `Int` division. (_#2196_)
+- One exact integer division kernel serves both evaluation and compile-time `Int` folding. (_#2196_)
+- Bumped the workspace version to v0.0.1-alpha.44 and added these notes to `CHANGELOG.md`. (_#2227_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.43...v0.0.1-alpha.44>
+
 ## v0.0.1-alpha.43
 
 This release adds two things for applications that serve models in batch: `graphcal model serve` can fix parameters it does not vary to given values, and the new `graphcal model unit` command resolves unit expressions for clients.
