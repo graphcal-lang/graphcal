@@ -18,7 +18,7 @@ workflows:
         - 'codecov/codecov-action@v7.1.1'
         - 'crate-ci/typos@v1.51.1'
         - 'hustcer/setup-nu@v3.27'
-        - 'leanprover/lean-action@v1.6.2'
+        - 'leanprover/lean-action@v1.7.0'
         - 'swatinem/rust-cache@v2.9.3'
         - 'taiki-e/install-action@v2.87.31'
     '.github/workflows/docs.yaml':
@@ -152,9 +152,9 @@ dependencies:
         commit: 'sha1-9215c80adb545a85c419d5085b76eb6d082f49e7'
         owner_id: 1161607
         repo_id: 486109928
-    'leanprover/lean-action@v1.6.2':
-        ref: 'v1.6.2'
-        commit: 'sha1-24581d74d674803a25a81b10b059c5c0cdd344c6'
+    'leanprover/lean-action@v1.7.0':
+        ref: 'v1.7.0'
+        commit: 'sha1-fe408643ea7367d8c0404a8be3975bb145f5fb64'
         owner_id: 7233018
         repo_id: 795738301
         uses:

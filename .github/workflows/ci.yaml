@@ -133,7 +133,7 @@ jobs:
           persist-credentials: false
 
       - name: Build and independently check Lean specifications
-        uses: leanprover/lean-action@v1.6.2
+        uses: leanprover/lean-action@v1.7.0
         with:
           lake-package-directory: formal
           auto-config: false
