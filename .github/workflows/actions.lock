@@ -18,6 +18,7 @@ workflows:
         - 'codecov/codecov-action@v7.1.1'
         - 'crate-ci/typos@v1.51.1'
         - 'hustcer/setup-nu@v3.27'
+        - 'j178/prek-action@v3.1.0'
         - 'leanprover/lean-action@v1.6.2'
         - 'swatinem/rust-cache@v2.9.3'
         - 'taiki-e/install-action@v2.87.31'
@@ -152,6 +153,11 @@ dependencies:
         commit: 'sha1-9215c80adb545a85c419d5085b76eb6d082f49e7'
         owner_id: 1161607
         repo_id: 486109928
+    'j178/prek-action@v3.1.0':
+        ref: 'v3.1.0'
+        commit: 'sha1-44924fe9ef4a6f88253c4b6b1bf11c689d3ce53d'
+        owner_id: 10510431
+        repo_id: 1052387486
     'leanprover/lean-action@v1.6.2':
         ref: 'v1.6.2'
         commit: 'sha1-24581d74d674803a25a81b10b059c5c0cdd344c6'
