@@ -1001,6 +1001,11 @@ fn load_project_with_plugins<F: graphcal_io::FileSystemReader>(
     Ok((project, host_fns))
 }
 
+/// Check the selected files without evaluating them and report their completeness.
+/// With `deny_todo`, reachable unfinished declarations count as file errors.
+///
+/// Exits with status 2 if source discovery is incomplete, or 1 if no files
+/// are found or any file fails loading or checking (including `deny_todo`).
 fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
     let (targets, traversal_failures) = resolve_target_files(paths).into_parts();
     if let Some(failures) = &traversal_failures {

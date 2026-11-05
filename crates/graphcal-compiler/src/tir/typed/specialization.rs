@@ -271,6 +271,8 @@ fn specialize_plot_channel(
     Ok(shape)
 }
 
+/// Rebase dependency map keys and targets into `frame` in place.
+/// Inline DAG calls retain their canonical targets; only their callers are rebased.
 fn specialize_dependencies(
     dependencies: &mut super::ResolvedDagDependencies,
     frame: &InstanceFrame,

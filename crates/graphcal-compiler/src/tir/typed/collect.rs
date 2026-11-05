@@ -53,6 +53,9 @@ pub fn dynamic_unit_scale_reads(
         .collect()
 }
 
+/// Extend runtime, assertion, and presentation dependencies with the reads of
+/// dynamic unit scales used by quantity literals in their expressions.
+/// `scale_deps` supplies those reads already resolved in each unit owner's frame.
 fn add_dynamic_unit_reads(
     dag: &mut DagTIR,
     scale_deps: &HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>>,
@@ -156,6 +159,11 @@ fn resolve_all<'a>(
         .collect()
 }
 
+/// Collect const, runtime, assertion, and presentation reads in `frame`, along
+/// with inline DAG calls. Dynamic unit scale reads are added separately.
+///
+/// Returns a semantic error located in `src` at the const declaration if an
+/// `@` reference in its body has no symbol in the module resolver.
 pub(super) fn collect_resolved_dag_dependencies(
     decls: &crate::ir::decl_table::DeclTable<super::model::Typed>,
     frame: &InstanceFrame,
