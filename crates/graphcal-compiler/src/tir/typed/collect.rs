@@ -28,11 +28,13 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(tir: &mut super::UncheckedT
 }
 
 /// The declarations each dynamic unit's scale reads, resolved in the frame
-/// of the DAG instance that owns the unit.
+/// of the DAG instance that owns the unit: its own `@` reads and, through the
+/// quantity literals of its scale, those of every dynamic unit it uses.
 pub fn dynamic_unit_scale_reads(
     tir: &super::UncheckedTir,
 ) -> HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>> {
-    tir.dags
+    let direct = tir
+        .dags
         .iter()
         .flat_map(|(_, dag)| {
             let frame = dag.frame();
@@ -40,15 +42,34 @@ pub fn dynamic_unit_scale_reads(
                 .dynamic_unit_scales
                 .iter()
                 .map(move |(name, entry)| {
+                    let reads = crate::hir::expr::collect_expr_dependencies(&entry.expr)
+                        .graph_refs
+                        .iter()
+                        .map(|reference| frame.resolve(reference))
+                        .collect::<BTreeSet<_>>();
                     (
                         name.clone(),
-                        crate::hir::expr::collect_expr_dependencies(&entry.expr)
-                            .graph_refs
-                            .iter()
-                            .map(|reference| frame.resolve(reference))
-                            .collect(),
+                        (reads, collect_unit_names(frame, &entry.expr)),
                     )
                 })
+        })
+        .collect::<HashMap<_, _>>();
+    direct
+        .keys()
+        .map(|unit| {
+            let mut reads = BTreeSet::new();
+            let mut visited = HashSet::new();
+            let mut pending = vec![unit];
+            while let Some(unit) = pending.pop() {
+                if !visited.insert(unit) {
+                    continue;
+                }
+                if let Some((own, used)) = direct.get(unit) {
+                    reads.extend(own.iter().cloned());
+                    pending.extend(used.iter().filter(|used| direct.contains_key(*used)));
+                }
+            }
+            (unit.clone(), reads)
         })
         .collect()
 }

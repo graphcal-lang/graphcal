@@ -150,6 +150,14 @@ fn package_with_unused_imported_todos() -> tempfile::TempDir {
             "fx.gcl",
             "pub base dim Money;\npub base unit USD: Money;\nnode rate: Dimensionless = todo<Dimensionless> {};\npub unit EUR: Money = (@rate) USD;\n",
         ),
+        (
+            "nested_fx.gcl",
+            "pub base dim Money;\npub base unit USD: Money;\nparam j: Dimensionless = 1.0;\nnode k: Dimensionless = todo<Dimensionless> {};\nunit inner: Dimensionless = (@k) USD/USD;\npub unit EUR: Money = (@j * 2.0 inner) USD;\n",
+        ),
+        (
+            "nested_unit.gcl",
+            "import demo.nested_fx::{dim Money, unit USD};\ninclude demo.nested_fx()::{ unit EUR as euros };\nassert rich = 2.0 euros > 1.0 USD;\n",
+        ),
         ("member.gcl", "include demo.parts() as a;\n"),
         ("requested_plot.gcl", "include demo.charts()::{ shown };\n"),
         (
@@ -201,6 +209,7 @@ fn check_counts_each_used_unfinished_declaration_once_by_its_definition() {
         "src/demo/requested_plot.gcl",
         "src/demo/unit_assert.gcl",
         "src/demo/unit_plot.gcl",
+        "src/demo/nested_unit.gcl",
     ] {
         let output = check_in(package.path(), &[file]);
         assert!(output.status.success());
