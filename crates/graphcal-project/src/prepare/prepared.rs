@@ -593,12 +593,34 @@ impl PreparedProject {
                 continue;
             };
             if let Some(imported) = self.output_assembly.imported_values.get(name) {
+                let value = match imported.value().value() {
+                    Ok(value) => value,
+                    Err(unfinished) => {
+                        let module_paths = self.output_assembly.display_names.module_paths();
+                        entries.push(graphcal_eval::eval::EvalEntry {
+                            name: name.clone(),
+                            outcome: Err(unfinished.reason(imported.value().key()).map_names(
+                                |declaration| {
+                                    module_paths
+                                        .name(declaration.owner(), declaration.leaf())
+                                        .map_or_else(
+                                            || {
+                                                graphcal_eval::eval::OutputDeclName::Unnamed(
+                                                    declaration.clone(),
+                                                )
+                                            },
+                                            graphcal_eval::eval::OutputDeclName::Invoked,
+                                        )
+                                },
+                            )),
+                            category: decl_type,
+                            identity: imported.value().key().clone(),
+                        });
+                        continue;
+                    }
+                };
                 let presented = presentations.get(imported.value().key()).map_or_else(
-                    || {
-                        graphcal_eval::runtime_presentation::PresentedRef::plain(
-                            imported.value().value(),
-                        )
-                    },
+                    || graphcal_eval::runtime_presentation::PresentedRef::plain(value),
                     |presented| presented.as_ref(),
                 );
                 let (value, diagnostics) = graphcal_eval::eval::public_projection::project(

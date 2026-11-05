@@ -68,7 +68,7 @@ fn auto_import_data(
 }
 
 /// Report source markers even in libraries and unused DAG definitions.
-pub fn unfinished_node_diagnostics<P: graphcal_compiler::syntax::phase::Phase>(
+pub fn unfinished_formula_diagnostics<P: graphcal_compiler::syntax::phase::Phase>(
     declarations: &[graphcal_compiler::syntax::ast::Declaration<P>],
     source: &str,
 ) -> Vec<Diagnostic>
@@ -79,22 +79,24 @@ where
     let lines = LineIndex::new(source);
     declarations
         .iter()
-        .flat_map(|declaration| match &declaration.kind {
-            DeclKind::Node(node) => {
-                graphcal_compiler::syntax::visitor::collect_todo_holes(&node.value)
-                    .into_iter()
-                    .map(|hole| Diagnostic {
-                        range: lines.span_to_range(hole.span),
-                        severity: Some(DiagnosticSeverity::INFORMATION),
-                        code: Some(NumberOrString::String("graphcal::todo".to_string())),
-                        source: Some("graphcal".to_string()),
-                        message: format!("{}: TODO — formula unfinished", node.name.value),
-                        ..Default::default()
-                    })
-                    .collect()
-            }
-            DeclKind::Dag(dag) => unfinished_node_diagnostics(&dag.body, source),
-            _ => Vec::new(),
+        .flat_map(|declaration| {
+            let (name, formula) = match &declaration.kind {
+                DeclKind::Node(node) => (&node.name.value, &node.value),
+                DeclKind::ConstNode(constant) => (&constant.name.value, &constant.value),
+                DeclKind::Dag(dag) => return unfinished_formula_diagnostics(&dag.body, source),
+                _ => return Vec::new(),
+            };
+            graphcal_compiler::syntax::visitor::collect_todo_holes(formula)
+                .into_iter()
+                .map(|hole| Diagnostic {
+                    range: lines.span_to_range(hole.span),
+                    severity: Some(DiagnosticSeverity::INFORMATION),
+                    code: Some(NumberOrString::String("graphcal::todo".to_string())),
+                    source: Some("graphcal".to_string()),
+                    message: format!("{name}: TODO — formula unfinished"),
+                    ..Default::default()
+                })
+                .collect()
         })
         .collect()
 }

@@ -111,6 +111,12 @@ impl ExecutionFacts {
             .flat_map(|facts| facts.const_presentations.iter())
     }
 
+    /// The constants of every DAG: their values, or why they have none.
+    #[must_use]
+    pub const fn consts(&self) -> &ConstPool {
+        &self.consts
+    }
+
     /// Resolved struct-field constraints of every concrete application.
     #[must_use]
     pub fn struct_field_constraints(&self) -> &StructFieldConstraints {

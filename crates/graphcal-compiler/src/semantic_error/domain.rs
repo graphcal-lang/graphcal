@@ -312,6 +312,14 @@ pub enum DomainError {
     InexactIntDomainBound { value: i64 },
     #[error("domain constraints are not supported on the type of a `todo` hole")]
     TodoHoleDomainConstraint,
+    /// A bound reads a constant that has no value: its formula, or that of a
+    /// constant it reads, is unfinished.
+    #[error("{bound_name} bound on `{name}` reads the unfinished constant `{constant}`")]
+    DomainBoundReadsUnfinishedConstant {
+        name: DomainSubject,
+        bound_name: DomainBoundKind,
+        constant: DeclName,
+    },
 }
 
 impl DiagnosticKind for DomainError {
@@ -326,6 +334,7 @@ impl DiagnosticKind for DomainError {
             Self::DatetimeDomainBoundTypeMismatch { .. } => "graphcal::C007",
             Self::InexactIntDomainBound { .. } => "graphcal::C008",
             Self::TodoHoleDomainConstraint => "graphcal::C009",
+            Self::DomainBoundReadsUnfinishedConstant { .. } => "graphcal::C010",
         }
     }
 
@@ -347,6 +356,9 @@ impl DiagnosticKind for DomainError {
                 Some("datetime bound has the wrong time scale or value type".to_owned())
             }
             Self::InexactIntDomainBound { .. } => Some("error here".to_owned()),
+            Self::DomainBoundReadsUnfinishedConstant { .. } => {
+                Some("bound has no value yet".to_owned())
+            }
         }
     }
 
@@ -361,6 +373,7 @@ impl DiagnosticKind for DomainError {
             Self::DatetimeDomainBoundTypeMismatch { .. } => Some("datetime bounds must have exactly the constrained Datetime<S> type; use an explicit time-scale conversion".to_owned()),
             Self::TodoHoleDomainConstraint => Some("put the constraint on the declaration's type instead".to_owned()),
             Self::InexactIntDomainBound { .. } => None,
+            Self::DomainBoundReadsUnfinishedConstant { .. } => Some("a bound must be known when the model is checked; finish the constant's formula first".to_owned()),
         }
     }
 
@@ -374,7 +387,8 @@ impl DiagnosticKind for DomainError {
             | Self::GenericTypeArgDomainConstraint
             | Self::DatetimeDomainBoundTypeMismatch { .. }
             | Self::InexactIntDomainBound { .. }
-            | Self::TodoHoleDomainConstraint => Vec::new(),
+            | Self::TodoHoleDomainConstraint
+            | Self::DomainBoundReadsUnfinishedConstant { .. } => Vec::new(),
         }
     }
 }

@@ -86,7 +86,7 @@ fn const_pools_evaluate_every_constant_once_after_the_constants_it_reads() {
     let reference = pool.reference(&key(&tir, "c")).unwrap();
     assert_eq!(reference.key(), &key(&tir, "c"));
     assert!(std::ptr::eq(
-        reference.value(),
+        reference.value().unwrap(),
         root.get(&key(&tir, "c")).unwrap()
     ));
     assert!(pool.reference(&key(&tir, "x")).is_none());
@@ -137,7 +137,7 @@ fn imported_constants_resolve_once() {
     assert_eq!(constant.name(), &local);
     assert_eq!(constant.value().key(), &target);
     assert!(std::ptr::eq(
-        constant.value().value(),
+        constant.value().value().unwrap(),
         consts
             .for_dag(tir.root_dag_id())
             .unwrap()

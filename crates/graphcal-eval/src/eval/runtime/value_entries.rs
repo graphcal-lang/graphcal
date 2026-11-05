@@ -161,11 +161,15 @@ fn root_entries(
         .map(|(declared, category)| {
             let key = declared.identity().clone();
             let (result, diagnostics) = match category {
-                ValueDeclCategory::Const => {
-                    let runtime = scope.const_values().get(&key);
-                    let (value, diagnostics) = project_value(&key, runtime, evaluated, ctx)?;
-                    (Ok(value), diagnostics)
-                }
+                ValueDeclCategory::Const => match scope.const_values().get(&key) {
+                    Some(runtime) => {
+                        let (value, diagnostics) =
+                            project_value(&key, Some(runtime), evaluated, ctx)?;
+                        (Ok(value), diagnostics)
+                    }
+                    // An unfinished constant: the frame recorded why.
+                    None => evaluated_value(&key, evaluated, ctx)?,
+                },
                 ValueDeclCategory::Param | ValueDeclCategory::Node => {
                     evaluated_value(&key, evaluated, ctx)?
                 }

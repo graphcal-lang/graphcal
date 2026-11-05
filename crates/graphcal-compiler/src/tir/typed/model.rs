@@ -1138,13 +1138,16 @@ impl DagTIR {
         }
     }
 
-    /// Whether `key` is an unfinished node: its formula contains a
-    /// `todo<T> { … }` hole.
+    /// Whether `key` is an unfinished constant or node: its formula contains
+    /// a `todo<T> { … }` hole.
     #[must_use]
     pub fn is_unfinished(&self, key: &ResolvedDeclName) -> bool {
         match self.decls.get(key) {
             Some(crate::ir::entry::Decl::Node(entry)) => {
                 crate::hir::expr::contains_todo_hole(&entry.definition)
+            }
+            Some(crate::ir::entry::Decl::Const(entry)) => {
+                crate::hir::expr::contains_todo_hole(&entry.expr)
             }
             _ => false,
         }

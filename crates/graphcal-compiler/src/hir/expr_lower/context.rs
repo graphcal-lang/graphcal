@@ -21,7 +21,7 @@ pub struct ExprLoweringContext<'a> {
 
 /// Whether the lowered expression may contain `todo<T> { … }` holes.
 ///
-/// Only runtime node bodies can be unfinished; every other body rejects holes
+/// Only constant and node formulas can be unfinished; every other body rejects holes
 /// unless its lowering opts in through
 /// [`ExprLoweringContext::allowing_todo_holes`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,7 +54,8 @@ impl<'a> ExprLoweringContext<'a> {
         }
     }
 
-    /// Accept `todo<T> { … }` holes: the expression is a runtime node body.
+    /// Accept `todo<T> { … }` holes: the expression is a constant or node
+    /// formula.
     #[must_use]
     pub const fn allowing_todo_holes(self) -> Self {
         Self {

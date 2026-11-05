@@ -151,6 +151,24 @@ impl UnfrozenIR {
                 .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_semantic(&err, src))
         };
         let lower_scoped = |expr: &InScope<Expr>| lower_in(&expr.syntax, &expr.resolution_owner);
+        // A constant or node body may be unfinished: it accepts `todo` holes.
+        let lower_unfinished = |expr: &InScope<Expr>| {
+            let scope = crate::hir::lower::ModuleScope::new(
+                &expr.resolution_owner,
+                resolver,
+                &generic_scope,
+            );
+            crate::hir::expr_lower::lower::lower_expr(
+                &expr.syntax,
+                crate::hir::expr_lower::context::ExprLoweringContext::with_overlay(
+                    scope,
+                    &time_zones,
+                    overlay,
+                )
+                .allowing_todo_holes(),
+            )
+            .map_err(|error| crate::hir::diagnostics::expr_lower_error_to_semantic(&error, src))
+        };
         let lower_type_annotation = |type_ann: &InScope<TypeExpr>| -> Result<
             crate::hir::type_annotation::TypeAnnotation,
             SemanticError,
@@ -255,7 +273,7 @@ impl UnfrozenIR {
                     Decl::Const(entry) => Decl::Const(ConstEntry {
                         doc: entry.doc,
                         type_ann: lower_type_annotation(&entry.type_ann)?,
-                        expr: lower_scoped(&entry.expr)?,
+                        expr: lower_unfinished(&entry.expr)?,
                         identity: entry.identity,
                         span: entry.span,
                         definition_range: entry.definition_range,
@@ -272,22 +290,7 @@ impl UnfrozenIR {
                     Decl::Node(entry) => Decl::Node(NodeEntry {
                         doc: entry.doc,
                         type_ann: lower_type_annotation(&entry.type_ann)?,
-                        definition: crate::hir::expr_lower::lower::lower_expr(
-                            &entry.definition.syntax,
-                            crate::hir::expr_lower::context::ExprLoweringContext::with_overlay(
-                                crate::hir::lower::ModuleScope::new(
-                                    &entry.definition.resolution_owner,
-                                    resolver,
-                                    &generic_scope,
-                                ),
-                                &time_zones,
-                                overlay,
-                            )
-                            .allowing_todo_holes(),
-                        )
-                        .map_err(|error| {
-                            crate::hir::diagnostics::expr_lower_error_to_semantic(&error, src)
-                        })?,
+                        definition: lower_unfinished(&entry.definition)?,
                         identity: entry.identity,
                         span: entry.span,
                         definition_range: entry.definition_range,

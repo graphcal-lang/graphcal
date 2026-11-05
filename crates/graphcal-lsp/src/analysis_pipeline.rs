@@ -396,7 +396,7 @@ pub fn run_analysis_with_cancellation(
             // `RequiredStaticInputNotBound` / `RequiredParamNotProvided` diagnostics when the
             // user opens such a file for editing.
             let todos =
-                crate::diagnostics::unfinished_node_diagnostics(&root_ast.declarations, text);
+                crate::diagnostics::unfinished_formula_diagnostics(&root_ast.declarations, text);
             let (mut view, degradations) = match view {
                 ViewModelDemand::Skip => (None, Vec::new()),
                 ViewModelDemand::Project => {
