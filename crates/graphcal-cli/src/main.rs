@@ -1021,34 +1021,18 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
         });
         match outcome {
             Ok(checked) => {
-                let todos = checked
-                    .tir()
-                    .dag_registry()
-                    .values()
-                    .filter(|dag| !dag.is_semantic_instance())
-                    .map(|dag| {
-                        dag.declarations()
-                            .filter(|declaration| {
-                                declaration.category()
-                                    == graphcal_compiler::declaration_category::DeclCategory::Value(
-                                        graphcal_compiler::declaration_category::ValueDeclCategory::Node,
-                                    )
-                                    && dag.is_unfinished(declaration.identity())
-                            })
-                            .count()
-                    })
-                    .sum::<usize>();
+                let todos = checked.tir().reachable_unfinished().len();
                 if todos == 0 {
                     println!("ok: {}", file.display());
                 } else if deny_todo {
                     eprintln!(
-                        "error: {}: {todos} unfinished node(s); --deny-todo requires complete formulas",
+                        "error: {}: {todos} unfinished declaration(s); --deny-todo requires complete formulas",
                         file.display()
                     );
                     error_count += 1;
                 } else {
                     println!(
-                        "ok: {} (model incomplete: {todos} unfinished node(s))",
+                        "ok: {} (model incomplete: {todos} unfinished declaration(s))",
                         file.display()
                     );
                 }

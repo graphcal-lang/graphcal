@@ -20,7 +20,7 @@ fn check_accepts_incomplete_source_but_deny_todo_rejects_it_without_evaluation()
     let source = format!("{MODEL} node bad: Length = 1.0 m / 0.0;");
     let output = run(&source, &["check"]);
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("1 unfinished node"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 unfinished declaration"));
     assert!(!run(&source, &["check", "--deny-todo"]).status.success());
     assert!(
         !run(
@@ -106,5 +106,142 @@ fn unavailability_reasons_name_declarations_as_the_output_does() {
     assert_eq!(
         json["node"]["failed"]["failed_deps"],
         serde_json::json!(["bad"])
+    );
+}
+
+/// A package whose `main` uses `lib`'s constant but none of the unfinished
+/// declarations of `lib` and `parts`; each other root file reaches exactly
+/// one unfinished declaration of another module.
+fn package_with_unused_imported_todos() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().unwrap();
+    let sources = directory.path().join("src/demo");
+    std::fs::create_dir_all(&sources).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        "[package]\nname = \"demo\"\nsource_dir = \"src\"\n",
+    )
+    .unwrap();
+    for (file, source) in [
+        (
+            "lib.gcl",
+            "pub const node g0: Acceleration = 9.80665 m/s^2;\nnode unused: Length = todo<Length> {};\n",
+        ),
+        (
+            "parts.gcl",
+            "pub node missing: Length = todo<Length> {};\npub node known: Length = 2.0 m;\n",
+        ),
+        (
+            "main.gcl",
+            "import demo.lib::{g0};\ninclude demo.parts()::{ known };\nnode w: Force = 2.0 kg * @g0;\n",
+        ),
+        (
+            "uses.gcl",
+            "import demo.parts as parts;\ninclude demo.parts() as a;\ninclude demo.parts() as b;\nnode called: Length = @parts()::missing;\n",
+        ),
+        (
+            "plots.gcl",
+            "import demo.parts as parts;\nplot p = { mark: point, encode: { x: @parts()::missing, y: 1.0 m } };\n",
+        ),
+        (
+            "charts.gcl",
+            "node hidden: Length = todo<Length> {};\npub plot shown = { mark: point, encode: { x: @hidden, y: 1.0 m } };\n",
+        ),
+        (
+            "fx.gcl",
+            "pub base dim Money;\npub base unit USD: Money;\nnode rate: Dimensionless = todo<Dimensionless> {};\npub unit EUR: Money = (@rate) USD;\n",
+        ),
+        ("member.gcl", "include demo.parts() as a;\n"),
+        ("requested_plot.gcl", "include demo.charts()::{ shown };\n"),
+        (
+            "unit_assert.gcl",
+            "import demo.fx::{dim Money, unit USD};\ninclude demo.fx()::{ unit EUR as euros };\nassert rich = 2.0 euros > 1.0 USD;\n",
+        ),
+        (
+            "unit_plot.gcl",
+            "import demo.fx::{dim Money, unit USD};\ninclude demo.fx()::{ unit EUR as euros };\nplot p = { mark: point, encode: { x: 1.0 euros, y: 1.0 m } };\n",
+        ),
+    ] {
+        std::fs::write(sources.join(file), source).unwrap();
+    }
+    directory
+}
+
+fn check_in(directory: &std::path::Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_graphcal"))
+        .current_dir(directory)
+        .arg("check")
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn check_ignores_unfinished_declarations_of_imported_modules_that_the_file_does_not_use() {
+    let package = package_with_unused_imported_todos();
+    let output = check_in(package.path(), &["src/demo/main.gcl"]);
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "ok: src/demo/main.gcl\n"
+    );
+    assert!(
+        check_in(package.path(), &["--deny-todo", "src/demo/main.gcl"])
+            .status
+            .success()
+    );
+}
+
+#[test]
+fn check_counts_each_used_unfinished_declaration_once_by_its_definition() {
+    let package = package_with_unused_imported_todos();
+    for file in [
+        "src/demo/uses.gcl",
+        "src/demo/plots.gcl",
+        "src/demo/member.gcl",
+        "src/demo/requested_plot.gcl",
+        "src/demo/unit_assert.gcl",
+        "src/demo/unit_plot.gcl",
+    ] {
+        let output = check_in(package.path(), &[file]);
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            format!("ok: {file} (model incomplete: 1 unfinished declaration(s))\n")
+        );
+        assert!(
+            !check_in(package.path(), &["--deny-todo", file])
+                .status
+                .success()
+        );
+    }
+}
+
+#[test]
+fn checking_the_package_directory_reports_every_unfinished_declaration_where_it_is_defined() {
+    let package = package_with_unused_imported_todos();
+    let output = check_in(package.path(), &["src"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Directory traversal prints paths with the platform's separator.
+    let line = |file: &str| {
+        format!(
+            "ok: {}",
+            std::path::Path::new("src")
+                .join("demo")
+                .join(file)
+                .display()
+        )
+    };
+    for file in ["lib.gcl", "parts.gcl", "charts.gcl", "fx.gcl"] {
+        assert!(stdout.contains(&format!(
+            "{} (model incomplete: 1 unfinished declaration(s))\n",
+            line(file)
+        )));
+    }
+    assert!(stdout.contains(&format!("{}\n", line("main.gcl"))));
+    assert!(
+        !check_in(package.path(), &["--deny-todo", "src"])
+            .status
+            .success()
     );
 }

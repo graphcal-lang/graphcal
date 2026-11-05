@@ -292,6 +292,7 @@ fn specialize_dependencies(
     dependencies.runtime_deps = remap(&dependencies.runtime_deps);
     dependencies.const_deps = remap(&dependencies.const_deps);
     dependencies.assert_deps = remap(&dependencies.assert_deps);
+    dependencies.presentation_deps = remap(&dependencies.presentation_deps);
     // A call targets a canonical DAG, so only the caller moves to the frame.
     dependencies.call_reads = dependencies
         .call_reads

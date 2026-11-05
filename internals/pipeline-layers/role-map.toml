@@ -1915,6 +1915,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["tir", "typed", "unfinished_reach"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["tir", "typed", "override_dependencies"]
 role = "contracts"
 

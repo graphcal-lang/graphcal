@@ -872,7 +872,7 @@ Check `.gcl` files without runtime evaluation. This performs parsing, module and
 graphcal check [OPTIONS] [PATHS]...
 ```
 
-Otherwise-valid [unfinished nodes](language/computation-model.md#unfinished-nodes) are summarized without making the check fail. Use `--deny-todo` to require complete formulas, including in unused DAG definitions. This is still a static check, not runtime domain validation.
+Otherwise-valid [unfinished nodes](language/computation-model.md#unfinished-nodes) are summarized without making the check fail. Use `--deny-todo` to require complete formulas, including in unused DAG definitions. Each file counts its own unfinished nodes and those of other modules that it uses; an unused unfinished node of an imported module is reported only when that module is checked. To require a whole package to be complete, check its directory. This is still a static check, not runtime domain validation.
 
 **Arguments:**
 

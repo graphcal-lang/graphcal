@@ -57,36 +57,56 @@ fn add_dynamic_unit_reads(
     dag: &mut DagTIR,
     scale_deps: &HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>>,
 ) {
-    let runtime_units = dag
-        .params()
-        .filter_map(|entry| {
-            entry
-                .default
-                .as_ref()
-                .map(|default| (entry.identity(), collect_unit_names(&dag.frame, default)))
-        })
-        .chain(dag.nodes().map(|entry| {
-            (
-                entry.identity(),
-                collect_unit_names(&dag.frame, &entry.definition),
-            )
-        }))
-        .collect::<Vec<_>>();
-
-    for (key, unit_names) in runtime_units {
-        let extra: BTreeSet<ResolvedDeclName> = unit_names
+    let units_of = |expressions: &[&crate::hir::expr::Expr]| {
+        expressions
+            .iter()
+            .flat_map(|expression| collect_unit_names(&dag.frame, expression))
+            .collect::<std::collections::HashSet<_>>()
+    };
+    let reads = |units: std::collections::HashSet<_>| -> BTreeSet<ResolvedDeclName> {
+        units
             .iter()
             .filter_map(|unit| scale_deps.get(unit))
             .flatten()
             .cloned()
-            .collect();
-        if !extra.is_empty() {
-            dag.semantic
-                .dependencies
-                .runtime_deps
-                .entry(key)
-                .or_default()
-                .extend(extra);
+            .collect()
+    };
+    let runtime = dag
+        .params()
+        .filter_map(|entry| {
+            entry
+                .default
+                .as_deref()
+                .map(|default| (entry.identity(), units_of(&[default])))
+        })
+        .chain(
+            dag.nodes()
+                .map(|entry| (entry.identity(), units_of(&[&*entry.definition]))),
+        )
+        .map(|(key, units)| (key, reads(units)))
+        .collect::<Vec<_>>();
+    let asserts = dag
+        .asserts()
+        .map(|entry| {
+            let expressions = entry.body.expressions().collect::<Vec<_>>();
+            (entry.identity(), reads(units_of(&expressions)))
+        })
+        .collect::<Vec<_>>();
+    let presentations = presentation_expressions(dag.decls())
+        .into_iter()
+        .map(|(key, expressions)| (key, reads(units_of(&expressions))))
+        .collect::<Vec<_>>();
+
+    let dependencies = &mut dag.semantic.dependencies;
+    for (map, extra) in [
+        (&mut dependencies.runtime_deps, runtime),
+        (&mut dependencies.assert_deps, asserts),
+        (&mut dependencies.presentation_deps, presentations),
+    ] {
+        for (key, extra) in extra {
+            if !extra.is_empty() {
+                map.entry(key).or_default().extend(extra);
+            }
         }
     }
 }
@@ -219,7 +239,56 @@ pub(super) fn collect_resolved_dag_dependencies(
             .insert(key, resolve_all(frame, &references));
     }
 
+    collect_presentation_dependencies(&mut resolved, decls, frame);
+
     Ok(resolved)
+}
+
+/// The expressions of each plot, figure, and layer of `decls`.
+fn presentation_expressions(
+    decls: &crate::ir::decl_table::DeclTable<super::model::Typed>,
+) -> Vec<(ResolvedDeclName, Vec<&crate::hir::expr::Expr>)> {
+    let plots = decls.plots().map(|entry| {
+        let expressions = entry
+            .body
+            .encodings
+            .iter()
+            .map(|(_, expression)| &**expression)
+            .chain(entry.body.mark_properties.iter().map(|field| &*field.value))
+            .chain(entry.body.properties.iter().map(|field| &*field.value))
+            .collect::<Vec<_>>();
+        (entry.identity(), expressions)
+    });
+    let compositions = decls
+        .figures()
+        .map(|entry| (entry.identity(), &entry.fields))
+        .chain(
+            decls
+                .layers()
+                .map(|entry| (entry.identity(), &entry.fields)),
+        )
+        .map(|(key, fields)| (key, fields.iter().map(|field| &*field.value).collect()));
+    plots.chain(compositions).collect()
+}
+
+/// Record what each plot, figure, and layer reads and calls.
+fn collect_presentation_dependencies(
+    resolved: &mut ResolvedDagDependencies,
+    decls: &crate::ir::decl_table::DeclTable<super::model::Typed>,
+    frame: &InstanceFrame,
+) {
+    for (key, expressions) in presentation_expressions(decls) {
+        record_call_reads(resolved, &key, expressions.iter().copied());
+        let references = expressions
+            .iter()
+            .flat_map(|expression| {
+                crate::hir::expr::collect_expr_dependencies(expression).graph_refs
+            })
+            .collect::<BTreeSet<_>>();
+        resolved
+            .presentation_deps
+            .insert(key, resolve_all(frame, &references));
+    }
 }
 
 /// Record the DAG calls of `caller`'s defining expressions, if it makes any.

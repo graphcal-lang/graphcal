@@ -514,10 +514,16 @@ pub struct ResolvedDagDependencies {
     /// For each const declaration, the canonical const declarations it reads.
     pub const_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
     /// For each assertion, the canonical declarations its operands read via
-    /// `@`. Assertions are not scheduled through this map; it serves tools
-    /// that trace what an assertion checks.
+    /// `@` and through the scales of the runtime units their literals use.
+    /// Assertions are not scheduled through this map; it serves tools that
+    /// trace what an assertion checks.
     pub assert_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
-    /// For each param, node, and assertion making inline DAG calls, those
+    /// For each plot, figure, and layer, the canonical declarations its
+    /// expressions read via `@` and through the scales of the runtime units
+    /// their literals use. Like `assert_deps`, these serve tools that trace
+    /// what a presentation shows; they are not scheduled.
+    pub presentation_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
+    /// For each param, node, assertion, and presentation making inline DAG calls, those
     /// calls in pre-order of its defining expressions. A call's arguments'
     /// `@` reads are already in `runtime_deps`/`assert_deps`; this records
     /// what the call itself reads. Callers are keyed in this body's frame;
