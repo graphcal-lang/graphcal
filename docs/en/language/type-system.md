@@ -1124,7 +1124,9 @@ Graphcal has **no implicit type conversions**. You must use explicit conversion
 functions. The only arithmetic that mixes `Int` with a quantity is `*` or `/`
 with one `Int` operand and one real or complex quantity operand. The `Int` is
 read as an exact `Dimensionless` value, so `n * q` and `q / n` keep the dimension `D` of `q`, and `n / q` has
-dimension `Dimensionless / D` (see [Arithmetic Operators](expressions.md#arithmetic-operators)):
+dimension `Dimensionless / D` (see [Arithmetic Operators](expressions.md#arithmetic-operators)).
+The exponent in `q ^ 2` is exact exponent syntax, not an `Int` operand, and a
+runtime `Int` exponent such as `@q ^ @n` is rejected:
 
 | Function | From | To | Example |
 |----------|------|----|---------|
