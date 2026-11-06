@@ -22,6 +22,7 @@ use crate::tir::texpr::operators::IntArithOp;
 use super::context::Infer;
 
 impl Infer<'_> {
+    /// Infer `if cond { a } else { b }` with the shared conditional rule.
     pub(super) fn infer_hir_if(
         &self,
         condition: &Expr,
@@ -51,6 +52,7 @@ impl Infer<'_> {
         .map_err(Outcome::Failed)
     }
 
+    /// Infer a unary operation with the shared unary rule.
     pub(super) fn infer_hir_unary(
         &self,
         op: crate::desugar::desugared_ast::UnaryOp,
@@ -70,6 +72,8 @@ impl Infer<'_> {
     }
 }
 
+/// Fold a static `Int` expression with the checked `Int` kernels, or `None`
+/// when it is not static or has no `Int` value.
 pub(super) fn try_const_int(expr: &Expr) -> Option<i64> {
     use crate::desugar::desugared_ast::BinOp;
     match expr.kind() {
@@ -102,6 +106,7 @@ pub(super) fn try_const_int(expr: &Expr) -> Option<i64> {
 }
 
 impl Infer<'_> {
+    /// Infer a binary operation with the shared binary rule.
     pub(super) fn infer_hir_binop(
         &self,
         span: crate::syntax::span::Span,

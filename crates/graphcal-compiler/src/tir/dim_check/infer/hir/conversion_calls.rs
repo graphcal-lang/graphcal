@@ -17,6 +17,7 @@ use crate::tir::operator_typing::{self, Operand};
 use super::context::Infer;
 
 impl Infer<'_> {
+    /// Infer `to_float(n)` or `to_int(x)`.
     pub(super) fn infer_hir_type_conversion(
         &self,
         kind: ConversionFn,

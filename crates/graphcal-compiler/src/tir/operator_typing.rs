@@ -101,6 +101,8 @@ fn comparison_operand_type<'a>(
     }
 }
 
+/// The exact rational spelling to suggest for a float-syntax exponent, when
+/// the float denotes one.
 fn exact_float_replacement(exact: Option<ExactRational>) -> Option<String> {
     let rational = Rational::try_from(exact?).ok()?;
     Some(rational.source_syntax().to_string())

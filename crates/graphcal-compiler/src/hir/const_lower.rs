@@ -221,7 +221,9 @@ pub fn lower_static_nat_expr(expr: &ast::NatExpr) -> Result<NatExpr, ConstExprEr
 /// The diagnostics a position reports for constructs outside its
 /// sublanguage.
 trait PositionErrors: ConstPosition {
+    /// A name that is not a built-in constant.
     fn unknown_constant(path: Spanned<NamePath>) -> ConstExprError;
+    /// A construct outside the constant sublanguage.
     fn non_constant(span: Span) -> ConstExprError;
 }
 
@@ -252,6 +254,7 @@ enum Typed<P: ConstPosition> {
 }
 
 impl<P: ConstPosition> Typed<P> {
+    /// The type the shared rules see for this operand.
     fn checked_type(&self) -> CheckedType<Symbolic> {
         match self {
             Self::Int(_) => CheckedType::Int,
@@ -278,6 +281,8 @@ impl<P: ConstPosition> Typed<P> {
     }
 }
 
+/// Lowering of one constant position `P`: the typing context, and the unit
+/// resolver when `P` admits quantity literals.
 struct Lowering<'a, 'r, P> {
     typing: ConstTyping<'a>,
     resolve_unit: Option<&'r UnitExprResolver<'r>>,
@@ -285,6 +290,7 @@ struct Lowering<'a, 'r, P> {
 }
 
 impl<P: PositionErrors> Lowering<'_, '_, P> {
+    /// Lower and type `expr`, reporting the first error in source order.
     fn lower(&self, expr: &ast::Expr) -> Result<Typed<P>, ConstLowerError> {
         let span = expr.span;
         let real = |kind| Typed::Real(ConstReal::new(kind, span), Dimension::dimensionless());
@@ -461,6 +467,8 @@ impl<P: PositionErrors> Lowering<'_, '_, P> {
         }
     }
 
+    /// Lower `lhs op rhs`: type it with the shared binary rule, then build
+    /// the `Int` or real node the rule's result type selects.
     fn binop(
         &self,
         span: Span,

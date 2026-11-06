@@ -609,6 +609,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         self.display_registry(owner).dimension_spelling(dimension)
     }
 
+    /// The dimension spellings diagnostics of `owner` use.
     fn display_registry(&self, owner: &DagId) -> DimensionFormattingRegistry {
         DimensionFormattingRegistry::new(
             self.base_dimensions.clone(),
@@ -933,6 +934,8 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         clippy::too_many_lines,
         reason = "one unit declaration's validation and scale evaluation in source order"
     )]
+    /// Validate one unit declaration and evaluate its static scale, or
+    /// record its dynamic scale for checking.
     fn declared_unit(
         &mut self,
         identity: &ResolvedUnitName,
@@ -1187,6 +1190,8 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             })
     }
 
+    /// Build the definition of one declared index, evaluating coordinate
+    /// axes.
     fn index_definition(
         &mut self,
         owner: &DagId,
