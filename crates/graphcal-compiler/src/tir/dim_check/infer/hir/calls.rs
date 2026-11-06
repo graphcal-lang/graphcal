@@ -22,6 +22,7 @@ use crate::tir::dim_check::helpers::expect_quantity;
 use crate::tir::dim_check::infer::linear_algebra::{
     LinearAlgebraTypeError, infer_linear_algebra_type,
 };
+use crate::tir::operator_typing::{self, Operand};
 
 use super::context::Infer;
 
@@ -111,21 +112,15 @@ impl Infer<'_> {
         args: &[Expr],
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         for arg in args {
-            let arg_type = self.infer_arg(arg)?;
-            if arg_type != CheckedType::Int {
-                return Err(SemanticError::located(
-                    self.env.src,
-                    arg.span,
-                    DimensionError::DimensionMismatch {
-                        expected: Box::new(MismatchOperand::Expected(OperandExpectation::Int)),
-                        found: Box::new(MismatchOperand::Type(
-                            arg_type.spelling(&self.env.registry.dimensions),
-                        )),
-                        help: Box::new(MismatchRule::IntDivisionOperands(function)),
-                    },
-                )
-                .into());
-            }
+            operator_typing::int_division_operand_rule(
+                function,
+                &Operand {
+                    ty: self.infer_arg(arg)?,
+                    span: arg.span,
+                },
+                &self.env.registry.dimensions,
+                self.env.src,
+            )?;
         }
         Ok(CheckedType::Int)
     }

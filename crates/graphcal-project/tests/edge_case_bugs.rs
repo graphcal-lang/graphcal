@@ -865,6 +865,69 @@ fn int_scaling_rejects_an_inexact_integer_in_a_const_node() {
     );
 }
 
+/// Unit scales and coordinates are typed by the rules node bodies use (#2195):
+/// the same expression has the same meaning with and without an `@`
+/// reference, and an `Int` scale is converted exactly.
+#[test]
+fn unit_scales_and_coordinates_follow_node_typing() {
+    let source = "\
+base dim Money;
+base unit USD: Money;
+param k: Dimensionless = 1.0;
+param n: Int = 3;
+const unit kilo_m: Length = 1000 m;
+const unit third_m: Length = (to_float(1) / 3) m;
+unit half_m: Length = (@k * div_floor(1, 2) + 0.5) m;
+unit triple_usd: Money = (@n) USD;
+index Steps = range(0.0 s, 2 * 30.0 s, step: 30.0 s);
+node e: Time[Steps] = for s: Steps { coord(s) };
+node a: Length = 2.0 kilo_m;
+node b: Length = 3.0 third_m;
+node c: Length = 1.0 half_m;
+node d: Money = 2.0 triple_usd;
+";
+    let result = compile_and_eval(source).unwrap();
+    let bits = |name: &str| find_value(&result, name).to_bits();
+    assert_eq!(bits("a"), 2000.0_f64.to_bits());
+    assert_eq!(bits("b"), (3.0 * (1.0_f64 / 3.0)).to_bits());
+    assert_eq!(bits("c"), 0.5_f64.to_bits());
+    assert_eq!(bits("d"), 6.0_f64.to_bits());
+}
+
+#[test]
+fn int_division_in_a_unit_scale_is_rejected_with_and_without_graph_refs() {
+    for source in [
+        "unit third_m: Length = (1 / 3) m;",
+        "param k: Dimensionless = 1.0;\nunit third_m: Length = (@k * (1 / 3)) m;",
+    ] {
+        let error = compile_and_eval(source).expect_err("`1 / 3` divides two Int operands");
+        assert!(
+            format!("{error:?}").contains("IntOperandDivision"),
+            "expected D043 for `{source}`, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn int_unit_scales_reject_an_integer_binary64_cannot_represent() {
+    let error = compile_and_eval("const unit u: Length = 9007199254740993 m;")
+        .expect_err("the scale has no exact binary64 value");
+    assert!(
+        error
+            .to_string()
+            .contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected error: {error}"
+    );
+    let source = "base dim Money;\nbase unit USD: Money;\nparam n: Int = 9007199254740993;\nunit u: Money = (@n) USD;\nnode y: Money = 1.0 u;";
+    let result = compile_and_eval(source).unwrap();
+    let message = get_node_error_message(&result, "y").expect("the dynamic scale should fail");
+    assert!(
+        message.contains("Int unit scale")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected message: {message}"
+    );
+}
+
 // ============================================================================
 // BUG 9: Aggregation functions on non-finite collections/results
 //

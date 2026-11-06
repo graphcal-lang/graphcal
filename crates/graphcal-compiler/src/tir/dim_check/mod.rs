@@ -155,7 +155,8 @@ fn check_decl_expr_type(
     Ok(())
 }
 
-/// Require every runtime unit factor to be one scalar Dimensionless quantity.
+/// Require every runtime unit factor to be an `Int` or one scalar
+/// Dimensionless quantity, as a static unit scale must be.
 fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<SemanticError>> {
     ctx.env
         .dag
@@ -171,14 +172,16 @@ fn check_dynamic_unit_scale_type(
 ) -> Result<(), Outcome<SemanticError>> {
     ctx.checkpoint()?;
     let inferred = ctx.infer_hir(&entry.expr, None)?;
-    if !matches!(
-        &inferred,
-        CheckedType::Quantity(dimension) if dimension.is_dimensionless()
-    ) {
+    if !matches!(&inferred, CheckedType::Int)
+        && !matches!(
+            &inferred,
+            CheckedType::Quantity(dimension) if dimension.is_dimensionless()
+        )
+    {
         return Err(SemanticError::located(
             ctx.env.src,
             entry.expr.span,
-            DimensionError::DynamicUnitScaleTypeMismatch {
+            DimensionError::UnitScaleTypeMismatch {
                 name: entry.spelling.clone(),
                 found: inferred.spelling(&ctx.env.registry.dimensions),
             },

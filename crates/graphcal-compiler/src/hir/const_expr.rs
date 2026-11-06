@@ -1,83 +1,74 @@
-//! Compile-time constant expressions and their single pure evaluator.
+//! Compile-time constant expressions and their pure evaluator.
 //!
 //! Unit-scale definitions (`const unit km: Length = 1000 m;`), coordinate
 //! bounds (`range(0.0 s, 1.0 s, step: 0.1 s)`), and `linspace` point counts
-//! admit a closed arithmetic sublanguage that registry construction evaluates
-//! before any runtime value exists. The trees in this module are the resolved
-//! (HIR) form of those positions: built-in constants are typed
-//! [`BuiltinConst`]s, unit literals carry their resolved dimension and static
-//! scale, and the position marker `P` makes the constructs a position rejects
-//! unrepresentable (an `Int` literal in a coordinate, a quantity literal in a
-//! unit scale, a power in a coordinate).
+//! are evaluated while the unit and index tables are built, before any
+//! runtime value exists. The trees in this module are the checked form of
+//! those positions. Lowering (`crate::hir::const_lower`) types every operator
+//! with the shared rules of [`crate::tir::operator_typing`], so a tree
+//! here is sorted like a checked node body: [`ConstInt`] holds an `Int`
+//! value, [`ConstReal`] holds a real quantity, and an `Int` that scales a
+//! quantity becomes an explicit [`ConstRealKind::FromInt`] node.
 //!
-//! Evaluation is one generic fold ([`ConstExpr::evaluate`]); the position
-//! entry points turn its result directly into the registry's invariant types:
-//! [`UnitScaleExpr::evaluate`] yields a [`PositiveFiniteScale`] and
-//! [`CoordinateAxisExpr::evaluate`] yields a validated
-//! [`CoordinateIndexData`].
+//! Evaluation uses the checked operations node evaluation uses: the `Int`
+//! kernel of [`crate::semantic::int_arith`], the checked finite arithmetic of
+//! [`FiniteQuantity`], and the exact `Int` to binary64 conversion. The
+//! position marker `P` makes the constructs a position rejects
+//! unrepresentable (a quantity literal in a unit scale).
 
 use std::convert::Infallible;
 
 use thiserror::Error;
 
-use crate::builtin::BuiltinConst;
+use crate::builtin::{BuiltinConst, IntDivisionFn};
 use crate::dimension::Dimension;
 use crate::display::unit_label::format_unit_expr_with_config;
 use crate::exact_rational::ExactRational;
+use crate::finite_value::{
+    ExactI64ToF64Error, ExactPowerFailure, FiniteArithmeticError, FiniteQuantity,
+};
 use crate::hir::types::NatExpr;
 use crate::ratio::ExactPowerError;
 use crate::semantic::index_def::{
     CoordinateDisplayUnit, CoordinateIndexData, CoordinateIndexError,
 };
+use crate::semantic::int_arith::{self, IntArithError};
+use crate::semantic::int_division::{self, IntDivisionError};
 use crate::semantic::unit_scale::{
     PositiveFiniteScale, PositiveFiniteScaleError, UnitResolveError,
 };
-use crate::syntax::ast::{BinOp, UnitExpr};
+use crate::syntax::ast::UnitExpr;
 use crate::syntax::names::NamePath;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::GenericParamName;
+use crate::tir::texpr::operators::{ArithOp, IntArithOp, IntConversion};
 
 /// A syntactic position that admits a constant expression.
-///
-/// Each associated type is `()` when the position admits the construct and
-/// [`Infallible`] when it does not, so a lowered tree can only contain the
-/// constructs its position accepts.
 pub trait ConstPosition: std::fmt::Debug + Clone + Copy + PartialEq {
-    /// Witness that `Int` literals are admitted.
-    type Integer: std::fmt::Debug + Clone + Copy + PartialEq;
-    /// Witness that quantity literals (`1.0 m`) are admitted.
+    /// Witness that quantity literals (`1.0 m`) are admitted: `()` when they
+    /// are and [`Infallible`] when they are not.
     type Quantity: std::fmt::Debug + Clone + Copy + PartialEq;
-    /// Witness that powers (`x ^ y`) are admitted.
-    type Power: std::fmt::Debug + Clone + Copy + PartialEq;
-    /// Whether every intermediate value must be finite.
-    ///
-    /// Unit scales validate only their final value; coordinates reject a
-    /// non-finite value at the node that produced it.
-    const FINITE_STEPS: bool;
+    /// The witness, when the position admits quantity literals.
+    const QUANTITY: Option<Self::Quantity>;
 }
 
 /// The scale expression of a unit definition: dimensionless arithmetic over
-/// numbers, integers, and built-in constants, including powers.
+/// numbers, integers, and built-in constants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnitScalePosition {}
 
 impl ConstPosition for UnitScalePosition {
-    type Integer = ();
     type Quantity = Infallible;
-    type Power = ();
-    const FINITE_STEPS: bool = false;
+    const QUANTITY: Option<Infallible> = None;
 }
 
-/// A coordinate bound or step: finite quantity arithmetic without `Int`
-/// values or powers.
+/// A coordinate bound or step: arithmetic over quantities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CoordinatePosition {}
 
 impl ConstPosition for CoordinatePosition {
-    type Integer = Infallible;
     type Quantity = ();
-    type Power = Infallible;
-    const FINITE_STEPS: bool = true;
+    const QUANTITY: Option<()> = Some(());
 }
 
 /// A unit literal resolved against the static unit registry.
@@ -106,6 +97,12 @@ impl ConstUnit {
         }
     }
 
+    /// The dimension the unit measures.
+    #[must_use]
+    pub const fn dimension(&self) -> &Dimension {
+        &self.dimension
+    }
+
     fn display_unit(&self) -> CoordinateDisplayUnit {
         CoordinateDisplayUnit {
             label: Some(format_unit_expr_with_config(&self.spelling, true)),
@@ -114,84 +111,92 @@ impl ConstUnit {
     }
 }
 
-/// Arithmetic operators shared by every constant position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConstArithOp {
-    Add,
-    Sub,
-    Mul,
-    Div,
+/// One `Int`-valued constant node.
+#[derive(Debug, Clone)]
+pub enum ConstIntKind {
+    /// An `Int` literal.
+    Literal(i64),
+    /// Negation.
+    Neg(Box<ConstInt>),
+    /// `+ - * %` on two `Int` values.
+    Arith {
+        op: IntArithOp,
+        lhs: Box<ConstInt>,
+        rhs: Box<ConstInt>,
+    },
+    /// A `div_*` built-in: the quotient rounded in the direction it names.
+    Division {
+        function: IntDivisionFn,
+        dividend: Box<ConstInt>,
+        divisor: Box<ConstInt>,
+    },
+    /// A power with an `Int` exponent.
+    Power {
+        base: Box<ConstInt>,
+        exponent: Box<ConstInt>,
+    },
 }
 
-/// The exponent of a constant power.
+/// A checked `Int`-valued constant expression.
 #[derive(Debug, Clone)]
-pub enum ConstExponent<P: ConstPosition> {
-    /// An exact source exponent (`2`, `-2`, `(3/2)`), evaluated with real
-    /// odd-root semantics.
-    Exact(ExactRational),
-    /// Any other exponent, evaluated as a binary64 value.
-    Evaluated(Box<ConstExpr<P>>),
+pub struct ConstInt {
+    kind: ConstIntKind,
+    span: Span,
 }
 
-/// One constant-expression node.
+/// One real-quantity-valued constant node.
 #[derive(Debug, Clone)]
-pub enum ConstExprKind<P: ConstPosition> {
-    /// A numeric literal. Coordinate lowering admits only finite literals.
-    Number(f64),
-    /// An `Int` literal, admitted only where `P::Integer` is inhabited.
-    Integer(i64, P::Integer),
+pub enum ConstRealKind<P: ConstPosition> {
+    /// A dimensionless numeric literal.
+    Number(FiniteQuantity),
     /// A built-in constant such as `PI`.
     Builtin(BuiltinConst),
     /// A quantity literal (`1.5 km`), admitted only where `P::Quantity` is
     /// inhabited.
     Quantity {
-        value: f64,
+        value: FiniteQuantity,
         unit: ConstUnit,
         admitted: P::Quantity,
     },
+    /// An `Int` converted exactly: an explicit `to_float(n)`, or an `Int`
+    /// operand of `*` or `/` whose other operand is a quantity.
+    FromInt {
+        conversion: IntConversion,
+        operand: Box<ConstInt>,
+    },
     /// Negation.
-    Neg(Box<ConstExpr<P>>),
-    /// Binary arithmetic.
+    Neg(Box<ConstReal<P>>),
+    /// `+ - * /` on two real quantities.
     Arith {
-        op: ConstArithOp,
-        lhs: Box<ConstExpr<P>>,
-        rhs: Box<ConstExpr<P>>,
+        op: ArithOp,
+        lhs: Box<ConstReal<P>>,
+        rhs: Box<ConstReal<P>>,
     },
-    /// A power, admitted only where `P::Power` is inhabited.
+    /// A power with an exact source exponent (`2`, `-2`, `(3/2)`), evaluated
+    /// with real odd-root semantics.
+    ExactPower {
+        base: Box<ConstReal<P>>,
+        exponent: ExactRational,
+    },
+    /// A dimensionless base raised to a dimensionless exponent expression.
     Power {
-        base: Box<ConstExpr<P>>,
-        exponent: ConstExponent<P>,
-        admitted: P::Power,
+        base: Box<ConstReal<P>>,
+        exponent: Box<ConstReal<P>>,
     },
 }
 
-/// A resolved constant expression for position `P`.
+/// A checked real-quantity-valued constant expression for position `P`.
 #[derive(Debug, Clone)]
-pub struct ConstExpr<P: ConstPosition> {
-    kind: ConstExprKind<P>,
+pub struct ConstReal<P: ConstPosition> {
+    kind: ConstRealKind<P>,
     span: Span,
-}
-
-/// The value of a constant expression: an SI magnitude and its dimension.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ConstQuantity {
-    pub value: f64,
-    pub dimension: Dimension,
-}
-
-impl ConstQuantity {
-    const fn dimensionless(value: f64) -> Self {
-        Self {
-            value,
-            dimension: Dimension::dimensionless(),
-        }
-    }
 }
 
 /// Why a constant expression could not be lowered or evaluated.
 ///
 /// The messages are the user-facing diagnostic text; [`Self::span`] is the
-/// source range they blame.
+/// source range they blame. Typing errors are not here: lowering reports
+/// them with the diagnostics of the shared operator rules.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum ConstExprError {
     /// A unit-scale name is not a built-in constant.
@@ -200,13 +205,10 @@ pub enum ConstExprError {
         path.value
     )]
     UnknownScaleConstant { path: Spanned<NamePath> },
-    /// A unit scale used a non-arithmetic operator.
-    #[error(
-        "unsupported operator `{op:?}` in scale expression; only `+`, `-`, `*`, `/`, `^` are allowed"
-    )]
-    UnsupportedScaleOperator { op: BinOp, span: Span },
     /// A unit scale contained a construct outside the constant sublanguage.
-    #[error("scale expression must be a constant expression (numbers, PI, E, and arithmetic)")]
+    #[error(
+        "scale expression must be a constant expression (numbers, built-in constants, arithmetic, `to_float`, and `div_*`)"
+    )]
     NonConstantScale { span: Span },
     /// A coordinate name is not a built-in constant.
     #[error(
@@ -214,32 +216,50 @@ pub enum ConstExprError {
         path.value
     )]
     UnknownCoordinateConstant { path: Spanned<NamePath> },
-    /// A coordinate used an operator other than `+`, `-`, `*`, `/`.
-    #[error("coordinate arguments support only static quantity arithmetic")]
-    UnsupportedCoordinateOperator { span: Span },
-    /// A coordinate contained an `Int` value or a runtime construct.
+    /// A coordinate contained a construct outside the constant sublanguage.
     #[error(
-        "coordinate arguments must be statically evaluable quantities; Int values and runtime expressions are not supported"
+        "coordinate arguments must be statically evaluable; only literals, built-in constants, arithmetic, `to_float`, and `div_*` are supported"
     )]
     NonStaticCoordinate { span: Span },
-    /// A coordinate literal or intermediate value was not finite.
-    #[error("coordinate expression must evaluate to a finite quantity, got {value}")]
-    NonFiniteCoordinate { value: f64, span: Span },
-    /// Coordinate addition or subtraction mixed dimensions.
-    #[error("addition or subtraction in a coordinate expression requires matching dimensions")]
-    CoordinateDimensionMismatch { span: Span },
+    /// A numeric literal was not finite.
+    #[error("numeric literal must be finite, got {value}")]
+    NonFiniteLiteral { value: f64, span: Span },
     /// A unit literal could not be resolved to a static unit.
     #[error("unit resolution failed")]
     Unit { error: UnitResolveError, span: Span },
-    /// Dimension exponent arithmetic overflowed.
-    #[error("dimension exponent overflow")]
-    DimensionOverflow { span: Span },
+    /// Checked `Int` arithmetic failed.
+    #[error("{error}")]
+    Int { error: IntArithError, span: Span },
+    /// A `div_*` built-in has no `Int` quotient.
+    #[error("{error}")]
+    IntDivision { error: IntDivisionError, span: Span },
+    /// A `to_float` argument has no exact binary64 value.
+    #[error("to_float() argument: {error}")]
+    ToFloat {
+        error: ExactI64ToF64Error,
+        span: Span,
+    },
+    /// An `Int` operand of `*` or `/` has no exact binary64 value.
+    #[error("Int operand of `*` or `/` with a quantity: {error}")]
+    IntScalar {
+        error: ExactI64ToF64Error,
+        span: Span,
+    },
+    /// An `Int` unit scale has no exact binary64 value.
+    #[error("Int unit scale: {error}")]
+    IntUnitScale {
+        error: ExactI64ToF64Error,
+        span: Span,
+    },
+    /// Checked quantity arithmetic failed.
+    #[error("constant arithmetic failed: {error}")]
+    Arithmetic {
+        error: FiniteArithmeticError,
+        span: Span,
+    },
     /// An exact power has no real value.
     #[error("{error}")]
     ExactPower { error: ExactPowerError, span: Span },
-    /// A power was applied to a dimensioned base.
-    #[error("powers in constant expressions require a dimensionless base")]
-    DimensionedPower { span: Span },
     /// The final unit-scale value was not positive and finite.
     #[error("unit scale expression {error}")]
     InvalidUnitScale {
@@ -265,16 +285,17 @@ impl ConstExprError {
             Self::UnknownScaleConstant { path } | Self::UnknownCoordinateConstant { path } => {
                 path.span
             }
-            Self::UnsupportedScaleOperator { span, .. }
-            | Self::NonConstantScale { span }
-            | Self::UnsupportedCoordinateOperator { span }
+            Self::NonConstantScale { span }
             | Self::NonStaticCoordinate { span }
-            | Self::NonFiniteCoordinate { span, .. }
-            | Self::CoordinateDimensionMismatch { span }
+            | Self::NonFiniteLiteral { span, .. }
             | Self::Unit { span, .. }
-            | Self::DimensionOverflow { span }
+            | Self::Int { span, .. }
+            | Self::IntDivision { span, .. }
+            | Self::ToFloat { span, .. }
+            | Self::IntScalar { span, .. }
+            | Self::IntUnitScale { span, .. }
+            | Self::Arithmetic { span, .. }
             | Self::ExactPower { span, .. }
-            | Self::DimensionedPower { span }
             | Self::InvalidUnitScale { span, .. }
             | Self::NonConstantNat { span, .. }
             | Self::NatAdditionOverflow { span }
@@ -283,16 +304,16 @@ impl ConstExprError {
     }
 }
 
-impl<P: ConstPosition> ConstExpr<P> {
+impl ConstInt {
     /// Build a node. Lowering is the only producer.
     #[must_use]
-    pub(crate) const fn new(kind: ConstExprKind<P>, span: Span) -> Self {
+    pub(crate) const fn new(kind: ConstIntKind, span: Span) -> Self {
         Self { kind, span }
     }
 
     /// The node shape.
     #[must_use]
-    pub const fn kind(&self) -> &ConstExprKind<P> {
+    pub const fn kind(&self) -> &ConstIntKind {
         &self.kind
     }
 
@@ -302,120 +323,139 @@ impl<P: ConstPosition> ConstExpr<P> {
         self.span
     }
 
-    /// Evaluate this expression to its SI value and dimension.
-    ///
-    /// Operands are evaluated left to right and every arithmetic step uses
-    /// plain binary64 operations, so the result is bit-identical to the
-    /// source-order computation.
+    /// Evaluate this expression with checked `Int` arithmetic, operands
+    /// left to right.
     ///
     /// # Errors
     ///
-    /// Returns a [`ConstExprError`] for mismatched or overflowing dimensions,
-    /// an exact power without a real value, or (where `P::FINITE_STEPS`) a
-    /// non-finite intermediate value.
-    pub fn evaluate(&self) -> Result<ConstQuantity, ConstExprError> {
-        let quantity = match &self.kind {
-            ConstExprKind::Number(value) => ConstQuantity::dimensionless(*value),
-            #[expect(clippy::cast_precision_loss, reason = "unit scale constant expression")]
-            ConstExprKind::Integer(value, _) => ConstQuantity::dimensionless(*value as f64),
-            ConstExprKind::Builtin(constant) => ConstQuantity::dimensionless(constant.value()),
-            ConstExprKind::Quantity { value, unit, .. } => ConstQuantity {
-                value: *value * unit.scale.get(),
-                dimension: unit.dimension.clone(),
-            },
-            ConstExprKind::Neg(operand) => {
-                let operand = operand.evaluate()?;
-                ConstQuantity {
-                    value: -operand.value,
-                    dimension: operand.dimension,
-                }
-            }
-            ConstExprKind::Arith { op, lhs, rhs } => {
+    /// Returns [`ConstExprError::Int`] when an operation has no `Int` result.
+    pub fn evaluate(&self) -> Result<i64, ConstExprError> {
+        let result = match &self.kind {
+            ConstIntKind::Literal(value) => Ok(*value),
+            ConstIntKind::Neg(operand) => int_arith::negate(operand.evaluate()?),
+            ConstIntKind::Arith { op, lhs, rhs } => {
                 let lhs = lhs.evaluate()?;
-                let rhs = rhs.evaluate()?;
-                self.arith(*op, lhs, &rhs)?
+                int_arith::arith(*op, lhs, rhs.evaluate()?)
             }
-            ConstExprKind::Power { base, exponent, .. } => {
+            ConstIntKind::Division {
+                function,
+                dividend,
+                divisor,
+            } => {
+                let dividend = dividend.evaluate()?;
+                return int_division::divide(*function, dividend, divisor.evaluate()?).map_err(
+                    |error| ConstExprError::IntDivision {
+                        error,
+                        span: self.span,
+                    },
+                );
+            }
+            ConstIntKind::Power { base, exponent } => {
                 let base = base.evaluate()?;
-                let value = match exponent {
-                    ConstExponent::Exact(exponent) => {
-                        exponent.pow_f64(base.value).map_err(|error| {
-                            ConstExprError::ExactPower {
-                                error,
-                                span: self.span,
-                            }
-                        })?
-                    }
-                    ConstExponent::Evaluated(exponent) => {
-                        base.value.powf(exponent.evaluate()?.value)
-                    }
-                };
-                if !base.dimension.is_dimensionless() {
-                    return Err(ConstExprError::DimensionedPower { span: self.span });
-                }
-                ConstQuantity::dimensionless(value)
+                int_arith::power(base, exponent.evaluate()?)
             }
         };
-        if P::FINITE_STEPS && !quantity.value.is_finite() {
-            return Err(ConstExprError::NonFiniteCoordinate {
-                value: quantity.value,
-                span: self.span,
-            });
-        }
-        Ok(quantity)
+        result.map_err(|error| ConstExprError::Int {
+            error,
+            span: self.span,
+        })
+    }
+}
+
+impl<P: ConstPosition> ConstReal<P> {
+    /// Build a node. Lowering is the only producer.
+    #[must_use]
+    pub(crate) const fn new(kind: ConstRealKind<P>, span: Span) -> Self {
+        Self { kind, span }
     }
 
-    fn arith(
-        &self,
-        op: ConstArithOp,
-        lhs: ConstQuantity,
-        rhs: &ConstQuantity,
-    ) -> Result<ConstQuantity, ConstExprError> {
-        let overflow = |_| ConstExprError::DimensionOverflow { span: self.span };
-        match op {
-            ConstArithOp::Add | ConstArithOp::Sub => {
-                if lhs.dimension != rhs.dimension {
-                    return Err(ConstExprError::CoordinateDimensionMismatch { span: self.span });
-                }
-                let value = if op == ConstArithOp::Add {
-                    lhs.value + rhs.value
-                } else {
-                    lhs.value - rhs.value
-                };
-                Ok(ConstQuantity {
-                    value,
-                    dimension: lhs.dimension,
-                })
+    /// The node shape.
+    #[must_use]
+    pub const fn kind(&self) -> &ConstRealKind<P> {
+        &self.kind
+    }
+
+    /// Source span of the whole node.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        self.span
+    }
+
+    /// Evaluate this expression to its SI value.
+    ///
+    /// Operands are evaluated left to right, and every step is the checked
+    /// binary64 operation node evaluation applies, so the result is
+    /// bit-identical to the same expression in a node body.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ConstExprError`] when an operation has no finite result,
+    /// an exact power has no real value, or an `Int` has no exact binary64
+    /// value.
+    pub fn evaluate(&self) -> Result<FiniteQuantity, ConstExprError> {
+        let arithmetic = |error| ConstExprError::Arithmetic {
+            error,
+            span: self.span,
+        };
+        match &self.kind {
+            ConstRealKind::Number(value) => Ok(*value),
+            ConstRealKind::Builtin(constant) => FiniteQuantity::try_new(constant.value())
+                .map_err(|_| arithmetic(FiniteArithmeticError::Infinite)),
+            ConstRealKind::Quantity { value, unit, .. } => {
+                FiniteQuantity::try_new(value.get() * unit.scale.get())
+                    .map_err(|_| arithmetic(FiniteArithmeticError::Infinite))
             }
-            ConstArithOp::Mul => Ok(ConstQuantity {
-                value: lhs.value * rhs.value,
-                dimension: lhs
-                    .dimension
-                    .checked_mul(&rhs.dimension)
-                    .map_err(overflow)?,
+            ConstRealKind::FromInt {
+                conversion,
+                operand,
+            } => FiniteQuantity::from_exact_int(operand.evaluate()?).map_err(|error| {
+                let span = operand.span;
+                match conversion {
+                    IntConversion::ToFloat => ConstExprError::ToFloat { error, span },
+                    IntConversion::Scaling => ConstExprError::IntScalar { error, span },
+                }
             }),
-            ConstArithOp::Div => Ok(ConstQuantity {
-                value: lhs.value / rhs.value,
-                dimension: lhs
-                    .dimension
-                    .checked_div(&rhs.dimension)
-                    .map_err(overflow)?,
-            }),
+            ConstRealKind::Neg(operand) => Ok(operand.evaluate()?.negated()),
+            ConstRealKind::Arith { op, lhs, rhs } => {
+                let lhs = lhs.evaluate()?;
+                let rhs = rhs.evaluate()?;
+                match op {
+                    ArithOp::Add => lhs.checked_add(rhs),
+                    ArithOp::Sub => lhs.checked_sub(rhs),
+                    ArithOp::Mul => lhs.checked_mul(rhs),
+                    ArithOp::Div => lhs.checked_div(rhs),
+                }
+                .map_err(arithmetic)
+            }
+            ConstRealKind::ExactPower { base, exponent } => base
+                .evaluate()?
+                .checked_exact_power(*exponent)
+                .map_err(|error| match error {
+                    ExactPowerFailure::NoRealValue(error) => ConstExprError::ExactPower {
+                        error,
+                        span: self.span,
+                    },
+                    ExactPowerFailure::Arithmetic(error) => arithmetic(error),
+                }),
+            ConstRealKind::Power { base, exponent } => {
+                let base = base.evaluate()?;
+                base.checked_powf(exponent.evaluate()?).map_err(arithmetic)
+            }
         }
     }
 }
 
-/// The resolved scale expression of a static unit definition.
+/// The checked scale expression of a static unit definition: an `Int` or a
+/// dimensionless quantity.
 #[derive(Debug, Clone)]
-pub struct UnitScaleExpr(ConstExpr<UnitScalePosition>);
+pub enum UnitScaleExpr {
+    /// An `Int` scale, converted exactly.
+    Int(ConstInt),
+    /// A dimensionless real scale.
+    Real(ConstReal<UnitScalePosition>),
+}
 
 impl UnitScaleExpr {
-    /// Wrap a lowered unit-scale tree.
-    #[must_use]
-    pub(crate) const fn new(expr: ConstExpr<UnitScalePosition>) -> Self {
-        Self(expr)
-    }
-
     /// Evaluate the scale factor this expression contributes to its unit.
     ///
     /// # Errors
@@ -423,31 +463,69 @@ impl UnitScaleExpr {
     /// Returns a [`ConstExprError`] when evaluation fails or the value is not
     /// positive and finite.
     pub fn evaluate(&self) -> Result<PositiveFiniteScale, ConstExprError> {
-        let value = self.0.evaluate()?.value;
-        PositiveFiniteScale::new(value).map_err(|error| ConstExprError::InvalidUnitScale {
-            error,
-            span: self.0.span,
-        })
+        let (value, span) = match self {
+            Self::Int(expr) => (
+                FiniteQuantity::from_exact_int(expr.evaluate()?).map_err(|error| {
+                    ConstExprError::IntUnitScale {
+                        error,
+                        span: expr.span,
+                    }
+                })?,
+                expr.span,
+            ),
+            Self::Real(expr) => (expr.evaluate()?, expr.span),
+        };
+        PositiveFiniteScale::new(value.get())
+            .map_err(|error| ConstExprError::InvalidUnitScale { error, span })
     }
 }
 
-/// A resolved coordinate bound or step.
-pub type CoordinateExpr = ConstExpr<CoordinatePosition>;
+/// A checked coordinate bound or step: a real quantity of `dimension`.
+#[derive(Debug, Clone)]
+pub struct CoordinateExpr {
+    expr: ConstReal<CoordinatePosition>,
+    dimension: Dimension,
+}
 
 impl CoordinateExpr {
+    /// Pair a checked tree with the dimension its typing derived.
+    #[must_use]
+    pub(crate) const fn new(expr: ConstReal<CoordinatePosition>, dimension: Dimension) -> Self {
+        Self { expr, dimension }
+    }
+
+    /// The dimension of the coordinate value.
+    #[must_use]
+    pub const fn dimension(&self) -> &Dimension {
+        &self.dimension
+    }
+
+    /// Evaluate the coordinate value in SI.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ConstExprError`] when evaluation fails.
+    pub fn evaluate(&self) -> Result<FiniteQuantity, ConstExprError> {
+        self.expr.evaluate()
+    }
+
     /// The display unit of a coordinate axis whose start is this expression:
     /// the unit of a (possibly negated) quantity literal, or SI otherwise.
     #[must_use]
     pub fn display_unit(&self) -> CoordinateDisplayUnit {
-        match &self.kind {
-            ConstExprKind::Quantity { unit, .. } => unit.display_unit(),
-            ConstExprKind::Neg(operand) => operand.display_unit(),
-            ConstExprKind::Number(_)
-            | ConstExprKind::Integer(..)
-            | ConstExprKind::Builtin(_)
-            | ConstExprKind::Arith { .. }
-            | ConstExprKind::Power { .. } => CoordinateDisplayUnit::SI,
+        fn literal_unit(expr: &ConstReal<CoordinatePosition>) -> CoordinateDisplayUnit {
+            match &expr.kind {
+                ConstRealKind::Quantity { unit, .. } => unit.display_unit(),
+                ConstRealKind::Neg(operand) => literal_unit(operand),
+                ConstRealKind::Number(_)
+                | ConstRealKind::Builtin(_)
+                | ConstRealKind::FromInt { .. }
+                | ConstRealKind::Arith { .. }
+                | ConstRealKind::ExactPower { .. }
+                | ConstRealKind::Power { .. } => CoordinateDisplayUnit::SI,
+            }
         }
+        literal_unit(&self.expr)
     }
 }
 
@@ -523,28 +601,23 @@ impl CoordinateAxisExpr {
     ///
     /// # Errors
     ///
-    /// Returns a [`CoordinateAxisError`] for a failing argument, mismatched
-    /// argument dimensions, or an invalid axis.
+    /// Returns a [`CoordinateAxisError`] for mismatched argument dimensions,
+    /// a failing argument, or an invalid axis.
     pub fn evaluate(&self) -> Result<CoordinateIndexData, CoordinateAxisError> {
         match self {
             Self::Range { start, end, step } => {
-                let start_value = start.evaluate()?;
-                let end_value = end.evaluate()?;
-                let step_value = step.evaluate()?;
-                if start_value.dimension != end_value.dimension
-                    || start_value.dimension != step_value.dimension
-                {
+                if start.dimension != end.dimension || start.dimension != step.dimension {
                     return Err(CoordinateAxisError::RangeDimensionMismatch {
-                        start: start_value.dimension,
-                        end: end_value.dimension,
-                        step: step_value.dimension,
+                        start: start.dimension.clone(),
+                        end: end.dimension.clone(),
+                        step: step.dimension.clone(),
                     });
                 }
                 CoordinateIndexData::try_range(
-                    start_value.value,
-                    end_value.value,
-                    step_value.value,
-                    start_value.dimension,
+                    start.evaluate()?.get(),
+                    end.evaluate()?.get(),
+                    step.evaluate()?.get(),
+                    start.dimension.clone(),
                     start.display_unit(),
                 )
                 .map_err(|error| CoordinateAxisError::Invalid {
@@ -553,20 +626,20 @@ impl CoordinateAxisExpr {
                 })
             }
             Self::Linspace { start, end, points } => {
-                let start_value = start.evaluate()?;
-                let end_value = end.evaluate()?;
-                if start_value.dimension != end_value.dimension {
+                if start.dimension != end.dimension {
                     return Err(CoordinateAxisError::LinspaceDimensionMismatch {
-                        start: start_value.dimension,
-                        end: end_value.dimension,
+                        start: start.dimension.clone(),
+                        end: end.dimension.clone(),
                     });
                 }
+                let start_value = start.evaluate()?.get();
+                let end_value = end.evaluate()?.get();
                 let point_count = evaluate_static_nat(points)?;
                 CoordinateIndexData::try_linspace(
-                    start_value.value,
-                    end_value.value,
+                    start_value,
+                    end_value,
                     point_count,
-                    start_value.dimension,
+                    start.dimension.clone(),
                     start.display_unit(),
                 )
                 .map_err(|error| CoordinateAxisError::Invalid {
@@ -587,16 +660,22 @@ mod tests {
         Span::new(0, 1)
     }
 
-    fn scale(kind: ConstExprKind<UnitScalePosition>) -> ConstExpr<UnitScalePosition> {
-        ConstExpr::new(kind, span())
+    fn int(kind: ConstIntKind) -> ConstInt {
+        ConstInt::new(kind, span())
     }
 
-    fn coordinate(kind: ConstExprKind<CoordinatePosition>) -> CoordinateExpr {
-        ConstExpr::new(kind, span())
+    fn real<P: ConstPosition>(kind: ConstRealKind<P>) -> ConstReal<P> {
+        ConstReal::new(kind, span())
     }
 
-    fn boxed<P: ConstPosition>(expr: ConstExpr<P>) -> Box<ConstExpr<P>> {
-        Box::new(expr)
+    fn number<P: ConstPosition>(value: f64) -> ConstReal<P> {
+        real(ConstRealKind::Number(
+            FiniteQuantity::try_new(value).unwrap(),
+        ))
+    }
+
+    fn boxed<T>(value: T) -> Box<T> {
+        Box::new(value)
     }
 
     #[test]
@@ -605,38 +684,85 @@ mod tests {
         reason = "the expected value replays the source-order binary64 operations"
     )]
     fn unit_scale_arithmetic_is_source_ordered_binary64() {
-        // (PI / 180) * 2 - 1 + 3 ^ 2
-        let expr = scale(ConstExprKind::Arith {
-            op: ConstArithOp::Add,
-            lhs: boxed(scale(ConstExprKind::Arith {
-                op: ConstArithOp::Sub,
-                lhs: boxed(scale(ConstExprKind::Arith {
-                    op: ConstArithOp::Mul,
-                    lhs: boxed(scale(ConstExprKind::Arith {
-                        op: ConstArithOp::Div,
-                        lhs: boxed(scale(ConstExprKind::Builtin(BuiltinConst::Pi))),
-                        rhs: boxed(scale(ConstExprKind::Integer(180, ()))),
+        // (PI / 180) * 2.0 - 1.0 + 3.0 ^ 2.0
+        let expr = real::<UnitScalePosition>(ConstRealKind::Arith {
+            op: ArithOp::Add,
+            lhs: boxed(real(ConstRealKind::Arith {
+                op: ArithOp::Sub,
+                lhs: boxed(real(ConstRealKind::Arith {
+                    op: ArithOp::Mul,
+                    lhs: boxed(real(ConstRealKind::Arith {
+                        op: ArithOp::Div,
+                        lhs: boxed(real(ConstRealKind::Builtin(BuiltinConst::Pi))),
+                        rhs: boxed(real(ConstRealKind::FromInt {
+                            conversion: IntConversion::Scaling,
+                            operand: boxed(int(ConstIntKind::Literal(180))),
+                        })),
                     })),
-                    rhs: boxed(scale(ConstExprKind::Number(2.0))),
+                    rhs: boxed(number(2.0)),
                 })),
-                rhs: boxed(scale(ConstExprKind::Number(1.0))),
+                rhs: boxed(number(1.0)),
             })),
-            rhs: boxed(scale(ConstExprKind::Power {
-                base: boxed(scale(ConstExprKind::Number(3.0))),
-                exponent: ConstExponent::Evaluated(boxed(scale(ConstExprKind::Number(2.0)))),
-                admitted: (),
+            rhs: boxed(real(ConstRealKind::Power {
+                base: boxed(number(3.0)),
+                exponent: boxed(number(2.0)),
             })),
         });
         let expected = std::f64::consts::PI / 180.0 * 2.0 - 1.0 + 3.0_f64.powf(2.0);
-        let actual = UnitScaleExpr::new(expr).evaluate().unwrap().get();
+        let actual = UnitScaleExpr::Real(expr).evaluate().unwrap().get();
         assert_eq!(actual.to_bits(), expected.to_bits());
     }
 
     #[test]
-    fn unit_scale_rejects_non_positive_and_non_finite_results() {
-        let negative = UnitScaleExpr::new(scale(ConstExprKind::Neg(boxed(scale(
-            ConstExprKind::Number(2.0),
-        )))));
+    fn int_unit_scales_convert_exactly() {
+        let thousand = UnitScaleExpr::Int(int(ConstIntKind::Literal(1000)));
+        assert_eq!(
+            thousand.evaluate().unwrap().get().to_bits(),
+            1000.0_f64.to_bits()
+        );
+        let inexact = UnitScaleExpr::Int(int(ConstIntKind::Literal((1 << 53) + 1)));
+        assert!(matches!(
+            inexact.evaluate(),
+            Err(ConstExprError::IntUnitScale { .. })
+        ));
+        let scaled = UnitScaleExpr::Real(real(ConstRealKind::Arith {
+            op: ArithOp::Mul,
+            lhs: boxed(real(ConstRealKind::FromInt {
+                conversion: IntConversion::Scaling,
+                operand: boxed(int(ConstIntKind::Literal((1 << 53) + 1))),
+            })),
+            rhs: boxed(number(1.0)),
+        }));
+        assert!(matches!(
+            scaled.evaluate(),
+            Err(ConstExprError::IntScalar { .. })
+        ));
+    }
+
+    #[test]
+    fn int_arithmetic_is_checked() {
+        let overflow = int(ConstIntKind::Power {
+            base: boxed(int(ConstIntKind::Literal(2))),
+            exponent: boxed(int(ConstIntKind::Literal(63))),
+        });
+        assert!(matches!(
+            overflow.evaluate(),
+            Err(ConstExprError::Int {
+                error: IntArithError::Overflow,
+                ..
+            })
+        ));
+        let remainder = int(ConstIntKind::Arith {
+            op: IntArithOp::Mod,
+            lhs: boxed(int(ConstIntKind::Literal(7))),
+            rhs: boxed(int(ConstIntKind::Neg(boxed(int(ConstIntKind::Literal(3)))))),
+        });
+        assert_eq!(remainder.evaluate(), Ok(1));
+    }
+
+    #[test]
+    fn unit_scale_rejects_non_positive_results_and_non_finite_steps() {
+        let negative = UnitScaleExpr::Real(real(ConstRealKind::Neg(boxed(number(2.0)))));
         assert!(matches!(
             negative.evaluate(),
             Err(ConstExprError::InvalidUnitScale {
@@ -644,17 +770,15 @@ mod tests {
                 ..
             })
         ));
-        // Intermediate infinities are not rejected for unit scales; only the
-        // final value is validated.
-        let infinite = UnitScaleExpr::new(scale(ConstExprKind::Arith {
-            op: ConstArithOp::Mul,
-            lhs: boxed(scale(ConstExprKind::Number(1e308))),
-            rhs: boxed(scale(ConstExprKind::Number(10.0))),
+        let infinite = UnitScaleExpr::Real(real(ConstRealKind::Arith {
+            op: ArithOp::Mul,
+            lhs: boxed(number(1e308)),
+            rhs: boxed(number(10.0)),
         }));
         assert!(matches!(
             infinite.evaluate(),
-            Err(ConstExprError::InvalidUnitScale {
-                error: PositiveFiniteScaleError::NonFinite { .. },
+            Err(ConstExprError::Arithmetic {
+                error: FiniteArithmeticError::Infinite,
                 ..
             })
         ));
@@ -662,10 +786,9 @@ mod tests {
 
     #[test]
     fn exact_power_of_negative_base_with_even_denominator_fails() {
-        let expr = UnitScaleExpr::new(scale(ConstExprKind::Power {
-            base: boxed(scale(ConstExprKind::Number(-4.0))),
-            exponent: ConstExponent::Exact(ExactRational::try_new(1, 2).unwrap()),
-            admitted: (),
+        let expr = UnitScaleExpr::Real(real(ConstRealKind::ExactPower {
+            base: boxed(number(-4.0)),
+            exponent: ExactRational::try_new(1, 2).unwrap(),
         }));
         assert!(matches!(
             expr.evaluate(),
@@ -674,87 +797,43 @@ mod tests {
                 ..
             })
         ));
-        let cube = UnitScaleExpr::new(scale(ConstExprKind::Power {
-            base: boxed(scale(ConstExprKind::Number(2.0))),
-            exponent: ConstExponent::Exact(ExactRational::try_new(3, 1).unwrap()),
-            admitted: (),
+        let cube = UnitScaleExpr::Real(real(ConstRealKind::ExactPower {
+            base: boxed(number(2.0)),
+            exponent: ExactRational::try_new(3, 1).unwrap(),
         }));
         assert_eq!(cube.evaluate().unwrap().get().to_bits(), 8.0_f64.to_bits());
     }
 
-    #[test]
-    fn coordinate_steps_must_stay_finite() {
-        let expr = coordinate(ConstExprKind::Arith {
-            op: ConstArithOp::Mul,
-            lhs: boxed(coordinate(ConstExprKind::Number(1e308))),
-            rhs: boxed(coordinate(ConstExprKind::Number(10.0))),
-        });
-        assert!(matches!(
-            expr.evaluate(),
-            Err(ConstExprError::NonFiniteCoordinate { value, .. }) if value.is_infinite()
-        ));
-    }
-
-    #[test]
-    fn coordinate_addition_requires_matching_dimensions() {
+    fn metre(value: f64, scale: PositiveFiniteScale) -> ConstReal<CoordinatePosition> {
         let length = Dimension::base(crate::dimension::BaseDimId::Prelude(
             crate::dimension::PreludeBaseDimension::Length,
         ));
-        let unit = ConstUnit::new(
-            UnitExpr {
-                terms: Vec::new(),
-                span: span(),
-            },
-            length.clone(),
-            PositiveFiniteScale::ONE,
-        );
-        let metre = coordinate(ConstExprKind::Quantity {
-            value: 1.0,
-            unit,
+        real(ConstRealKind::Quantity {
+            value: FiniteQuantity::try_new(value).unwrap(),
+            unit: ConstUnit::new(
+                UnitExpr {
+                    terms: Vec::new(),
+                    span: span(),
+                },
+                length,
+                scale,
+            ),
             admitted: (),
-        });
-        let mismatch = coordinate(ConstExprKind::Arith {
-            op: ConstArithOp::Sub,
-            lhs: boxed(metre.clone()),
-            rhs: boxed(coordinate(ConstExprKind::Number(1.0))),
-        });
-        assert!(matches!(
-            mismatch.evaluate(),
-            Err(ConstExprError::CoordinateDimensionMismatch { .. })
-        ));
-        let area = coordinate(ConstExprKind::Arith {
-            op: ConstArithOp::Mul,
-            lhs: boxed(metre.clone()),
-            rhs: boxed(metre),
-        });
-        assert_eq!(
-            area.evaluate().unwrap().dimension,
-            length.clone().checked_mul(&length).unwrap()
-        );
+        })
     }
 
     #[test]
     fn display_unit_follows_negation_to_a_quantity_literal() {
-        let plain = coordinate(ConstExprKind::Number(1.0));
+        let plain = CoordinateExpr::new(number(1.0), Dimension::dimensionless());
         assert_eq!(plain.display_unit(), CoordinateDisplayUnit::SI);
         let two = PositiveFiniteScale::new(2.0).unwrap();
-        let unit = ConstUnit::new(
-            UnitExpr {
-                terms: Vec::new(),
-                span: span(),
-            },
+        let negated = CoordinateExpr::new(
+            real(ConstRealKind::Neg(boxed(metre(1.0, two)))),
             Dimension::dimensionless(),
-            two,
         );
-        let negated = coordinate(ConstExprKind::Neg(boxed(coordinate(
-            ConstExprKind::Quantity {
-                value: 1.0,
-                unit,
-                admitted: (),
-            },
-        ))));
         assert_eq!(negated.display_unit().scale, two);
         assert!(negated.display_unit().label.is_some());
+        assert_eq!(negated.evaluate().unwrap().get(), -2.0);
     }
 
     #[test]
@@ -790,10 +869,11 @@ mod tests {
     }
 
     #[test]
-    fn linspace_blames_the_point_count() {
+    fn coordinate_axes_check_dimensions_and_blame_the_point_count() {
+        let dimensionless = |value| CoordinateExpr::new(number(value), Dimension::dimensionless());
         let axis = CoordinateAxisExpr::Linspace {
-            start: coordinate(ConstExprKind::Number(0.0)),
-            end: coordinate(ConstExprKind::Number(1.0)),
+            start: dimensionless(0.0),
+            end: dimensionless(1.0),
             points: NatExpr::Literal(0, Span::new(5, 1)),
         };
         assert!(matches!(
@@ -804,10 +884,27 @@ mod tests {
             }) if span == Span::new(5, 1)
         ));
         let range = CoordinateAxisExpr::Range {
-            start: coordinate(ConstExprKind::Number(0.0)),
-            end: coordinate(ConstExprKind::Number(1.0)),
-            step: coordinate(ConstExprKind::Number(0.5)),
+            start: dimensionless(0.0),
+            end: dimensionless(1.0),
+            step: dimensionless(0.5),
         };
         assert_eq!(range.evaluate().unwrap().cardinality(), 3);
+        let length = metre(1.0, PositiveFiniteScale::ONE);
+        let mismatch = CoordinateAxisExpr::Linspace {
+            start: dimensionless(0.0),
+            end: CoordinateExpr::new(
+                length,
+                Dimension::dimensionless()
+                    .checked_mul(&Dimension::base(crate::dimension::BaseDimId::Prelude(
+                        crate::dimension::PreludeBaseDimension::Length,
+                    )))
+                    .unwrap(),
+            ),
+            points: NatExpr::Literal(2, span()),
+        };
+        assert!(matches!(
+            mismatch.evaluate(),
+            Err(CoordinateAxisError::LinspaceDimensionMismatch { .. })
+        ));
     }
 }

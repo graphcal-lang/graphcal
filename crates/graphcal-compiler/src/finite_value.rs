@@ -2,6 +2,9 @@
 
 use thiserror::Error;
 
+use crate::exact_rational::ExactRational;
+use crate::ratio::ExactPowerError;
+
 /// A binary64 quantity proven to be finite.
 ///
 /// ```
@@ -38,6 +41,54 @@ pub enum FiniteArithmeticError {
     /// The divisor was zero.
     #[error("division by zero")]
     DivisionByZero,
+    /// A power of a negative base by a non-integer exponent has no real
+    /// value.
+    #[error("result is not a number")]
+    NotANumber,
+}
+
+/// Failure of a checked power with an exact rational exponent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ExactPowerFailure {
+    /// The power has no real value.
+    #[error(transparent)]
+    NoRealValue(#[from] ExactPowerError),
+    /// The real value is not a finite binary64 value.
+    #[error(transparent)]
+    Arithmetic(#[from] FiniteArithmeticError),
+}
+
+/// Failure to project an `i64` into binary64 without changing its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("integer {value} cannot be represented exactly as binary64")]
+pub struct ExactI64ToF64Error {
+    /// The integer binary64 cannot hold.
+    pub value: i64,
+}
+
+/// Convert an integer to binary64 only when the conversion is exact.
+///
+/// # Errors
+///
+/// Returns [`ExactI64ToF64Error`] when binary64 has no value equal to
+/// `value` (magnitudes above 2^53 that are not multiples of a power of two).
+pub const fn exact_i64_to_f64(value: i64) -> Result<f64, ExactI64ToF64Error> {
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the following wider-integer round trip proves whether this specific value is exact"
+    )]
+    let converted = value as f64;
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "i128 contains every rounded binary64 value reachable from an i64"
+    )]
+    let round_trip = converted as i128;
+    let original = value as i128;
+    if round_trip == original {
+        Ok(converted)
+    } else {
+        Err(ExactI64ToF64Error { value })
+    }
 }
 
 impl FiniteQuantity {
@@ -110,6 +161,53 @@ impl FiniteQuantity {
             return Err(FiniteArithmeticError::DivisionByZero);
         }
         Self::nonzero_result(self.0 / rhs.0, self.0 != 0.0)
+    }
+
+    /// The exact real value of an integer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExactI64ToF64Error`] when binary64 cannot hold `value`
+    /// exactly.
+    pub const fn from_exact_int(value: i64) -> Result<Self, ExactI64ToF64Error> {
+        match exact_i64_to_f64(value) {
+            // An exactly converted `i64` is always finite.
+            Ok(converted) => Ok(Self(converted)),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// `self ^ exponent` for a dimensionless runtime exponent, when the power
+    /// is a real, finite value and a power of nonzero operands did not round
+    /// to zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FiniteArithmeticError::NotANumber`] when the power has no
+    /// real value, [`FiniteArithmeticError::Infinite`] on overflow, and
+    /// [`FiniteArithmeticError::Underflow`] on complete underflow.
+    pub fn checked_powf(self, exponent: Self) -> Result<Self, FiniteArithmeticError> {
+        let result = self.0.powf(exponent.0);
+        if result.is_nan() {
+            return Err(FiniteArithmeticError::NotANumber);
+        }
+        Self::nonzero_result(result, self.0 != 0.0 && exponent.0 != 0.0)
+    }
+
+    /// `self ^ exponent` for an exact rational exponent, with real odd-root
+    /// semantics for a negative base.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExactPowerFailure::NoRealValue`] for an even root of a
+    /// negative base, and [`ExactPowerFailure::Arithmetic`] when the power
+    /// overflows or a nonzero base underflows to zero.
+    pub fn checked_exact_power(self, exponent: ExactRational) -> Result<Self, ExactPowerFailure> {
+        let result = exponent.pow_f64(self.0)?;
+        if result.is_nan() {
+            return Err(FiniteArithmeticError::NotANumber.into());
+        }
+        Ok(Self::nonzero_result(result, self.0 != 0.0)?)
     }
 
     /// Arithmetic on finite operands (with a nonzero divisor) never yields

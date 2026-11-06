@@ -654,13 +654,24 @@ impl Parser<'_> {
             .then_some(start_span)
     }
 
+    /// Whether a number literal (with `_` separators removed) is an `Int`
+    /// literal: it has no decimal point and no exponent.
+    pub(super) fn is_integer_literal(text: &str) -> bool {
+        !text.contains('.') && !text.contains('e') && !text.contains('E')
+    }
+
+    /// Parse the value of an `Int` literal (with `_` separators removed).
+    pub(super) fn parse_int_literal_text(text: &str, span: Span) -> Result<i64, ParseError> {
+        text.parse()
+            .map_err(|error| Self::invalid_number(InvalidNumberReason::Integer(error), span))
+    }
+
     /// Parse a number literal: integer, float, or float with unit.
     fn parse_number_expr(&mut self) -> Result<Expr, ParseError> {
         let (_, span) = self.advance()?;
         let text = self.lexer.slice_at(span).replace('_', "");
-        let is_integer = !text.contains('.') && !text.contains('e') && !text.contains('E');
 
-        if is_integer {
+        if Self::is_integer_literal(&text) {
             // Integer literal: no decimal point or scientific notation.
             if self.same_line_unit_expr_start(span).is_some() {
                 // Integer followed by unit is an error: must use float
@@ -669,9 +680,7 @@ impl Parser<'_> {
                     span,
                 ));
             }
-            let value: i64 = text
-                .parse()
-                .map_err(|error| Self::invalid_number(InvalidNumberReason::Integer(error), span))?;
+            let value = Self::parse_int_literal_text(&text, span)?;
             Ok(Expr::new(ExprKind::Integer(value), span))
         } else {
             // Floating-point literal: has a decimal point or scientific notation

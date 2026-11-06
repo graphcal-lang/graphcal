@@ -478,11 +478,10 @@ fn unused_dynamic_unit_scale_rejects_assertion_reference() {
 }
 
 #[test]
-fn dynamic_unit_scale_must_be_scalar_dimensionless_quantity() {
+fn dynamic_unit_scale_must_be_int_or_scalar_dimensionless_quantity() {
     let invalid_factors = [
         "param factor: Length = 2.0 m;",
         "param factor: Bool = true;",
-        "param factor: Int = 2;",
         "pub index Case = { A, B };\nparam factor: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.0 };",
         "pub type Config { Config(value: Dimensionless) }\nparam factor: Config = Config(value: 2.0);",
     ];
@@ -496,7 +495,7 @@ fn dynamic_unit_scale_must_be_scalar_dimensionless_quantity() {
                 err,
                 SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Dimension(
-                        DimensionError::DynamicUnitScaleTypeMismatch { .. }
+                        DimensionError::UnitScaleTypeMismatch { .. }
                     ),
                     ..
                 })

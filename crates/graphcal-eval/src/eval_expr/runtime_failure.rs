@@ -26,6 +26,7 @@ use super::numeric::{ExactI64ToF64Error, QuantityValidationError};
 use crate::domain_check::DomainViolation;
 use crate::host_abi::marshal::{ArgumentError, ResultError};
 use crate::host_fns::HostFnError;
+use graphcal_compiler::semantic::int_arith::IntArithError;
 
 /// Why evaluating a checked expression failed at runtime.
 #[derive(Debug, Error)]
@@ -48,6 +49,8 @@ pub(super) enum RuntimeFailure {
     ToFloat(ExactI64ToF64Error),
     #[error("Int operand of `*` or `/` with a quantity: {0}")]
     IntScalar(ExactI64ToF64Error),
+    #[error("Int unit scale: {0}")]
+    IntUnitScale(ExactI64ToF64Error),
     #[error("to_int() argument {}{}", .0, rounding_help(.0))]
     ToInt(ExactIntConversionError),
     #[error("builtin function `{function}` {error}")]
@@ -108,6 +111,18 @@ pub(super) enum IntegerFailure {
     NegativeExponent,
     #[error("integer exponent too large")]
     ExponentTooLarge,
+}
+
+impl From<IntArithError> for IntegerFailure {
+    fn from(error: IntArithError) -> Self {
+        match error {
+            IntArithError::ModuloByZero => Self::ModuloByZero,
+            IntArithError::Overflow => Self::Overflow,
+            IntArithError::NegationOverflow => Self::NegationOverflow,
+            IntArithError::NegativeExponent => Self::NegativeExponent,
+            IntArithError::ExponentTooLarge => Self::ExponentTooLarge,
+        }
+    }
 }
 
 /// The unit-scale computation a non-finite scale came from.
