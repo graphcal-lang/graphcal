@@ -22,7 +22,7 @@ use super::complex::ComplexEvalError;
 use super::conversions::ExactIntConversionError;
 use super::datetime::DatetimeRangeError;
 use super::linear_algebra_error::LinearAlgebraError;
-use super::numeric::QuantityValidationError;
+use super::numeric::{ExactI64ToF64Error, QuantityValidationError};
 use crate::domain_check::DomainViolation;
 use crate::host_abi::marshal::{ArgumentError, ResultError};
 use crate::host_fns::HostFnError;
@@ -44,6 +44,8 @@ pub(super) enum RuntimeFailure {
     Datetime(#[from] DatetimeRangeError),
     #[error("{}() integer argument {} is too large for exact conversion", .0.as_str(), .1)]
     DatetimeIntegerTooLarge(DatetimeFromNumericFn, i64),
+    #[error("to_float() argument: {0}")]
+    ToFloat(ExactI64ToF64Error),
     #[error("to_int() argument {}{}", .0, rounding_help(.0))]
     ToInt(ExactIntConversionError),
     #[error("builtin function `{function}` {error}")]

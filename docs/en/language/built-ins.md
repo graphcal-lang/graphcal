@@ -126,7 +126,7 @@ These selectors always take exactly two values. To reduce an indexed value, use
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `to_float(x)` | `Int -> Dimensionless` | Convert an integer to a binary64 `Dimensionless` quantity |
+| `to_float(x)` | `Int -> Dimensionless` | Convert an integer to a binary64 `Dimensionless` quantity exactly; reject integers binary64 cannot represent, which exist only beyond `2 ^ 53` in magnitude |
 | `to_int(x)` | `Dimensionless -> Int` | Convert an integer-valued `Dimensionless` quantity exactly; reject fractional, non-finite, or out-of-range values |
 | `to_int(k)` | `Key<Fin(N)> -> Int` | Extract the integer position of a `Fin` index key; named and coordinate keys are rejected |
 

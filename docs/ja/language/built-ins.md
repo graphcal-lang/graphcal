@@ -125,7 +125,7 @@ node shifted: Complex<Length> = @displacement + to_complex(1.0 m);
 
 | 関数 | シグネチャ | 説明 |
 |----------|-----------|-------------|
-| `to_float(x)` | `Int -> Dimensionless` | 整数を binary64 の `Dimensionless` 量に変換 |
+| `to_float(x)` | `Int -> Dimensionless` | 整数を binary64 の `Dimensionless` 量に正確に変換。binary64 で表せない整数は拒否される（絶対値が `2 ^ 53` を超える場合にだけ起こる） |
 | `to_int(x)` | `Dimensionless -> Int` | 整数値の `Dimensionless` 量を正確に変換。小数部を持つ値、非有限値、範囲外の値は拒否される |
 | `to_int(k)` | `Key<Fin(N)> -> Int` | `Fin` インデックスキーの整数位置を取り出す。名前付きキーと座標キーは拒否される |
 

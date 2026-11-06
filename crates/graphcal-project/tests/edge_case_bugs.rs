@@ -746,29 +746,53 @@ node x: Dimensionless = 1.0 / @neg_zero;
 }
 
 // ============================================================================
-// BUG 8: to_float precision loss for large integers
+// Exact to_float() conversion (#2235)
 //
-// to_float uses `i as f64` which loses precision for i64 values > 2^53.
-// For engineering, this could silently corrupt large integer values.
+// `to_float(n)` fails instead of rounding an `Int` that binary64 cannot
+// represent exactly. Such values exist only above 2^53 in magnitude.
 // ============================================================================
 
 #[test]
-fn to_float_large_integer_precision() {
-    // 2^53 = 9007199254740992 is the last integer exactly representable as f64
-    // 2^53 + 1 = 9007199254740993 should lose precision
+fn to_float_rejects_an_integer_binary64_cannot_represent() {
     let val = (1i64 << 53) + 1;
     let source = format!("param x: Int = {val};\nnode y: Dimensionless = to_float(@x);");
     let result = compile_and_eval(&source).unwrap();
-    let y = find_value(&result, "y");
-    // BUG: y will be 9007199254740992.0, not 9007199254740993.0
-    // The precision loss is silent — no error, no warning
-    let expected = val as f64; // This itself loses precision
+    let message = get_node_error_message(&result, "y").expect("to_float should fail");
     assert!(
-        (y - expected).abs() < f64::EPSILON,
-        "to_float({val}) = {y}, expected {expected}. Note: both lose precision!"
+        message.contains("to_float() argument")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected message: {message}"
     );
-    // The real test: does the language warn about or prevent this?
-    // Currently it doesn't, which is a design concern for safety-critical code.
+}
+
+#[test]
+fn to_float_rejects_an_inexact_integer_in_a_const_node() {
+    let source = "const node y: Dimensionless = to_float(9007199254740993);";
+    let error = compile_and_eval(source)
+        .expect_err("a const node is evaluated at compile time, so to_float should fail there");
+    let message = error.to_string();
+    assert!(
+        message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn to_float_converts_large_integers_binary64_represents() {
+    let source = format!(
+        "param a: Int = {};\nparam b: Int = {};\nnode x: Dimensionless = to_float(@a);\nnode y: Dimensionless = to_float(@b);",
+        1i64 << 53,
+        -(1i64 << 62),
+    );
+    let result = compile_and_eval(&source).unwrap();
+    assert_eq!(
+        find_value(&result, "x").to_bits(),
+        9_007_199_254_740_992.0_f64.to_bits()
+    );
+    assert_eq!(
+        find_value(&result, "y").to_bits(),
+        (-4_611_686_018_427_387_904.0_f64).to_bits()
+    );
 }
 
 // ============================================================================
