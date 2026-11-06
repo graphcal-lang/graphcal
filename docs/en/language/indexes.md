@@ -159,13 +159,14 @@ node total: Velocity = sum(for m: Maneuver { @delta_v[m] });
 node largest: Velocity = maximum(for m: Maneuver { @delta_v[m] });
 node combined_sigma: Velocity = rss(for m: Maneuver { @delta_v[m] });
 node n: Int = count(for m: Maneuver { @delta_v[m] });
-node normalized: Velocity = sum(@delta_v) / to_float(count(@delta_v));
+node normalized: Velocity = sum(@delta_v) / count(@delta_v);
 node critical: Key<Maneuver> = argmax(@delta_v);
 node critical_dv: Velocity = @delta_v[@critical];
 ```
 
-`Int` and quantity arithmetic never mix implicitly. Use `to_float(count(...))`
-when a scalar calculation needs the cardinality. A multi-axis value must first be
+A `count` is an `Int`, which can scale a quantity in `*` and `/` but never mixes
+with one in `+`, `-`, or comparisons (see
+[Arithmetic Operators](expressions.md#arithmetic-operators)). A multi-axis value must first be
 projected to a single axis with an explicit `for` comprehension (`D021`); total-
 and partial-axis aggregation are not yet defined.
 

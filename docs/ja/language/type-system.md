@@ -351,6 +351,7 @@ const node seven: Int = 7;
 
 整数演算には検査付き演算を使用します。オーバーフローは実行時エラーであり、暗黙に折り返すことはありません。
 `Int` 同士の `/` は定義されていません。整数除算は、丸めの方向を名前で示す `div_trunc`、`div_floor`、`div_ceil` で書きます。
+`Int` は `*` と `/` で実数や複素数の量をスカラー倍できます。[算術演算子](expressions.md#arithmetic-operators)を参照してください。
 
 #### Bool { #bool }
 
@@ -797,7 +798,7 @@ node below_limit: Bool[Maneuver] = for m: Maneuver {
 
 ## 型変換 { #type-conversions }
 
-Graphcal には**暗黙の型変換はありません**。明示的な変換関数を使用する必要があります。
+Graphcal には**暗黙の型変換はありません**。明示的な変換関数を使用する必要があります。型を混ぜる算術は、`*` と `/` で `Int` が量をスカラー倍する場合だけです。このとき結果は量の型のままで、`Int` は正確な `Dimensionless` の値として扱われます（[算術演算子](expressions.md#arithmetic-operators)を参照）。
 
 | 関数 | 変換元 | 変換先 | 例 |
 |----------|------|----|---------|

@@ -43,7 +43,22 @@ left.
 rounded and languages disagree on the direction. Name the rounding with
 `div_trunc`, `div_floor`, or `div_ceil` (see
 [Integer Division Functions](built-ins.md#integer-division-functions)), or
-convert first for the real quotient: `to_float(a) / to_float(b)`.
+convert the dividend for the real quotient: `to_float(a) / b`.
+
+An `Int` can scale a quantity. `n * q`, `q * n`, `q / n`, and `n / q` are
+quantity arithmetic in which the `Int` `n` is an exact `Dimensionless` value,
+so `n * q` keeps the dimension of `q`. `+`, `-`, and comparisons never mix an
+`Int` with a quantity. An `Int` that binary64 cannot represent, which exists
+only beyond `2 ^ 53` in magnitude, is an evaluation error.
+
+```graphcal
+param p_unit: Power = 2.8 W;
+param qty: Int = 4;
+param r: Length = 0.5 m;
+
+node p_total: Power = @p_unit * @qty; // 11.2 W
+node circumference: Length = 2 * PI * @r;
+```
 
 `%` is defined only for `Int % Int`; Graphcal does not implicitly apply an
 IEEE floating-point remainder to real quantities. The result follows truncating
@@ -60,9 +75,9 @@ implicitly for addition or subtraction; write `to_complex(x)` explicitly.
 | `z1 + z2`, `z1 - z2` | `Complex<D>` | Both operands are `Complex<D>` |
 | `z1 * z2` | `Complex<D1 * D2>` | Complex operands may have different dimensions |
 | `z1 / z2` | `Complex<D1 / D2>` | The divisor must be nonzero |
-| `q * z`, `z * q` | `Complex<Dq * Dz>` | `q` is a real quantity |
-| `z / q` | `Complex<Dz / Dq>` | `q` is a nonzero real quantity |
-| `q / z` | `Complex<Dq / Dz>` | `z` is nonzero |
+| `q * z`, `z * q` | `Complex<Dq * Dz>` | `q` is a real quantity or an `Int` |
+| `z / q` | `Complex<Dz / Dq>` | `q` is a nonzero real quantity or `Int` |
+| `q / z` | `Complex<Dq / Dz>` | `q` is a real quantity or an `Int`; `z` is nonzero |
 | `-z` | `Complex<D>` | |
 
 For example:

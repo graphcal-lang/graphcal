@@ -1813,6 +1813,103 @@ fn check_int_operand_division_is_rejected_with_d043() {
     }
 }
 
+// --- An Int scales a quantity in `*` and `/` (issue #2187) ---
+
+const INT_SCALING_PARAMS: &str = "param p: Power = 2.8 W;\n\
+     param t: Time = 2.0 s;\n\
+     param n: Int = 4;\n\
+     param z: Complex<Length> = complex(3.0 m, 4.0 m);\n\
+     param w: Complex<Dimensionless> = complex(1.0, 2.0);\n\
+     param b: Bool = true;\n";
+
+#[test]
+fn check_int_scales_real_and_complex_quantities() {
+    for node in [
+        "node x: Power = @p * @n;",
+        "node x: Power = @n * @p;",
+        "node x: Power = @p / @n;",
+        "node x: Frequency = @n / @t;",
+        "node x: Power = @p * @n / 2;",
+        "node x: Power = 2 * @n * @p;",
+        "node x: Length = 2 * PI * 1.0 m;",
+        "node x: Complex<Length> = @z * @n;",
+        "node x: Complex<Length> = @n * @z;",
+        "node x: Complex<Length> = @z / @n;",
+        "node x: Complex<Dimensionless> = @n / @w;",
+        "const node x: Length = 3 * 1.0 m;",
+    ] {
+        let source = format!("{INT_SCALING_PARAMS}{node}");
+        check(&source).unwrap_or_else(|err| panic!("{node}: {err:?}"));
+    }
+}
+
+#[test]
+fn check_int_scaling_keeps_the_quantity_dimension() {
+    let source = format!("{INT_SCALING_PARAMS}node x: Energy = @p * @n;");
+    let err = check(&source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::DimensionMismatchInAnnotation { .. }
+                ),
+                ..
+            })
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_int_does_not_mix_with_quantities_outside_scaling() {
+    for node in [
+        "node x: Power = @p + @n;",
+        "node x: Power = @n - @p;",
+        "node x: Bool = @p > @n;",
+        "node x: Bool = @n == @p;",
+        "node x: Complex<Length> = @z + @n;",
+        "node x: Power = @b * @n;",
+        "node x: Power = @n * @b;",
+    ] {
+        let source = format!("{INT_SCALING_PARAMS}{node}");
+        let err = check(&source).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SemanticError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                    ..
+                })
+            ),
+            "{node}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn check_int_quotient_does_not_reach_quantity_scaling() {
+    // `@n / 2` is still `/` on two Ints, so a truncated quotient cannot
+    // silently scale a quantity.
+    for node in [
+        "node x: Power = @n / 2 * @p;",
+        "node x: Power = @p * (@n / 2);",
+    ] {
+        let source = format!("{INT_SCALING_PARAMS}{node}");
+        let err = check(&source).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SemanticError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::IntOperandDivision),
+                    ..
+                })
+            ),
+            "{node}: {err:?}"
+        );
+    }
+}
+
 #[test]
 fn check_int_division_builtins_require_int_operands() {
     check("param a: Int = 7;\nnode q: Int = div_floor(@a, 2);").unwrap();

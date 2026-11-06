@@ -537,6 +537,8 @@ const node seven: Int = 7;
 Integer arithmetic uses checked operations -- overflow is a runtime error, not silent wraparound.
 `/` is not defined for two `Int` operands; integer division is written with
 `div_trunc`, `div_floor`, or `div_ceil`, which name the rounding direction.
+An `Int` can scale a real or complex quantity in `*` and `/`; see
+[Arithmetic Operators](expressions.md#arithmetic-operators).
 
 #### Bool
 
@@ -1118,7 +1120,10 @@ axes or element pairing explicit.
 
 ## Type Conversions
 
-Graphcal has **no implicit type conversions**. You must use explicit conversion functions:
+Graphcal has **no implicit type conversions**. You must use explicit conversion
+functions. The one arithmetic that mixes types, an `Int` scaling a quantity in
+`*` and `/`, keeps the quantity's type and reads the `Int` as an exact
+`Dimensionless` value (see [Arithmetic Operators](expressions.md#arithmetic-operators)):
 
 | Function | From | To | Example |
 |----------|------|----|---------|

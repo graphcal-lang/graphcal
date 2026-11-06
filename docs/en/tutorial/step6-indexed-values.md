@@ -59,12 +59,12 @@ node max_dv: Velocity = maximum(for m: Maneuver { @delta_v[m] });
 node min_dv: Velocity = minimum(for m: Maneuver { @delta_v[m] });
 node mean_dv: Velocity = mean(for m: Maneuver { @delta_v[m] });
 node n_maneuvers: Int = count(for m: Maneuver { @delta_v[m] });
-node normalized: Velocity = @total_dv / to_float(@n_maneuvers);
+node normalized: Velocity = @total_dv / @n_maneuvers;
 ```
 
 Available aggregation functions: `sum`, `maximum`, `minimum`, `mean`, `count`.
-Use `to_float` explicitly when a scalar quantity calculation needs an integer
-count. Direct multi-axis aggregation is not yet defined.
+An `Int` count can scale a quantity with `*` and `/`, as in `normalized`.
+Direct multi-axis aggregation is not yet defined.
 
 ## Scan (Cumulative Fold)
 

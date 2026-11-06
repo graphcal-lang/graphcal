@@ -796,6 +796,76 @@ fn to_float_converts_large_integers_binary64_represents() {
 }
 
 // ============================================================================
+// An Int scales a quantity in `*` and `/` (#2187)
+//
+// The Int operand is converted exactly, so the result is bit-identical to the
+// explicit `to_float` form, and an Int binary64 cannot represent fails.
+// ============================================================================
+
+#[test]
+fn int_scaling_matches_the_explicit_to_float_form() {
+    let source = "\
+param p: Power = 2.8 W;
+param t: Time = 3.0 s;
+param n: Int = 7;
+param d: Int = 2;
+param z: Complex<Length> = complex(3.0 m, 4.0 m);
+node mul_right: Power = @p * @n;
+node mul_right_explicit: Power = @p * to_float(@n);
+node mul_left: Power = @n * @p;
+node div_right: Power = @p / @n;
+node div_right_explicit: Power = @p / to_float(@n);
+node div_left: Frequency = @n / @t;
+node div_left_explicit: Frequency = to_float(@n) / @t;
+node ratio: Power = @p * @n / @d;
+node real_quotient: Dimensionless = to_float(@n) / @d;
+node literal: Length = 2 * PI * 1.0 m;
+node complex_re: Length = re(@z * @n);
+node complex_im: Length = im(@n * @z);
+node complex_div_re: Length = re(@z / @d);
+";
+    let result = compile_and_eval(source).unwrap();
+    let bits = |name: &str| find_value(&result, name).to_bits();
+    assert_eq!(bits("mul_right"), bits("mul_right_explicit"));
+    assert_eq!(bits("mul_left"), bits("mul_right_explicit"));
+    assert_eq!(bits("div_right"), bits("div_right_explicit"));
+    assert_eq!(bits("div_left"), bits("div_left_explicit"));
+    assert_eq!(bits("ratio"), (2.8_f64 * 7.0 / 2.0).to_bits());
+    assert_eq!(bits("real_quotient"), 3.5_f64.to_bits());
+    assert_eq!(bits("literal"), (2.0 * std::f64::consts::PI).to_bits());
+    assert_eq!(bits("complex_re"), 21.0_f64.to_bits());
+    assert_eq!(bits("complex_im"), 28.0_f64.to_bits());
+    assert_eq!(bits("complex_div_re"), 1.5_f64.to_bits());
+}
+
+#[test]
+fn int_scaling_rejects_an_integer_binary64_cannot_represent() {
+    let val = (1i64 << 53) + 1;
+    let source =
+        format!("param p: Power = 1.0 W;\nparam n: Int = {val};\nnode y: Power = @p * @n;");
+    let result = compile_and_eval(&source).unwrap();
+    let message = get_node_error_message(&result, "y").expect("Int scaling should fail");
+    assert!(
+        message.contains("Int operand of `*` or `/` with a quantity")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn int_scaling_rejects_an_inexact_integer_in_a_const_node() {
+    let source = "const node y: Length = 9007199254740993 * 1.0 m;";
+    let error = compile_and_eval(source).expect_err(
+        "a const node is evaluated at compile time, so the conversion should fail there",
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected error: {message}"
+    );
+}
+
+// ============================================================================
 // BUG 9: Aggregation functions on non-finite collections/results
 //
 // Aggregation functions (sum, min, max, mean) should reject non-finite
