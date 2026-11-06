@@ -1121,9 +1121,10 @@ axes or element pairing explicit.
 ## Type Conversions
 
 Graphcal has **no implicit type conversions**. You must use explicit conversion
-functions. The one arithmetic that mixes types, an `Int` scaling a quantity in
-`*` and `/`, keeps the quantity's type and reads the `Int` as an exact
-`Dimensionless` value (see [Arithmetic Operators](expressions.md#arithmetic-operators)):
+functions. The one arithmetic that mixes types is an `Int` operand of `*` or `/`
+whose other operand is a quantity. The `Int` is read as an exact `Dimensionless`
+value, so `n * q` and `q / n` keep the dimension `D` of `q`, and `n / q` has
+dimension `Dimensionless / D` (see [Arithmetic Operators](expressions.md#arithmetic-operators)):
 
 | Function | From | To | Example |
 |----------|------|----|---------|

@@ -798,7 +798,7 @@ node below_limit: Bool[Maneuver] = for m: Maneuver {
 
 ## 型変換 { #type-conversions }
 
-Graphcal には**暗黙の型変換はありません**。明示的な変換関数を使用する必要があります。型を混ぜる算術は、`*` と `/` で `Int` が量をスカラー倍する場合だけです。このとき結果は量の型のままで、`Int` は正確な `Dimensionless` の値として扱われます（[算術演算子](expressions.md#arithmetic-operators)を参照）。
+Graphcal には**暗黙の型変換はありません**。明示的な変換関数を使用する必要があります。型を混ぜる算術は、`*` または `/` の一方のオペランドが `Int` で、もう一方が量である場合だけです。`Int` は正確な `Dimensionless` の値として扱われます。そのため `n * q` と `q / n` の次元は `q` の次元 `D` のままで、`n / q` の次元は `Dimensionless / D` になります（[算術演算子](expressions.md#arithmetic-operators)を参照）。
 
 | 関数 | 変換元 | 変換先 | 例 |
 |----------|------|----|---------|
