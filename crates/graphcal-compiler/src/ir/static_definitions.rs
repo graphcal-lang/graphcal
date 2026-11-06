@@ -24,7 +24,8 @@ use crate::desugar::desugared_ast::{
 use crate::dimension::{BaseDimId, Dimension};
 use crate::hir::const_expr::{ConstExprError, CoordinateAxisError, CoordinateAxisExpr};
 use crate::hir::const_lower::{
-    UnitScaleSource, classify_unit_scale, lower_coordinate_expr, lower_static_nat_expr,
+    ConstLowerError, ConstTyping, UnitScaleSource, classify_unit_scale, lower_coordinate_expr,
+    lower_static_nat_expr,
 };
 use crate::ir::module_definitions::StaticDefinitions;
 use crate::ir::prelude_definitions::PreludeDefinitionError;
@@ -608,6 +609,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         self.display_registry(owner).dimension_spelling(dimension)
     }
 
+    /// The dimension spellings diagnostics of `owner` use.
     fn display_registry(&self, owner: &DagId) -> DimensionFormattingRegistry {
         DimensionFormattingRegistry::new(
             self.base_dimensions.clone(),
@@ -932,6 +934,8 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         clippy::too_many_lines,
         reason = "one unit declaration's validation and scale evaluation in source order"
     )]
+    /// Validate one unit declaration and evaluate its static scale, or
+    /// record its dynamic scale for checking.
     fn declared_unit(
         &mut self,
         identity: &ResolvedUnitName,
@@ -1067,9 +1071,17 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 // A plain `unit` with no `@` still remains a runtime unit for
                 // const-context policy; `const unit` is the surface marker
                 // that makes it available to `const node`.
+                let registry = self.display_registry(owner);
                 let scale_expr = source
-                    .lower()
-                    .and_then(|expr| expr.evaluate())
+                    .lower(
+                        &UnitRef::local(unit.name.value.clone()),
+                        ConstTyping {
+                            registry: &registry,
+                            src,
+                        },
+                    )
+                    .map_err(|error| const_lower_error(error, src))?
+                    .evaluate()
                     .map_err(|error| const_expr_error(error, src))?;
                 let scale = scale_expr
                     .checked_mul(base_scale)
@@ -1178,6 +1190,8 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             })
     }
 
+    /// Build the definition of one declared index, evaluating coordinate
+    /// axes.
     fn index_definition(
         &mut self,
         owner: &DagId,
@@ -1206,29 +1220,39 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             IndexDeclKind::Range { start, end, step } => {
                 let units = self.coordinate_units(owner, [&**start, &**end, &**step])?;
                 let resolve = |unit: &UnitExpr| resolve_unit_expr_with(unit, |r| units.get(r));
-                let axis = lower_coordinate_expr(start, &resolve)
+                let registry = self.display_registry(owner);
+                let typing = ConstTyping {
+                    registry: &registry,
+                    src,
+                };
+                let axis = lower_coordinate_expr(start, &resolve, typing)
                     .and_then(|start| {
                         Ok(CoordinateAxisExpr::Range {
                             start,
-                            end: lower_coordinate_expr(end, &resolve)?,
-                            step: lower_coordinate_expr(step, &resolve)?,
+                            end: lower_coordinate_expr(end, &resolve, typing)?,
+                            step: lower_coordinate_expr(step, &resolve, typing)?,
                         })
                     })
-                    .map_err(|error| const_expr_error(error, src))?;
+                    .map_err(|error| const_lower_error(error, src))?;
                 self.coordinate_index(owner, &index.name.value, &axis, src, decl_span)?
             }
             IndexDeclKind::Linspace { start, end, points } => {
                 let units = self.coordinate_units(owner, [&**start, &**end])?;
                 let resolve = |unit: &UnitExpr| resolve_unit_expr_with(unit, |r| units.get(r));
-                let axis = lower_coordinate_expr(start, &resolve)
+                let registry = self.display_registry(owner);
+                let typing = ConstTyping {
+                    registry: &registry,
+                    src,
+                };
+                let axis = lower_coordinate_expr(start, &resolve, typing)
                     .and_then(|start| {
                         Ok(CoordinateAxisExpr::Linspace {
                             start,
-                            end: lower_coordinate_expr(end, &resolve)?,
-                            points: lower_static_nat_expr(points)?,
+                            end: lower_coordinate_expr(end, &resolve, typing)?,
+                            points: lower_static_nat_expr(points).map_err(ConstLowerError::from)?,
                         })
                     })
-                    .map_err(|error| const_expr_error(error, src))?;
+                    .map_err(|error| const_lower_error(error, src))?;
                 self.coordinate_index(owner, &index.name.value, &axis, src, decl_span)?
             }
             IndexDeclKind::RequiredNamed => IndexKind::Required(RequiredIndexKind::Named),
@@ -1379,13 +1403,18 @@ fn unit_resolve_error(err: UnitResolveError, src: SourceId, span: Span) -> Seman
     }
 }
 
+/// Render a constant-position lowering failure at the definition boundary.
+fn const_lower_error(error: ConstLowerError, src: SourceId) -> SemanticError {
+    match error {
+        ConstLowerError::Expr(error) => const_expr_error(error, src),
+        ConstLowerError::Type(error) => *error,
+    }
+}
+
 /// Render a constant-expression failure at the definition boundary.
 fn const_expr_error(error: ConstExprError, src: SourceId) -> SemanticError {
     match error {
         ConstExprError::Unit { error, span } => unit_resolve_error(error, src, span),
-        ConstExprError::DimensionOverflow { span } => {
-            SemanticError::located(src, span, DimensionError::DimensionOverflow)
-        }
         error => SemanticError::located(
             src,
             error.span(),

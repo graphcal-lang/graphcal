@@ -13,13 +13,16 @@ use crate::semantic_error::SemanticError;
 use crate::syntax::ast::UnaryOp;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
-use crate::semantic::int_division;
+use crate::semantic::{int_arith, int_division};
 use crate::tir::dim_check::helpers::expect_quantity;
-use crate::tir::dim_check::infer::rules::{self, Operand};
+use crate::tir::dim_check::infer::rules;
+use crate::tir::operator_typing::{self, Operand};
+use crate::tir::texpr::operators::IntArithOp;
 
 use super::context::Infer;
 
 impl Infer<'_> {
+    /// Infer `if cond { a } else { b }` with the shared conditional rule.
     pub(super) fn infer_hir_if(
         &self,
         condition: &Expr,
@@ -30,7 +33,7 @@ impl Infer<'_> {
         let cond_type = infer(condition)?;
         let then_type = infer(then_branch)?;
         let else_type = infer(else_branch)?;
-        rules::if_rule(
+        operator_typing::if_rule(
             &Operand {
                 ty: cond_type,
                 span: condition.span,
@@ -43,31 +46,34 @@ impl Infer<'_> {
                 ty: else_type,
                 span: else_branch.span,
             },
-            self.env.registry,
+            &self.env.registry.dimensions,
             self.env.src,
         )
         .map_err(Outcome::Failed)
     }
 
+    /// Infer a unary operation with the shared unary rule.
     pub(super) fn infer_hir_unary(
         &self,
         op: crate::desugar::desugared_ast::UnaryOp,
         operand: &Expr,
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let operand_type = self.infer_hir_type(operand)?;
-        rules::unary_rule(
+        operator_typing::unary_rule(
             op,
             &Operand {
                 ty: operand_type,
                 span: operand.span,
             },
-            self.env.registry,
+            &self.env.registry.dimensions,
             self.env.src,
         )
         .map_err(Outcome::Failed)
     }
 }
 
+/// Fold a static `Int` expression with the checked `Int` kernels, or `None`
+/// when it is not static or has no `Int` value.
 pub(super) fn try_const_int(expr: &Expr) -> Option<i64> {
     use crate::desugar::desugared_ast::BinOp;
     match expr.kind() {
@@ -75,7 +81,7 @@ pub(super) fn try_const_int(expr: &Expr) -> Option<i64> {
         ExprKind::UnaryOp {
             op: UnaryOp::Neg,
             operand,
-        } => try_const_int(operand)?.checked_neg(),
+        } => int_arith::negate(try_const_int(operand)?).ok(),
         ExprKind::FnCall { callee, args } => match (callee.value.builtin()?, args.as_slice()) {
             (BuiltinFn::IntDivision(function), [dividend, divisor]) => {
                 int_division::divide(function, try_const_int(dividend)?, try_const_int(divisor)?)
@@ -87,12 +93,11 @@ pub(super) fn try_const_int(expr: &Expr) -> Option<i64> {
             let l = try_const_int(lhs)?;
             let r = try_const_int(rhs)?;
             match op {
-                BinOp::Add => l.checked_add(r),
-                BinOp::Sub => l.checked_sub(r),
-                BinOp::Mul => l.checked_mul(r),
-                BinOp::Mod if r == -1 => Some(0),
-                BinOp::Mod if r != 0 => l.checked_rem(r),
-                BinOp::Pow(_) if r >= 0 => u32::try_from(r).ok().and_then(|e| l.checked_pow(e)),
+                BinOp::Add => int_arith::arith(IntArithOp::Add, l, r).ok(),
+                BinOp::Sub => int_arith::arith(IntArithOp::Sub, l, r).ok(),
+                BinOp::Mul => int_arith::arith(IntArithOp::Mul, l, r).ok(),
+                BinOp::Mod => int_arith::arith(IntArithOp::Mod, l, r).ok(),
+                BinOp::Pow(_) => int_arith::power(l, r).ok(),
                 _ => None,
             }
         }
@@ -101,6 +106,7 @@ pub(super) fn try_const_int(expr: &Expr) -> Option<i64> {
 }
 
 impl Infer<'_> {
+    /// Infer a binary operation with the shared binary rule.
     pub(super) fn infer_hir_binop(
         &self,
         span: crate::syntax::span::Span,
@@ -119,7 +125,7 @@ impl Infer<'_> {
         } else {
             None
         };
-        rules::binop_rule(
+        operator_typing::binop_rule(
             span,
             op,
             &Operand {
@@ -131,7 +137,7 @@ impl Infer<'_> {
                 span: rhs.span,
             },
             rhs_const_int,
-            self.env.registry,
+            &self.env.registry.dimensions,
             self.env.src,
         )
         .map_err(Outcome::Failed)

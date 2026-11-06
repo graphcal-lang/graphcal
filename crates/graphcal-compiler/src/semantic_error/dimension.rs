@@ -282,8 +282,8 @@ pub enum DimensionError {
         declared: DimensionSpelling,
         definition: DimensionSpelling,
     },
-    #[error("dynamic unit `{name}` requires a scalar Dimensionless scale, but found {found}")]
-    DynamicUnitScaleTypeMismatch { name: UnitRef, found: TypeSpelling },
+    #[error("unit `{name}` requires an Int or scalar Dimensionless scale, but found {found}")]
+    UnitScaleTypeMismatch { name: UnitRef, found: TypeSpelling },
     #[error("unknown unit `{name}`")]
     UnknownUnit { name: UnitRef },
     #[error("unknown dimension `{name}`")]
@@ -392,7 +392,7 @@ impl DiagnosticKind for DimensionError {
             Self::MaterializedShapeTooLarge { .. } => "graphcal::D035",
             Self::DimensionMismatchInAnnotation { .. } => "graphcal::D002",
             Self::UnitDefinitionDimensionMismatch { .. } => "graphcal::D031",
-            Self::DynamicUnitScaleTypeMismatch { .. } => "graphcal::D032",
+            Self::UnitScaleTypeMismatch { .. } => "graphcal::D032",
             Self::UnknownUnit { .. } => "graphcal::D003",
             Self::UnknownDimension { .. } => "graphcal::D004",
             Self::CyclicDimension { .. } => "graphcal::D008",
@@ -456,7 +456,7 @@ impl DiagnosticKind for DimensionError {
             Self::UnitDefinitionDimensionMismatch { definition, .. } => {
                 Some(format!("this unit expression has dimension {definition}"))
             }
-            Self::DynamicUnitScaleTypeMismatch { found, .. } => {
+            Self::UnitScaleTypeMismatch { found, .. } => {
                 Some(format!("this scale expression has type {found}"))
             }
             Self::UnknownUnit { .. } => Some("unknown unit".to_owned()),
@@ -544,7 +544,7 @@ impl DiagnosticKind for DimensionError {
             Self::MaterializedShapeTooLarge { maximum, .. } => Some(format!("reduce one or more axis cardinalities so their product is at most {maximum}")),
             Self::DimensionMismatchInAnnotation { .. } => Some("the declared type must match the inferred dimension of the expression".to_owned()),
             Self::UnitDefinitionDimensionMismatch { .. } => Some("the unit expression on the right-hand side must have exactly the declared dimension".to_owned()),
-            Self::DynamicUnitScaleTypeMismatch { .. } => Some("use an unindexed Dimensionless quantity; Bool, Int, structures, indexed values, and dimensioned quantities are not valid unit scales".to_owned()),
+            Self::UnitScaleTypeMismatch { .. } => Some("use an Int or an unindexed Dimensionless quantity; Bool, structures, indexed values, and dimensioned quantities are not valid unit scales".to_owned()),
             Self::UnknownUnit { .. } => Some("a bare unit name must be declared in this file, selectively imported, or part of the prelude; units of a module imported with an alias are referenced as `alias::unit`".to_owned()),
             Self::UnknownDimension { .. } => Some("dimension must be declared or part of the prelude".to_owned()),
             Self::CyclicDimension { .. } => Some("derived dimensions cannot form dependency cycles".to_owned()),
@@ -586,7 +586,7 @@ impl DiagnosticKind for DimensionError {
             | Self::MaterializedShapeTooLarge { .. }
             | Self::DimensionMismatchInAnnotation { .. }
             | Self::UnitDefinitionDimensionMismatch { .. }
-            | Self::DynamicUnitScaleTypeMismatch { .. }
+            | Self::UnitScaleTypeMismatch { .. }
             | Self::UnknownUnit { .. }
             | Self::UnknownDimension { .. }
             | Self::CyclicDimension { .. }

@@ -717,7 +717,9 @@ Slice labels must qualify each shared axis in the declared order (`Phase#Launch`
 
 Coordinate indexes carry statically known quantity coordinates. Bounds and
 spacing must be finite, compile-time quantities with the same dimension.
-Runtime inputs and integer (`Int`) values are not accepted.
+Runtime inputs are not accepted. Each argument is typed like an expression in
+a node body, so an `Int` can scale a quantity (`2 * 30.0 s`) but cannot be a
+bound or step by itself.
 
 ### Exact-Step `range`
 

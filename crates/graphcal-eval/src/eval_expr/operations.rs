@@ -25,7 +25,7 @@ use crate::runtime_value::{IndexedValue, KeyElement, KeyValue, RuntimeValue};
 
 use super::EvalSession;
 use super::arithmetic::apply_ordering;
-use super::runtime_failure::{IntegerFailure, RuntimeFailure};
+use super::runtime_failure::RuntimeFailure;
 
 /// A value whose shape a violated-invariant diagnostic describes.
 pub(super) trait Shape {
@@ -414,10 +414,7 @@ pub(super) fn int<'t>(
             let exponent = operands.int(exponent)?;
             super::arithmetic::int_power(base, exponent, ctx, span).map_err(Outcome::Failed)
         }
-        IExpr::Neg(operand) => operands
-            .int(operand)?
-            .checked_neg()
-            .ok_or_else(|| ctx.runtime_error(IntegerFailure::NegationOverflow, span))
+        IExpr::Neg(operand) => super::arithmetic::int_negate(operands.int(operand)?, ctx, span)
             .map_err(Outcome::Failed),
         IExpr::FromQuantity(arg) => {
             let value = operands.quantity(arg)?.get();

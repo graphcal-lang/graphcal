@@ -8,11 +8,13 @@
 use crate::builtin::IntDivisionFn;
 
 /// Why an integer division has no `Int` result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum IntDivisionError {
     /// The divisor is zero.
+    #[error("integer division by zero")]
     DivisionByZero,
     /// The quotient does not fit in `i64` (`i64::MIN` divided by `-1`).
+    #[error("integer arithmetic overflow")]
     Overflow,
 }
 

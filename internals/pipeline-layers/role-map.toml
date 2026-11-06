@@ -753,6 +753,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["semantic", "int_arith"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic", "int_arith", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["semantic", "int_division"]
 role = "contracts"
 
@@ -1779,6 +1789,11 @@ role = "checking"
 [[module]]
 package = "compiler"
 path = ["tir", "dim_check", "infer", "linear_algebra"]
+role = "checking"
+
+[[module]]
+package = "compiler"
+path = ["tir", "operator_typing"]
 role = "checking"
 
 [[module]]

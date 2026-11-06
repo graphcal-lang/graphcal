@@ -1,7 +1,6 @@
 //! Inference of the type-conversion, time-scale, and datetime built-in calls.
 
 use crate::builtin::{BuiltinFn, ConversionFn, DatetimeConstructorFn};
-use crate::dimension::Dimension;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::outcome::Outcome;
 use crate::semantic_error::SemanticError;
@@ -13,10 +12,12 @@ use crate::semantic_error::index::IndexError;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::expect_quantity;
+use crate::tir::operator_typing::{self, Operand};
 
 use super::context::Infer;
 
 impl Infer<'_> {
+    /// Infer `to_float(n)` or `to_int(x)`.
     pub(super) fn infer_hir_type_conversion(
         &self,
         kind: ConversionFn,
@@ -24,23 +25,15 @@ impl Infer<'_> {
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let arg_type = self.infer_arg(&args[0])?;
         match kind {
-            ConversionFn::ToFloat => {
-                if arg_type != CheckedType::Int {
-                    return Err(SemanticError::located(
-                        self.env.src,
-                        args[0].span,
-                        DimensionError::DimensionMismatch {
-                            expected: Box::new(MismatchOperand::Expected(OperandExpectation::Int)),
-                            found: Box::new(MismatchOperand::Type(
-                                arg_type.spelling(&self.env.registry.dimensions),
-                            )),
-                            help: Box::new(MismatchRule::ToFloatInt),
-                        },
-                    )
-                    .into());
-                }
-                Ok(CheckedType::Quantity(Dimension::dimensionless()))
-            }
+            ConversionFn::ToFloat => operator_typing::to_float_rule(
+                &Operand {
+                    ty: arg_type,
+                    span: args[0].span,
+                },
+                &self.env.registry.dimensions,
+                self.env.src,
+            )
+            .map_err(Outcome::Failed),
             ConversionFn::ToInt => {
                 // A `Fin`-axis key exposes its position: the position is the
                 // key's semantic content. Named and coordinate keys stay opaque.

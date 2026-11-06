@@ -659,8 +659,14 @@ impl Parser<'_> {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value = Self::parse_finite_f64_literal(&text, span)?;
-                Ok(Expr::new(ExprKind::Number(value), span))
+                // The scale is typed like any other literal: `1000` is an
+                // `Int` that scales the unit, `1000.0` a real number.
+                let kind = if Self::is_integer_literal(&text) {
+                    ExprKind::Integer(Self::parse_int_literal_text(&text, span)?)
+                } else {
+                    ExprKind::Number(Self::parse_finite_f64_literal(&text, span)?)
+                };
+                Ok(Expr::new(kind, span))
             }
             Some(Token::LParen) => {
                 let (_, _lp_span) = self.advance()?;

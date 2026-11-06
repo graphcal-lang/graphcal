@@ -1,4 +1,5 @@
 use crate::runtime_value::RuntimeValue;
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::hir::expr::ResolvedUnitExpr;
 use graphcal_compiler::hir::expr::{ResolvedUnitExprItem, ResolvedUnitRef};
 use graphcal_compiler::outcome::Outcome;
@@ -71,20 +72,28 @@ fn resolve_dynamic_unit_scale(
     })?;
     let scale_session = session.with_src(scale.source());
     let expression = scale.expression();
-    let scale_f64 = super::operations::read_shape(
+    let scale_value = super::operations::read_shape(
         evaluate(
             &scale_session.executable(expression)?,
             values,
             &scale_session,
         )?,
-        "a dynamic unit scale quantity",
+        "a dynamic unit scale",
         expression.get().span,
         &scale_session,
         |value| match value {
-            RuntimeValue::Quantity(scale) => Ok(scale),
+            RuntimeValue::Quantity(scale) => Ok(Ok(scale)),
+            RuntimeValue::Int(scale) => Ok(Err(scale)),
             other => Err(other),
         },
     )?;
+    // An `Int` scale is converted exactly, like an `Int` that scales a
+    // quantity.
+    let scale_f64 = scale_value.or_else(|scale| {
+        FiniteQuantity::from_exact_int(scale).map_err(|error| {
+            scale_session.runtime_error(RuntimeFailure::IntUnitScale(error), expression.get().span)
+        })
+    })?;
     let dynamic_scale = PositiveFiniteScale::new(scale_f64.get()).map_err(|error| {
         unit_scale_error(
             UnitScaleContext::DynamicUnit,

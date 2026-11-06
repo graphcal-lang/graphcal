@@ -3,32 +3,7 @@ use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use thiserror::Error;
 
-/// Failure to project an `i64` into binary64 without changing its value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("integer {value} cannot be represented exactly as binary64")]
-pub(crate) struct ExactI64ToF64Error {
-    value: i64,
-}
-
-/// Convert an integer to binary64 only when the conversion is exact.
-pub(crate) const fn exact_i64_to_f64(value: i64) -> Result<f64, ExactI64ToF64Error> {
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "the following wider-integer round trip proves whether this specific value is exact"
-    )]
-    let converted = value as f64;
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "i128 contains every rounded binary64 value reachable from an i64"
-    )]
-    let round_trip = converted as i128;
-    let original = value as i128;
-    if round_trip == original {
-        Ok(converted)
-    } else {
-        Err(ExactI64ToF64Error { value })
-    }
-}
+pub(crate) use graphcal_compiler::finite_value::{ExactI64ToF64Error, exact_i64_to_f64};
 
 /// Error returned by pure quantity validation helpers.
 #[derive(Debug, Clone, PartialEq, Error)]
@@ -61,6 +36,9 @@ impl QuantityValidationError {
                 context: context.to_string(),
             },
             FiniteArithmeticError::DivisionByZero => Self::DivisionByZero,
+            FiniteArithmeticError::NotANumber => Self::NanResult {
+                context: context.to_string(),
+            },
         }
     }
 }
