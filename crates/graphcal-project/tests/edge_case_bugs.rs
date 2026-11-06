@@ -766,6 +766,18 @@ fn to_float_rejects_an_integer_binary64_cannot_represent() {
 }
 
 #[test]
+fn to_float_rejects_an_inexact_integer_in_a_const_node() {
+    let source = "const node y: Dimensionless = to_float(9007199254740993);";
+    let error = compile_and_eval(source)
+        .expect_err("a const node is evaluated at compile time, so to_float should fail there");
+    let message = error.to_string();
+    assert!(
+        message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
 fn to_float_converts_large_integers_binary64_represents() {
     let source = format!(
         "param a: Int = {};\nparam b: Int = {};\nnode x: Dimensionless = to_float(@a);\nnode y: Dimensionless = to_float(@b);",
