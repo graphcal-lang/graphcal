@@ -111,6 +111,25 @@ fn fin_key_additive_rule(
         })
 }
 
+/// The dimension of one operand of `*` or `/`, and whether it is complex,
+/// once the other operand is known not to be an `Int` as well.
+///
+/// An `Int` scales the other operand as an exact `Dimensionless` value, so
+/// `Int * Q`, `Q * Int`, `Q / Int`, and `Int / Q` follow quantity arithmetic,
+/// and the same holds for `Complex<D>`. `+`, `-`, and comparisons never mix
+/// `Int` with a quantity. The caller rules on two `Int` operands first.
+fn product_operand(
+    operand: &Operand,
+    registry: &FormattingRegistry,
+    src: SourceId,
+) -> Result<(Dimension, bool), SemanticError> {
+    match &operand.ty {
+        CheckedType::Complex(dimension) => Ok((dimension.clone(), true)),
+        CheckedType::Int => Ok((Dimension::dimensionless(), false)),
+        other => Ok((expect_quantity(other, registry, src, operand.span)?, false)),
+    }
+}
+
 /// Typing rule for a binary operation, given already-inferred operands.
 ///
 /// `rhs_const_int` is the right operand's constant-folded `Int` value for
@@ -458,14 +477,8 @@ pub(super) fn binop_rule(
             if matches!(lhs_type, CheckedType::Int) && matches!(rhs_type, CheckedType::Int) {
                 return Ok(CheckedType::Int);
             }
-            let (lhs_dim, lhs_complex) = match lhs_type {
-                CheckedType::Complex(dimension) => (dimension.clone(), true),
-                _ => (expect_quantity(lhs_type, registry, src, lhs.span)?, false),
-            };
-            let (rhs_dim, rhs_complex) = match rhs_type {
-                CheckedType::Complex(dimension) => (dimension.clone(), true),
-                _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
-            };
+            let (lhs_dim, lhs_complex) = product_operand(lhs, registry, src)?;
+            let (rhs_dim, rhs_complex) = product_operand(rhs, registry, src)?;
             let dim = lhs_dim.checked_mul(&rhs_dim).map_err(|_| {
                 SemanticError::located(src, expr_span, DimensionError::DimensionOverflow)
             })?;
@@ -485,14 +498,8 @@ pub(super) fn binop_rule(
                     DimensionError::IntOperandDivision,
                 ));
             }
-            let (lhs_dim, lhs_complex) = match lhs_type {
-                CheckedType::Complex(dimension) => (dimension.clone(), true),
-                _ => (expect_quantity(lhs_type, registry, src, lhs.span)?, false),
-            };
-            let (rhs_dim, rhs_complex) = match rhs_type {
-                CheckedType::Complex(dimension) => (dimension.clone(), true),
-                _ => (expect_quantity(rhs_type, registry, src, rhs.span)?, false),
-            };
+            let (lhs_dim, lhs_complex) = product_operand(lhs, registry, src)?;
+            let (rhs_dim, rhs_complex) = product_operand(rhs, registry, src)?;
             let dim = lhs_dim.checked_div(&rhs_dim).map_err(|_| {
                 SemanticError::located(src, expr_span, DimensionError::DimensionOverflow)
             })?;

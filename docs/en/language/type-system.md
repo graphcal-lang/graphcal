@@ -537,6 +537,8 @@ const node seven: Int = 7;
 Integer arithmetic uses checked operations -- overflow is a runtime error, not silent wraparound.
 `/` is not defined for two `Int` operands; integer division is written with
 `div_trunc`, `div_floor`, or `div_ceil`, which name the rounding direction.
+An `Int` can scale a real or complex quantity in `*` and `/`; see
+[Arithmetic Operators](expressions.md#arithmetic-operators).
 
 #### Bool
 
@@ -1118,7 +1120,13 @@ axes or element pairing explicit.
 
 ## Type Conversions
 
-Graphcal has **no implicit type conversions**. You must use explicit conversion functions:
+Graphcal has **no implicit type conversions**. You must use explicit conversion
+functions. The only arithmetic that mixes `Int` with a quantity is `*` or `/`
+with one `Int` operand and one real or complex quantity operand. The `Int` is
+read as an exact `Dimensionless` value, so `n * q` and `q / n` keep the dimension `D` of `q`, and `n / q` has
+dimension `Dimensionless / D` (see [Arithmetic Operators](expressions.md#arithmetic-operators)).
+The exponent in `q ^ 2` is exact exponent syntax, not an `Int` operand, and a
+runtime `Int` exponent such as `@q ^ @n` is rejected:
 
 | Function | From | To | Example |
 |----------|------|----|---------|
@@ -1250,8 +1258,8 @@ This section lists the type of each expression form and the constraints the comp
 |-----------|-------------|------------|
 | `a + b` | type of `a` | Same numeric kind and dimension |
 | `a - b` | type of `a` | Same numeric kind and dimension |
-| `a * b` | numeric kind lifted over `dim(a) * dim(b)` | Supports Int×Int, real×real, real×complex, complex×real, and complex×complex |
-| `a / b` | numeric kind lifted over `dim(a) / dim(b)` | Supports real÷real, real÷complex, complex÷real, and complex÷complex; not defined for two `Int` operands (use `div_trunc`, `div_floor`, or `div_ceil`) |
+| `a * b` | numeric kind lifted over `dim(a) * dim(b)` | Supports Int×Int, real×real, real×complex, complex×real, complex×complex, and Int with a real or complex quantity on either side |
+| `a / b` | numeric kind lifted over `dim(a) / dim(b)` | Supports real÷real, real÷complex, complex÷real, complex÷complex, and Int with a real or complex quantity on either side; not defined for two `Int` operands (use `div_trunc`, `div_floor`, or `div_ceil`) |
 | `a % b` | `Int` | Both operands must be `Int`; quantity remainder is not defined |
 | `a ^ n` | `dim(a) ^ n` | Real quantities or integers only; `n` is dimensionless and a dimensioned base requires an exact integer or parenthesized rational |
 | `-a` | type and dimension of `a` | Real quantity, complex quantity, or integer |

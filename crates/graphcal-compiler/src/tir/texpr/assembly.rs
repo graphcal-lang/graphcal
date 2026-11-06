@@ -34,8 +34,8 @@ use super::model::{
 };
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use super::operators::{
-    ArithOp, BExpr, CExpr, ComplexPart, DExpr, EqualityOp, IExpr, IntArithOp, LinearAlgebraCall,
-    OrderedOperands, OrderingOp, QExpr, ScaleOp, ShiftOp,
+    ArithOp, BExpr, CExpr, ComplexPart, DExpr, EqualityOp, IExpr, IntArithOp, IntConversion,
+    LinearAlgebraCall, OrderedOperands, OrderingOp, QExpr, ScaleOp, ShiftOp,
 };
 use crate::builtin::{BuiltinFn, ComplexFn, ConversionFn, DatetimeConstructorFn, DatetimeFn};
 use crate::hir::expr::FunctionRef;
@@ -583,12 +583,53 @@ impl BinaryOperation {
     }
 }
 
+/// `lhs op rhs` with the `Int` operand of a mixed `*` or `/` converted.
+///
+/// Checking lets an `Int` scale a real or complex quantity in `*` and `/`
+/// as an exact `Dimensionless` value. The conversion becomes an explicit
+/// [`QExpr::FromInt`] node over the `Int` operand, so the operation selected
+/// afterwards is ordinary quantity arithmetic and evaluation fails on an
+/// `Int` binary64 cannot represent. Every other operand pair is unchanged.
+fn convert_int_scalar(
+    op: BinOp,
+    lhs: Box<TExpr<Symbolic>>,
+    rhs: Box<TExpr<Symbolic>>,
+) -> (Box<TExpr<Symbolic>>, Box<TExpr<Symbolic>>) {
+    let scaled = |ty: &CheckedType<Symbolic>| {
+        matches!(ty, CheckedType::Quantity(_) | CheckedType::Complex(_))
+    };
+    if !matches!(op, BinOp::Mul | BinOp::Div) {
+        return (lhs, rhs);
+    }
+    match (lhs.ty(), rhs.ty()) {
+        (CheckedType::Int, other) if scaled(other) => (int_scalar(lhs), rhs),
+        (other, CheckedType::Int) if scaled(other) => (lhs, int_scalar(rhs)),
+        _ => (lhs, rhs),
+    }
+}
+
+/// The exact `Dimensionless` value of an `Int` operand that scales a
+/// quantity. The conversion checks the same occurrence as its operand, so it
+/// shares the operand's identity and span.
+fn int_scalar(int: Box<TExpr<Symbolic>>) -> Box<TExpr<Symbolic>> {
+    Box::new(TExpr::new(
+        int.id().clone(),
+        int.span(),
+        CheckedType::Quantity(crate::dimension::Dimension::dimensionless()),
+        TExprKind::Quantity(QExpr::FromInt {
+            conversion: IntConversion::Scaling,
+            arg: int,
+        }),
+    ))
+}
+
 /// The typed form of `lhs op rhs`, if checking admits its operand types.
 fn binary(
     op: BinOp,
     lhs: Box<TExpr<Symbolic>>,
     rhs: Box<TExpr<Symbolic>>,
 ) -> Option<TExprKind<Symbolic>> {
+    let (lhs, rhs) = convert_int_scalar(op, lhs, rhs);
     Some(match BinaryOperation::select(op, lhs.ty(), rhs.ty())? {
         BinaryOperation::And => TExprKind::Bool(BExpr::And { lhs, rhs }),
         BinaryOperation::Or => TExprKind::Bool(BExpr::Or { lhs, rhs }),
@@ -810,7 +851,10 @@ fn builtin_call(
         BuiltinFn::Conversion(conversion) => {
             let arg = single(args)?;
             match (conversion, category(&arg)) {
-                (ConversionFn::ToFloat, Category::Int) => TExprKind::Quantity(QExpr::FromInt(arg)),
+                (ConversionFn::ToFloat, Category::Int) => TExprKind::Quantity(QExpr::FromInt {
+                    conversion: IntConversion::ToFloat,
+                    arg,
+                }),
                 (ConversionFn::ToInt, Category::Key) => TExprKind::Int(IExpr::FinPosition(arg)),
                 (ConversionFn::ToInt, Category::Quantity) => {
                     TExprKind::Int(IExpr::FromQuantity(arg))
@@ -1074,6 +1118,60 @@ mod tests {
         for (op, lhs, rhs) in cases {
             assert_eq!(select(op, &lhs, &rhs), None, "{op:?} {lhs:?} {rhs:?}");
         }
+    }
+
+    #[test]
+    fn int_scaling_operand_becomes_an_explicit_conversion() {
+        use CheckedType as T;
+        let converted = |operand: &TExpr<Symbolic>| {
+            matches!(
+                operand.kind(),
+                TExprKind::Quantity(QExpr::FromInt {
+                    conversion: IntConversion::Scaling,
+                    arg,
+                }) if *arg.ty() == T::Int
+            ) && *operand.ty() == quantity()
+        };
+        for op in [BinOp::Mul, BinOp::Div] {
+            match binary(op, arg(quantity()), arg(T::Int)) {
+                Some(TExprKind::Quantity(QExpr::Arith { lhs, rhs, .. })) => {
+                    assert_eq!(*lhs.ty(), quantity());
+                    assert!(converted(&rhs), "{op:?}: {rhs:?}");
+                }
+                other => panic!("{op:?}: {other:?}"),
+            }
+            match binary(op, arg(T::Int), arg(quantity())) {
+                Some(TExprKind::Quantity(QExpr::Arith { lhs, rhs, .. })) => {
+                    assert!(converted(&lhs), "{op:?}: {lhs:?}");
+                    assert_eq!(*rhs.ty(), quantity());
+                }
+                other => panic!("{op:?}: {other:?}"),
+            }
+            match binary(op, arg(complex()), arg(T::Int)) {
+                Some(TExprKind::Complex(CExpr::ScaleRight { scalar, .. })) => {
+                    assert!(converted(&scalar), "{op:?}: {scalar:?}");
+                }
+                other => panic!("{op:?}: {other:?}"),
+            }
+            match binary(op, arg(T::Int), arg(complex())) {
+                Some(TExprKind::Complex(CExpr::ScaleLeft { scalar, .. })) => {
+                    assert!(converted(&scalar), "{op:?}: {scalar:?}");
+                }
+                other => panic!("{op:?}: {other:?}"),
+            }
+        }
+        // `+`, `-`, comparisons, and two Ints convert nothing.
+        assert!(binary(BinOp::Add, arg(quantity()), arg(T::Int)).is_none());
+        assert!(binary(BinOp::Sub, arg(T::Int), arg(complex())).is_none());
+        assert!(binary(BinOp::Lt, arg(T::Int), arg(quantity())).is_none());
+        assert!(binary(BinOp::Div, arg(T::Int), arg(T::Int)).is_none());
+        assert!(matches!(
+            binary(BinOp::Mul, arg(T::Int), arg(T::Int)),
+            Some(TExprKind::Int(IExpr::Arith {
+                op: IntArithOp::Mul,
+                ..
+            }))
+        ));
     }
 
     #[test]

@@ -46,6 +46,8 @@ pub(super) enum RuntimeFailure {
     DatetimeIntegerTooLarge(DatetimeFromNumericFn, i64),
     #[error("to_float() argument: {0}")]
     ToFloat(ExactI64ToF64Error),
+    #[error("Int operand of `*` or `/` with a quantity: {0}")]
+    IntScalar(ExactI64ToF64Error),
     #[error("to_int() argument {}{}", .0, rounding_help(.0))]
     ToInt(ExactIntConversionError),
     #[error("builtin function `{function}` {error}")]

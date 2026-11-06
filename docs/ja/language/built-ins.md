@@ -168,11 +168,11 @@ node racks: Int = div_ceil(@items, @per_rack);
 // 2: only the completely filled racks.
 node full_racks: Int = div_floor(@items, @per_rack);
 // 2.5: the real quotient.
-node exact_racks: Dimensionless = to_float(@items) / to_float(@per_rack);
+node exact_racks: Dimensionless = to_float(@items) / @per_rack;
 ```
 
-商を最も近い整数に丸めるには、実数どうしで割ってから明示的に丸めます。
-`to_int(round(to_float(a) / to_float(b)))` と書いてください。結果が正確である
+商を最も近い整数に丸めるには、実数の商を求めてから明示的に丸めます。
+`to_int(round(to_float(a) / b))` と書いてください。結果が正確である
 ことが保証されるのは、`a` の絶対値が `2 ^ 52` 未満の場合だけです。それより大きい
 値では、binary64 の丸めにより結果が近似値になることがあります。
 
@@ -380,8 +380,8 @@ node budget_mean: Mass = sum(@means);   // 150 kg
 node budget_sigma: Mass = rss(@sigmas); // 5 kg
 ```
 
-量の算術で無次元スカラーが必要な場合は、`sum(@values) / to_float(count(@values))`
-のように、個数を明示的に変換してください。複数軸に対する直接の集約は拒否
+個数はそのまま量をスカラー倍できます。たとえば `sum(@values) / count(@values)`
+と書けます。複数軸に対する直接の集約は拒否
 されます。`product(for row: Row { product(for column: Column { @a[row, column] }) })`
 のように、明示的な `for` を使って選択した 1 つの軸ずつ縮約してください。
 

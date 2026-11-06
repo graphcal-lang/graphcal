@@ -14,7 +14,7 @@ use graphcal_compiler::semantic::key_value::FinKeyShift;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::operators::{
-    BExpr, CExpr, DExpr, EqualityOp, IExpr, OrderedOperands, QExpr, ShiftOp,
+    BExpr, CExpr, DExpr, EqualityOp, IExpr, IntConversion, OrderedOperands, QExpr, ShiftOp,
 };
 use graphcal_compiler::tir::texpr::{DatetimeLiteral, LabelDispatch};
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
@@ -352,11 +352,17 @@ pub(super) fn quantity<'t>(
             .map_err(|error| ctx.runtime_error(error, span).into()),
         QExpr::Exp(arg) => super::complex::real_exp(operands.quantity(arg)?)
             .map_err(|error| ctx.runtime_error(error, span).into()),
-        QExpr::FromInt(arg) => {
+        QExpr::FromInt { conversion, arg } => {
             let value = operands.int(arg)?;
-            let value = super::numeric::exact_i64_to_f64(value)
-                .map_err(|error| ctx.runtime_error(RuntimeFailure::ToFloat(error), arg.span()))?;
-            super::numeric::finite_quantity(value, "to_float()")
+            let value = super::numeric::exact_i64_to_f64(value).map_err(|error| {
+                let failure = match conversion {
+                    IntConversion::ToFloat => RuntimeFailure::ToFloat(error),
+                    IntConversion::Scaling => RuntimeFailure::IntScalar(error),
+                };
+                ctx.runtime_error(failure, arg.span())
+            })?;
+            // An exactly converted `i64` is always finite.
+            super::numeric::finite_quantity(value, "Int conversion")
                 .map_err(|error| ctx.runtime_error(error, arg.span()))
                 .map_err(Outcome::Failed)
         }

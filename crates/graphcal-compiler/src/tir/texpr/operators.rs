@@ -43,6 +43,17 @@ pub enum ScaleOp {
     Div,
 }
 
+/// Where an `Int` becomes an exact `Dimensionless` real quantity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntConversion {
+    /// An explicit `to_float(n)`.
+    ToFloat,
+    /// An `Int` operand of `*` or `/` whose other operand is a real or
+    /// complex quantity. Checking inserts this conversion, so the source has
+    /// no call for it.
+    Scaling,
+}
+
 /// Moving a datetime by a duration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShiftOp {
@@ -132,8 +143,11 @@ pub enum QExpr<C> {
     Abs(C),
     /// `exp(x)` of a dimensionless real quantity.
     Exp(C),
-    /// `to_float(n)`.
-    FromInt(C),
+    /// An `Int` converted exactly; values binary64 cannot represent fail.
+    FromInt {
+        conversion: IntConversion,
+        arg: C,
+    },
     /// `coord(k)`: the coordinate of a coordinate-axis key.
     Coordinate(C),
     /// A numeric epoch count of a datetime.
@@ -319,7 +333,10 @@ impl<C> QExpr<C> {
             },
             Self::Abs(arg) => QExpr::Abs(f(arg)?),
             Self::Exp(arg) => QExpr::Exp(f(arg)?),
-            Self::FromInt(arg) => QExpr::FromInt(f(arg)?),
+            Self::FromInt { conversion, arg } => QExpr::FromInt {
+                conversion: *conversion,
+                arg: f(arg)?,
+            },
             Self::Coordinate(arg) => QExpr::Coordinate(f(arg)?),
             Self::FromDatetime { function, arg } => QExpr::FromDatetime {
                 function: *function,
@@ -344,7 +361,7 @@ impl<C> QExpr<C> {
             Self::ComplexPart { arg, .. }
             | Self::Abs(arg)
             | Self::Exp(arg)
-            | Self::FromInt(arg)
+            | Self::FromInt { arg, .. }
             | Self::Coordinate(arg)
             | Self::FromDatetime { arg, .. } => vec![arg],
         }

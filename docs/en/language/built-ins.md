@@ -170,11 +170,11 @@ node racks: Int = div_ceil(@items, @per_rack);
 // 2: only the completely filled racks.
 node full_racks: Int = div_floor(@items, @per_rack);
 // 2.5: the real quotient.
-node exact_racks: Dimensionless = to_float(@items) / to_float(@per_rack);
+node exact_racks: Dimensionless = to_float(@items) / @per_rack;
 ```
 
-To round the quotient to the nearest integer, divide real values and round
-explicitly: `to_int(round(to_float(a) / to_float(b)))`. The result is guaranteed
+To round the quotient to the nearest integer, take the real quotient and round
+it explicitly: `to_int(round(to_float(a) / b))`. The result is guaranteed
 to be exact only while `a` is below `2 ^ 52` in magnitude; for larger values,
 binary64 rounding can make it approximate.
 
@@ -382,8 +382,8 @@ node budget_mean: Mass = sum(@means);   // 150 kg
 node budget_sigma: Mass = rss(@sigmas); // 5 kg
 ```
 
-Convert a count explicitly when quantity arithmetic needs a dimensionless
-scalar: `sum(@values) / to_float(count(@values))`. Direct multi-axis aggregation
+A count scales a quantity directly: `sum(@values) / count(@values)`. Direct
+multi-axis aggregation
 is rejected; reduce one selected axis at a time with an explicit `for`, such as
 `product(for row: Row { product(for column: Column { @a[row, column] }) })`.
 
