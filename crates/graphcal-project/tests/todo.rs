@@ -515,3 +515,33 @@ fn keyed_interfaces_are_checked_like_reads() {
         assert!(!check(&source), "unexpectedly accepted: {body}");
     }
 }
+
+#[test]
+fn reachable_unfinished_names_each_unfinished_declaration_once_by_its_definition() {
+    let loaded = LoadedProject::from_source(
+        r"
+dag partial {
+    pub node missing: Length = todo<Length> {};
+    pub node known: Length = 2.0 m;
+}
+dag unused { node pending: Length = todo<Length> {}; }
+include partial() as a;
+include partial() as b;
+node direct: Length = todo<Length> {};
+node blocked: Length = @direct + @a::missing;
+",
+        "todo.gcl",
+    )
+    .unwrap();
+    let checked = ProjectCompiler::new(&loaded).check().unwrap();
+    let names = checked
+        .tir()
+        .reachable_unfinished()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        ["todo.direct", "todo.partial.missing", "todo.unused.pending"]
+    );
+}

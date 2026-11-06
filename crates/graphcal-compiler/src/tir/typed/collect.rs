@@ -28,11 +28,13 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(tir: &mut super::UncheckedT
 }
 
 /// The declarations each dynamic unit's scale reads, resolved in the frame
-/// of the DAG instance that owns the unit.
+/// of the DAG instance that owns the unit: its own `@` reads and, through the
+/// quantity literals of its scale, those of every dynamic unit it uses.
 pub fn dynamic_unit_scale_reads(
     tir: &super::UncheckedTir,
 ) -> HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>> {
-    tir.dags
+    let direct = tir
+        .dags
         .iter()
         .flat_map(|(_, dag)| {
             let frame = dag.frame();
@@ -40,53 +42,95 @@ pub fn dynamic_unit_scale_reads(
                 .dynamic_unit_scales
                 .iter()
                 .map(move |(name, entry)| {
+                    let reads = crate::hir::expr::collect_expr_dependencies(&entry.expr)
+                        .graph_refs
+                        .iter()
+                        .map(|reference| frame.resolve(reference))
+                        .collect::<BTreeSet<_>>();
                     (
                         name.clone(),
-                        crate::hir::expr::collect_expr_dependencies(&entry.expr)
-                            .graph_refs
-                            .iter()
-                            .map(|reference| frame.resolve(reference))
-                            .collect(),
+                        (reads, collect_unit_names(frame, &entry.expr)),
                     )
                 })
+        })
+        .collect::<HashMap<_, _>>();
+    direct
+        .keys()
+        .map(|unit| {
+            let mut reads = BTreeSet::new();
+            let mut visited = HashSet::new();
+            let mut pending = vec![unit];
+            while let Some(unit) = pending.pop() {
+                if !visited.insert(unit) {
+                    continue;
+                }
+                if let Some((own, used)) = direct.get(unit) {
+                    reads.extend(own.iter().cloned());
+                    pending.extend(used.iter().filter(|used| direct.contains_key(*used)));
+                }
+            }
+            (unit.clone(), reads)
         })
         .collect()
 }
 
+/// Extend runtime, assertion, and presentation dependencies with the reads of
+/// dynamic unit scales used by quantity literals in their expressions.
+/// `scale_deps` supplies those reads already resolved in each unit owner's frame.
 fn add_dynamic_unit_reads(
     dag: &mut DagTIR,
     scale_deps: &HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>>,
 ) {
-    let runtime_units = dag
-        .params()
-        .filter_map(|entry| {
-            entry
-                .default
-                .as_ref()
-                .map(|default| (entry.identity(), collect_unit_names(&dag.frame, default)))
-        })
-        .chain(dag.nodes().map(|entry| {
-            (
-                entry.identity(),
-                collect_unit_names(&dag.frame, &entry.definition),
-            )
-        }))
-        .collect::<Vec<_>>();
-
-    for (key, unit_names) in runtime_units {
-        let extra: BTreeSet<ResolvedDeclName> = unit_names
+    let units_of = |expressions: &[&crate::hir::expr::Expr]| {
+        expressions
+            .iter()
+            .flat_map(|expression| collect_unit_names(&dag.frame, expression))
+            .collect::<std::collections::HashSet<_>>()
+    };
+    let reads = |units: std::collections::HashSet<_>| -> BTreeSet<ResolvedDeclName> {
+        units
             .iter()
             .filter_map(|unit| scale_deps.get(unit))
             .flatten()
             .cloned()
-            .collect();
-        if !extra.is_empty() {
-            dag.semantic
-                .dependencies
-                .runtime_deps
-                .entry(key)
-                .or_default()
-                .extend(extra);
+            .collect()
+    };
+    let runtime = dag
+        .params()
+        .filter_map(|entry| {
+            entry
+                .default
+                .as_deref()
+                .map(|default| (entry.identity(), units_of(&[default])))
+        })
+        .chain(
+            dag.nodes()
+                .map(|entry| (entry.identity(), units_of(&[&*entry.definition]))),
+        )
+        .map(|(key, units)| (key, reads(units)))
+        .collect::<Vec<_>>();
+    let asserts = dag
+        .asserts()
+        .map(|entry| {
+            let expressions = entry.body.expressions().collect::<Vec<_>>();
+            (entry.identity(), reads(units_of(&expressions)))
+        })
+        .collect::<Vec<_>>();
+    let presentations = presentation_expressions(dag.decls())
+        .into_iter()
+        .map(|(key, expressions)| (key, reads(units_of(&expressions))))
+        .collect::<Vec<_>>();
+
+    let dependencies = &mut dag.semantic.dependencies;
+    for (map, extra) in [
+        (&mut dependencies.runtime_deps, runtime),
+        (&mut dependencies.assert_deps, asserts),
+        (&mut dependencies.presentation_deps, presentations),
+    ] {
+        for (key, extra) in extra {
+            if !extra.is_empty() {
+                map.entry(key).or_default().extend(extra);
+            }
         }
     }
 }
@@ -136,6 +180,11 @@ fn resolve_all<'a>(
         .collect()
 }
 
+/// Collect const, runtime, assertion, and presentation reads in `frame`, along
+/// with inline DAG calls. Dynamic unit scale reads are added separately.
+///
+/// Returns a semantic error located in `src` at the const declaration if an
+/// `@` reference in its body has no symbol in the module resolver.
 pub(super) fn collect_resolved_dag_dependencies(
     decls: &crate::ir::decl_table::DeclTable<super::model::Typed>,
     frame: &InstanceFrame,
@@ -219,7 +268,56 @@ pub(super) fn collect_resolved_dag_dependencies(
             .insert(key, resolve_all(frame, &references));
     }
 
+    collect_presentation_dependencies(&mut resolved, decls, frame);
+
     Ok(resolved)
+}
+
+/// The expressions of each plot, figure, and layer of `decls`.
+fn presentation_expressions(
+    decls: &crate::ir::decl_table::DeclTable<super::model::Typed>,
+) -> Vec<(ResolvedDeclName, Vec<&crate::hir::expr::Expr>)> {
+    let plots = decls.plots().map(|entry| {
+        let expressions = entry
+            .body
+            .encodings
+            .iter()
+            .map(|(_, expression)| &**expression)
+            .chain(entry.body.mark_properties.iter().map(|field| &*field.value))
+            .chain(entry.body.properties.iter().map(|field| &*field.value))
+            .collect::<Vec<_>>();
+        (entry.identity(), expressions)
+    });
+    let compositions = decls
+        .figures()
+        .map(|entry| (entry.identity(), &entry.fields))
+        .chain(
+            decls
+                .layers()
+                .map(|entry| (entry.identity(), &entry.fields)),
+        )
+        .map(|(key, fields)| (key, fields.iter().map(|field| &*field.value).collect()));
+    plots.chain(compositions).collect()
+}
+
+/// Record what each plot, figure, and layer reads and calls.
+fn collect_presentation_dependencies(
+    resolved: &mut ResolvedDagDependencies,
+    decls: &crate::ir::decl_table::DeclTable<super::model::Typed>,
+    frame: &InstanceFrame,
+) {
+    for (key, expressions) in presentation_expressions(decls) {
+        record_call_reads(resolved, &key, expressions.iter().copied());
+        let references = expressions
+            .iter()
+            .flat_map(|expression| {
+                crate::hir::expr::collect_expr_dependencies(expression).graph_refs
+            })
+            .collect::<BTreeSet<_>>();
+        resolved
+            .presentation_deps
+            .insert(key, resolve_all(frame, &references));
+    }
 }
 
 /// Record the DAG calls of `caller`'s defining expressions, if it makes any.

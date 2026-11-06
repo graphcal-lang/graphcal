@@ -71,6 +71,7 @@ pub use resolved_nominal::*;
 pub mod resolved_type;
 pub use resolved_type::*;
 pub mod scoped_node;
+pub mod unfinished_reach;
 
 impl DagTIR {
     /// Populate the values that callers may project from this DAG.
