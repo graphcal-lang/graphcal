@@ -52,6 +52,9 @@ pub enum IntConversion {
     /// complex quantity. Checking inserts this conversion, so the source has
     /// no call for it.
     Scaling,
+    /// The runtime `Int` exponent of a `Dimensionless` base in `^`. Checking
+    /// inserts this conversion, so the source has no call for it.
+    Exponent,
 }
 
 /// Moving a datetime by a duration.

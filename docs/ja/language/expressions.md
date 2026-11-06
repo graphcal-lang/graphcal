@@ -79,7 +79,7 @@ node with_offset: Complex<Length> = @displacement + to_complex(1.0 m);
 
 ### べき乗の指数 { #power-exponents }
 
-量に対するすべての指数は無次元でなければなりません。底が `Dimensionless` であれば、指数は任意の実行時 `Dimensionless` 量でかまいません。`@ratio ^ @runtime_exponent` は有効です。
+量に対するすべての指数は無次元でなければなりません。底が `Dimensionless` であれば、指数は任意の実行時 `Dimensionless` 量か `Int` でかまいません。`@ratio ^ @runtime_exponent` も `@ratio ^ @n` も有効です。`Int` の指数は、`*` や `/` の `Int` オペランドと同じく、正確な `Dimensionless` の値として扱われます。
 
 底が物理的な次元を持つ場合、その指数は代わりに正確な静的構文、すなわち整数（`2`、`-2`、`0`）または括弧で囲まれた有理数（`(3/2)` や `(-1/3)`）を使わなければなりません。結果の次元はその正確な有理数だけべき乗されます。次元付きの底に対しては小数／指数表記の構文は受け付けられません。`0.25` ではなく `(1/4)`、`2.0` ではなく `2` と書いてください（`D020`）。
 

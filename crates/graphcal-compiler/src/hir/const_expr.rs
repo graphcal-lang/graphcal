@@ -158,8 +158,9 @@ pub enum ConstRealKind<P: ConstPosition> {
         unit: ConstUnit,
         admitted: P::Quantity,
     },
-    /// An `Int` converted exactly: an explicit `to_float(n)`, or an `Int`
-    /// operand of `*` or `/` whose other operand is a quantity.
+    /// An `Int` converted exactly: an explicit `to_float(n)`, an `Int`
+    /// operand of `*` or `/` whose other operand is a quantity, or the `Int`
+    /// exponent of a `Dimensionless` base in `^`.
     FromInt {
         conversion: IntConversion,
         operand: Box<ConstInt>,
@@ -245,6 +246,12 @@ pub enum ConstExprError {
         error: ExactI64ToF64Error,
         span: Span,
     },
+    /// An `Int` exponent of `^` has no exact binary64 value.
+    #[error("Int exponent of `^`: {error}")]
+    IntExponent {
+        error: ExactI64ToF64Error,
+        span: Span,
+    },
     /// An `Int` unit scale has no exact binary64 value.
     #[error("Int unit scale: {error}")]
     IntUnitScale {
@@ -293,6 +300,7 @@ impl ConstExprError {
             | Self::IntDivision { span, .. }
             | Self::ToFloat { span, .. }
             | Self::IntScalar { span, .. }
+            | Self::IntExponent { span, .. }
             | Self::IntUnitScale { span, .. }
             | Self::Arithmetic { span, .. }
             | Self::ExactPower { span, .. }
@@ -413,6 +421,7 @@ impl<P: ConstPosition> ConstReal<P> {
                 match conversion {
                     IntConversion::ToFloat => ConstExprError::ToFloat { error, span },
                     IntConversion::Scaling => ConstExprError::IntScalar { error, span },
+                    IntConversion::Exponent => ConstExprError::IntExponent { error, span },
                 }
             }),
             ConstRealKind::Neg(operand) => Ok(operand.evaluate()?.negated()),
