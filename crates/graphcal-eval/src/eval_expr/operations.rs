@@ -354,11 +354,9 @@ pub(super) fn quantity<'t>(
             .map_err(|error| ctx.runtime_error(error, span).into()),
         QExpr::FromInt(arg) => {
             let value = operands.int(arg)?;
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "explicit Int to float conversion"
-            )]
-            super::numeric::finite_quantity(value as f64, "to_float()")
+            let value = super::numeric::exact_i64_to_f64(value)
+                .map_err(|error| ctx.runtime_error(RuntimeFailure::ToFloat(error), arg.span()))?;
+            super::numeric::finite_quantity(value, "to_float()")
                 .map_err(|error| ctx.runtime_error(error, arg.span()))
                 .map_err(Outcome::Failed)
         }
