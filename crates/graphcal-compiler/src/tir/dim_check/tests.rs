@@ -1910,6 +1910,70 @@ fn check_int_quotient_does_not_reach_quantity_scaling() {
     }
 }
 
+// --- An Int exponent on a Dimensionless base (issue #2232) ---
+
+const INT_EXPONENT_PARAMS: &str = "param x: Dimensionless = 1.5;\n\
+     param l: Length = 2.0 m;\n\
+     param n: Int = 3;\n\
+     param w: Complex<Dimensionless> = complex(1.0, 2.0);\n";
+
+#[test]
+fn check_int_exponent_on_a_dimensionless_base() {
+    for node in [
+        "node y: Dimensionless = @x ^ @n;",
+        "node y: Dimensionless = @x ^ (-@n);",
+        "node y: Dimensionless = @x ^ (@n + 1);",
+        "node y: Dimensionless = 2.0 ^ @n;",
+        "node y: Dimensionless = (@l / 1.0 m) ^ @n;",
+        "const node y: Dimensionless = 2.0 ^ (1 + 2);",
+    ] {
+        let source = format!("{INT_EXPONENT_PARAMS}{node}");
+        check(&source).unwrap_or_else(|err| panic!("{node}: {err:?}"));
+    }
+}
+
+#[test]
+fn check_int_exponent_on_a_dimensioned_base_is_rejected() {
+    let source = format!("{INT_EXPONENT_PARAMS}node y: Volume = @l ^ @n;");
+    let err = check(&source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::RuntimeExponentForDimensionedBase
+                ),
+                ..
+            })
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_int_exponent_leaves_int_and_complex_bases_unchanged() {
+    // An Int base still requires an exact non-negative exponent, so no real
+    // quotient of two Ints appears; a complex base has no `^`.
+    for node in [
+        "node y: Int = 2 ^ @n;",
+        "node y: Int = 2 ^ (-@n);",
+        "node y: Complex<Dimensionless> = @w ^ @n;",
+    ] {
+        let source = format!("{INT_EXPONENT_PARAMS}{node}");
+        let err = check(&source).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SemanticError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                    ..
+                })
+            ),
+            "{node}: {err:?}"
+        );
+    }
+}
+
 #[test]
 fn check_int_division_builtins_require_int_operands() {
     check("param a: Int = 7;\nnode q: Int = div_floor(@a, 2);").unwrap();

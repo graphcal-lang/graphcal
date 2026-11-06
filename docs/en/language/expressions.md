@@ -97,8 +97,10 @@ for component and polar operations.
 ### Power exponents
 
 Every quantity exponent must be dimensionless. If the base is
-`Dimensionless`, the exponent may be any runtime `Dimensionless` quantity:
-`@ratio ^ @runtime_exponent` is valid.
+`Dimensionless`, the exponent may be any runtime `Dimensionless` quantity or
+`Int`: `@ratio ^ @runtime_exponent` and `@ratio ^ @n` are valid. An `Int`
+exponent is read as an exact `Dimensionless` value, the same way an `Int`
+operand of `*` or `/` is.
 
 If the base has a physical dimension, its exponent must instead use exact
 static syntax: an integer (`2`, `-2`, or `0`) or a parenthesized rational

@@ -49,6 +49,8 @@ pub(super) enum RuntimeFailure {
     ToFloat(ExactI64ToF64Error),
     #[error("Int operand of `*` or `/` with a quantity: {0}")]
     IntScalar(ExactI64ToF64Error),
+    #[error("Int exponent of `^`: {0}")]
+    IntExponent(ExactI64ToF64Error),
     #[error("Int unit scale: {0}")]
     IntUnitScale(ExactI64ToF64Error),
     #[error("to_int() argument {}{}", .0, rounding_help(.0))]

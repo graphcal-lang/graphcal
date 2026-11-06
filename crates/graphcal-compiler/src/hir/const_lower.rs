@@ -262,15 +262,15 @@ impl<P: ConstPosition> Typed<P> {
         }
     }
 
-    /// The real value of this operand: an `Int` that scales a quantity is
-    /// converted explicitly.
-    fn into_real(self) -> ConstReal<P> {
+    /// The real value of this operand: an `Int` that meets a quantity is
+    /// converted explicitly, labeled with the role it plays there.
+    fn into_real(self, conversion: IntConversion) -> ConstReal<P> {
         match self {
             Self::Int(int) => {
                 let span = int.span();
                 ConstReal::new(
                     ConstRealKind::FromInt {
-                        conversion: IntConversion::Scaling,
+                        conversion,
                         operand: Box::new(int),
                     },
                     span,
@@ -567,14 +567,20 @@ impl<P: PositionErrors> Lowering<'_, '_, P> {
 
     /// The real node for an operation the shared rules typed as a quantity.
     fn real_node(op: BinOp, lhs: Typed<P>, rhs: Option<Typed<P>>) -> Option<ConstRealKind<P>> {
-        let lhs = Box::new(lhs.into_real());
+        // The rules type `^` on an `Int` base as `Int`, so only `*` and `/`
+        // reach here with an `Int` on the left.
+        let lhs = Box::new(lhs.into_real(IntConversion::Scaling));
         if let BinOp::Pow(PowerExponent::Exact(exponent)) = op {
             return Some(ConstRealKind::ExactPower {
                 base: lhs,
                 exponent,
             });
         }
-        let rhs = Box::new(rhs?.into_real());
+        let conversion = match op {
+            BinOp::Pow(_) => IntConversion::Exponent,
+            _ => IntConversion::Scaling,
+        };
+        let rhs = Box::new(rhs?.into_real(conversion));
         let op = match op {
             BinOp::Add => ArithOp::Add,
             BinOp::Sub => ArithOp::Sub,

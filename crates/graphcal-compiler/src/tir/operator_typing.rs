@@ -586,8 +586,14 @@ pub fn binop_rule(
 
             let lhs_dim = expect_quantity(lhs_type, registry, src, lhs.span)?;
 
-            // Non-exact exponent expressions must still be dimensionless.
-            if !matches!(exponent, PowerExponent::Exact(_)) {
+            // Non-exact exponent expressions must still be dimensionless. An
+            // `Int` exponent is an exact `Dimensionless` value: `x ^ n` is
+            // repeated multiplication, the same scaling by an `Int` that `*`
+            // and `/` allow. Like any runtime exponent it needs a
+            // `Dimensionless` base, since the value of `n` cannot fix the
+            // result dimension.
+            if !matches!(exponent, PowerExponent::Exact(_)) && !matches!(rhs_type, CheckedType::Int)
+            {
                 let rhs_dim = expect_quantity(rhs_type, registry, src, rhs.span)?;
                 if !rhs_dim.is_dimensionless() {
                     return Err(SemanticError::located(

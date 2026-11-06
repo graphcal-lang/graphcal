@@ -358,6 +358,7 @@ pub(super) fn quantity<'t>(
                 let failure = match conversion {
                     IntConversion::ToFloat => RuntimeFailure::ToFloat(error),
                     IntConversion::Scaling => RuntimeFailure::IntScalar(error),
+                    IntConversion::Exponent => RuntimeFailure::IntExponent(error),
                 };
                 ctx.runtime_error(failure, arg.span())
             })?;

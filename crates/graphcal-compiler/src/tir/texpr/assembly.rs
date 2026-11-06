@@ -583,14 +583,15 @@ impl BinaryOperation {
     }
 }
 
-/// `lhs op rhs` with the `Int` operand of a mixed `*` or `/` converted.
+/// `lhs op rhs` with an `Int` operand that meets a quantity converted.
 ///
-/// Checking lets an `Int` scale a real or complex quantity in `*` and `/`
-/// as an exact `Dimensionless` value. The conversion becomes an explicit
+/// Checking lets an `Int` scale a real or complex quantity in `*` and `/`,
+/// and be the runtime exponent of a `Dimensionless` base in `^`, as an exact
+/// `Dimensionless` value. The conversion becomes an explicit
 /// [`QExpr::FromInt`] node over the `Int` operand, so the operation selected
 /// afterwards is ordinary quantity arithmetic and evaluation fails on an
 /// `Int` binary64 cannot represent. Every other operand pair is unchanged.
-fn convert_int_scalar(
+fn convert_int_operand(
     op: BinOp,
     lhs: Box<TExpr<Symbolic>>,
     rhs: Box<TExpr<Symbolic>>,
@@ -598,26 +599,30 @@ fn convert_int_scalar(
     let scaled = |ty: &CheckedType<Symbolic>| {
         matches!(ty, CheckedType::Quantity(_) | CheckedType::Complex(_))
     };
-    if !matches!(op, BinOp::Mul | BinOp::Div) {
-        return (lhs, rhs);
-    }
-    match (lhs.ty(), rhs.ty()) {
-        (CheckedType::Int, other) if scaled(other) => (int_scalar(lhs), rhs),
-        (other, CheckedType::Int) if scaled(other) => (lhs, int_scalar(rhs)),
+    match (op, lhs.ty(), rhs.ty()) {
+        (BinOp::Mul | BinOp::Div, CheckedType::Int, other) if scaled(other) => {
+            (int_to_quantity(IntConversion::Scaling, lhs), rhs)
+        }
+        (BinOp::Mul | BinOp::Div, other, CheckedType::Int) if scaled(other) => {
+            (lhs, int_to_quantity(IntConversion::Scaling, rhs))
+        }
+        (BinOp::Pow(PowerExponent::Runtime), CheckedType::Quantity(_), CheckedType::Int) => {
+            (lhs, int_to_quantity(IntConversion::Exponent, rhs))
+        }
         _ => (lhs, rhs),
     }
 }
 
-/// The exact `Dimensionless` value of an `Int` operand that scales a
+/// The exact `Dimensionless` value of an `Int` operand that meets a
 /// quantity. The conversion checks the same occurrence as its operand, so it
 /// shares the operand's identity and span.
-fn int_scalar(int: Box<TExpr<Symbolic>>) -> Box<TExpr<Symbolic>> {
+fn int_to_quantity(conversion: IntConversion, int: Box<TExpr<Symbolic>>) -> Box<TExpr<Symbolic>> {
     Box::new(TExpr::new(
         int.id().clone(),
         int.span(),
         CheckedType::Quantity(crate::dimension::Dimension::dimensionless()),
         TExprKind::Quantity(QExpr::FromInt {
-            conversion: IntConversion::Scaling,
+            conversion,
             arg: int,
         }),
     ))
@@ -629,7 +634,7 @@ fn binary(
     lhs: Box<TExpr<Symbolic>>,
     rhs: Box<TExpr<Symbolic>>,
 ) -> Option<TExprKind<Symbolic>> {
-    let (lhs, rhs) = convert_int_scalar(op, lhs, rhs);
+    let (lhs, rhs) = convert_int_operand(op, lhs, rhs);
     Some(match BinaryOperation::select(op, lhs.ty(), rhs.ty())? {
         BinaryOperation::And => TExprKind::Bool(BExpr::And { lhs, rhs }),
         BinaryOperation::Or => TExprKind::Bool(BExpr::Or { lhs, rhs }),
@@ -1171,6 +1176,36 @@ mod tests {
                 op: IntArithOp::Mul,
                 ..
             }))
+        ));
+    }
+
+    #[test]
+    fn int_exponent_becomes_an_explicit_conversion() {
+        use CheckedType as T;
+        match binary(
+            BinOp::Pow(PowerExponent::Runtime),
+            arg(quantity()),
+            arg(T::Int),
+        ) {
+            Some(TExprKind::Quantity(QExpr::Power { base, exponent })) => {
+                assert_eq!(*base.ty(), quantity());
+                assert!(
+                    matches!(
+                        exponent.kind(),
+                        TExprKind::Quantity(QExpr::FromInt {
+                            conversion: IntConversion::Exponent,
+                            arg,
+                        }) if *arg.ty() == T::Int
+                    ) && *exponent.ty() == quantity(),
+                    "{exponent:?}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // An Int base keeps integer powers; nothing is converted.
+        assert!(matches!(
+            binary(BinOp::Pow(PowerExponent::Runtime), arg(T::Int), arg(T::Int)),
+            Some(TExprKind::Int(IExpr::Power { .. }))
         ));
     }
 

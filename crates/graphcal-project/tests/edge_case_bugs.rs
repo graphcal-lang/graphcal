@@ -929,6 +929,76 @@ fn int_unit_scales_reject_an_integer_binary64_cannot_represent() {
 }
 
 // ============================================================================
+// An Int exponent on a Dimensionless base (#2232)
+//
+// The exponent is converted exactly, so the result is bit-identical to the
+// explicit `to_float` form, and an Int binary64 cannot represent fails.
+// ============================================================================
+
+#[test]
+fn int_exponent_matches_the_explicit_to_float_form() {
+    let source = "\
+param x: Dimensionless = 1.1;
+param n: Int = 7;
+param m: Int = -3;
+node pos: Dimensionless = @x ^ @n;
+node pos_explicit: Dimensionless = @x ^ to_float(@n);
+node neg: Dimensionless = @x ^ @m;
+node neg_explicit: Dimensionless = @x ^ to_float(@m);
+node odd_negative_base: Dimensionless = (-2.0) ^ @n;
+const node constant: Dimensionless = 2.0 ^ (5 + 5);
+";
+    let result = compile_and_eval(source).unwrap();
+    let bits = |name: &str| find_value(&result, name).to_bits();
+    assert_eq!(bits("pos"), bits("pos_explicit"));
+    assert_eq!(bits("neg"), bits("neg_explicit"));
+    assert_eq!(bits("odd_negative_base"), (-128.0_f64).to_bits());
+    assert_eq!(bits("constant"), 1024.0_f64.to_bits());
+}
+
+#[test]
+fn int_exponent_rejects_an_integer_binary64_cannot_represent() {
+    let val = (1i64 << 53) + 1;
+    let source = format!(
+        "param x: Dimensionless = 1.0;\nparam n: Int = {val};\nnode y: Dimensionless = @x ^ @n;"
+    );
+    let result = compile_and_eval(&source).unwrap();
+    let message = get_node_error_message(&result, "y").expect("Int exponent should fail");
+    assert!(
+        message.contains("Int exponent of `^`")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn int_exponent_rejects_an_inexact_integer_in_a_const_node() {
+    // A literal exponent is exact syntax, so the `Int` reaches `^` through a
+    // constant reference.
+    let source = "const node n: Int = 9007199254740993;\nconst node y: Dimensionless = 1.0 ^ @n;";
+    let error = compile_and_eval(source).expect_err(
+        "a const node is evaluated at compile time, so the conversion should fail there",
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("Int exponent of `^`")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn int_exponent_of_zero_to_a_negative_power_fails() {
+    let source = "param n: Int = -1;\nnode y: Dimensionless = 0.0 ^ @n;";
+    let result = compile_and_eval(source).unwrap();
+    let message = get_node_error_message(&result, "y").expect("0 ^ -1 should fail");
+    assert!(
+        message.contains("infinite"),
+        "unexpected message: {message}"
+    );
+}
+
+// ============================================================================
 // BUG 9: Aggregation functions on non-finite collections/results
 //
 // Aggregation functions (sum, min, max, mean) should reject non-finite
