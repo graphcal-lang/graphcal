@@ -935,6 +935,8 @@ fn int_unit_scales_reject_an_integer_binary64_cannot_represent() {
 // explicit `to_float` form, and an Int binary64 cannot represent fails.
 // ============================================================================
 
+/// `x ^ n` is bit-identical to `x ^ to_float(n)`, including negative
+/// exponents, an odd power of a negative base, and constant nodes.
 #[test]
 fn int_exponent_matches_the_explicit_to_float_form() {
     let source = "\
@@ -956,6 +958,7 @@ const node constant: Dimensionless = 2.0 ^ (5 + 5);
     assert_eq!(bits("constant"), 1024.0_f64.to_bits());
 }
 
+/// A runtime `Int` exponent binary64 cannot represent fails at evaluation.
 #[test]
 fn int_exponent_rejects_an_integer_binary64_cannot_represent() {
     let val = (1i64 << 53) + 1;
@@ -971,6 +974,7 @@ fn int_exponent_rejects_an_integer_binary64_cannot_represent() {
     );
 }
 
+/// An inexact `Int` exponent in a constant node fails at compile time.
 #[test]
 fn int_exponent_rejects_an_inexact_integer_in_a_const_node() {
     // A literal exponent is exact syntax, so the `Int` reaches `^` through a
@@ -987,6 +991,7 @@ fn int_exponent_rejects_an_inexact_integer_in_a_const_node() {
     );
 }
 
+/// Zero to a negative `Int` power reports the existing infinite-result error.
 #[test]
 fn int_exponent_of_zero_to_a_negative_power_fails() {
     let source = "param n: Int = -1;\nnode y: Dimensionless = 0.0 ^ @n;";

@@ -1179,6 +1179,8 @@ mod tests {
         ));
     }
 
+    /// The `Int` exponent of a quantity power becomes an explicit
+    /// [`IntConversion::Exponent`] node; an `Int` base converts nothing.
     #[test]
     fn int_exponent_becomes_an_explicit_conversion() {
         use CheckedType as T;

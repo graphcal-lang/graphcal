@@ -293,6 +293,7 @@ impl<'t> ArgumentReader<ScopedNode<'t>> for Operands<'_, 't> {
     }
 }
 
+/// Evaluate an operation whose result is a real quantity.
 pub(super) fn quantity<'t>(
     operation: &QExpr<ScopedNode<'t>>,
     span: Span,

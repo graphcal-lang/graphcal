@@ -1917,6 +1917,8 @@ const INT_EXPONENT_PARAMS: &str = "param x: Dimensionless = 1.5;\n\
      param n: Int = 3;\n\
      param w: Complex<Dimensionless> = complex(1.0, 2.0);\n";
 
+/// A runtime `Int` exponent is accepted on a `Dimensionless` base, in nodes
+/// and constant nodes alike.
 #[test]
 fn check_int_exponent_on_a_dimensionless_base() {
     for node in [
@@ -1932,6 +1934,8 @@ fn check_int_exponent_on_a_dimensionless_base() {
     }
 }
 
+/// A dimensioned base keeps D005: the value of an `Int` exponent cannot fix
+/// the result dimension.
 #[test]
 fn check_int_exponent_on_a_dimensioned_base_is_rejected() {
     let source = format!("{INT_EXPONENT_PARAMS}node y: Volume = @l ^ @n;");
@@ -1950,10 +1954,10 @@ fn check_int_exponent_on_a_dimensioned_base_is_rejected() {
     );
 }
 
+/// An `Int` base still requires an exact non-negative exponent, so no real
+/// quotient of two `Int`s appears, and a complex base still has no `^`.
 #[test]
 fn check_int_exponent_leaves_int_and_complex_bases_unchanged() {
-    // An Int base still requires an exact non-negative exponent, so no real
-    // quotient of two Ints appears; a complex base has no `^`.
     for node in [
         "node y: Int = 2 ^ @n;",
         "node y: Int = 2 ^ (-@n);",
