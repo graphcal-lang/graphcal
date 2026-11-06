@@ -884,7 +884,7 @@ fn prepared_imports_and_instance_constant_pools_borrow_canonical_values() {
             }
         }
         for import in callable.constant_imports() {
-            let value = import.value.value();
+            let value = import.value.value().unwrap();
             assert!(plan.tir().dag_registry().keys().any(|dag_id| {
                 plan.program()
                     .dag(dag_id)

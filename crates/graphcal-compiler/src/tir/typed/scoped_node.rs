@@ -414,6 +414,24 @@ impl<'t> Scoped<'t, TExpr> {
         });
     }
 
+    /// Every declaration this tree references, through `@name` or as a
+    /// constant, including unselected branches, resolved in its own scope.
+    #[must_use]
+    pub fn referenced_declarations(self) -> BTreeSet<ResolvedDeclName> {
+        let mut references = BTreeSet::new();
+        self.visit(&mut |node| match node.kind() {
+            NodeKind::GraphRef(Spanned { value, .. })
+            | NodeKind::Const(Spanned {
+                value: ConstRef::Decl(value),
+                ..
+            }) => {
+                references.insert(value);
+            }
+            _ => {}
+        });
+        references
+    }
+
     /// Every declaration this tree references through `@name`, including
     /// unselected branches, resolved in its own scope, in handle order.
     #[must_use]

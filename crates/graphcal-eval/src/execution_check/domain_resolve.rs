@@ -18,7 +18,7 @@ use graphcal_compiler::tir::typed::{
     CheckedDag, CheckedTir, DeclarationBody, ResolvedValueType, Scoped, StructFieldConstraintKey,
 };
 
-use crate::constant_pools::RuntimeValueMap;
+use crate::constant_pools::{ConstPool, RuntimeValueMap};
 use crate::deferred_field_checks::DeferredFieldChecks;
 use crate::domain_constraint::{
     DomainInstant, ResolvedDomainBound as EvaluatedDomainBound,
@@ -41,6 +41,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
     dag: &CheckedDag,
     const_values: &RuntimeValueMap,
     all_const_values: &RuntimeValueMap,
+    consts: &ConstPool,
     ctx: &EvalSession<'_>,
 ) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, Outcome<SemanticError>> {
     let (tir, src, cancellation) = (ctx.tir, ctx.src, &ctx.cancellation);
@@ -94,6 +95,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
             BoundCheckingContext {
                 evaluation: &ctx.for_decl(&resolved_key).with_src(constraint_src),
                 bindings: &HashMap::new(),
+                consts,
             },
             constraint_src,
         )?;
@@ -121,6 +123,8 @@ pub(super) fn resolve_domain_constraints_for_dag(
 struct BoundCheckingContext<'a, 'b> {
     evaluation: &'a EvalSession<'b>,
     bindings: &'a HashMap<graphcal_compiler::hir::types::GenericParamId, u64>,
+    /// The constants, to reject a bound that reads an unfinished one.
+    consts: &'a ConstPool,
 }
 
 /// Evaluate a declaration's or field's stored HIR domain bounds into the
@@ -222,6 +226,23 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             let tree = graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
                 ctx.evaluation.tir, scoped_bound, ctx.bindings,
             )?;
+            if let Some(constant) = tree
+                .root()
+                .referenced_declarations()
+                .into_iter()
+                .find(|declaration| ctx.consts.unfinished(declaration).is_some())
+            {
+                return Err(SemanticError::located(
+                    bound.src,
+                    bound.value.span,
+                    DomainError::DomainBoundReadsUnfinishedConstant {
+                        name: display_name.clone(),
+                        bound_name: bound.kind,
+                        constant: constant.leaf().clone(),
+                    },
+                )
+                .into());
+            }
             let runtime_value = eval_root(&tree, values, ctx.evaluation)?;
             let (value, display) = read(&runtime_value, bound)?.ok_or_else(|| {
                 SemanticError::internal_error(
@@ -424,14 +445,16 @@ impl<'a> ConstScopes<'a> {
     }
 }
 
-struct FieldConstraintResolutionContext<'a> {
-    tir: &'a CheckedTir,
-    const_scopes: &'a ConstScopes<'a>,
-    all_const_values: &'a RuntimeValueMap,
-    fallback_src: SourceId,
-    field_checks: &'a Rc<DeferredFieldChecks>,
-    sources: &'a SourceRegistry,
-    cancellation: &'a graphcal_compiler::cancellation::CancellationToken,
+/// What resolving the field constraints of a checked TIR reads.
+pub(super) struct FieldConstraintResolutionContext<'a> {
+    pub(super) tir: &'a CheckedTir,
+    pub(super) const_scopes: &'a ConstScopes<'a>,
+    pub(super) all_const_values: &'a RuntimeValueMap,
+    pub(super) consts: &'a ConstPool,
+    pub(super) fallback_src: SourceId,
+    pub(super) field_checks: &'a Rc<DeferredFieldChecks>,
+    pub(super) sources: &'a SourceRegistry,
+    pub(super) cancellation: &'a graphcal_compiler::cancellation::CancellationToken,
 }
 
 type DagFieldConstraints = HashMap<
@@ -515,6 +538,7 @@ fn resolve_application_field_constraints(
             BoundCheckingContext {
                 evaluation: &application_ctx.with_src(*constraint_src),
                 bindings: &nat_bindings,
+                consts: ctx.consts,
             },
             *constraint_src,
         )?;
@@ -564,27 +588,13 @@ fn collect_field_constraint_applications(
 }
 
 pub(super) fn resolve_struct_field_constraints_for_dags(
-    tir: &CheckedTir,
-    const_scopes: &ConstScopes<'_>,
-    all_const_values: &RuntimeValueMap,
-    src: SourceId,
-    sources: &SourceRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    field_checks: &Rc<DeferredFieldChecks>,
+    context: &FieldConstraintResolutionContext<'_>,
 ) -> Result<DagFieldConstraints, Outcome<SemanticError>> {
-    cancellation.checkpoint()?;
-    let context = FieldConstraintResolutionContext {
-        tir,
-        const_scopes,
-        all_const_values,
-        fallback_src: src,
-        field_checks,
-        sources,
-        cancellation,
-    };
+    context.cancellation.checkpoint()?;
+    let (tir, src) = (context.tir, context.fallback_src);
     let mut grouped = DagFieldConstraints::new();
     for application in collect_field_constraint_applications(tir, src)? {
-        let (owner, entries) = resolve_application_field_constraints(&application, &context)?;
+        let (owner, entries) = resolve_application_field_constraints(&application, context)?;
         grouped.entry(owner).or_default().extend(entries);
     }
     Ok(grouped)
@@ -609,18 +619,20 @@ fn resolve_struct_field_constraints_with_cancellation(
     });
     let all_const_values = visible_values_with_imports(const_values, &empty);
     let field_checks = Rc::new(DeferredFieldChecks::default());
-    let constraints = resolve_struct_field_constraints_for_dags(
-        tir,
-        &const_scopes,
-        &all_const_values,
-        src,
-        sources,
-        cancellation,
-        &field_checks,
-    )?
-    .into_values()
-    .flatten()
-    .collect();
+    let constraints =
+        resolve_struct_field_constraints_for_dags(&FieldConstraintResolutionContext {
+            tir,
+            const_scopes: &const_scopes,
+            all_const_values: &all_const_values,
+            consts: &ConstPool::default(),
+            fallback_src: src,
+            field_checks: &field_checks,
+            sources,
+            cancellation,
+        })?
+        .into_values()
+        .flatten()
+        .collect();
     check_deferred_field_constraints(&field_checks, &constraints, cancellation)?;
     Ok(constraints)
 }

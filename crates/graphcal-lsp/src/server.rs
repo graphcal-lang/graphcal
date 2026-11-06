@@ -2584,6 +2584,37 @@ mod tests {
     }
 
     #[test]
+    fn unfinished_constants_are_marked_and_their_readers_shown_blocked() {
+        let uri = untitled_uri();
+        let analysis = run_analysis(
+            &uri,
+            "const node missing: Length = todo<Length> {}; const node doubled: Length = 2.0 * @missing; node blocked: Length = @doubled;",
+            &[],
+            test_plugin_host(),
+        );
+        let diagnostics = &analysis.diagnostics[&uri];
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(
+            diagnostics[0].severity,
+            Some(tower_lsp::lsp_types::DiagnosticSeverity::INFORMATION)
+        );
+        assert!(diagnostics[0].message.starts_with("missing: TODO"));
+        let values = analysis.eval_values.values().collect::<Vec<_>>();
+        assert!(
+            values.iter().any(|value| value.contains("TODO")),
+            "{values:?}"
+        );
+        assert_eq!(
+            values
+                .iter()
+                .filter(|value| value.contains("BLOCKED"))
+                .count(),
+            2,
+            "{values:?}"
+        );
+    }
+
+    #[test]
     fn library_file_with_required_index_has_no_diagnostics() {
         let text = "\
 pub(bind) dim Speed = Length / Time;

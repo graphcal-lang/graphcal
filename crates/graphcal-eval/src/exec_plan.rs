@@ -9,7 +9,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::tir::schedule::ScheduleUnit;
-use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, NodeBody};
+use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, FormulaBody};
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
@@ -130,10 +130,10 @@ fn prepare_declarations<'p>(
         for unit in tir.declaration_bodies(position) {
             let key = unit.identity();
             let body = match unit.kind() {
-                BodyKind::Node(NodeBody::Unfinished(_)) => {
+                BodyKind::Node(FormulaBody::Unfinished(_)) => {
                     PlannedBody::Computed(ComputedBody::Todo)
                 }
-                BodyKind::Node(NodeBody::Formula(root))
+                BodyKind::Node(FormulaBody::Formula(root))
                 | BodyKind::Param {
                     default: Some(root),
                 } => PlannedBody::Computed(ComputedBody::Expression {

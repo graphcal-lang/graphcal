@@ -186,8 +186,9 @@ impl<'a> HirRefCollector<'a> {
         self.collect_lowered(expr, table, BodyHoles::Rejected);
     }
 
-    /// Collect a node formula, which may contain `todo<T> { … }` holes.
-    fn collect_node_body(
+    /// Collect a constant or node formula, which may contain `todo<T> { … }`
+    /// holes.
+    fn collect_formula_body(
         &mut self,
         expr: &graphcal_compiler::desugar::desugared_ast::Expr,
         table: &mut SymbolTable,
@@ -1655,7 +1656,7 @@ fn collect_node_decl(
     for hole in graphcal_compiler::syntax::visitor::collect_todo_holes(&n.value) {
         collect_type_expr_refs(&hole.value.ty, table, refs);
     }
-    refs.collect_node_body(&n.value, table);
+    refs.collect_formula_body(&n.value, table);
 }
 
 fn collect_const_node_decl(
@@ -1676,7 +1677,10 @@ fn collect_const_node_decl(
         );
     }
     collect_type_expr_refs(&c.type_ann, table, refs);
-    refs.collect_body(&c.value, table);
+    for hole in graphcal_compiler::syntax::visitor::collect_todo_holes(&c.value) {
+        collect_type_expr_refs(&hole.value.ty, table, refs);
+    }
+    refs.collect_formula_body(&c.value, table);
 }
 
 fn collect_base_dim_decl(
@@ -2216,7 +2220,8 @@ fn collect_selected_names(
 type GenericParamSymbolScope = HashMap<GenericParamName, SymbolKey>;
 
 /// Collect references from a type expression outside a generic declaration.
-/// Whether a lowered body may contain `todo<T> { … }` holes (node formulas).
+/// Whether a lowered body may contain `todo<T> { … }` holes (constant and
+/// node formulas).
 #[derive(Debug, Clone, Copy)]
 enum BodyHoles {
     Rejected,

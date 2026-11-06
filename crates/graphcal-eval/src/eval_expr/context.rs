@@ -298,15 +298,16 @@ impl<'a> EvalSession<'a> {
     > {
         let roots = roots.into_iter().collect::<Vec<_>>();
         self.unavailable_among(
-            || roots.iter().flat_map(|root| root.graph_refs()).collect(),
+            || roots.iter().flat_map(|root| root.reads()).collect(),
             roots.iter().map(|root| root.get()),
         )
     }
 
-    /// Availability of `graph_refs` and of the call outputs of `expressions`.
+    /// Availability of the declarations `reads` and of the call outputs of
+    /// `expressions`.
     fn unavailable_among<E: ExpressionDependencies>(
         &self,
-        graph_refs: impl FnOnce() -> Vec<ResolvedDeclName>,
+        reads: impl FnOnce() -> Vec<ResolvedDeclName>,
         expressions: impl IntoIterator<Item = E>,
     ) -> Result<
         Option<graphcal_compiler::node_unavailable::RuntimeUnavailable>,
@@ -321,7 +322,7 @@ impl<'a> EvalSession<'a> {
         {
             return Ok(None);
         }
-        let mut dependencies = graph_refs()
+        let mut dependencies = reads()
             .into_iter()
             .filter_map(|key| {
                 self.unavailable
@@ -449,14 +450,17 @@ impl EvalSession<'_> {
         crate::pipeline_metrics::record(
             crate::pipeline_metrics::Event::DependencyAvailabilityCheck,
         );
-        self.unavailable_among(|| expression.graph_refs(), std::iter::once(expression))?
-            .map_or(Ok(()), |reason| {
-                Err(SemanticError::located(
-                    self.src,
-                    expression.span(),
-                    EvaluationError::Unavailable { reason },
-                )
-                .into())
-            })
+        self.unavailable_among(
+            || expression.referenced_declarations().into_iter().collect(),
+            std::iter::once(expression),
+        )?
+        .map_or(Ok(()), |reason| {
+            Err(SemanticError::located(
+                self.src,
+                expression.span(),
+                EvaluationError::Unavailable { reason },
+            )
+            .into())
+        })
     }
 }

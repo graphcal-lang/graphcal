@@ -42,11 +42,10 @@ pub fn dynamic_unit_scale_reads(
                 .dynamic_unit_scales
                 .iter()
                 .map(move |(name, entry)| {
-                    let reads = crate::hir::expr::collect_expr_dependencies(&entry.expr)
-                        .graph_refs
-                        .iter()
-                        .map(|reference| frame.resolve(reference))
-                        .collect::<BTreeSet<_>>();
+                    let reads = resolve_reads(
+                        frame,
+                        &crate::hir::expr::collect_expr_dependencies(&entry.expr),
+                    );
                     (
                         name.clone(),
                         (reads, collect_unit_names(frame, &entry.expr)),
@@ -169,6 +168,21 @@ fn collect_unit_names_from_hir(
     });
 }
 
+/// Every declaration an expression with dependencies `dependencies` reads,
+/// through `@name` or as a constant, as `frame` names it.
+fn resolve_reads(
+    frame: &InstanceFrame,
+    dependencies: &crate::hir::expr::ExprDependencies,
+) -> BTreeSet<ResolvedDeclName> {
+    resolve_all(
+        frame,
+        dependencies
+            .graph_refs
+            .iter()
+            .chain(&dependencies.const_refs),
+    )
+}
+
 /// The declarations `references` name in `frame`.
 fn resolve_all<'a>(
     frame: &InstanceFrame,
@@ -240,15 +254,15 @@ pub(super) fn collect_resolved_dag_dependencies(
         );
         resolved
             .runtime_deps
-            .insert(key, resolve_all(frame, &deps.graph_refs));
+            .insert(key, resolve_reads(frame, &deps));
     }
 
     for entry in decls.nodes() {
         let key = entry.identity();
         record_call_reads(&mut resolved, &key, std::iter::once(&*entry.definition));
-        let dependencies = resolve_all(
+        let dependencies = resolve_reads(
             frame,
-            &crate::hir::expr::collect_expr_dependencies(&entry.definition).graph_refs,
+            &crate::hir::expr::collect_expr_dependencies(&entry.definition),
         );
         resolved.runtime_deps.insert(key, dependencies);
     }
@@ -260,12 +274,13 @@ pub(super) fn collect_resolved_dag_dependencies(
             .body
             .expressions()
             .flat_map(|expression| {
-                crate::hir::expr::collect_expr_dependencies(expression).graph_refs
+                resolve_reads(
+                    frame,
+                    &crate::hir::expr::collect_expr_dependencies(expression),
+                )
             })
-            .collect::<BTreeSet<_>>();
-        resolved
-            .assert_deps
-            .insert(key, resolve_all(frame, &references));
+            .collect();
+        resolved.assert_deps.insert(key, references);
     }
 
     collect_presentation_dependencies(&mut resolved, decls, frame);
@@ -311,12 +326,13 @@ fn collect_presentation_dependencies(
         let references = expressions
             .iter()
             .flat_map(|expression| {
-                crate::hir::expr::collect_expr_dependencies(expression).graph_refs
+                resolve_reads(
+                    frame,
+                    &crate::hir::expr::collect_expr_dependencies(expression),
+                )
             })
-            .collect::<BTreeSet<_>>();
-        resolved
-            .presentation_deps
-            .insert(key, resolve_all(frame, &references));
+            .collect();
+        resolved.presentation_deps.insert(key, references);
     }
 }
 

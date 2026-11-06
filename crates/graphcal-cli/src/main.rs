@@ -130,7 +130,7 @@ enum Commands {
     },
     /// Check .gcl files for type/dimension errors without evaluation
     Check {
-        /// Reject unfinished node definitions without evaluating runtime values
+        /// Reject unfinished constant and node definitions without evaluating runtime values
         #[arg(long)]
         deny_todo: bool,
         /// Files or directories to check (default: current directory)

@@ -166,8 +166,13 @@ impl Analysis<'_> {
                     origins.extend(self.declaration(&output, &parameters)?);
                 }
             }
-            // Required ports have no default; constants cannot contain TODOs.
-            PlannedBody::Supplied => {}
+            // Required ports have no default; a constant is unavailable only
+            // when it is unfinished.
+            PlannedBody::Supplied => {
+                if let Some(unfinished) = plan.program().facts().consts().unfinished(name) {
+                    origins.extend(unfinished.origins(name).iter().cloned());
+                }
+            }
         }
         self.active.remove(&query);
         self.memo.insert(query, origins.clone());

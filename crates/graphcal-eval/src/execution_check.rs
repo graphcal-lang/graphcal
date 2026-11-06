@@ -24,7 +24,7 @@ mod const_eval;
 mod domain_resolve;
 
 use domain_resolve::{
-    ConstScopes, DagConstScope, check_deferred_field_constraints,
+    ConstScopes, DagConstScope, FieldConstraintResolutionContext, check_deferred_field_constraints,
     resolve_domain_constraints_for_dag, resolve_struct_field_constraints_for_dags,
 };
 
@@ -92,6 +92,7 @@ pub fn seal_checked_program(
                 dag,
                 evaluated.pool_at(position),
                 &all_const_values,
+                consts,
                 &session,
             )
             .map(|constraints| (dag.dag_id().clone(), constraints))
@@ -105,18 +106,20 @@ pub fn seal_checked_program(
         source: evaluated.inherited().source(dag.dag_id()).unwrap_or(src),
     });
     cancellation.checkpoint()?;
-    let struct_field_constraints = resolve_struct_field_constraints_for_dags(
-        tir,
-        &const_scopes,
-        &all_const_values,
-        src,
-        sources,
-        cancellation,
-        &field_checks,
-    )?
-    .into_values()
-    .flatten()
-    .collect::<HashMap<_, _>>();
+    let struct_field_constraints =
+        resolve_struct_field_constraints_for_dags(&FieldConstraintResolutionContext {
+            tir,
+            const_scopes: &const_scopes,
+            all_const_values: &all_const_values,
+            consts,
+            fallback_src: src,
+            field_checks: &field_checks,
+            sources,
+            cancellation,
+        })?
+        .into_values()
+        .flatten()
+        .collect::<HashMap<_, _>>();
     let mut all_field_constraints = evaluated.inherited().struct_field_constraints().clone();
     all_field_constraints.extend(
         struct_field_constraints

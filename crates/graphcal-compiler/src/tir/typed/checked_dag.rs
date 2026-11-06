@@ -221,8 +221,8 @@ impl CheckedDag {
         self.body.value_declaration_identities()
     }
 
-    /// Whether a declaration is an unfinished node: its formula contains a
-    /// `todo<T> { … }` hole.
+    /// Whether a declaration is an unfinished constant or node: its formula
+    /// contains a `todo<T> { … }` hole.
     #[must_use]
     pub fn is_unfinished(&self, key: &ResolvedDeclName) -> bool {
         self.body.is_unfinished(key)

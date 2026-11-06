@@ -167,7 +167,7 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             ModuleError::InvalidTypeLevelBindingValue { name: name.clone() },
         ),
         ExprLowerError::TodoHoleNotAllowed { span } => {
-            SemanticError::located(src, *span, GraphError::TodoHoleOutsideNode)
+            SemanticError::located(src, *span, GraphError::TodoHoleOutsideFormula)
         }
         ExprLowerError::TodoHoleDomainConstraint { span } => {
             SemanticError::located(src, *span, DomainError::TodoHoleDomainConstraint)

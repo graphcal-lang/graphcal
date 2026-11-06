@@ -1036,7 +1036,12 @@ impl<'p> ExecPlan<'p> {
         );
         let has_unfinished_definitions = declarations.values().any(|declaration| {
             matches!(declaration.body, PlannedBody::Computed(ComputedBody::Todo))
-        });
+        }) || program
+            .facts()
+            .consts()
+            .unfinished_constants()
+            .next()
+            .is_some();
         Ok(Self {
             program,
             has_unfinished_definitions,

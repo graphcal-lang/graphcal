@@ -71,6 +71,21 @@ impl<'t> Scoped<'t, Expr> {
         }
     }
 
+    /// Every declaration this root reads, through `@name` or as a constant,
+    /// including unselected branches, resolved in its own scope.
+    #[must_use]
+    pub fn reads(self) -> Vec<ResolvedDeclName> {
+        let dependencies = crate::hir::expr::collect_expr_dependencies(self.get());
+        dependencies
+            .graph_refs
+            .iter()
+            .chain(&dependencies.const_refs)
+            .map(|handle| self.scope().resolve(handle))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect()
+    }
+
     /// Every declaration this root references through `@name`, including
     /// unselected branches, resolved in its own scope, in handle order.
     #[must_use]
@@ -167,12 +182,12 @@ pub struct DeclarationBody<'t> {
 /// scope of its owner.
 #[derive(Debug, Clone, Copy)]
 pub enum BodyKind<'t> {
-    /// A constant and its expression.
-    Const(Scoped<'t, Expr>),
+    /// A constant and its formula.
+    Const(FormulaBody<'t>),
     /// A parameter and its default, when it has one.
     Param { default: Option<Scoped<'t, Expr>> },
-    /// A node.
-    Node(NodeBody<'t>),
+    /// A node and its formula.
+    Node(FormulaBody<'t>),
     /// An assertion.
     Assert(Scoped<'t, TypedAssertEntry>),
     /// A plot.
@@ -183,14 +198,25 @@ pub enum BodyKind<'t> {
     Layer(Scoped<'t, TypedLayerEntry>),
 }
 
-/// The body of a node.
+/// The formula of a constant or a node.
 #[derive(Debug, Clone, Copy)]
-pub enum NodeBody<'t> {
+pub enum FormulaBody<'t> {
     /// Its formula.
     Formula(Scoped<'t, Expr>),
     /// An unfinished formula: it contains a `todo<T> { … }` hole, so the
-    /// node is TODO and its formula is never evaluated.
+    /// declaration is TODO and its formula is never evaluated.
     Unfinished(Scoped<'t, Expr>),
+}
+
+impl<'t> FormulaBody<'t> {
+    /// Classify `formula` by whether it contains a hole.
+    fn of(formula: Scoped<'t, Expr>) -> Self {
+        if crate::hir::expr::contains_todo_hole(formula.get()) {
+            Self::Unfinished(formula)
+        } else {
+            Self::Formula(formula)
+        }
+    }
 }
 
 impl<'t> DeclarationBody<'t> {
@@ -223,7 +249,9 @@ impl<'t> DeclarationBody<'t> {
     pub fn kind(self) -> BodyKind<'t> {
         let scope = self.scope;
         match self.declaration {
-            Decl::Const(entry) => BodyKind::Const(Scoped::new(scope, &*entry.expr)),
+            Decl::Const(entry) => {
+                BodyKind::Const(FormulaBody::of(Scoped::new(scope, &*entry.expr)))
+            }
             Decl::Param(entry) => BodyKind::Param {
                 default: entry
                     .default
@@ -231,12 +259,7 @@ impl<'t> DeclarationBody<'t> {
                     .map(|expr| Scoped::new(scope, expr)),
             },
             Decl::Node(entry) => {
-                let formula = Scoped::new(scope, &*entry.definition);
-                BodyKind::Node(if crate::hir::expr::contains_todo_hole(&entry.definition) {
-                    NodeBody::Unfinished(formula)
-                } else {
-                    NodeBody::Formula(formula)
-                })
+                BodyKind::Node(FormulaBody::of(Scoped::new(scope, &*entry.definition)))
             }
             Decl::Assert(entry) => BodyKind::Assert(Scoped::new(scope, entry)),
             Decl::Plot(entry) => BodyKind::Plot(Scoped::new(scope, entry)),
@@ -251,7 +274,7 @@ impl<'t> DeclarationBody<'t> {
     pub fn runtime_expression(self) -> Option<Scoped<'t, Expr>> {
         match self.kind() {
             BodyKind::Param { default } => default,
-            BodyKind::Node(NodeBody::Formula(formula) | NodeBody::Unfinished(formula)) => {
+            BodyKind::Node(FormulaBody::Formula(formula) | FormulaBody::Unfinished(formula)) => {
                 Some(formula)
             }
             BodyKind::Const(_)

@@ -132,7 +132,7 @@ fn package_with_unused_imported_todos() -> tempfile::TempDir {
         ),
         (
             "main.gcl",
-            "import demo.lib::{g0};\ninclude demo.parts()::{ known };\nnode w: Force = 2.0 kg * @g0;\n",
+            "import demo.lib::{g0};\nimport demo.consts as c;\ninclude demo.parts()::{ known };\nnode w: Force = 2.0 kg * @g0;\nnode x: Force = c::g0 * 2.0 kg;\n",
         ),
         (
             "uses.gcl",
@@ -157,6 +157,14 @@ fn package_with_unused_imported_todos() -> tempfile::TempDir {
         (
             "nested_unit.gcl",
             "import demo.nested_fx::{dim Money, unit USD};\ninclude demo.nested_fx()::{ unit EUR as euros };\nassert rich = 2.0 euros > 1.0 USD;\n",
+        ),
+        (
+            "consts.gcl",
+            "pub const node g0: Acceleration = 9.80665 m/s^2;\npub const node v: Velocity = todo<Velocity> { @g0 };\npub const node v2: Velocity = 2.0 * @v;\n",
+        ),
+        (
+            "uses_constants.gcl",
+            "import demo.consts::{v2};\nimport demo.consts as c;\nnode a: Velocity = 3.0 * @v2;\nnode n: Velocity = 2.0 * c::v2;\nassert t = c::v2 > 0.0 m/s;\nplot p = { mark: point, encode: { x: c::v2, y: 1.0 m } };\n",
         ),
         ("member.gcl", "include demo.parts() as a;\n"),
         ("requested_plot.gcl", "include demo.charts()::{ shown };\n"),
@@ -210,6 +218,7 @@ fn check_counts_each_used_unfinished_declaration_once_by_its_definition() {
         "src/demo/unit_assert.gcl",
         "src/demo/unit_plot.gcl",
         "src/demo/nested_unit.gcl",
+        "src/demo/uses_constants.gcl",
     ] {
         let output = check_in(package.path(), &[file]);
         assert!(output.status.success());
@@ -241,7 +250,7 @@ fn checking_the_package_directory_reports_every_unfinished_declaration_where_it_
                 .display()
         )
     };
-    for file in ["lib.gcl", "parts.gcl", "charts.gcl", "fx.gcl"] {
+    for file in ["lib.gcl", "parts.gcl", "charts.gcl", "fx.gcl", "consts.gcl"] {
         assert!(stdout.contains(&format!(
             "{} (model incomplete: 1 unfinished declaration(s))\n",
             line(file)
@@ -253,4 +262,41 @@ fn checking_the_package_directory_reports_every_unfinished_declaration_where_it_
             .status
             .success()
     );
+}
+
+#[test]
+fn readers_of_an_imported_unfinished_constant_are_blocked_however_they_name_it() {
+    let package = package_with_unused_imported_todos();
+    let output = Command::new(env!("CARGO_BIN_EXE_graphcal"))
+        .current_dir(package.path())
+        .args(["eval", "--allow-incomplete", "src/demo/uses_constants.gcl"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in [
+        "a     = BLOCKED — unfinished dependencies: demo.consts::v",
+        "n     = BLOCKED — unfinished dependencies: demo.consts::v",
+        "t  BLOCKED — unfinished dependencies: demo.consts::v",
+    ] {
+        assert!(stdout.contains(line), "missing `{line}` in:\n{stdout}");
+    }
+    assert!(
+        stderr.contains("plot `p` not rendered: BLOCKED — unfinished dependencies: demo.consts::v"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_bound_reading_an_imported_unfinished_constant_is_rejected() {
+    let package = package_with_unused_imported_todos();
+    std::fs::write(
+        package.path().join("src/demo/bound.gcl"),
+        "import demo.consts::{v2};\nparam x: Velocity(max: @v2) = 1.0 m/s;\n",
+    )
+    .unwrap();
+    let output = check_in(package.path(), &["src/demo/bound.gcl"]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("graphcal::C010"));
 }
