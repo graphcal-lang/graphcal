@@ -7,9 +7,12 @@
 use crate::invariant::{Failure, Invariant};
 use crate::runtime_value::{IndexedValue, KeyValue, RuntimeValue};
 use graphcal_compiler::builtin::{KeyAggregation, ValueAggregation};
+use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::finite_value::FiniteQuantity;
+use graphcal_compiler::outcome::Outcome;
 use thiserror::Error;
 
+use super::kernel_checkpoint::KernelCheckpoint;
 use super::numeric;
 
 /// Error produced by pure aggregation evaluation.
@@ -20,27 +23,36 @@ pub(super) enum AggregationError {
     Quantity(#[from] numeric::QuantityValidationError),
 }
 
-/// Evaluate an aggregation function over the quantities of an indexed value.
+/// Why an aggregation stopped: cancellation or a user-facing failure.
+type AggregationStop = Outcome<AggregationError>;
+
+fn quantity_error(error: numeric::QuantityValidationError) -> AggregationStop {
+    Outcome::Failed(AggregationError::from(error))
+}
+
+/// Evaluate an aggregation function over the quantities of an indexed value,
+/// stepping `control` once per entry.
 pub(super) fn aggregate_quantities(
     kind: ValueAggregation,
     entries: &[FiniteQuantity],
-) -> Result<RuntimeValue, Failure<AggregationError>> {
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<RuntimeValue, Outcome<Failure<AggregationError>>> {
     let value = match kind {
-        ValueAggregation::Sum => aggregate_sum(entries).map(RuntimeValue::Quantity),
-        ValueAggregation::Product => aggregate_product(entries).map(RuntimeValue::Quantity),
-        ValueAggregation::Minimum => aggregate_minimum(entries).map(RuntimeValue::Quantity),
-        ValueAggregation::Maximum => aggregate_maximum(entries).map(RuntimeValue::Quantity),
-        ValueAggregation::Mean => aggregate_mean(entries).map(RuntimeValue::Quantity),
-        ValueAggregation::RootSumSquare => {
-            aggregate_root_sum_square(entries).map(RuntimeValue::Quantity)
-        }
+        ValueAggregation::Sum => aggregate_sum(entries, control),
+        ValueAggregation::Product => aggregate_product(entries, control),
+        ValueAggregation::Minimum => aggregate_minimum(entries, control),
+        ValueAggregation::Maximum => aggregate_maximum(entries, control),
+        ValueAggregation::Mean => aggregate_mean(entries, control),
+        ValueAggregation::RootSumSquare => aggregate_root_sum_square(entries, control),
         ValueAggregation::Count => {
             return count(entries.len())
                 .map(RuntimeValue::Int)
-                .map_err(Failure::Invariant);
+                .map_err(Into::into);
         }
     };
-    value.map_err(Failure::Error)
+    value
+        .map(RuntimeValue::Quantity)
+        .map_err(|stop| stop.map_failed(Failure::Error))
 }
 
 /// `count()` of a rank-one indexed value: its number of entries, whatever
@@ -54,35 +66,47 @@ pub(super) fn count_entries<V>(indexed: &IndexedValue<V>) -> Result<RuntimeValue
 pub(super) fn extremum_key(
     kind: KeyAggregation,
     indexed: &IndexedValue<FiniteQuantity>,
-) -> KeyValue {
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<KeyValue, Cancelled> {
     let keys = KeyValue::all(indexed.axis());
     let (first_key, rest_keys) = keys.split_first();
     let (first_value, rest_values) = indexed.values().split_first();
-    let (key, _) = rest_keys.iter().zip(rest_values).fold(
+    let (key, _) = rest_keys.iter().zip(rest_values).try_fold(
         (first_key, *first_value),
         |incumbent, (key, quantity)| {
+            control.step()?;
             let better = match kind {
                 KeyAggregation::Argmax => *quantity > incumbent.1,
                 KeyAggregation::Argmin => *quantity < incumbent.1,
             };
-            if better { (key, *quantity) } else { incumbent }
+            Ok::<_, Cancelled>(if better { (key, *quantity) } else { incumbent })
         },
-    );
-    key.clone()
+    )?;
+    Ok(key.clone())
 }
 
-fn aggregate_sum(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
+fn aggregate_sum(
+    entries: &[FiniteQuantity],
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<FiniteQuantity, AggregationStop> {
     // The raw total may overflow midway and still be reported once at the end.
-    let total = entries.iter().fold(0.0_f64, |acc, value| acc + value.get());
-    numeric::computed_finite_quantity(total, "sum()").map_err(AggregationError::from)
+    let total = entries.iter().try_fold(0.0_f64, |acc, value| {
+        control.step()?;
+        Ok::<_, Cancelled>(acc + value.get())
+    })?;
+    numeric::computed_finite_quantity(total, "sum()").map_err(quantity_error)
 }
 
-fn aggregate_product(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
+fn aggregate_product(
+    entries: &[FiniteQuantity],
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<FiniteQuantity, AggregationStop> {
     entries
         .iter()
         .try_fold(FiniteQuantity::ONE, |product, value| {
+            control.step()?;
             product.checked_mul(*value).map_err(|error| {
-                AggregationError::from(numeric::QuantityValidationError::from_arithmetic(
+                quantity_error(numeric::QuantityValidationError::from_arithmetic(
                     error,
                     "product()",
                 ))
@@ -92,28 +116,55 @@ fn aggregate_product(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, Aggre
 
 fn aggregate_root_sum_square(
     entries: &[FiniteQuantity],
-) -> Result<FiniteQuantity, AggregationError> {
-    let values = entries.iter().map(|value| value.get()).collect::<Vec<_>>();
-    numeric::root_sum_square(values, "rss()").map_err(AggregationError::from)
-}
-
-fn aggregate_minimum(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
-    let minimum = entries
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<FiniteQuantity, AggregationStop> {
+    entries
         .iter()
-        .fold(f64::INFINITY, |acc, value| acc.min(value.get()));
-    numeric::computed_finite_quantity(minimum, "minimum()").map_err(AggregationError::from)
+        .try_fold(numeric::RootSumSquare::new(), |mut accumulator, value| {
+            control.step()?;
+            accumulator
+                .add(value.get(), "rss()")
+                .map_err(quantity_error)?;
+            Ok::<_, AggregationStop>(accumulator)
+        })?
+        .finish("rss()")
+        .map_err(quantity_error)
 }
 
-fn aggregate_maximum(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
-    let maximum = entries
+fn aggregate_minimum(
+    entries: &[FiniteQuantity],
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<FiniteQuantity, AggregationStop> {
+    let minimum = entries.iter().try_fold(f64::INFINITY, |acc, value| {
+        control.step()?;
+        Ok::<_, Cancelled>(acc.min(value.get()))
+    })?;
+    numeric::computed_finite_quantity(minimum, "minimum()").map_err(quantity_error)
+}
+
+fn aggregate_maximum(
+    entries: &[FiniteQuantity],
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<FiniteQuantity, AggregationStop> {
+    let maximum = entries.iter().try_fold(f64::NEG_INFINITY, |acc, value| {
+        control.step()?;
+        Ok::<_, Cancelled>(acc.max(value.get()))
+    })?;
+    numeric::computed_finite_quantity(maximum, "maximum()").map_err(quantity_error)
+}
+
+fn aggregate_mean(
+    entries: &[FiniteQuantity],
+    control: &mut KernelCheckpoint<'_>,
+) -> Result<FiniteQuantity, AggregationStop> {
+    let values = entries
         .iter()
-        .fold(f64::NEG_INFINITY, |acc, value| acc.max(value.get()));
-    numeric::computed_finite_quantity(maximum, "maximum()").map_err(AggregationError::from)
-}
-
-fn aggregate_mean(entries: &[FiniteQuantity]) -> Result<FiniteQuantity, AggregationError> {
-    let values = entries.iter().map(|value| value.get()).collect::<Vec<_>>();
-    numeric::exact_mean(&values, "mean()").map_err(AggregationError::from)
+        .map(|value| {
+            control.step()?;
+            Ok(value.get())
+        })
+        .collect::<Result<Vec<_>, Cancelled>>()?;
+    numeric::exact_mean(&values, "mean()").map_err(quantity_error)
 }
 
 /// No in-memory axis has more entries than `Int` can count.
@@ -128,6 +179,7 @@ fn count(count: usize) -> Result<i64, Invariant> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use graphcal_compiler::cancellation::CancellationToken;
 
     fn quantities(values: &[f64]) -> IndexedValue<FiniteQuantity> {
         IndexedValue::finite_for_test(
@@ -138,20 +190,70 @@ mod tests {
         )
     }
 
+    const UNBOUNDED: CancellationToken = CancellationToken::unbounded();
+
     fn aggregate(
         kind: ValueAggregation,
         values: &[f64],
     ) -> Result<RuntimeValue, Failure<AggregationError>> {
-        aggregate_quantities(kind, quantities(values).values().as_slice())
+        aggregate_quantities(
+            kind,
+            quantities(values).values().as_slice(),
+            &mut KernelCheckpoint::new(&UNBOUNDED),
+        )
+        .map_err(|outcome| match outcome {
+            Outcome::Failed(failure) => failure,
+            Outcome::Cancelled => panic!("an unbounded aggregation cannot be cancelled"),
+        })
+    }
+
+    fn extremum(kind: KeyAggregation, entries: &IndexedValue<FiniteQuantity>) -> usize {
+        extremum_key(kind, entries, &mut KernelCheckpoint::new(&UNBOUNDED))
+            .unwrap()
+            .position()
     }
 
     #[test]
     fn extremum_keys_prefer_the_first_of_tied_entries() {
         let entries = quantities(&[2.0, 1.0, 3.0, 1.0, 3.0]);
-        assert_eq!(extremum_key(KeyAggregation::Argmin, &entries).position(), 1);
-        assert_eq!(extremum_key(KeyAggregation::Argmax, &entries).position(), 2);
+        assert_eq!(extremum(KeyAggregation::Argmin, &entries), 1);
+        assert_eq!(extremum(KeyAggregation::Argmax, &entries), 2);
         let single = quantities(&[5.0]);
-        assert_eq!(extremum_key(KeyAggregation::Argmax, &single).position(), 0);
+        assert_eq!(extremum(KeyAggregation::Argmax, &single), 0);
+    }
+
+    #[test]
+    fn aggregations_observe_cancellation() {
+        let source = graphcal_compiler::cancellation::CancellationSource::new();
+        source.cancel();
+        let token = source.token();
+        let entries = quantities(&[1.0, 2.0]);
+        for kind in [
+            ValueAggregation::Sum,
+            ValueAggregation::Product,
+            ValueAggregation::Minimum,
+            ValueAggregation::Maximum,
+            ValueAggregation::Mean,
+            ValueAggregation::RootSumSquare,
+        ] {
+            assert!(
+                matches!(
+                    aggregate_quantities(
+                        kind,
+                        entries.values().as_slice(),
+                        &mut KernelCheckpoint::new(&token),
+                    ),
+                    Err(Outcome::Cancelled)
+                ),
+                "{kind:?} ignored cancellation"
+            );
+        }
+        for kind in [KeyAggregation::Argmin, KeyAggregation::Argmax] {
+            assert_eq!(
+                extremum_key(kind, &entries, &mut KernelCheckpoint::new(&token)),
+                Err(Cancelled)
+            );
+        }
     }
 
     #[test]
