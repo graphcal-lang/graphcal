@@ -370,7 +370,8 @@ pub(super) fn quantity<'t>(
         }
         QExpr::Coordinate(arg) => operands.coordinate(arg),
         QExpr::UnixTime(arg) => {
-            let result = operands.datetime(arg)?.to_unix_seconds();
+            let result = super::datetime::unix_seconds(operands.datetime(arg)?)
+                .map_err(|error| ctx.runtime_error(error, arg.span()))?;
             super::numeric::finite_quantity(result, "to_unix()")
                 .map_err(|error| ctx.runtime_error(error, arg.span()))
                 .map_err(Outcome::Failed)

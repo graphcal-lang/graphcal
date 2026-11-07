@@ -1,7 +1,13 @@
 //! Datetime construction and declared-scale Gregorian field extraction.
 
+use std::cmp::Ordering;
+
 use graphcal_compiler::datetime_literal::{OffsetDateTimeLiteral, ZonedDateTimeLiteral};
+use num_rational::BigRational;
+use num_traits::ToPrimitive;
 use thiserror::Error;
+
+const NANOS_PER_SECOND: i128 = 1_000_000_000;
 
 /// A numeric datetime conversion or arithmetic operation exceeded hifitime's
 /// representable duration range.
@@ -13,22 +19,83 @@ pub(super) enum DatetimeRangeError {
     OutOfRange { context: &'static str },
 }
 
+/// The duration of `nanoseconds`, when hifitime can represent it.
+fn checked_duration_from_nanoseconds(
+    nanoseconds: i128,
+    context: &'static str,
+) -> Result<hifitime::Duration, DatetimeRangeError> {
+    let range =
+        hifitime::Duration::MIN.total_nanoseconds()..=hifitime::Duration::MAX.total_nanoseconds();
+    if range.contains(&nanoseconds) {
+        Ok(hifitime::Duration::from_total_nanoseconds(nanoseconds))
+    } else {
+        Err(DatetimeRangeError::OutOfRange { context })
+    }
+}
+
+/// The exact binary64 value `seconds`, rounded once to the nearest whole
+/// nanosecond with ties to even.
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "arbitrary-precision rationals cannot overflow; the i128 increment is checked"
+)]
+fn nanoseconds_from_seconds(
+    seconds: f64,
+    context: &'static str,
+) -> Result<i128, DatetimeRangeError> {
+    let exact = BigRational::from_float(seconds).ok_or(DatetimeRangeError::NonFinite {
+        context,
+        value: seconds,
+    })? * BigRational::from_integer(NANOS_PER_SECOND.into());
+    let floor = exact.floor();
+    let below = floor
+        .to_integer()
+        .to_i128()
+        .ok_or(DatetimeRangeError::OutOfRange { context })?;
+    let half = BigRational::new(1.into(), 2.into());
+    let round_up = match (exact - floor).cmp(&half) {
+        Ordering::Less => false,
+        Ordering::Greater => true,
+        Ordering::Equal => below.rem_euclid(2) == 1,
+    };
+    if round_up {
+        below
+            .checked_add(1)
+            .ok_or(DatetimeRangeError::OutOfRange { context })
+    } else {
+        Ok(below)
+    }
+}
+
+/// `nanoseconds` as seconds, correctly rounded to binary64.
+///
+/// Up to 2^53 in magnitude both the count and 10^9 are exact binary64
+/// values, so one IEEE division rounds correctly; beyond that the quotient is
+/// rounded from the exact rational.
+fn seconds_from_nanoseconds(
+    nanoseconds: i128,
+    context: &'static str,
+) -> Result<f64, DatetimeRangeError> {
+    const EXACT_BINARY64_INTEGER: u128 = 1 << 53;
+    if nanoseconds.unsigned_abs() <= EXACT_BINARY64_INTEGER {
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "an integer of magnitude at most 2^53 is exact in binary64"
+        )]
+        let exact = nanoseconds as f64;
+        return Ok(exact / 1e9);
+    }
+    BigRational::new(nanoseconds.into(), NANOS_PER_SECOND.into())
+        .to_f64()
+        .filter(|seconds| seconds.is_finite())
+        .ok_or(DatetimeRangeError::OutOfRange { context })
+}
+
 fn checked_duration_from_seconds(
     seconds: f64,
     context: &'static str,
 ) -> Result<hifitime::Duration, DatetimeRangeError> {
-    if !seconds.is_finite() {
-        return Err(DatetimeRangeError::NonFinite {
-            context,
-            value: seconds,
-        });
-    }
-    let min_seconds = hifitime::Duration::MIN.to_seconds();
-    let max_seconds = hifitime::Duration::MAX.to_seconds();
-    if seconds < min_seconds || seconds > max_seconds {
-        return Err(DatetimeRangeError::OutOfRange { context });
-    }
-    Ok(hifitime::Duration::from_seconds(seconds))
+    checked_duration_from_nanoseconds(nanoseconds_from_seconds(seconds, context)?, context)
 }
 
 fn checked_epoch_with_delta(
@@ -45,13 +112,8 @@ fn checked_epoch_with_delta(
         epoch_ns.checked_add(delta_ns)
     }
     .ok_or(DatetimeRangeError::OutOfRange { context })?;
-    let min_ns = hifitime::Duration::MIN.total_nanoseconds();
-    let max_ns = hifitime::Duration::MAX.total_nanoseconds();
-    if total_ns < min_ns || total_ns > max_ns {
-        return Err(DatetimeRangeError::OutOfRange { context });
-    }
     Ok(hifitime::Epoch::from_duration(
-        hifitime::Duration::from_total_nanoseconds(total_ns),
+        checked_duration_from_nanoseconds(total_ns, context)?,
         epoch.time_scale,
     ))
 }
@@ -92,14 +154,16 @@ pub(super) fn checked_epoch_difference_seconds(
         .ok_or(DatetimeRangeError::OutOfRange {
             context: "datetime difference",
         })?;
-    let min_ns = hifitime::Duration::MIN.total_nanoseconds();
-    let max_ns = hifitime::Duration::MAX.total_nanoseconds();
-    if difference_ns < min_ns || difference_ns > max_ns {
-        return Err(DatetimeRangeError::OutOfRange {
-            context: "datetime difference",
-        });
-    }
-    Ok(hifitime::Duration::from_total_nanoseconds(difference_ns).to_seconds())
+    checked_duration_from_nanoseconds(difference_ns, "datetime difference")?;
+    seconds_from_nanoseconds(difference_ns, "datetime difference")
+}
+
+/// The Unix-time reading of the UTC datetime `epoch`, correctly rounded.
+pub(super) fn unix_seconds(epoch: hifitime::Epoch) -> Result<f64, DatetimeRangeError> {
+    seconds_from_nanoseconds(
+        epoch.to_unix_duration().total_nanoseconds(),
+        "Unix timestamp",
+    )
 }
 
 /// The UTC datetime whose Unix-time reading is `seconds`.
@@ -352,8 +416,93 @@ mod tests {
 
     use crate::eval_expr::datetime::{
         GregorianFields, checked_epoch_add_seconds, checked_epoch_difference_seconds,
-        checked_epoch_from_unix_seconds, checked_epoch_subtract_seconds,
+        checked_epoch_from_unix_seconds, checked_epoch_subtract_seconds, nanoseconds_from_seconds,
+        seconds_from_nanoseconds, unix_seconds,
     };
+
+    fn tai_nanoseconds(nanoseconds: i128) -> hifitime::Epoch {
+        hifitime::Epoch::from_duration(
+            hifitime::Duration::from_total_nanoseconds(nanoseconds),
+            hifitime::TimeScale::TAI,
+        )
+    }
+
+    #[test]
+    fn differences_are_correctly_rounded_and_antisymmetric() {
+        // Far from the reference epoch, where f64 seconds of each instant
+        // cannot resolve a nanosecond.
+        let base = 3_800_000_000 * 1_000_000_000_i128;
+        let a = tai_nanoseconds(base);
+        let one_ns_later = tai_nanoseconds(base + 1);
+        assert_eq!(
+            checked_epoch_difference_seconds(one_ns_later, a).unwrap(),
+            1e-9
+        );
+        assert_eq!(
+            checked_epoch_difference_seconds(a, one_ns_later).unwrap(),
+            -1e-9
+        );
+        let b = tai_nanoseconds(base + 300_000_000);
+        assert_eq!(checked_epoch_difference_seconds(b, a).unwrap(), 0.3);
+        assert_eq!(checked_epoch_difference_seconds(a, b).unwrap(), -0.3);
+    }
+
+    #[test]
+    fn nanosecond_counts_convert_to_correctly_rounded_seconds() {
+        let limit = 1_i128 << 53;
+        for nanoseconds in [
+            0,
+            1,
+            -1,
+            999_999_999,
+            limit,
+            -limit,
+            limit + 1,
+            i128::from(i64::MAX),
+        ] {
+            let expected = num_rational::BigRational::new(nanoseconds.into(), 1_000_000_000.into());
+            let expected = num_traits::ToPrimitive::to_f64(&expected).unwrap();
+            assert_eq!(
+                seconds_from_nanoseconds(nanoseconds, "test")
+                    .unwrap()
+                    .to_bits(),
+                expected.to_bits(),
+                "{nanoseconds}"
+            );
+        }
+    }
+
+    #[test]
+    fn seconds_round_to_the_nearest_nanosecond_with_ties_to_even() {
+        assert_eq!(nanoseconds_from_seconds(2.9e-9, "test").unwrap(), 3);
+        assert_eq!(nanoseconds_from_seconds(-2.9e-9, "test").unwrap(), -3);
+        assert_eq!(nanoseconds_from_seconds(0.3, "test").unwrap(), 300_000_000);
+        // 2^-10 s is exactly 976562.5 ns; 3 * 2^-10 s is 2929687.5 ns.
+        assert_eq!(
+            nanoseconds_from_seconds(2.0_f64.powi(-10), "test").unwrap(),
+            976_562
+        );
+        assert_eq!(
+            nanoseconds_from_seconds(3.0 * 2.0_f64.powi(-10), "test").unwrap(),
+            2_929_688
+        );
+        assert_eq!(
+            nanoseconds_from_seconds(-(2.0_f64.powi(-10)), "test").unwrap(),
+            -976_562
+        );
+        assert!(nanoseconds_from_seconds(f64::NAN, "test").is_err());
+        assert!(nanoseconds_from_seconds(1e300, "test").is_err());
+    }
+
+    #[test]
+    fn unix_seconds_resolve_a_nanosecond_before_the_epoch() {
+        let epoch = checked_epoch_from_unix_seconds(-1e-9).unwrap();
+        assert_eq!(unix_seconds(epoch).unwrap(), -1e-9);
+        let shifted =
+            checked_epoch_add_seconds(checked_epoch_from_unix_seconds(0.0).unwrap(), 2.9e-9)
+                .unwrap();
+        assert_eq!(shifted.to_unix_duration().total_nanoseconds(), 3);
+    }
 
     #[test]
     fn every_supported_scale_extracts_its_own_calendar_coordinate() {

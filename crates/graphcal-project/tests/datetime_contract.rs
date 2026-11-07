@@ -135,3 +135,33 @@ node converted: Bool = from_unix(to_float(@seconds)) == datetime("2024-11-05T12:
     .unwrap();
     assert_true(&result, "converted");
 }
+
+// EV-10: differences and Unix readings are the exact nanosecond count rounded
+// once; shifts round seconds to the nearest nanosecond.
+#[test]
+fn datetime_numbers_are_correctly_rounded() {
+    let result = compile_and_eval(
+        r#"
+node a: Datetime<TAI> = epoch<TAI>("2020-06-01T00:00:00");
+node b: Datetime<TAI> = epoch<TAI>("2020-06-01T00:00:00.000000001");
+node c: Datetime<TAI> = epoch<TAI>("2020-06-01T00:00:00.3");
+node gap_forward: Bool = @b - @a == 1.0e-9 s;
+node gap_backward: Bool = @a - @b == -1.0e-9 s;
+node tenths_forward: Bool = @c - @a == 0.3 s;
+node tenths_backward: Bool = @a - @c == -0.3 s;
+node shift_rounds: Bool = @a + 2.9e-9 s == epoch<TAI>("2020-06-01T00:00:00.000000003");
+node unix_before_epoch: Bool = to_unix(datetime("1969-12-31T23:59:59.999999999Z")) == -1.0e-9;
+"#,
+    )
+    .unwrap();
+    for name in [
+        "gap_forward",
+        "gap_backward",
+        "tenths_forward",
+        "tenths_backward",
+        "shift_rounds",
+        "unix_before_epoch",
+    ] {
+        assert_true(&result, name);
+    }
+}
