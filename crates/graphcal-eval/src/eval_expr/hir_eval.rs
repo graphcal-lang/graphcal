@@ -23,6 +23,7 @@ use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap, Pr
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::context::EvalSession;
+use super::kernel_checkpoint::KernelCheckpoint;
 use super::operations::read_shape;
 use super::runtime_failure::{
     ExternFailure, InlineAssertionFailure, RuntimeFailure, UnboundReference,
@@ -399,10 +400,12 @@ fn eval_texpr_inner(
         NodeKind::Aggregate { function, arg } => match function {
             AggregationFn::Key(function) => {
                 let quantities = operands.quantities(arg)?;
+                let mut control = KernelCheckpoint::new(&ctx.cancellation);
                 Ok(plain(RuntimeValue::Key(super::aggregations::extremum_key(
                     function,
                     &quantities,
-                ))))
+                    &mut control,
+                )?)))
             }
             AggregationFn::Value(ValueAggregation::Count) => {
                 super::aggregations::count_entries(&operands.rank_one(arg)?)
@@ -412,9 +415,10 @@ fn eval_texpr_inner(
             AggregationFn::Value(function) => super::aggregations::aggregate_quantities(
                 function,
                 operands.quantities(arg)?.values().as_slice(),
+                &mut KernelCheckpoint::new(&ctx.cancellation),
             )
             .map(plain)
-            .map_err(|failure| ctx.failure_error(failure, span).into()),
+            .map_err(|outcome| ctx.outcome_error(outcome, span)),
         },
         NodeKind::LinearAlgebra(call) => {
             super::linear_algebra::evaluate(&call, span, &operands, ctx).map(plain)
@@ -1269,6 +1273,9 @@ fn eval_dag_call(
     caller_locals: &HirLocalValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    // Calls nest and repeat without bound on the work they multiply (#2251):
+    // every call observes cancellation before it allocates its frame.
+    ctx.cancellation.checkpoint()?;
     let target = call.target();
     let plan = ctx.execution_plan()?;
     let callable = plan.call(call);

@@ -3504,6 +3504,62 @@ fn cancellation_stops_an_in_flight_evaluation() {
     );
 }
 
+/// A chain of DAGs each calling the previous one twice does `2^depth` work
+/// from linear source (#2251). Evaluation has no operation budget, so the
+/// chain must stop promptly on cancellation instead.
+#[test]
+fn cancellation_stops_an_exponential_dag_call_chain() {
+    use std::{fmt::Write as _, sync::mpsc, thread, time::Duration};
+
+    const DEPTH: usize = 48;
+    let mut source = String::from("dag d0 { pub node out: Dimensionless = 1.0; }\n");
+    for level in 1..=DEPTH {
+        let previous = level - 1;
+        writeln!(
+            source,
+            "dag d{level} {{ pub node out: Dimensionless = @d{previous}()::out + @d{previous}()::out; }}"
+        )
+        .unwrap();
+    }
+    writeln!(source, "node result: Dimensionless = @d{DEPTH}()::out;").unwrap();
+    let project = crate::loader::LoadedProject::from_source(&source, "calls.gcl").unwrap();
+    let cancellation_source = graphcal_compiler::cancellation::CancellationSource::new();
+    let cancellation = cancellation_source.token();
+    let (prepared_sender, prepared_receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        // Compile without the token so that cancellation can only stop the
+        // evaluation itself.
+        let prepared = ProjectCompiler::new(&project).prepare().unwrap();
+        let row = prepared.binding_builder().finish().unwrap();
+        prepared_sender.send(()).unwrap();
+        sender
+            .send(prepared.evaluate_with_cancellation(&row, &cancellation))
+            .unwrap();
+    });
+
+    prepared_receiver
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the call chain should compile");
+    // The uncancelled evaluation needs about 2^48 additions, so it is still
+    // running deep inside the call chain when cancellation is requested.
+    assert!(
+        receiver.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the call chain must not finish without cancellation"
+    );
+    cancellation_source.cancel();
+
+    let result = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("a cancelled call chain should stop promptly");
+    let error = result.expect_err("the call chain should be cancelled");
+    assert!(
+        matches!(error, Outcome::Cancelled),
+        "unexpected outcome: {error:?}"
+    );
+}
+
 #[test]
 #[expect(
     clippy::suboptimal_flops,

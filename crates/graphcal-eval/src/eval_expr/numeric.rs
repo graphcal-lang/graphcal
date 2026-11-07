@@ -291,23 +291,6 @@ impl RootSumSquare {
     }
 }
 
-/// Compute a root-sum-square with scaled accumulation to avoid intermediate
-/// overflow and underflow.
-pub(super) fn root_sum_square(
-    values: impl IntoIterator<Item = f64>,
-    context: impl Into<String>,
-) -> Result<FiniteQuantity, QuantityValidationError> {
-    let context = context.into();
-    let accumulator =
-        values
-            .into_iter()
-            .try_fold(RootSumSquare::new(), |mut accumulator, value| {
-                accumulator.add(value, context.clone())?;
-                Ok::<_, QuantityValidationError>(accumulator)
-            })?;
-    accumulator.finish(context)
-}
-
 /// Validate the result of a computation whose non-finite output indicates an error.
 pub(crate) fn computed_finite_quantity(
     value: f64,
