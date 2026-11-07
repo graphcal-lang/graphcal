@@ -398,6 +398,7 @@ dependencies = [
  "indexmap",
  "jiff",
  "miette",
+ "num-bigint",
  "num-rational",
  "num-traits",
  "self_cell",

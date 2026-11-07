@@ -1,5 +1,6 @@
 //! Transport-independent model ports and per-row model evaluation.
 
+use graphcal_compiler::outcome::Outcome;
 use graphcal_eval::eval::runtime::{FailureOrigin, RootFailure, RootOutcome};
 
 use super::{
@@ -252,14 +253,21 @@ impl PreparedProject {
         if model.plan_id != self.plan_id {
             return Err(ModelExecutionError::PlanMismatch);
         }
-        self.evaluate_row(row, &model.outputs, |runtime, position| {
-            let output = &model.outputs[position];
-            graphcal_eval::eval::public_projection::project(
-                graphcal_eval::runtime_presentation::PresentedRef::plain(runtime),
-                &output.declared_type,
+        graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            self.evaluate_row(
+                row,
+                &model.outputs,
+                |runtime, position| {
+                    let output = &model.outputs[position];
+                    graphcal_eval::eval::public_projection::project(
+                        graphcal_eval::runtime_presentation::PresentedRef::plain(runtime),
+                        &output.declared_type,
+                    )
+                    .map(|(value, _)| value)
+                    .map_err(OutputProjectionError::Invariant)
+                },
+                cancellation,
             )
-            .map(|(value, _)| value)
-            .map_err(OutputProjectionError::Invariant)
         })
     }
 
@@ -273,22 +281,21 @@ impl PreparedProject {
             &graphcal_eval::eval_expr::RuntimeValue,
             usize,
         ) -> Result<T, OutputProjectionError>,
-    ) -> Result<ModelRowOutcome<T>, ModelExecutionError> {
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<ModelRowOutcome<T>, Outcome<ModelExecutionError>> {
         self.validate_row_identity(row)
-            .map_err(ModelExecutionError::from)?;
+            .map_err(|error| Outcome::Failed(ModelExecutionError::from(error)))?;
 
-        let outcome = graphcal_compiler::outcome::without_cancellation(|cancellation| {
-            RootOutcome::evaluate(
-                self.plan(),
-                &row.bindings,
-                self.source,
-                &self.sources,
-                &self.host_fns,
-                &self.output_assembly.display_names,
-                cancellation,
-            )
-        })
-        .map_err(|error| self.render(error))?;
+        let outcome = RootOutcome::evaluate(
+            self.plan(),
+            &row.bindings,
+            self.source,
+            &self.sources,
+            &self.host_fns,
+            &self.output_assembly.display_names,
+            cancellation,
+        )
+        .map_err(|outcome| outcome.map_failed(|error| self.render(error).into()))?;
         if let Some(failure) =
             outcome.first_failure(self.plan(), &self.output_assembly.display_names)
         {
@@ -317,6 +324,7 @@ impl PreparedProject {
             })
             .collect::<Result<Vec<_>, _>>()
             .map(ModelRowOutcome::Success)
+            .map_err(Outcome::Failed)
     }
 
     /// The diagnostic a model row reports for the first failure of its

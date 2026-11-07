@@ -59,7 +59,6 @@ pub(super) fn scaled<R: std::fmt::Display>(
 /// Compute every pending display unit of `presented` against `values`,
 /// the complete values of the root frame.
 ///
-/// Future operation-budget accounting belongs here, shared with unit-scale work.
 /// Resolving a subtree never stores the frame or any transient computational value.
 pub(super) fn resolve(
     presented: EvaluatedRuntimeValue,
