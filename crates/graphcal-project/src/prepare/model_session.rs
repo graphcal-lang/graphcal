@@ -8,6 +8,7 @@
 
 use std::sync::Arc;
 
+use graphcal_compiler::outcome::Outcome;
 use graphcal_eval::eval::bindings::RuntimeParameterBinding;
 use graphcal_eval::eval_expr::j2000_seconds::seconds_since_j2000;
 use graphcal_model_protocol::{
@@ -315,20 +316,45 @@ impl PreparedProject {
         session: &ModelSession,
         request: &RequestBatch,
     ) -> Result<ResultBatch, ModelExecutionError> {
+        graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            self.evaluate_request_with_cancellation(session, request, cancellation)
+        })
+    }
+
+    /// Evaluate every row of `request`, in order, until `cancellation` is
+    /// requested; a cancelled request has no partial result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Outcome::Cancelled`] on cancellation, or the errors of
+    /// [`Self::evaluate_request`].
+    pub fn evaluate_request_with_cancellation(
+        &self,
+        session: &ModelSession,
+        request: &RequestBatch,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<ResultBatch, Outcome<ModelExecutionError>> {
         if session.plan_id != self.plan_id {
-            return Err(ModelExecutionError::PlanMismatch);
+            return Err(Outcome::Failed(ModelExecutionError::PlanMismatch));
         }
         if request.schema().as_ref() != session.schema.as_ref() {
-            return Err(ModelExecutionError::SessionMismatch);
+            return Err(Outcome::Failed(ModelExecutionError::SessionMismatch));
         }
         let mut results = ResultBatchBuilder::new(Arc::clone(&session.schema));
         for row in 0..request.rows() {
-            let outcome = match self.bind_request_row(session, request, row)? {
+            cancellation.checkpoint()?;
+            let outcome = match self
+                .bind_request_row(session, request, row)
+                .map_err(Outcome::Failed)?
+            {
                 Err(failure) => RowOutcome::Failure(failure),
                 Ok(bindings) => {
-                    match self.evaluate_row(&bindings, &session.outputs, |runtime, position| {
-                        session.output_codecs[position].protocol_value(runtime)
-                    })? {
+                    match self.evaluate_row(
+                        &bindings,
+                        &session.outputs,
+                        |runtime, position| session.output_codecs[position].protocol_value(runtime),
+                        cancellation,
+                    )? {
                         ModelRowOutcome::Success(values) => RowOutcome::Success(values),
                         ModelRowOutcome::Failure(failure) => {
                             RowOutcome::Failure(protocol_failure(&failure))
@@ -336,9 +362,13 @@ impl PreparedProject {
                     }
                 }
             };
-            results.push(outcome)?;
+            results
+                .push(outcome)
+                .map_err(|error| Outcome::Failed(error.into()))?;
         }
-        Ok(results.finish()?)
+        results
+            .finish()
+            .map_err(|error| Outcome::Failed(error.into()))
     }
 
     /// Bind one request row; a domain violation is the row's failure.

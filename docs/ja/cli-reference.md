@@ -737,7 +737,8 @@ graphcal model unit <FILE> <UNIT>... [--root <ROOT>]
 ```bash
 graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=UNIT>]... \
     [--param <NAME=VALUE>]... [--params-json <JSON> | --params-json-file <FILE>] \
-    (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) [--root <ROOT>]
+    (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) \
+    [--request-timeout <SECONDS>] [--root <ROOT>]
 ```
 
 **引数とオプション:**
@@ -751,6 +752,7 @@ graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=U
 | `--param`、`--params-json`、`--params-json-file` | 変化させないパラメータを、すべての行でこれらの値に固定します。形式は `eval` と同じです。`--params-json-file -` は使えません |
 | `--expect-fingerprint <FINGERPRINT>` | `graphcal model describe` で得たインターフェースの指紋と一致しない場合、起動を拒否します |
 | `--skip-fingerprint-check` | 指紋を検査せずに起動します |
+| `--request-timeout <SECONDS>` | 1 つのリクエストバッチの評価がこの秒数を過ぎても終わらない場合、終了コード `1` でセッションを終えます。指定しない場合、リクエストは評価が終わるまで実行されます |
 | `--root <ROOT>` | 明示的なプロジェクトルート |
 
 `--expect-fingerprint` と `--skip-fingerprint-check` のどちらか一方の指定が必須です。stdout には Arrow IPC だけを書き、診断は stderr に出します。セッションの流れ、行ごとの結果、ストリームの構成は[バッチ評価](batch-evaluation.md)を参照してください。
