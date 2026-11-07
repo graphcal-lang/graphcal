@@ -317,16 +317,13 @@ impl Parser<'_> {
                 // is not the base of a power expression.
                 if let Some((&Token::Number, literal_span)) = self.lexer.peek_with_span()
                     && self.lexer.slice_at(literal_span).replace('_', "") == "9223372036854775808"
+                    && self.lexer.peek_second() != Some(&Token::Caret)
                 {
-                    let mut after_literal = self.lexer.clone();
-                    after_literal.next_token();
-                    if after_literal.peek() != Some(&Token::Caret) {
-                        self.lexer.next_token();
-                        return Ok(Expr::new(
-                            ExprKind::Integer(i64::MIN),
-                            op_span.merge(literal_span),
-                        ));
-                    }
+                    self.lexer.next_token();
+                    return Ok(Expr::new(
+                        ExprKind::Integer(i64::MIN),
+                        op_span.merge(literal_span),
+                    ));
                 }
 
                 let operand = self.parse_unary()?;
@@ -551,16 +548,7 @@ impl Parser<'_> {
             return self.finish_inline_dag_call(at_span, NonEmpty::singleton(first));
         }
 
-        let mut probe = self.lexer.clone();
-        while probe.peek() == Some(&Token::Dot)
-            && probe
-                .peek_second()
-                .is_some_and(|token| token.is_identifier())
-        {
-            probe.next_token();
-            probe.next_token();
-        }
-        let terminator = probe.peek().copied();
+        let terminator = self.token_after_dotted_tail();
         if !matches!(terminator, Some(Token::LParen | Token::DoubleColon)) {
             let span = at_span.merge(first.span);
             return Ok(Expr::new(
@@ -641,7 +629,7 @@ impl Parser<'_> {
     /// (`2.0 (m/s)`), or the exact reciprocal shorthand (`2.0 1/s`). The
     /// token-based classification keeps ordinary division (`2.0 / ...`) in
     /// the expression grammar.
-    fn same_line_unit_expr_start(&mut self, literal_span: Span) -> Option<Span> {
+    fn same_line_unit_expr_start(&self, literal_span: Span) -> Option<Span> {
         let (token, start_span) = self.lexer.peek_with_span()?;
         let token = *token;
         let starts_unit_expr = token.is_identifier()
@@ -875,7 +863,7 @@ impl Parser<'_> {
     /// so an ordinary boolean expression like `a < b && c > (d)` is not
     /// misparsed as turbofish. Line comments are skipped so their contents
     /// affect neither the bracket balance nor the operator bail-out.
-    fn are_generic_args_followed_by(&mut self, expected: u8) -> bool {
+    fn are_generic_args_followed_by(&self, expected: u8) -> bool {
         let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
             return false;
         };
@@ -884,7 +872,7 @@ impl Parser<'_> {
 
     /// After peeking `todo`, look ahead for `< … > {`: only that shape is a
     /// typed hole, so `todo` stays an ordinary identifier elsewhere (`todo < x`).
-    fn is_todo_hole(&mut self) -> bool {
+    fn is_todo_hole(&self) -> bool {
         if self.lexer.peek_second() != Some(&Token::Lt) {
             return false;
         }
@@ -933,7 +921,7 @@ impl Parser<'_> {
     /// Scans the raw source string from the current position without consuming tokens.
     /// Returns `true` only if the `(...)` contains only identifiers, commas,
     /// whitespace, and line comments, followed by `)` then `=>`.
-    pub(super) fn is_tuple_key_sugar(&mut self) -> bool {
+    pub(super) fn is_tuple_key_sugar(&self) -> bool {
         let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
             return false;
         };
@@ -974,7 +962,7 @@ impl Parser<'_> {
     /// Look ahead to check if `<...>` is followed by `(`.
     /// Used to disambiguate `eye<3>()` (turbofish fn call)
     /// from `f < x` (comparison).
-    fn is_generic_args_followed_by_paren(&mut self) -> bool {
+    fn is_generic_args_followed_by_paren(&self) -> bool {
         self.are_generic_args_followed_by(b'(')
     }
 
@@ -988,7 +976,7 @@ impl Parser<'_> {
     /// zero-argument functions keep their call shape. If name resolution finds
     /// a constructor instead, HIR lowering emits the constructor-specific S010
     /// diagnostic.
-    fn is_named_arg_call(&mut self) -> bool {
+    fn is_named_arg_call(&self) -> bool {
         let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
             return false;
         };

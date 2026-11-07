@@ -27,7 +27,9 @@ use token_stream::ParserTokenStream;
 /// The parser knows nothing about where its source came from: errors carry
 /// only spans into it, and the shell that owns the source attaches its
 /// identity with [`ParseError::located`].
-#[derive(Clone)]
+///
+/// The parser is deliberately not `Clone`: speculative parses go through
+/// `speculate`, which saves and restores only the token position.
 pub struct Parser<'src> {
     lexer: ParserTokenStream<'src>,
     source: &'src str,
@@ -355,7 +357,7 @@ impl<'src> Parser<'src> {
     }
 
     /// The contextual keyword spelled by the next token, if any.
-    fn peek_contextual_keyword(&mut self) -> Option<ContextualKeyword> {
+    fn peek_contextual_keyword(&self) -> Option<ContextualKeyword> {
         match self.lexer.peek() {
             Some(&Token::ContextualKeyword(keyword)) => Some(keyword),
             _ => None,
@@ -376,22 +378,43 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// The first token after the longest `(. identifier)*` run at the
+    /// cursor, without consuming anything.
+    fn token_after_dotted_tail(&self) -> Option<Token> {
+        let mut upcoming = self.lexer.upcoming();
+        loop {
+            let token = upcoming.next();
+            if token != Some(Token::Dot) {
+                return token;
+            }
+            let mut after_dot = upcoming.clone();
+            if !after_dot.next().is_some_and(Token::is_identifier) {
+                return token;
+            }
+            upcoming = after_dot;
+        }
+    }
+
+    /// Run a speculative parse. When `attempt` succeeds its consumption is
+    /// kept; when it fails the token position is restored, so a rejected
+    /// speculation leaves no trace. Restoring touches only the token cursor,
+    /// which keeps speculation O(1) regardless of the recorded trivia.
+    fn speculate<T, E>(&mut self, attempt: impl FnOnce(&mut Self) -> Result<T, E>) -> Result<T, E> {
+        let mark = self.lexer.mark();
+        let result = attempt(self);
+        if result.is_err() {
+            self.lexer.rewind(mark);
+        }
+        result
+    }
+
     /// Parse a local name or a member selected after a dotted DAG path and
     /// `::`. A dot sequence is consumed only when a later `::` proves that it
     /// is a namespace owner; otherwise the first identifier remains local and
     /// expression parsing handles the dot as field projection.
     fn parse_ident_path(&mut self) -> Result<IdentPath, ParseError> {
         let first = self.parse_any_ident()?;
-        let mut probe = self.lexer.clone();
-        while probe.peek() == Some(&Token::Dot)
-            && probe
-                .peek_second()
-                .is_some_and(|token| token.is_identifier())
-        {
-            probe.next_token();
-            probe.next_token();
-        }
-        if probe.peek() != Some(&Token::DoubleColon) {
+        if self.token_after_dotted_tail() != Some(Token::DoubleColon) {
             return Ok(IdentPath::local(first));
         }
 
@@ -411,10 +434,72 @@ impl<'src> Parser<'src> {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use crate::outcome::Outcome;
     use crate::syntax::parser::{
         ParseErrorKind, Parser, token_stream::CANCELLATION_CHECKPOINT_INTERVAL,
     };
+
+    /// Assert that parsing grows roughly linearly with input size: parsing a
+    /// source four times as large must take well under the 16x a quadratic
+    /// parser would need. Best-of-three timings and a generous bound keep the
+    /// check robust on a loaded machine.
+    fn assert_parse_time_is_roughly_linear(make_source: impl Fn(usize) -> String) {
+        const SMALL: usize = 1_000;
+        const SCALE: u32 = 4;
+        let best_parse_time = |size: usize| {
+            let source = make_source(size);
+            (0..3)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    // Only the time matters; some probes are invalid programs.
+                    let _ = Parser::new(&source).parse_file();
+                    start.elapsed()
+                })
+                .min()
+                .expect("three timings")
+        };
+        // Warm up allocator and caches before measuring the small input.
+        best_parse_time(SMALL);
+        let small = best_parse_time(SMALL);
+        let large = best_parse_time(SMALL * SCALE as usize);
+        assert!(
+            large < small * (SCALE * 3) + std::time::Duration::from_millis(50),
+            "parse time grew superlinearly: {small:?} for {SMALL} items, \
+             {large:?} for {} items",
+            SMALL * SCALE as usize
+        );
+    }
+
+    #[test]
+    fn interleaved_comments_do_not_make_lookahead_quadratic() {
+        // FE-1 (#2250): every identifier and `@` reference probed ahead by
+        // cloning the lexer, which copied every comment recorded so far.
+        assert_parse_time_is_roughly_linear(|size| {
+            let mut source = String::from("param y: Dimensionless = 1.0;\n");
+            for i in 0..size {
+                writeln!(
+                    source,
+                    "// x{i} is derived from y; see design note section {i}\n\
+                     node x{i}: Dimensionless = @y * 2.0 + @y;"
+                )
+                .expect("writing to a String cannot fail");
+            }
+            source
+        });
+    }
+
+    #[test]
+    fn rejected_generic_argument_speculation_keeps_comments_once() {
+        // A type-expression attempt that is rejected (`2 + N` is Nat) must
+        // not leave comments it skipped recorded twice.
+        let source = "param t: Vec<// inner\nN + 2> = 1.0; // trailing";
+        let mut parser = Parser::new(source);
+        let _ = parser.parse_file();
+        let metadata = parser.into_source_metadata();
+        assert_eq!(metadata.comments().len(), 2);
+    }
 
     #[test]
     fn stray_character_in_source_surfaces_as_unknown_token() {
