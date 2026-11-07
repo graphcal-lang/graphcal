@@ -1141,6 +1141,20 @@ fn error_datetime_epoch_leap_second() {
 }
 
 #[test]
+fn error_datetime_utc_difference() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_utc_difference.gcl");
+    let rendered = render_error(source, "datetime_utc_difference.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_utc_shift() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_utc_shift.gcl");
+    let rendered = render_error(source, "datetime_utc_shift.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_datetime_positional_epoch_scale() {
     let source =
         include_str!("../../../tests/fixtures/invalid/datetime_positional_epoch_scale.gcl");

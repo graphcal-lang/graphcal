@@ -41,3 +41,51 @@ node via_tt: Bool = to_utc(epoch<TT>("2017-01-01T00:00:32.184")) == datetime("20
         assert_true(&result, name);
     }
 }
+
+fn assert_compile_error(source: &str, code: &str) {
+    let error = compile_and_eval(source).unwrap_err();
+    let rendered = format!("{error:?}");
+    assert!(
+        miette::Diagnostic::code(&error).is_some_and(|c| c.to_string() == code),
+        "expected {code}, got {rendered}"
+    );
+}
+
+// TYC-4: `-` and `± Time` on `Datetime<UTC>` are rejected (decision D1);
+// every other scale keeps its arithmetic and UTC keeps its comparisons.
+#[test]
+fn utc_arithmetic_is_rejected_in_every_operator_position() {
+    for (ty, body) in [
+        ("Time", "@b - @a"),
+        ("Datetime", "@a + 1.0 s"),
+        ("Datetime", "@a - 1.0 s"),
+        ("Datetime", "1.0 s + @a"),
+    ] {
+        let source = format!(
+            r#"
+node a: Datetime = datetime("2016-12-31T23:59:59Z");
+node b: Datetime = datetime("2017-01-01T00:00:00Z");
+node bad: {ty} = {body};
+"#
+        );
+        assert_compile_error(&source, "graphcal::D044");
+    }
+}
+
+#[test]
+fn tai_arithmetic_and_utc_comparisons_stay_defined() {
+    let result = compile_and_eval(
+        r#"
+node a: Datetime = datetime("2016-12-31T23:59:59Z");
+node b: Datetime = datetime("2017-01-01T00:00:00Z");
+node elapsed_is_two_seconds: Bool = to_tai(@b) - to_tai(@a) == 2.0 s;
+node shifted: Bool = to_utc(to_tai(@a) + 2.0 s) == @b;
+node ordered: Bool = @a < @b;
+node tt_shift: Bool = epoch<TT>("2000-01-01T12:00:00") + 1.0 s == epoch<TT>("2000-01-01T12:00:01");
+"#,
+    )
+    .unwrap();
+    for name in ["elapsed_is_two_seconds", "shifted", "ordered", "tt_shift"] {
+        assert_true(&result, name);
+    }
+}

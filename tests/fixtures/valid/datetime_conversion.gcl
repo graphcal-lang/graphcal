@@ -22,7 +22,5 @@ assert roundtrip = @roundtrip_delta == 0.0 s;
 // So TT is ahead of UTC by about 69.184s.
 // The conversion changes the *labeling* of the same instant, so:
 //   t_utc is the same physical instant as t_tt, just labeled in UTC
-// Arithmetic between same-scale is allowed; the difference should be ~0.
-// Let's verify the physical instants match by converting both to UTC and subtracting.
-node same_instant_check: Time = to_utc(@t_tt) - @t_utc;
-assert same_instant = @same_instant_check == 0.0 s;
+// UTC values can be compared, but not subtracted; compare the instants directly.
+assert same_instant = to_utc(@t_tt) == @t_utc;

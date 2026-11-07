@@ -91,6 +91,7 @@ fn diagnostic_code_reassignments_are_pinned() {
         ("AggregationCardinalityUnknown", "D027"),
         ("MaterializedShapeTooLarge", "D035"),
         ("InvalidDatetimeLiteral", "D028"),
+        ("UtcDatetimeArithmetic", "D044"),
         ("EpochTimeScaleArgumentCount", "D023"),
         ("InvalidEpochTimeScaleArgument", "D029"),
         ("UnsupportedEpochTimeScale", "D030"),

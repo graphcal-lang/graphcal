@@ -791,8 +791,8 @@ fn every_civil_datetime_constructor_has_matching_static_and_runtime_scales() {
 node offset: Datetime = datetime("2024-11-05T21:00:00.123456789+09:00");
 node utc: Datetime = datetime("2024-11-05T12:00:00.123456789Z");
 node zoned: Datetime = datetime("2024-11-05T21:00:00.123456789", "Asia/Tokyo");
-node offset_delta: Time = @offset - @utc;
-node zoned_delta: Time = @zoned - @utc;
+node offset_delta: Time = to_tai(@offset) - to_tai(@utc);
+node zoned_delta: Time = to_tai(@zoned) - to_tai(@utc);
 "#,
     )
     .unwrap();
