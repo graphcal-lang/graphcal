@@ -3192,6 +3192,56 @@ fn deeply_nested_params_json_is_rejected_in_linear_time() {
     );
 }
 
+#[test]
+fn deeply_nested_params_json_objects_are_rejected_in_bounded_time() {
+    // Nested objects used to be re-parsed once per level as well; the
+    // 64-level object guard must reject them after bounded work, both just
+    // past the limit and at a depth that was quadratic before.
+    let directory = tempfile::tempdir().unwrap();
+    let model = directory.path().join("m.gcl");
+    std::fs::write(
+        &model,
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;\n",
+    )
+    .unwrap();
+    for depth in [65, 100_000] {
+        let params = directory.path().join(format!("deep-{depth}.json"));
+        std::fs::write(
+            &params,
+            format!(
+                "{{\"x\": {}1{}}}",
+                "{\"a\": ".repeat(depth),
+                "}".repeat(depth)
+            ),
+        )
+        .unwrap();
+
+        let output = output_with_watchdog(
+            graphcal_bin()
+                .arg("eval")
+                .arg(&model)
+                .arg("--params-json-file")
+                .arg(&params),
+            std::time::Duration::from_secs(60),
+        );
+
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "depth {depth}\nstderr: {}",
+            output.stderr
+        );
+        assert!(output.stdout.is_empty(), "stdout: {}", output.stdout);
+        assert!(
+            output
+                .stderr
+                .contains("is nested deeper than the limit of 64 levels"),
+            "depth {depth}\nstderr: {}",
+            output.stderr
+        );
+    }
+}
+
 /// `check`, `format --check` and `--params-json-file` reject FIFOs instead
 /// of blocking on them.
 #[cfg(unix)]
