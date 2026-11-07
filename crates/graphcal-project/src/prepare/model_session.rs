@@ -352,7 +352,9 @@ impl PreparedProject {
                     match self.evaluate_row(
                         &bindings,
                         &session.outputs,
-                        |runtime, position| session.output_codecs[position].protocol_value(runtime),
+                        |runtime, position, cancellation| {
+                            session.output_codecs[position].protocol_value(runtime, cancellation)
+                        },
                         cancellation,
                     )? {
                         ModelRowOutcome::Success(values) => RowOutcome::Success(values),

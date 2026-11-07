@@ -3478,6 +3478,69 @@ fn cancellation_stops_an_in_flight_evaluation() {
     );
 }
 
+/// Projecting a large indexed output observes the request's cancellation per
+/// entry, and a deadline that passes during projection cancels the row
+/// rather than returning it as a success (#2251).
+#[test]
+fn model_requests_observe_cancellation_while_projecting_outputs() {
+    use graphcal_model_protocol::{FiniteF64, InputColumn, RequestBatch};
+
+    const ENTRIES: usize = 20_000;
+    // The smallest number of successful checkpoints that lets one request of
+    // `output` over `ENTRIES` values finish.
+    let checkpoints_to_finish = |output: &str| {
+        let source = format!(
+            "param scale: Dimensionless = 1.0;\n\
+             node values: Dimensionless[Fin({ENTRIES})] = for i: Fin({ENTRIES}) {{ @scale }};\n\
+             pub node indexed: Dimensionless[Fin({ENTRIES})] = @values;\n\
+             pub node total: Int = count(@values);\n"
+        );
+        let project = crate::loader::LoadedProject::from_source(&source, "model.gcl").unwrap();
+        let prepared = prepare_from_project(&project).unwrap();
+        let schema = session_over(&prepared, &["scale"], &[output]);
+        let session = prepared
+            .model_session(std::sync::Arc::clone(&schema))
+            .unwrap();
+        let request = RequestBatch::new(
+            std::sync::Arc::clone(&schema),
+            vec![InputColumn::Quantity(vec![FiniteF64::new(2.0).unwrap()])],
+        )
+        .unwrap();
+        let finishes = |checkpoints: usize| {
+            let cancellation =
+                graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(
+                    checkpoints,
+                );
+            match prepared.evaluate_request_with_cancellation(&session, &request, &cancellation) {
+                Ok(_) => true,
+                Err(Outcome::Cancelled) => false,
+                Err(Outcome::Failed(error)) => panic!("unexpected failure: {error}"),
+            }
+        };
+        let (mut low, mut high) = (0, 1_usize);
+        while !finishes(high) {
+            low = high;
+            high *= 2;
+        }
+        while low + 1 < high {
+            let middle = low + (high - low) / 2;
+            if finishes(middle) {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        high
+    };
+    let scalar = checkpoints_to_finish("total");
+    let indexed = checkpoints_to_finish("indexed");
+    assert!(
+        indexed >= scalar + ENTRIES,
+        "projecting {ENTRIES} entries must observe cancellation per entry: \
+         scalar output needs {scalar} checkpoints, indexed output {indexed}"
+    );
+}
+
 /// Static TODO reachability is value-independent, so one prepared plan
 /// answers each query once, however many expressions and evaluations ask
 /// it (#2251).
