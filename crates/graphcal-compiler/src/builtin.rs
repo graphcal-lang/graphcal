@@ -1067,10 +1067,8 @@ define_builtin_family! {
         Constructor(DatetimeConstructorFn),
         /// Extract a Gregorian calendar field as `Int`.
         Field(DatetimeField),
-        /// Construct a UTC datetime from a numeric epoch count.
-        FromNumeric(DatetimeFromNumericFn),
-        /// Convert a datetime into a dimensionless numeric epoch count.
-        ToNumeric(DatetimeToNumericFn),
+        /// Convert between a UTC datetime and its Unix-time reading.
+        Unix(UnixTimeFn),
         /// Re-express a datetime in another time scale.
         ScaleConversion(TimeScaleConversionFn),
     }
@@ -1087,8 +1085,7 @@ impl DatetimeFn {
             }
             Self::Constructor(DatetimeConstructorFn::Epoch)
             | Self::Field(_)
-            | Self::FromNumeric(_)
-            | Self::ToNumeric(_)
+            | Self::Unix(_)
             | Self::ScaleConversion(_) => BuiltinArity::Exact(1),
         }
     }
@@ -1122,21 +1119,28 @@ define_builtin_names! {
 
 define_builtin_names! {
     parse = fn from_spelling;
-    /// Numeric-to-datetime constructors.
-    pub enum DatetimeFromNumericFn {
-        Jd => "from_jd",
-        Mjd => "from_mjd",
-        Unix => "from_unix",
+    /// Conversions between a `Datetime<UTC>` and its Unix-time reading: the
+    /// UTC label as seconds since 1970-01-01T00:00:00Z, counted without leap
+    /// seconds (POSIX time).
+    pub enum UnixTimeFn {
+        /// `from_unix(seconds)`: the UTC datetime a Unix time names.
+        FromUnix => "from_unix",
+        /// `to_unix(datetime)`: the Unix time of a UTC datetime.
+        ToUnix => "to_unix",
     }
 }
 
 define_builtin_names! {
-    parse = fn from_spelling;
-    /// Datetime-to-numeric extractors.
-    pub enum DatetimeToNumericFn {
-        Jd => "to_jd",
-        Mjd => "to_mjd",
-        Unix => "to_unix",
+    parse = pub fn parse;
+    /// Former built-in names that were removed rather than reused, so a call
+    /// gets a dedicated diagnostic instead of the generic unknown-function
+    /// error (#2246). A Julian date is only meaningful in a named time scale;
+    /// these converted every scale to UTC.
+    pub enum RemovedBuiltinFn {
+        ToJd => "to_jd",
+        ToMjd => "to_mjd",
+        FromJd => "from_jd",
+        FromMjd => "from_mjd",
     }
 }
 
@@ -1219,7 +1223,7 @@ mod tests {
 
     use super::{
         AggregationFn, BuiltinApplication, BuiltinArity, BuiltinConst, BuiltinEntry, BuiltinFn,
-        ComplexFn, DatetimeConstructorFn, DatetimeFn, LinearAlgebraFn, ScalarFn,
+        ComplexFn, DatetimeConstructorFn, DatetimeFn, LinearAlgebraFn, RemovedBuiltinFn, ScalarFn,
         TimeScaleConversionFn,
     };
     use crate::semantic::time_scale::TimeScale;
@@ -1227,7 +1231,7 @@ mod tests {
     #[test]
     fn every_builtin_function_round_trips_through_its_spelling() {
         let all = BuiltinFn::all().collect::<Vec<_>>();
-        assert_eq!(all.len(), 89);
+        assert_eq!(all.len(), 85);
         for function in &all {
             assert_eq!(BuiltinFn::parse(function.as_str()), Some(*function));
             assert_eq!(function.to_string(), function.as_str());
@@ -1243,7 +1247,7 @@ mod tests {
         assert_eq!(count(|f| matches!(f, BuiltinFn::Complex(_))), 9);
         assert_eq!(count(|f| matches!(f, BuiltinFn::Aggregation(_))), 9);
         assert_eq!(count(|f| matches!(f, BuiltinFn::LinearAlgebra(_))), 10);
-        assert_eq!(count(|f| matches!(f, BuiltinFn::Datetime(_))), 25);
+        assert_eq!(count(|f| matches!(f, BuiltinFn::Datetime(_))), 21);
         assert_eq!(count(|f| matches!(f, BuiltinFn::Conversion(_))), 3);
         assert_eq!(count(|f| matches!(f, BuiltinFn::IntDivision(_))), 3);
     }
@@ -1261,6 +1265,14 @@ mod tests {
             "determinant",
         ] {
             assert_eq!(BuiltinFn::parse(name), None, "`{name}` must not parse");
+        }
+    }
+
+    #[test]
+    fn removed_names_are_not_builtins() {
+        for removed in RemovedBuiltinFn::all() {
+            assert_eq!(BuiltinFn::parse(removed.as_str()), None, "`{removed}`");
+            assert_eq!(RemovedBuiltinFn::parse(removed.as_str()), Some(removed));
         }
     }
 
@@ -1351,7 +1363,7 @@ mod tests {
             ("det", 1),
             ("epoch", 1),
             ("year", 1),
-            ("from_jd", 1),
+            ("from_unix", 1),
             ("to_unix", 1),
             ("to_tai", 1),
             ("to_float", 1),

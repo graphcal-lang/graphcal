@@ -263,6 +263,7 @@ pub enum MismatchRule {
     CoordCoordinateKeysOnly,
     IntDivisionOperands(IntDivisionFn),
     DatetimeArgument(BuiltinFn),
+    UnixTimeOfUtcOnly,
     DatetimeStringLiteral,
     DatetimeTimezoneLiteral,
     EpochCivilLiteral,
@@ -403,6 +404,9 @@ impl std::fmt::Display for MismatchRule {
             Self::DatetimeArgument(builtin) => {
                 write!(f, "{}() requires a Datetime argument", builtin.as_str())
             }
+            Self::UnixTimeOfUtcOnly => f.write_str(
+                "to_unix() reads the label of a UTC datetime and does not convert scales implicitly; convert first, for example `to_unix(to_utc(@t))`",
+            ),
             Self::DatetimeStringLiteral => {
                 f.write_str("datetime() requires a contextual datetime string literal")
             }

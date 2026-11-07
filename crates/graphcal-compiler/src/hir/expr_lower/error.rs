@@ -98,6 +98,12 @@ pub enum ExprLowerError {
         path: crate::syntax::names::NamePath,
         span: Span,
     },
+    /// A call names a built-in function that was removed from the language.
+    #[error("built-in function `{function}` was removed")]
+    RemovedBuiltinFunction {
+        function: crate::builtin::RemovedBuiltinFn,
+        span: Span,
+    },
     /// A plugin alias is in scope, but does not declare the called function.
     #[error("plugin alias `{alias}` does not declare a function `{name}`")]
     UnknownExternFunction {

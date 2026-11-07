@@ -2,7 +2,7 @@
 
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexVariant};
 
-use crate::builtin::{BuiltinConst, BuiltinFn};
+use crate::builtin::{BuiltinConst, BuiltinFn, RemovedBuiltinFn};
 use crate::desugar::desugared_ast as ast;
 use crate::resolve::category::{DeclSymbolKind, SymbolTable};
 use crate::resolve::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
@@ -594,11 +594,20 @@ impl<'a> ExprLowerer<'a> {
         callee: &crate::syntax::ast::IdentPath,
     ) -> Result<UnappliedFunctionRef, ExprLowerError> {
         if let Some(ident) = callee.as_bare() {
-            return BuiltinFn::parse(ident.name.as_str())
+            let name = ident.name.as_str();
+            return BuiltinFn::parse(name)
                 .map(UnappliedFunctionRef::Builtin)
-                .ok_or_else(|| ExprLowerError::UnknownFunction {
-                    path: callee.to_name_path(),
-                    span: callee.span(),
+                .ok_or_else(|| {
+                    RemovedBuiltinFn::parse(name).map_or_else(
+                        || ExprLowerError::UnknownFunction {
+                            path: callee.to_name_path(),
+                            span: callee.span(),
+                        },
+                        |function| ExprLowerError::RemovedBuiltinFunction {
+                            function,
+                            span: callee.span(),
+                        },
+                    )
                 });
         }
         // `alias::name(...)`: an extern call when `alias` is a plugin alias in

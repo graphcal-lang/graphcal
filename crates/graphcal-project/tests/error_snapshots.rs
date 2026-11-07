@@ -1155,6 +1155,20 @@ fn error_datetime_utc_shift() {
 }
 
 #[test]
+fn error_datetime_removed_julian_date() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_removed_julian_date.gcl");
+    let rendered = render_error(source, "datetime_removed_julian_date.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_unix_non_utc() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_unix_non_utc.gcl");
+    let rendered = render_error(source, "datetime_unix_non_utc.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_datetime_positional_epoch_scale() {
     let source =
         include_str!("../../../tests/fixtures/invalid/datetime_positional_epoch_scale.gcl");

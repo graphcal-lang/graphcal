@@ -37,7 +37,9 @@ use super::operators::{
     ArithOp, BExpr, CExpr, ComplexPart, DExpr, EqualityOp, IExpr, IntArithOp, IntConversion,
     LinearAlgebraCall, OrderedOperands, OrderingOp, QExpr, ScaleOp, ShiftOp,
 };
-use crate::builtin::{BuiltinFn, ComplexFn, ConversionFn, DatetimeConstructorFn, DatetimeFn};
+use crate::builtin::{
+    BuiltinFn, ComplexFn, ConversionFn, DatetimeConstructorFn, DatetimeFn, UnixTimeFn,
+};
 use crate::hir::expr::FunctionRef;
 
 /// Why a checked node could not be assembled into a typed tree.
@@ -888,14 +890,14 @@ fn builtin_call(
                 (DatetimeFn::Field(field), Category::Datetime) => {
                     TExprKind::Int(IExpr::DatetimeField { field, arg })
                 }
-                (DatetimeFn::FromNumeric(function), Category::Quantity) => {
-                    TExprKind::Datetime(DExpr::FromQuantity { function, arg })
+                (DatetimeFn::Unix(UnixTimeFn::FromUnix), Category::Quantity) => {
+                    TExprKind::Datetime(DExpr::FromUnixTime(arg))
                 }
-                (DatetimeFn::FromNumeric(function), Category::Int) => {
-                    TExprKind::Datetime(DExpr::FromInt { function, arg })
+                (DatetimeFn::Unix(UnixTimeFn::FromUnix), Category::Int) => {
+                    TExprKind::Datetime(DExpr::FromUnixInt(arg))
                 }
-                (DatetimeFn::ToNumeric(function), Category::Datetime) => {
-                    TExprKind::Quantity(QExpr::FromDatetime { function, arg })
+                (DatetimeFn::Unix(UnixTimeFn::ToUnix), Category::Datetime) => {
+                    TExprKind::Quantity(QExpr::UnixTime(arg))
                 }
                 _ => return None,
             }
@@ -1272,8 +1274,8 @@ mod tests {
     )]
     fn built_in_calls_select_their_typed_operation() {
         use crate::builtin::{
-            AggregationFn, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn,
-            IntDivisionFn, LinearAlgebraFn, ScalarFn, TimeScaleConversionFn, ValueAggregation,
+            AggregationFn, DatetimeField, IntDivisionFn, LinearAlgebraFn, ScalarFn,
+            TimeScaleConversionFn, ValueAggregation,
         };
         let indexed = CheckedType::Indexed {
             element: Box::new(quantity()),
@@ -1372,19 +1374,19 @@ mod tests {
                 "Int::DatetimeField",
             ),
             (
-                BuiltinFn::Datetime(DatetimeFn::FromNumeric(DatetimeFromNumericFn::Jd)),
+                BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::FromUnix)),
                 vec![quantity()],
-                "Datetime::FromQuantity",
+                "Datetime::FromUnixTime",
             ),
             (
-                BuiltinFn::Datetime(DatetimeFn::FromNumeric(DatetimeFromNumericFn::Unix)),
+                BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::FromUnix)),
                 vec![CheckedType::Int],
-                "Datetime::FromInt",
+                "Datetime::FromUnixInt",
             ),
             (
-                BuiltinFn::Datetime(DatetimeFn::ToNumeric(DatetimeToNumericFn::Mjd)),
+                BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::ToUnix)),
                 vec![datetime()],
-                "Quantity::FromDatetime",
+                "Quantity::UnixTime",
             ),
             (
                 BuiltinFn::Datetime(DatetimeFn::ScaleConversion(TimeScaleConversionFn::ALL[0])),

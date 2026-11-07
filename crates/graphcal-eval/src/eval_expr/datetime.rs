@@ -13,13 +13,6 @@ pub(super) enum DatetimeRangeError {
     OutOfRange { context: &'static str },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum NumericEpochKind {
-    JulianDate,
-    ModifiedJulianDate,
-    UnixSeconds,
-}
-
 fn checked_duration_from_seconds(
     seconds: f64,
     context: &'static str,
@@ -36,19 +29,6 @@ fn checked_duration_from_seconds(
         return Err(DatetimeRangeError::OutOfRange { context });
     }
     Ok(hifitime::Duration::from_seconds(seconds))
-}
-
-fn checked_duration_from_days(
-    days: f64,
-    context: &'static str,
-) -> Result<hifitime::Duration, DatetimeRangeError> {
-    if !days.is_finite() {
-        return Err(DatetimeRangeError::NonFinite {
-            context,
-            value: days,
-        });
-    }
-    checked_duration_from_seconds(days * 86_400.0, context)
 }
 
 fn checked_epoch_with_delta(
@@ -122,28 +102,16 @@ pub(super) fn checked_epoch_difference_seconds(
     Ok(hifitime::Duration::from_total_nanoseconds(difference_ns).to_seconds())
 }
 
-pub(super) fn checked_epoch_from_numeric(
-    value: f64,
-    kind: NumericEpochKind,
+/// The UTC datetime whose Unix-time reading is `seconds`.
+pub(super) fn checked_epoch_from_unix_seconds(
+    seconds: f64,
 ) -> Result<hifitime::Epoch, DatetimeRangeError> {
-    let (base, delta, context) = match kind {
-        NumericEpochKind::JulianDate => (
-            hifitime::Epoch::from_jde_utc(0.0),
-            checked_duration_from_days(value, "Julian date")?,
-            "Julian date conversion",
-        ),
-        NumericEpochKind::ModifiedJulianDate => (
-            hifitime::Epoch::from_mjd_utc(0.0),
-            checked_duration_from_days(value, "modified Julian date")?,
-            "modified Julian date conversion",
-        ),
-        NumericEpochKind::UnixSeconds => (
-            hifitime::Epoch::from_unix_seconds(0.0),
-            checked_duration_from_seconds(value, "Unix timestamp")?,
-            "Unix timestamp conversion",
-        ),
-    };
-    checked_epoch_with_delta(base, delta, false, context)
+    checked_epoch_with_delta(
+        hifitime::Epoch::from_unix_seconds(0.0),
+        checked_duration_from_seconds(seconds, "Unix timestamp")?,
+        false,
+        "Unix timestamp conversion",
+    )
 }
 
 /// Invalid Gregorian components returned by the datetime backend.
@@ -383,9 +351,8 @@ mod tests {
     use graphcal_compiler::semantic::time_scale::TimeScale;
 
     use crate::eval_expr::datetime::{
-        GregorianFields, NumericEpochKind, checked_epoch_add_seconds,
-        checked_epoch_difference_seconds, checked_epoch_from_numeric,
-        checked_epoch_subtract_seconds,
+        GregorianFields, checked_epoch_add_seconds, checked_epoch_difference_seconds,
+        checked_epoch_from_unix_seconds, checked_epoch_subtract_seconds,
     };
 
     #[test]
@@ -450,18 +417,11 @@ mod tests {
     }
 
     #[test]
-    fn numeric_epoch_constructors_reject_saturating_inputs() {
-        for kind in [
-            NumericEpochKind::JulianDate,
-            NumericEpochKind::ModifiedJulianDate,
-            NumericEpochKind::UnixSeconds,
-        ] {
-            assert!(checked_epoch_from_numeric(1.0e300, kind).is_err());
-            assert!(checked_epoch_from_numeric(-1.0e300, kind).is_err());
-        }
-        assert!(checked_epoch_from_numeric(0.0, NumericEpochKind::UnixSeconds).is_ok());
-        assert!(checked_epoch_from_numeric(2_460_000.0, NumericEpochKind::JulianDate).is_ok());
-        assert!(checked_epoch_from_numeric(60_000.0, NumericEpochKind::ModifiedJulianDate).is_ok());
+    fn unix_time_constructor_rejects_saturating_inputs() {
+        assert!(checked_epoch_from_unix_seconds(1.0e300).is_err());
+        assert!(checked_epoch_from_unix_seconds(-1.0e300).is_err());
+        assert!(checked_epoch_from_unix_seconds(f64::NAN).is_err());
+        assert!(checked_epoch_from_unix_seconds(0.0).is_ok());
     }
 
     #[test]

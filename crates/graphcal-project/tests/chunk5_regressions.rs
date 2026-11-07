@@ -172,13 +172,12 @@ node now: Datetime<TAI> = epoch<TAI>("2024-01-01T00:00:00");
 node far_add: Datetime<TAI> = @now + 1.0e300 s;
 node far_subtract: Datetime<TAI> = @now - 1.0e300 s;
 node far_unix: Datetime = from_unix(1.0e300);
-node far_jd: Datetime = from_jd(1.0e300);
-node far_mjd: Datetime = from_mjd(-1.0e300);
+node far_unix_negative: Datetime = from_unix(-1.0e300);
 "#,
     )
     .unwrap();
 
-    for name in ["far_add", "far_subtract", "far_unix", "far_jd", "far_mjd"] {
+    for name in ["far_add", "far_subtract", "far_unix", "far_unix_negative"] {
         assert_node_failed(&result, name);
     }
 }

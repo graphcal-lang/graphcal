@@ -6,7 +6,7 @@
 //! which keeps the typed failure and renders it only where the diagnostic is
 //! displayed.
 
-use graphcal_compiler::builtin::{DatetimeFromNumericFn, ScalarFn};
+use graphcal_compiler::builtin::ScalarFn;
 use graphcal_compiler::hir::expr::ExternFnRef;
 use graphcal_compiler::ratio::ExactPowerError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -43,8 +43,8 @@ pub(super) enum RuntimeFailure {
     Complex(#[from] ComplexEvalError),
     #[error(transparent)]
     Datetime(#[from] DatetimeRangeError),
-    #[error("{}() integer argument {} is too large for exact conversion", .0.as_str(), .1)]
-    DatetimeIntegerTooLarge(DatetimeFromNumericFn, i64),
+    #[error("from_unix() integer argument {0} is too large for exact conversion")]
+    UnixIntegerTooLarge(i64),
     #[error("to_float() argument: {0}")]
     ToFloat(ExactI64ToF64Error),
     #[error("Int operand of `*` or `/` with a quantity: {0}")]

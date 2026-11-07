@@ -6,7 +6,7 @@
 //! another shape is a violated invariant, reported at one place
 //! ([`read_shape`], through [`Operands`]), and never an evaluation error.
 
-use graphcal_compiler::builtin::{DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn};
+use graphcal_compiler::builtin::DatetimeField;
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::outcome::Outcome;
@@ -369,14 +369,9 @@ pub(super) fn quantity<'t>(
                 .map_err(Outcome::Failed)
         }
         QExpr::Coordinate(arg) => operands.coordinate(arg),
-        QExpr::FromDatetime { function, arg } => {
-            let epoch = operands.datetime(arg)?;
-            let result = match function {
-                DatetimeToNumericFn::Jd => epoch.to_jde_utc_days(),
-                DatetimeToNumericFn::Mjd => epoch.to_mjd_utc_days(),
-                DatetimeToNumericFn::Unix => epoch.to_unix_seconds(),
-            };
-            super::numeric::finite_quantity(result, "datetime conversion")
+        QExpr::UnixTime(arg) => {
+            let result = operands.datetime(arg)?.to_unix_seconds();
+            super::numeric::finite_quantity(result, "to_unix()")
                 .map_err(|error| ctx.runtime_error(error, arg.span()))
                 .map_err(Outcome::Failed)
         }
@@ -586,19 +581,18 @@ pub(super) fn datetime<'t>(
             let datetime = operands.datetime(datetime)?;
             super::datetime::checked_epoch_add_seconds(datetime, seconds)
         }
-        DExpr::FromQuantity { function, arg } => {
+        DExpr::FromUnixTime(arg) => {
             let value = operands.quantity(arg)?.get();
-            return from_numeric(function, value, arg.span(), operands.ctx);
+            return from_unix_seconds(value, arg.span(), operands.ctx);
         }
-        DExpr::FromInt { function, arg } => {
+        DExpr::FromUnixInt(arg) => {
             let value = operands.int(arg)?;
             let value = super::numeric::exact_i64_to_f64(value).map_err(|_| {
-                operands.ctx.runtime_error(
-                    RuntimeFailure::DatetimeIntegerTooLarge(function, value),
-                    arg.span(),
-                )
+                operands
+                    .ctx
+                    .runtime_error(RuntimeFailure::UnixIntegerTooLarge(value), arg.span())
             })?;
-            return from_numeric(function, value, arg.span(), operands.ctx);
+            return from_unix_seconds(value, arg.span(), operands.ctx);
         }
         DExpr::ToScale { conversion, arg } => {
             return Ok(crate::time_scale_conversion::to_time_scale(
@@ -612,19 +606,13 @@ pub(super) fn datetime<'t>(
         .map_err(Outcome::Failed)
 }
 
-/// The UTC datetime a numeric epoch count denotes.
-fn from_numeric(
-    function: DatetimeFromNumericFn,
+/// The UTC datetime a Unix time names.
+fn from_unix_seconds(
     value: f64,
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
-    let kind = match function {
-        DatetimeFromNumericFn::Jd => super::datetime::NumericEpochKind::JulianDate,
-        DatetimeFromNumericFn::Mjd => super::datetime::NumericEpochKind::ModifiedJulianDate,
-        DatetimeFromNumericFn::Unix => super::datetime::NumericEpochKind::UnixSeconds,
-    };
-    super::datetime::checked_epoch_from_numeric(value, kind)
+    super::datetime::checked_epoch_from_unix_seconds(value)
         .map_err(|error| ctx.runtime_error(error, span))
         .map_err(Outcome::Failed)
 }

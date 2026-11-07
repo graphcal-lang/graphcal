@@ -89,3 +89,31 @@ node tt_shift: Bool = epoch<TT>("2000-01-01T12:00:00") + 1.0 s == epoch<TT>("200
         assert_true(&result, name);
     }
 }
+
+// TYC-2: the Julian-date functions are removed with a dedicated diagnostic, and
+// `to_unix` accepts only `Datetime<UTC>` (decision D2).
+#[test]
+fn removed_julian_date_functions_fail_loudly() {
+    for call in [
+        "to_jd(datetime(\"2000-01-01T12:00:00Z\"))",
+        "to_mjd(datetime(\"2000-01-01T12:00:00Z\"))",
+    ] {
+        assert_compile_error(
+            &format!("node x: Dimensionless = {call};"),
+            "graphcal::N038",
+        );
+    }
+    for call in ["from_jd(2451545.0)", "from_mjd(51544.5)"] {
+        assert_compile_error(&format!("node x: Datetime = {call};"), "graphcal::N038");
+    }
+}
+
+#[test]
+fn to_unix_rejects_every_non_utc_scale() {
+    for scale in ["TAI", "TT", "TDB", "ET", "GPST", "GST", "BDT", "QZSST"] {
+        assert_compile_error(
+            &format!(r#"node x: Dimensionless = to_unix(epoch<{scale}>("2024-01-01T00:00:00"));"#),
+            "graphcal::D001",
+        );
+    }
+}

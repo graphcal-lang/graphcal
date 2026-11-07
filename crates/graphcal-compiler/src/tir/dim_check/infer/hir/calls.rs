@@ -10,7 +10,7 @@ use crate::semantic_error::dimension_mismatch::{
 };
 
 use crate::builtin::{
-    AggregationFn, BuiltinFn, DatetimeFn, IntDivisionFn, ScalarFn, ValueAggregation,
+    AggregationFn, BuiltinFn, DatetimeFn, IntDivisionFn, ScalarFn, UnixTimeFn, ValueAggregation,
 };
 use crate::dimension::{Dimension, Rational};
 use crate::semantic_error::SemanticError;
@@ -259,7 +259,7 @@ impl Infer<'_> {
             BuiltinFn::Datetime(DatetimeFn::Field(_)) => {
                 self.infer_hir_datetime_unary(builtin, args, CheckedType::Int)
             }
-            BuiltinFn::Datetime(DatetimeFn::FromNumeric(_)) => {
+            BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::FromUnix)) => {
                 let arg_type = self.infer_arg(&args[0])?;
                 match &arg_type {
                     t if t
@@ -287,11 +287,9 @@ impl Infer<'_> {
                     crate::semantic::time_scale::TimeScale::UTC,
                 ))
             }
-            BuiltinFn::Datetime(DatetimeFn::ToNumeric(_)) => self.infer_hir_datetime_unary(
-                builtin,
-                args,
-                CheckedType::Quantity(Dimension::dimensionless()),
-            ),
+            BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::ToUnix)) => {
+                self.infer_hir_to_unix(builtin, args)
+            }
             BuiltinFn::Scalar(function) => {
                 self.infer_hir_builtin_fn(function, callee.span, checked)
             }
