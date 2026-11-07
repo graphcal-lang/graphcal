@@ -1,0 +1,7 @@
+// quantity_literal_operands.gcl -- parentheses a quantity literal needs before `*`, `/` and `^`
+param n: Int = 3;
+node other: Length = (2.0 m) * PI;
+node area: Area = -(2.0 m) ^ 2;
+node angle: Angle = (0.001 rad) * to_float(@n);
+node chained: Length = (@n * 2.0 m) * PI;
+node smallest: Int = (-9223372036854775808) ^ 1;

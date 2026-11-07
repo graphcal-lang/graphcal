@@ -271,6 +271,44 @@ fn load_bearing_parentheses_are_preserved() {
     assert_eq!(format_source(&formatted).unwrap(), formatted);
 }
 
+#[test]
+fn quantity_literal_keeps_parentheses_before_unit_continuing_operators() {
+    // A quantity literal's unit suffix greedily absorbs a following `*`,
+    // `/` or `^`, so `(2.0 m) * PI` must not print as `2.0 m * PI` (#2244).
+    let cases = [
+        ("(2.0 m) * PI", "(2.0 m) * PI"),
+        ("(2.0 m) / s", "(2.0 m) / s"),
+        ("(0.001 rad) * to_float(@n)", "(0.001 rad) * to_float(@n)"),
+        ("(2.0 m)^2", "(2.0 m) ^ 2"),
+        ("-(2.0 m)^2", "-(2.0 m) ^ 2"),
+        ("(-2.0 m) * PI", "(-2.0 m) * PI"),
+        ("(@x * 2.0 m) * y", "(@x * 2.0 m) * y"),
+        ("@x + (2.0 m) * y", "@x + (2.0 m) * y"),
+        ("(2.0 m) * (3.0 s)", "2.0 m * 3.0 s"),
+        ("(2.0 m) * (y + @x)", "(2.0 m) * (y + @x)"),
+        ("(2.0 m) / ((2.0 m) * y)", "(2.0 m) / ((2.0 m) * y)"),
+        ("(2.0 m) * @x", "2.0 m * @x"),
+        ("(2.0 m) / (@x + @y)", "2.0 m / (@x + @y)"),
+        ("(2.0 m) / 3.0", "2.0 m / 3.0"),
+        ("@x * 2.0 m", "@x * 2.0 m"),
+        ("(2.0 m) + @x", "2.0 m + @x"),
+        ("(2.0 m) % @x", "2.0 m % @x"),
+        ("(-9223372036854775808)^1", "(-9223372036854775808) ^ 1"),
+        ("-9223372036854775808", "-9223372036854775808"),
+    ];
+    for (expression, expected) in cases {
+        let source = format!("node result: Dimensionless = {expression};\n");
+        let formatted = format_source(&source)
+            .unwrap_or_else(|error| panic!("failed to format `{expression}`: {error}"));
+        assert_eq!(
+            formatted,
+            format!("node result: Dimensionless = {expected};\n"),
+            "unexpected formatting of `{expression}`"
+        );
+        assert_eq!(format_source(&formatted).unwrap(), formatted);
+    }
+}
+
 fn generated_expression() -> impl Strategy<Value = String> {
     prop_oneof![
         Just("1.0".to_string()),
@@ -279,6 +317,7 @@ fn generated_expression() -> impl Strategy<Value = String> {
         Just("@value".to_string()),
         Just("value".to_string()),
         Just("sqrt(1.0)".to_string()),
+        Just("1.0 m".to_string()),
     ]
     .prop_recursive(4, 128, 4, |inner| {
         prop_oneof![
