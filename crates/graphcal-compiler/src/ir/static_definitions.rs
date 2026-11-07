@@ -147,8 +147,11 @@ enum StaticItem {
 /// The source declaration of one dimension.
 #[derive(Debug, Clone, Copy)]
 enum DimensionSource<'a> {
-    /// `base dim Foo;` or a required `dim D;`: an opaque base dimension.
+    /// `base dim Foo;`: an opaque base dimension.
     Base(&'a Spanned<DimName>),
+    /// A required bindable port `pub(bind) dim D;`: an opaque base dimension
+    /// in its own module, which every include binds to a concrete one.
+    Required(&'a Spanned<DimName>),
     /// `dim Foo = <expr>;`
     Derived(&'a DimDecl, &'a DimExpr),
 }
@@ -189,7 +192,7 @@ impl<'a> ModuleSource<'a> {
                     let definition = dimension
                         .definition
                         .as_ref()
-                        .map_or(DimensionSource::Base(&dimension.name), |definition| {
+                        .map_or(DimensionSource::Required(&dimension.name), |definition| {
                             DimensionSource::Derived(dimension, definition)
                         });
                     module
@@ -713,7 +716,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             (None, Some((DimensionSource::Derived(_, definition), src))) => self
                 .evaluate_dim_expr(owner, definition, &HashMap::new(), view, site)
                 .map_err(|failure| dim_expr_error(failure, src, definition.span))?,
-            (None, Some((DimensionSource::Base(_), _)) | None) => default,
+            (None, Some((DimensionSource::Base(_) | DimensionSource::Required(_), _)) | None) => {
+                default
+            }
         };
         self.port_generic_dimensions
             .insert(identity.clone(), generic.clone());
@@ -734,6 +739,14 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             })
     }
 
+    /// Whether `identity` is a required bindable dimension port of its module.
+    fn is_required_dimension_port(&self, identity: &ResolvedDimName) -> bool {
+        self.modules
+            .get(identity.owner())
+            .and_then(|module| module.dimensions.get(&identity.to_unowned_def_name()))
+            .is_some_and(|source| matches!(source, DimensionSource::Required(_)))
+    }
+
     fn dimension_cycle_at(&self, identity: &ResolvedDimName) -> SemanticError {
         let source = self.modules.get(identity.owner()).and_then(|module| {
             module
@@ -742,7 +755,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 .map(|source| (source, module.src))
         });
         match source {
-            Some((DimensionSource::Base(name), src)) => CycleSite::Dimension { name, src }.error(),
+            Some((DimensionSource::Base(name) | DimensionSource::Required(name), src)) => {
+                CycleSite::Dimension { name, src }.error()
+            }
             Some((DimensionSource::Derived(declaration, _), src)) => CycleSite::Dimension {
                 name: &declaration.name,
                 src,
@@ -769,7 +784,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             ));
         };
         match source {
-            DimensionSource::Base(_) => {
+            DimensionSource::Base(_) | DimensionSource::Required(_) => {
                 let id = BaseDimId::UserDefined(identity.clone());
                 self.base_dimensions.entry(id.clone()).or_default();
                 self.annotate_base(owner, id.clone());
@@ -956,6 +971,22 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 None,
             )
             .map_err(|failure| dim_expr_error(failure, src, unit.dim_type.span))?;
+        if let Some(port) = dim.iter().find_map(|(base, _)| match base {
+            BaseDimId::UserDefined(port) if self.is_required_dimension_port(port) => Some(port),
+            BaseDimId::UserDefined(_) | BaseDimId::Prelude(_) => None,
+        }) {
+            // Every include binds the port to a concrete dimension that
+            // already owns its canonical unit, so a unit defined over the
+            // opaque port would silently become a scale-1 alias of it.
+            return Err(SemanticError::located(
+                src,
+                unit.name.span,
+                DimensionError::UnitOverRequiredDimensionPort {
+                    name: unit.name.value.clone(),
+                    port: port.to_unowned_def_name(),
+                },
+            ));
+        }
         if !unit.constness.is_const() {
             self.reject_default_dependent_runtime_unit(owner, unit, src)?;
         }

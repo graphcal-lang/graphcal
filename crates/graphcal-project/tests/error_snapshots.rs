@@ -494,6 +494,22 @@ fn error_base_unit_derived_dimension() {
 }
 
 #[test]
+fn error_base_unit_required_dimension_port() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/base_unit_required_dimension_port.gcl");
+    let rendered = render_error(source, "base_unit_required_dimension_port.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unit_over_required_dimension_port() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/unit_over_required_dimension_port.gcl");
+    let rendered = render_error(source, "unit_over_required_dimension_port.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_base_unit_affine_temperature() {
     let source = include_str!("../../../tests/fixtures/invalid/base_unit_affine_temperature.gcl");
     let rendered = render_error(source, "base_unit_affine_temperature.gcl");

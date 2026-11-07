@@ -26,20 +26,37 @@ fn family_code_catalog() -> BTreeMap<String, String> {
         else {
             panic!("family `{family}` has no `code()` method");
         };
+        // Variants of a multi-line `Self::A { .. } | Self::B { .. } => …`
+        // pattern that precede the line carrying the code.
+        let mut pending = Vec::new();
         for line in body.lines() {
-            let Some((arm, code)) = line.trim().split_once(" => \"graphcal::") else {
-                continue;
+            let line = line.trim();
+            let (pattern, code) = match line.split_once(" => \"graphcal::") {
+                Some((pattern, code)) => (pattern, Some(code)),
+                None if !line.contains("=>")
+                    && (line.starts_with("Self::") || line.starts_with("| Self::")) =>
+                {
+                    (line, None)
+                }
+                None => continue,
             };
-            let variant = arm
+            let variant = pattern
+                .trim_start_matches("| ")
                 .strip_prefix("Self::")
                 .and_then(|rest| rest.split([' ', '(', '{']).next())
                 .unwrap_or_else(|| panic!("unexpected code arm in `{family}`: {line}"));
+            pending.push(variant.to_owned());
+            let Some(code) = code else {
+                continue;
+            };
             let code = code.trim_end_matches([',', '"']);
-            let previous = catalog.insert(variant.to_owned(), code.to_owned());
-            assert!(
-                previous.is_none(),
-                "variant `{variant}` appears in more than one family"
-            );
+            for variant in std::mem::take(&mut pending) {
+                let previous = catalog.insert(variant.clone(), code.to_owned());
+                assert!(
+                    previous.is_none(),
+                    "variant `{variant}` appears in more than one family"
+                );
+            }
         }
     }
     catalog
