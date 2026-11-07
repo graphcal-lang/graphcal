@@ -626,8 +626,9 @@ impl EvalAnalysisOutput {
                 text,
                 symbol_table,
             ));
+        let shown = symbol_table.inlay_hint_declarations();
         self.values
-            .extend(format_eval_values(result, cancellation)?);
+            .extend(format_eval_values(result, &shown, cancellation)?);
         Ok(())
     }
 

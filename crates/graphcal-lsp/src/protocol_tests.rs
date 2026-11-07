@@ -523,6 +523,261 @@ async fn creating_previously_missing_dependency_repairs_open_importer() {
     drain.abort();
 }
 
+/// What a refresh-capable test client observed, in arrival order.
+#[derive(Debug)]
+enum ClientEvent {
+    InlayHintRefresh,
+    Diagnostics(Url),
+}
+
+/// Answer every server request and report what arrived.
+fn spawn_refresh_client(socket: ClientSocket) -> tokio::sync::mpsc::UnboundedReceiver<ClientEvent> {
+    let (events, received) = tokio::sync::mpsc::unbounded_channel();
+    let (mut requests, mut responses) = socket.split();
+    tokio::spawn(async move {
+        while let Some(message) = requests.next().await {
+            let event = match message.method() {
+                "workspace/inlayHint/refresh" => ClientEvent::InlayHintRefresh,
+                "textDocument/publishDiagnostics" => {
+                    let uri = message.params().expect("diagnostic params")["uri"]
+                        .as_str()
+                        .and_then(|uri| Url::parse(uri).ok())
+                        .expect("diagnostic uri");
+                    ClientEvent::Diagnostics(uri)
+                }
+                _ => continue,
+            };
+            if let Some(id) = message.id().cloned() {
+                let _ = responses.send(Response::from_ok(id, json!(null))).await;
+            }
+            if events.send(event).is_err() {
+                break;
+            }
+        }
+    });
+    received
+}
+
+async fn next_client_event(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<ClientEvent>,
+) -> ClientEvent {
+    timeout(Duration::from_secs(30), events.recv())
+        .await
+        .expect("client event timeout")
+        .expect("client closed")
+}
+
+/// LSP-4 (#2253): one `didChangeWatchedFiles` batch touching many
+/// dependencies of an open root schedules that root once, with one refresh.
+#[tokio::test]
+async fn watched_file_burst_schedules_each_root_once() {
+    const LIBRARIES: usize = 5;
+
+    let project = tempfile::tempdir().unwrap();
+    let source_dir = project.path().join("src/burst");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        project.path().join("graphcal.toml"),
+        "[package]\nname = \"burst\"\n",
+    )
+    .unwrap();
+    let library_paths: Vec<_> = (0..LIBRARIES)
+        .map(|index| source_dir.join(format!("lib{index}.gcl")))
+        .collect();
+    for (index, path) in library_paths.iter().enumerate() {
+        std::fs::write(
+            path,
+            format!("pub const node v{index}: Dimensionless = 1.0;\n"),
+        )
+        .unwrap();
+    }
+    let imports = (0..LIBRARIES)
+        .map(|index| format!("import burst.lib{index}::{{v{index}}};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let sum = (0..LIBRARIES)
+        .map(|index| format!("@v{index}"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let main_source = format!("{imports}\nnode total: Dimensionless = {sum};\n");
+    let main_path = source_dir.join("main.gcl");
+    std::fs::write(&main_path, &main_source).unwrap();
+    let main_uri = Url::from_file_path(&main_path).unwrap();
+
+    let (mut service, socket) = service();
+    initialize(
+        &mut service,
+        json!({ "workspace": { "inlayHint": { "refreshSupport": true } } }),
+    )
+    .await;
+    let mut events = spawn_refresh_client(socket);
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&main_uri, 1, &main_source),
+    )
+    .await;
+    // The open's pass publishes, then asks for a refresh.
+    while !matches!(next_client_event(&mut events).await, ClientEvent::Diagnostics(uri) if uri == main_uri)
+    {
+    }
+    while !matches!(
+        next_client_event(&mut events).await,
+        ClientEvent::InlayHintRefresh
+    ) {}
+    let generation = service.inner().generation_for_test(&main_uri);
+
+    for (index, path) in library_paths.iter().enumerate() {
+        std::fs::write(
+            path,
+            format!("pub const node v{index}: Dimensionless = 2.0;\n"),
+        )
+        .unwrap();
+    }
+    let changes: Vec<_> = library_paths
+        .iter()
+        .map(|path| json!({ "uri": Url::from_file_path(path).unwrap(), "type": 2 }))
+        .collect();
+    notify(
+        &mut service,
+        "workspace/didChangeWatchedFiles",
+        json!({ "changes": changes }),
+    )
+    .await;
+    assert_eq!(
+        service.inner().generation_for_test(&main_uri),
+        generation + 1,
+        "the burst schedules the root exactly once"
+    );
+    let mut refreshes = 0;
+    loop {
+        match next_client_event(&mut events).await {
+            ClientEvent::InlayHintRefresh => refreshes += 1,
+            ClientEvent::Diagnostics(uri) if uri == main_uri => break,
+            ClientEvent::Diagnostics(_) => {}
+        }
+    }
+    assert_eq!(refreshes, 1, "one refresh for the whole burst");
+}
+
+/// LSP-9 (#2253): `didOpen` and `didSave` return before their analysis
+/// finishes. Here the pass cannot finish until the client answers its
+/// inlay-hint refresh request, which the client only reads after the
+/// notifications returned.
+#[tokio::test]
+async fn open_and_save_do_not_wait_for_their_analysis() {
+    let (mut service, socket) = service();
+    initialize(
+        &mut service,
+        json!({ "workspace": { "inlayHint": { "refreshSupport": true } } }),
+    )
+    .await;
+    let uri = Url::parse("untitled:unawaited.gcl").unwrap();
+    timeout(
+        Duration::from_secs(30),
+        notify(
+            &mut service,
+            "textDocument/didOpen",
+            open_params(&uri, 1, SOURCE),
+        ),
+    )
+    .await
+    .expect("didOpen returns before its analysis");
+    timeout(
+        Duration::from_secs(30),
+        notify(
+            &mut service,
+            "textDocument/didSave",
+            json!({ "textDocument": { "uri": uri }, "text": SOURCE }),
+        ),
+    )
+    .await
+    .expect("didSave returns before its analysis");
+
+    let mut events = spawn_refresh_client(socket);
+    while !matches!(
+        next_client_event(&mut events).await,
+        ClientEvent::Diagnostics(published) if published == uri
+    ) {}
+}
+
+/// LSP-16 (#2253): disk revisions of documents no analysis depends on are
+/// pruned, and closing the last document empties every per-document map.
+#[tokio::test]
+async fn per_document_state_shrinks_after_analysis_and_close() {
+    let project = tempfile::tempdir().unwrap();
+    let source_dir = project.path().join("src/shrink");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        project.path().join("graphcal.toml"),
+        "[package]\nname = \"shrink\"\n",
+    )
+    .unwrap();
+    let library_path = source_dir.join("lib.gcl");
+    let unrelated_path = source_dir.join("unrelated.gcl");
+    let main_path = source_dir.join("main.gcl");
+    let main_source = "import shrink.lib::{v};\nnode total: Dimensionless = @v;\n";
+    std::fs::write(&library_path, "pub const node v: Dimensionless = 1.0;\n").unwrap();
+    std::fs::write(&unrelated_path, "node u: Dimensionless = 1.0;\n").unwrap();
+    std::fs::write(&main_path, main_source).unwrap();
+    let main_uri = Url::from_file_path(&main_path).unwrap();
+
+    let (mut service, socket) = service();
+    initialize(&mut service, json!({})).await;
+    let drain = tokio::spawn(async move {
+        let mut socket = socket;
+        while socket.next().await.is_some() {}
+    });
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&main_uri, 1, main_source),
+    )
+    .await;
+    service.inner().wait_until_settled_for_test(&main_uri).await;
+
+    std::fs::write(&library_path, "pub const node v: Dimensionless = 2.0;\n").unwrap();
+    std::fs::write(&unrelated_path, "node u: Dimensionless = 2.0;\n").unwrap();
+    let changes: Vec<_> = [&library_path, &unrelated_path]
+        .into_iter()
+        .map(|path| json!({ "uri": Url::from_file_path(path).unwrap(), "type": 2 }))
+        .collect();
+    notify(
+        &mut service,
+        "workspace/didChangeWatchedFiles",
+        json!({ "changes": changes }),
+    )
+    .await;
+    service.inner().wait_until_settled_for_test(&main_uri).await;
+    let disk = service.inner().disk_revision_identities_for_test().await;
+    assert_eq!(disk.len(), 1, "{disk:?}");
+    assert!(
+        disk.iter().all(|identity| identity
+            .file_path()
+            .is_some_and(|path| path.ends_with("lib.gcl"))),
+        "only the dependency keeps its revision: {disk:?}"
+    );
+
+    notify(
+        &mut service,
+        "textDocument/didClose",
+        json!({ "textDocument": { "uri": main_uri } }),
+    )
+    .await;
+    assert!(
+        service
+            .inner()
+            .disk_revision_identities_for_test()
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        service.inner().tracked_documents_for_test().await,
+        [0, 0, 0]
+    );
+    drain.abort();
+}
+
 async fn assert_imported_factor_features(
     service: &mut LspService<Backend>,
     main_uri: &Url,
@@ -894,6 +1149,75 @@ async fn inlay_hints_requested_right_after_an_edit_answer_the_edited_text() {
     )
     .await;
     assert_eq!(calculated_hint_labels(&mut service, &uri).await, [" = 3"]);
+    drain.abort();
+}
+
+/// LSP-3 (#2253): slow feature work runs off tower-lsp's serving task, so a
+/// fast request is answered meanwhile, and `$/cancelRequest` answers the slow
+/// request at once instead of after its work.
+#[tokio::test]
+async fn slow_feature_work_neither_blocks_requests_nor_ignores_cancellation() {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use tower_lsp::jsonrpc::ErrorCode;
+
+    const WAIT: Duration = Duration::from_secs(30);
+
+    let (mut service, mut socket) = service();
+    initialize(&mut service, json!({})).await;
+    let uri = Url::parse("untitled:slow.gcl").unwrap();
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&uri, 1, SOURCE),
+    )
+    .await;
+    let _ = timeout(WAIT, socket.next())
+        .await
+        .expect("publish diagnostics timeout");
+    let drain = tokio::spawn(async move { while socket.next().await.is_some() {} });
+    let probe = Arc::clone(&service.inner().blocking_feature_probe);
+
+    let slow = service.ready().await.expect("service ready").call(
+        Request::build(crate::server::BlockingFeatureRequest::METHOD)
+            .params(json!({ "uri": uri }))
+            .id(2)
+            .finish(),
+    );
+    let slow = tokio::spawn(slow);
+    timeout(WAIT, probe.started.notified())
+        .await
+        .expect("the slow feature work starts");
+
+    let hover = timeout(
+        WAIT,
+        request(
+            &mut service,
+            "textDocument/hover",
+            position_params(&uri, 1, 6),
+        ),
+    )
+    .await
+    .expect("a fast request is answered while slow feature work runs");
+    assert!(!hover.is_null(), "hover answers the analyzed document");
+
+    notify(&mut service, "$/cancelRequest", json!({ "id": 2 })).await;
+    let cancelled = timeout(WAIT, slow)
+        .await
+        .expect("the cancelled request is answered while its work still runs")
+        .expect("request task")
+        .expect("service call")
+        .expect("request response");
+    let (_, body) = cancelled.into_parts();
+    assert_eq!(
+        body.expect_err("cancelled request").code,
+        ErrorCode::RequestCancelled
+    );
+    // Only now is the work released: the answer did not wait for it.
+    probe.released.store(true, Ordering::SeqCst);
+    timeout(WAIT, probe.finished.notified())
+        .await
+        .expect("the released work finishes");
     drain.abort();
 }
 

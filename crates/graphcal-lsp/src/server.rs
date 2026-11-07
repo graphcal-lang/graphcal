@@ -1,6 +1,7 @@
 //! LSP server backend: state management and `LanguageServer` trait implementation.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -24,19 +25,20 @@ use tower_lsp::lsp_types::{
 use tower_lsp::{Client, ClientSocket, LanguageServer, LspService, Server};
 
 use crate::analysis::AnalysisResult;
+use crate::analysis_generations::AnalysisGenerations;
 use crate::analysis_pipeline::{
     AnalysisRun, OpenBuffer, ViewModelDemand, run_analysis_with_cancellation,
 };
 use crate::analysis_schedule_state::AnalysisScheduleState;
-use crate::analysis_settlement::AnalysisSettlement;
 use crate::client_capabilities::{ClientFeatureSupport, DocumentSymbolShape, WorkspaceEditShape};
 use crate::convert::position_to_byte_offset;
+use crate::feature_worker::{FeatureWorkError, run_feature};
 use crate::file_identity::{document_identity, file_identity};
 use crate::formatting_scheduler::{FormattingScheduler, FormattingTaskError};
 use crate::project_symbols::ProjectSymbolIndex;
 use crate::workspace_revision::{
-    AnalysisFreshness, AnalysisInputSnapshot, DependencyGraph, DocumentIdentity, DocumentRevision,
-    RevisionClock, RevisionExhausted, current_revisions,
+    AnalysisFreshness, AnalysisInputSnapshot, CurrentRevisions, DependencyGraph, DocumentIdentity,
+    DocumentRevision, RevisionClock, RevisionExhausted,
 };
 use graphcal_compiler::cancellation::{CancellationSource, CancellationToken, Cancelled};
 
@@ -200,6 +202,51 @@ async fn acquire_analysis_permit(
     }
 }
 
+/// Analysis passes between observing the current revisions and checking
+/// them again. Disk revisions are pruned only while there is none, so no pass
+/// can miss a change that was recorded and pruned during its flight.
+#[derive(Debug, Default)]
+struct RevisionObservers(AtomicUsize);
+
+impl RevisionObservers {
+    /// Register one observing pass. Requiring the disk-revision read guard
+    /// the observation reads ensures a pruner holding the write lock sees it.
+    fn observe(
+        &self,
+        _observed: &tokio::sync::RwLockReadGuard<'_, HashMap<DocumentIdentity, DocumentRevision>>,
+    ) -> RevisionObservation<'_> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        RevisionObservation(self)
+    }
+
+    fn any(&self) -> bool {
+        self.0.load(Ordering::SeqCst) != 0
+    }
+}
+
+/// One registered observing pass; ends when dropped.
+struct RevisionObservation<'a>(&'a RevisionObservers);
+
+impl Drop for RevisionObservation<'_> {
+    fn drop(&mut self) {
+        self.0.0.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Forget the disk revisions of documents no dependency edge references, so
+/// the map does not grow with every file a watcher ever reported.
+async fn prune_filesystem_revisions(
+    filesystem_revisions: &RwLock<HashMap<DocumentIdentity, DocumentRevision>>,
+    dependency_graph: &RwLock<DependencyGraph>,
+    observers: &RevisionObservers,
+) {
+    let mut disk = filesystem_revisions.write().await;
+    if observers.any() {
+        return;
+    }
+    dependency_graph.read().await.retain_referenced(&mut disk);
+}
+
 /// Latest text and LSP version for one open editor document.
 #[derive(Debug, Clone)]
 struct OpenDocumentSnapshot {
@@ -223,11 +270,12 @@ pub struct Backend {
     /// capabilities. `OnceLock` mirrors the protocol's initialize-once rule.
     client_features: Arc<OnceLock<ClientFeatureSupport>>,
     /// Per-document analysis results, keyed by URI.
-    documents: Arc<RwLock<HashMap<Url, AnalysisResult>>>,
-    /// Generation counter per URI, used for debouncing `did_change`.
-    /// Each change increments the counter; a delayed task only runs analysis
-    /// if its generation matches the current counter (no newer change arrived).
-    change_generations: Arc<RwLock<HashMap<Url, u64>>>,
+    documents: Arc<RwLock<HashMap<Url, StoredDocument>>>,
+    /// Change generation of each open document and its latest finished
+    /// pass. A delayed task only runs analysis if its generation is still
+    /// current (no newer change arrived); requests wait for the current pass
+    /// instead of answering a keystroke too early.
+    generations: Arc<AnalysisGenerations>,
     /// Latest document text as typed in the editor, updated synchronously on
     /// every `did_open`/`did_change`/`did_save`. May be newer than
     /// `AnalysisResult::source` (analysis is debounced and can fail or time
@@ -244,57 +292,83 @@ pub struct Backend {
     filesystem_revisions: Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
     /// Reverse dependency edges from the latest accepted analyses.
     dependency_graph: Arc<RwLock<DependencyGraph>>,
+    /// Passes whose observed revisions a prune must not invalidate.
+    revision_observers: Arc<RevisionObservers>,
     /// WASM plugin host shared across analysis passes, so re-analysis on
     /// every debounced keystroke hits the content-hash module cache instead
     /// of recompiling unchanged plugins.
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     /// Per-document single-flight and global concurrency control.
     analysis_scheduler: Arc<AnalysisScheduler>,
-    /// The latest finished analysis pass of each document, which requests
-    /// wait for instead of answering a keystroke too early.
-    analysis_settlement: Arc<AnalysisSettlement>,
+    /// Controls the test-only slow request [`BlockingFeatureRequest`].
+    #[cfg(test)]
+    pub(crate) blocking_feature_probe: Arc<BlockingFeatureProbe>,
 }
 
-#[derive(Clone, Copy)]
-struct CurrentAnalysis<'a>(&'a AnalysisResult);
+/// One open document's cached analysis state.
+#[cfg_attr(test, derive(Debug))]
+struct StoredDocument {
+    /// The semantic state editor features answer from. Shared so a request
+    /// clones the `Arc` under the lock and works on it off the serving task.
+    analysis: Arc<AnalysisResult>,
+    /// Diagnostics of the document's latest pass. Newer than
+    /// `analysis.diagnostics` after a parse-failure pass kept the previous
+    /// semantic state (#834); diagnostics are published from here.
+    diagnostics: Arc<HashMap<Url, Vec<Diagnostic>>>,
+}
 
-impl<'a> CurrentAnalysis<'a> {
-    const fn get(self) -> &'a AnalysisResult {
-        self.0
+impl StoredDocument {
+    fn new(analysis: AnalysisResult) -> Self {
+        Self {
+            diagnostics: Arc::clone(&analysis.diagnostics),
+            analysis: Arc::new(analysis),
+        }
     }
 }
 
-#[derive(Clone, Copy)]
-struct SemanticAnalysis<'a>(&'a AnalysisResult);
+/// An analysis whose every input is current, so exact coordinates apply.
+struct CurrentAnalysis(Arc<AnalysisResult>);
 
-impl<'a> SemanticAnalysis<'a> {
-    const fn get(self) -> &'a AnalysisResult {
-        self.0
+impl CurrentAnalysis {
+    fn get(&self) -> &AnalysisResult {
+        &self.0
     }
 }
 
-fn select_current_analysis<'a>(
-    analysis: &'a AnalysisResult,
-    revisions: &HashMap<DocumentIdentity, DocumentRevision>,
-) -> Option<CurrentAnalysis<'a>> {
-    (analysis.inputs.freshness(revisions) == AnalysisFreshness::Current)
-        .then_some(CurrentAnalysis(analysis))
+/// An analysis whose dependencies are current; the root text may be newer.
+struct SemanticAnalysis(Arc<AnalysisResult>);
+
+impl SemanticAnalysis {
+    fn get(&self) -> &AnalysisResult {
+        &self.0
+    }
 }
 
-fn select_semantic_analysis<'a>(
-    analysis: &'a AnalysisResult,
-    revisions: &HashMap<DocumentIdentity, DocumentRevision>,
-) -> Option<SemanticAnalysis<'a>> {
-    (analysis.inputs.freshness(revisions) != AnalysisFreshness::DependencyChanged)
-        .then_some(SemanticAnalysis(analysis))
+fn is_current_analysis(analysis: &AnalysisResult, revisions: &CurrentRevisions<'_>) -> bool {
+    analysis.inputs.freshness(revisions) == AnalysisFreshness::Current
+}
+
+fn is_semantic_analysis(analysis: &AnalysisResult, revisions: &CurrentRevisions<'_>) -> bool {
+    analysis.inputs.freshness(revisions) != AnalysisFreshness::DependencyChanged
+}
+
+/// Map a failed feature worker onto the JSON-RPC response.
+fn feature_response<R>(
+    result: std::result::Result<Option<R>, FeatureWorkError>,
+) -> Result<Option<R>> {
+    result.map_err(|error| {
+        let mut response = tower_lsp::jsonrpc::Error::internal_error();
+        response.message = error.to_string().into();
+        response
+    })
 }
 
 fn open_revisions(
     snapshots: &HashMap<Url, OpenDocumentSnapshot>,
-) -> impl Iterator<Item = (DocumentIdentity, DocumentRevision)> + '_ {
+) -> impl Iterator<Item = (&DocumentIdentity, DocumentRevision)> + '_ {
     snapshots
         .values()
-        .map(|snapshot| (snapshot.identity.clone(), snapshot.revision))
+        .map(|snapshot| (&snapshot.identity, snapshot.revision))
 }
 
 impl Backend {
@@ -303,14 +377,14 @@ impl Backend {
         AnalysisWorker {
             client: self.client.clone(),
             documents: Arc::clone(&self.documents),
-            generations: Arc::clone(&self.change_generations),
+            generations: Arc::clone(&self.generations),
             latest_text: Arc::clone(&self.latest_text),
             filesystem_revisions: Arc::clone(&self.filesystem_revisions),
             dependency_graph: Arc::clone(&self.dependency_graph),
+            revision_observers: Arc::clone(&self.revision_observers),
             client_features: self.client_features(),
             plugin_host: Arc::clone(&self.plugin_host),
             scheduler: Arc::clone(&self.analysis_scheduler),
-            settlement: Arc::clone(&self.analysis_settlement),
         }
     }
 
@@ -334,55 +408,61 @@ impl Backend {
             .is_some_and(|ext| ext.eq_ignore_ascii_case("gcl"))
     }
 
-    /// Apply an exact-coordinate feature only to a fully current analysis.
-    async fn with_current_analysis<F, R>(&self, uri: &Url, f: F) -> Result<Option<R>>
-    where
-        F: FnOnce(CurrentAnalysis<'_>) -> Option<R>,
-    {
+    /// The cached analysis of `uri` when `accept` admits it against the
+    /// current workspace revisions, with the document's latest editor text.
+    ///
+    /// Both come from one consistent snapshot: the revision locks are held
+    /// until the analysis is selected.
+    async fn cached_analysis(
+        &self,
+        uri: &Url,
+        accept: fn(&AnalysisResult, &CurrentRevisions<'_>) -> bool,
+    ) -> Option<(Arc<AnalysisResult>, Option<Arc<String>>)> {
         let snapshots = self.latest_text.read().await;
         let disk_revisions = self.filesystem_revisions.read().await;
-        let revisions = current_revisions(&disk_revisions, open_revisions(&snapshots));
+        let revisions = CurrentRevisions::new(&disk_revisions, open_revisions(&snapshots));
+        let current_source = snapshots
+            .get(uri)
+            .map(|snapshot| Arc::clone(&snapshot.text));
         let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(uri) else {
-            return Ok(None);
-        };
-        let Some(current) = select_current_analysis(analysis, &revisions) else {
-            return Ok(None);
-        };
-        drop(snapshots);
-        drop(disk_revisions);
-        let result = f(current);
+        let analysis = docs
+            .get(uri)
+            .map(|stored| Arc::clone(&stored.analysis))
+            .filter(|analysis| accept(analysis, &revisions));
         drop(docs);
-        Ok(result)
+        drop(disk_revisions);
+        drop(snapshots);
+        Some((analysis?, current_source))
+    }
+
+    /// Apply an exact-coordinate feature only to a fully current analysis.
+    ///
+    /// The feature runs off the serving task, so it neither blocks other
+    /// requests nor ignores `$/cancelRequest`.
+    async fn with_current_analysis<F, R>(&self, uri: &Url, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(CurrentAnalysis) -> Option<R> + Send + 'static,
+        R: Send + 'static,
+    {
+        let Some((analysis, _)) = self.cached_analysis(uri, is_current_analysis).await else {
+            return Ok(None);
+        };
+        feature_response(run_feature(move |_| f(CurrentAnalysis(analysis))).await)
     }
 
     /// Apply a coordinate-free candidate feature when dependencies are still
     /// current. The root text may be newer than the cached semantic snapshot.
     async fn with_semantic_analysis<F, R>(&self, uri: &Url, f: F) -> Result<Option<R>>
     where
-        F: FnOnce(SemanticAnalysis<'_>, &str) -> Option<R>,
+        F: FnOnce(SemanticAnalysis, &str) -> Option<R> + Send + 'static,
+        R: Send + 'static,
     {
-        let snapshots = self.latest_text.read().await;
-        let disk_revisions = self.filesystem_revisions.read().await;
-        let revisions = current_revisions(&disk_revisions, open_revisions(&snapshots));
-        let Some(current_source) = snapshots
-            .get(uri)
-            .map(|snapshot| Arc::clone(&snapshot.text))
+        let Some((analysis, Some(current_source))) =
+            self.cached_analysis(uri, is_semantic_analysis).await
         else {
             return Ok(None);
         };
-        let docs = self.documents.read().await;
-        let Some(analysis) = docs.get(uri) else {
-            return Ok(None);
-        };
-        let Some(semantic) = select_semantic_analysis(analysis, &revisions) else {
-            return Ok(None);
-        };
-        drop(snapshots);
-        drop(disk_revisions);
-        let result = f(semantic, &current_source);
-        drop(docs);
-        Ok(result)
+        feature_response(run_feature(move |_| f(SemanticAnalysis(analysis), &current_source)).await)
     }
 
     /// Record the latest editor text for `uri`, synchronously with the
@@ -390,7 +470,7 @@ impl Backend {
     async fn record_latest_text(
         &self,
         uri: &Url,
-        text: &str,
+        text: Arc<String>,
         version: Option<i32>,
     ) -> std::result::Result<RecordedDocument, RevisionExhausted> {
         use std::collections::hash_map::Entry;
@@ -399,7 +479,7 @@ impl Backend {
             Entry::Occupied(mut entry) => {
                 let snapshot = entry.get_mut();
                 snapshot.revision = revision;
-                snapshot.text = Arc::new(text.to_string());
+                snapshot.text = text;
                 if let Some(version) = version {
                     snapshot.version = version;
                 }
@@ -410,7 +490,7 @@ impl Backend {
                 entry.insert(OpenDocumentSnapshot {
                     identity: identity.clone(),
                     revision,
-                    text: Arc::new(text.to_string()),
+                    text,
                     version: version.unwrap_or_default(),
                 });
                 identity
@@ -433,8 +513,12 @@ impl Backend {
             self.request_inlay_hint_refresh();
         }
         for (uri, text, revision) in pending {
-            let generation = self.bump_generation(&uri).await;
-            self.spawn_debounced_analysis(uri, text.as_ref().clone(), revision, generation);
+            // A document closed meanwhile is not resurrected.
+            let Some(generation) = self.generations.advance(&uri) else {
+                continue;
+            };
+            self.analysis_scheduler.cancel_document(&uri);
+            self.spawn_debounced_analysis(uri, text, revision, generation);
         }
     }
 
@@ -449,13 +533,15 @@ impl Backend {
         self.schedule_open_roots(&importers).await;
     }
 
-    /// Record and schedule one client-reported external filesystem change.
-    async fn handle_filesystem_change(&self, uri: Url) {
+    /// Record one client-reported external filesystem change and return the
+    /// open roots it affects. Scheduling is left to the caller, so a batch of
+    /// changes schedules each affected root once.
+    async fn record_filesystem_change(&self, uri: &Url) -> HashSet<DocumentIdentity> {
         let Ok(path) = uri.to_file_path() else {
-            return;
+            return HashSet::new();
         };
         let Some(kind) = crate::filesystem_events::WatchedArtifactKind::from_path(&path) else {
-            return;
+            return HashSet::new();
         };
         let identity = file_identity(&path);
         if self
@@ -467,7 +553,7 @@ impl Backend {
         {
             // The editor snapshot is authoritative. This also coalesces the
             // watcher event commonly emitted for an LSP didSave notification.
-            return;
+            return HashSet::new();
         }
         let revision = match self.revision_clock.next() {
             Ok(revision) => revision,
@@ -475,7 +561,7 @@ impl Backend {
                 self.client
                     .log_message(MessageType::ERROR, error.to_string())
                     .await;
-                return;
+                return HashSet::new();
             }
         };
         self.filesystem_revisions
@@ -505,7 +591,7 @@ impl Backend {
                     .map(|snapshot| snapshot.identity.clone()),
             );
         }
-        self.schedule_open_roots(&affected).await;
+        affected
     }
 
     /// Latest editor text for `uri`, falling back to the analyzed snapshot.
@@ -517,16 +603,24 @@ impl Backend {
             .read()
             .await
             .get(uri)
-            .map(|analysis| Arc::clone(&analysis.source))
+            .map(|stored| Arc::clone(&stored.analysis.source))
     }
 
-    async fn analyze_and_publish(&self, uri: Url, text: String, version: Option<i32>) {
+    /// Record `text` as the latest editor text of `uri` and start its
+    /// analysis at once (no debounce).
+    ///
+    /// The analysis runs on its own task: a notification handler that awaited
+    /// it would hold one of tower-lsp's few handler slots for the whole pass.
+    async fn record_and_analyze(&self, uri: Url, text: Arc<String>, version: Option<i32>) {
         if !Self::is_graphcal_file(&uri) {
             return;
         }
 
         self.analysis_scheduler.open_document(&uri);
-        let recorded = match self.record_latest_text(&uri, &text, version).await {
+        let recorded = match self
+            .record_latest_text(&uri, Arc::clone(&text), version)
+            .await
+        {
             Ok(recorded) => recorded,
             Err(error) => {
                 self.client
@@ -539,16 +633,12 @@ impl Backend {
 
         // Bump the generation so any in-flight debounced analysis for this URI
         // becomes stale and refuses to overwrite fresh results.
-        let generation = self.bump_generation(&uri).await;
+        let generation = self.bump_generation(&uri);
 
-        analyze_store_publish(
-            &self.analysis_worker(),
-            uri,
-            text,
-            recorded.revision,
-            generation,
-        )
-        .await;
+        let worker = self.analysis_worker();
+        tokio::spawn(async move {
+            analyze_store_publish(&worker, uri, text, recorded.revision, generation).await;
+        });
     }
 
     /// Spawn a debounced analysis task for a `did_change` event.
@@ -559,7 +649,7 @@ impl Backend {
     fn spawn_debounced_analysis(
         &self,
         uri: Url,
-        text: String,
+        text: Arc<String>,
         root_revision: DocumentRevision,
         generation: u64,
     ) {
@@ -569,7 +659,7 @@ impl Backend {
             tokio::time::sleep(Duration::from_millis(DEBOUNCE_DELAY_MS)).await;
 
             // Check if a newer change has superseded this one.
-            if !is_generation_current(&worker.generations, &uri, generation).await {
+            if !worker.generations.is_current(&uri, generation) {
                 return;
             }
 
@@ -577,9 +667,9 @@ impl Backend {
         });
     }
 
-    /// Increment and return the current generation for `uri`.
-    async fn bump_generation(&self, uri: &Url) -> u64 {
-        let generation = bump_generation_value(&self.change_generations, uri).await;
+    /// Start and return a new generation for `uri`, cancelling older work.
+    fn bump_generation(&self, uri: &Url) -> u64 {
+        let generation = self.generations.bump(uri);
         self.analysis_scheduler.cancel_document(uri);
         generation
     }
@@ -598,15 +688,15 @@ enum AnalysisCompletion {
 #[derive(Clone)]
 struct AnalysisWorker {
     client: Client,
-    documents: Arc<RwLock<HashMap<Url, AnalysisResult>>>,
-    generations: Arc<RwLock<HashMap<Url, u64>>>,
+    documents: Arc<RwLock<HashMap<Url, StoredDocument>>>,
+    generations: Arc<AnalysisGenerations>,
     latest_text: Arc<RwLock<HashMap<Url, OpenDocumentSnapshot>>>,
     filesystem_revisions: Arc<RwLock<HashMap<DocumentIdentity, DocumentRevision>>>,
     dependency_graph: Arc<RwLock<DependencyGraph>>,
+    revision_observers: Arc<RevisionObservers>,
     client_features: ClientFeatureSupport,
     plugin_host: Arc<graphcal_plugin_host::PluginHost>,
     scheduler: Arc<AnalysisScheduler>,
-    settlement: Arc<AnalysisSettlement>,
 }
 
 /// Run analysis until it either stores a revision-coherent result or reaches
@@ -615,7 +705,7 @@ struct AnalysisWorker {
 async fn analyze_store_publish(
     worker: &AnalysisWorker,
     uri: Url,
-    mut text: String,
+    mut text: Arc<String>,
     mut root_revision: DocumentRevision,
     mut generation: u64,
 ) {
@@ -623,13 +713,23 @@ async fn analyze_store_publish(
         match analyze_store_publish_once(worker, uri.clone(), text, root_revision, generation).await
         {
             AnalysisCompletion::Done => {
-                worker.settlement.settle(&uri, generation);
+                prune_filesystem_revisions(
+                    &worker.filesystem_revisions,
+                    &worker.dependency_graph,
+                    &worker.revision_observers,
+                )
+                .await;
+                worker.generations.settle(&uri, generation);
                 return;
             }
             AnalysisCompletion::Retry(snapshot) => {
-                text = snapshot.text.as_ref().clone();
+                text = snapshot.text;
                 root_revision = snapshot.revision;
-                generation = bump_generation_value(&worker.generations, &uri).await;
+                // The pass ends here when its document closed meanwhile.
+                let Some(next) = worker.generations.advance(&uri) else {
+                    return;
+                };
+                generation = next;
                 worker.scheduler.cancel_document(&uri);
             }
         }
@@ -645,7 +745,7 @@ async fn analyze_store_publish(
 async fn analyze_store_publish_once(
     worker: &AnalysisWorker,
     uri: Url,
-    text: String,
+    text: Arc<String>,
     root_revision: DocumentRevision,
     generation: u64,
 ) -> AnalysisCompletion {
@@ -656,15 +756,15 @@ async fn analyze_store_publish_once(
         latest_text,
         filesystem_revisions,
         dependency_graph,
+        revision_observers,
         client_features,
         plugin_host,
         scheduler,
-        settlement: _,
     } = worker;
     let client_features = *client_features;
     let registration = scheduler.register(&uri, generation);
     let cancellation = registration.source.token();
-    if !is_generation_current(generations, &uri, generation).await {
+    if !generations.is_current(&uri, generation) {
         registration.source.cancel();
         scheduler.finish(&uri, generation);
         return AnalysisCompletion::Done;
@@ -687,7 +787,7 @@ async fn analyze_store_publish_once(
                 return AnalysisCompletion::Done;
             }
         };
-    if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
+    if cancellation.is_cancelled() || !generations.is_current(&uri, generation) {
         scheduler.finish(&uri, generation);
         return AnalysisCompletion::Done;
     }
@@ -710,7 +810,7 @@ async fn analyze_store_publish_once(
             return AnalysisCompletion::Done;
         }
     };
-    if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
+    if cancellation.is_cancelled() || !generations.is_current(&uri, generation) {
         scheduler.finish(&uri, generation);
         return AnalysisCompletion::Done;
     }
@@ -721,11 +821,15 @@ async fn analyze_store_publish_once(
     // itself uses `text` (this analysis pass's snapshot).
     let snapshots = latest_text.read().await;
     let disk_revisions = filesystem_revisions.read().await;
+    // Registered under the read lock and held until this pass has checked
+    // its observed revisions again (it ends with the function).
+    let _observation = revision_observers.observe(&disk_revisions);
     let root_identity = snapshots.get(&uri).map_or_else(
         || document_identity(&uri),
         |snapshot| snapshot.identity.clone(),
     );
-    let observed_revisions = current_revisions(&disk_revisions, open_revisions(&snapshots));
+    let observed_revisions =
+        CurrentRevisions::new(&disk_revisions, open_revisions(&snapshots)).to_map();
     let input_snapshot =
         AnalysisInputSnapshot::new(root_identity, root_revision, observed_revisions);
     let open_buffers: Vec<OpenBuffer> = snapshots
@@ -737,7 +841,7 @@ async fn analyze_store_publish_once(
         .collect();
     drop(snapshots);
     drop(disk_revisions);
-    if cancellation.is_cancelled() || !is_generation_current(generations, &uri, generation).await {
+    if cancellation.is_cancelled() || !generations.is_current(&uri, generation) {
         scheduler.finish(&uri, generation);
         return AnalysisCompletion::Done;
     }
@@ -790,7 +894,7 @@ async fn analyze_store_publish_once(
                 let _ = task.await;
                 cleanup_scheduler.finish(&cleanup_uri, generation);
             });
-            if is_generation_current(generations, &uri, generation).await {
+            if generations.is_current(&uri, generation) {
                 publish_analysis_timeout(client, &uri).await;
             }
             return AnalysisCompletion::Done;
@@ -803,7 +907,7 @@ async fn analyze_store_publish_once(
     } = analysis_run;
     let latest_guard = latest_text.read().await;
     let filesystem_guard = filesystem_revisions.read().await;
-    let current_revisions = current_revisions(&filesystem_guard, open_revisions(&latest_guard));
+    let current_revisions = CurrentRevisions::new(&filesystem_guard, open_revisions(&latest_guard));
     if !analysis.inputs.is_current(&current_revisions) {
         let root_is_current = analysis.inputs.root_is_current(&current_revisions);
         if analysis.inputs.has_complete_dependencies() || analysis.buffer_parsed {
@@ -830,7 +934,7 @@ async fn analyze_store_publish_once(
     // the insert: a newer-generation analysis completing between a
     // separate check and insert used to be clobbered by this older one.
     let mut docs = documents.write().await;
-    if !is_generation_current(generations, &uri, generation).await {
+    if !generations.is_current(&uri, generation) {
         return AnalysisCompletion::Done;
     }
     // Every URI this analysis touches — newly reported plus previously
@@ -899,14 +1003,14 @@ async fn analyze_store_publish_once(
 /// keystroke (#834). Instead, only the diagnostics are refreshed; symbol
 /// queries keep answering from the last successfully analyzed state (whose
 /// `source` snapshot they remain consistent with).
-fn store_analysis(docs: &mut HashMap<Url, AnalysisResult>, uri: &Url, analysis: AnalysisResult) {
+fn store_analysis(docs: &mut HashMap<Url, StoredDocument>, uri: &Url, analysis: AnalysisResult) {
     if !analysis.buffer_parsed
         && let Some(prev) = docs.get_mut(uri)
     {
         prev.diagnostics = analysis.diagnostics;
         return;
     }
-    docs.insert(uri.clone(), analysis);
+    docs.insert(uri.clone(), StoredDocument::new(analysis));
 }
 
 /// Compute the diagnostics to publish for each URI in `targets` from the
@@ -919,7 +1023,7 @@ fn store_analysis(docs: &mut HashMap<Url, AnalysisResult>, uri: &Url, analysis: 
 /// identical diagnostics reported by multiple importers. A URI no open
 /// document reports on yields an empty list, clearing stale squiggles.
 fn merged_diagnostics_for(
-    docs: &HashMap<Url, AnalysisResult>,
+    docs: &HashMap<Url, StoredDocument>,
     targets: &[Url],
 ) -> Vec<(Url, Vec<Diagnostic>)> {
     targets
@@ -930,8 +1034,8 @@ fn merged_diagnostics_for(
                 return (target.clone(), diags);
             }
             let mut merged: Vec<Diagnostic> = Vec::new();
-            for analysis in docs.values() {
-                for diag in analysis.diagnostics.get(target).into_iter().flatten() {
+            for stored in docs.values() {
+                for diag in stored.diagnostics.get(target).into_iter().flatten() {
                     if !merged.contains(diag) {
                         merged.push(diag.clone());
                     }
@@ -1043,29 +1147,6 @@ async fn publish_analysis_timeout(client: &Client, uri: &Url) {
         .await;
 }
 
-async fn bump_generation_value(generations: &Arc<RwLock<HashMap<Url, u64>>>, uri: &Url) -> u64 {
-    *generations
-        .write()
-        .await
-        .entry(uri.clone())
-        .and_modify(|value| *value = value.saturating_add(1))
-        .or_insert(1)
-}
-
-/// The current generation stored for `uri`.
-async fn generation_of(generations: &Arc<RwLock<HashMap<Url, u64>>>, uri: &Url) -> u64 {
-    *generations.read().await.get(uri).unwrap_or(&0)
-}
-
-/// Check whether `generation` is still the current generation stored for `uri`.
-async fn is_generation_current(
-    generations: &Arc<RwLock<HashMap<Url, u64>>>,
-    uri: &Url,
-    generation: u64,
-) -> bool {
-    generation_of(generations, uri).await == generation
-}
-
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
@@ -1168,9 +1249,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        self.analyze_and_publish(
+        self.record_and_analyze(
             params.text_document.uri,
-            params.text_document.text,
+            Arc::new(params.text_document.text),
             Some(params.text_document.version),
         )
         .await;
@@ -1184,13 +1265,14 @@ impl LanguageServer for Backend {
         if !Self::is_graphcal_file(&uri) {
             return;
         }
+        let text = Arc::new(change.text);
 
         self.analysis_scheduler.open_document(&uri);
         // Record the new text synchronously: completion/signature-help fire
         // on trigger characters milliseconds after this notification, long
         // before the debounced analysis lands.
         let recorded = match self
-            .record_latest_text(&uri, &change.text, Some(params.text_document.version))
+            .record_latest_text(&uri, Arc::clone(&text), Some(params.text_document.version))
             .await
         {
             Ok(recorded) => recorded,
@@ -1205,24 +1287,29 @@ impl LanguageServer for Backend {
         // changed; ask capable clients to clear/re-request them before debounce.
         self.request_inlay_hint_refresh();
         self.schedule_transitive_importers(&recorded.identity).await;
-        let generation = self.bump_generation(&uri).await;
-        self.spawn_debounced_analysis(uri, change.text, recorded.revision, generation);
+        let generation = self.bump_generation(&uri);
+        self.spawn_debounced_analysis(uri, text, recorded.revision, generation);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         if let Some(text) = params.text {
-            self.analyze_and_publish(params.text_document.uri, text, None)
+            self.record_and_analyze(params.text_document.uri, Arc::new(text), None)
                 .await;
         }
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        // Record every revision before scheduling anything: a burst (such as
+        // a `git checkout`) then schedules each affected root once, with one
+        // inlay-hint refresh, instead of once per event.
         let mut seen = HashSet::new();
+        let mut affected = HashSet::new();
         for change in params.changes {
             if seen.insert(change.uri.clone()) {
-                self.handle_filesystem_change(change.uri).await;
+                affected.extend(self.record_filesystem_change(&change.uri).await);
             }
         }
+        self.schedule_open_roots(&affected).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -1231,12 +1318,12 @@ impl LanguageServer for Backend {
             || document_identity(&uri),
             |snapshot| snapshot.identity.clone(),
         );
-        // Invalidate and cancel queued/running work before clearing state. Keep
-        // the generation entry to avoid an ABA collision if the URI is reopened
-        // while an old blocking worker is still winding down.
-        let generation = self.bump_generation(&uri).await;
-        // No pass follows a close: settle it so no request waits for one.
-        self.analysis_settlement.settle(&uri, generation);
+        // Invalidate and cancel queued/running work before clearing state.
+        // Generations are process-wide, so forgetting the document cannot
+        // let a reopened URI reuse a generation an old worker still holds;
+        // nothing waits for a pass of a closed document either.
+        self.generations.forget(&uri);
+        self.analysis_scheduler.cancel_document(&uri);
         self.analysis_scheduler.close_document(&uri);
         // Re-publish every URI the closing document reported on from the
         // *remaining* open documents' merged view: closing one document only
@@ -1260,6 +1347,12 @@ impl LanguageServer for Backend {
         };
         self.latest_text.write().await.remove(&uri);
         self.dependency_graph.write().await.remove(&identity);
+        prune_filesystem_revisions(
+            &self.filesystem_revisions,
+            &self.dependency_graph,
+            &self.revision_observers,
+        )
+        .await;
         self.schedule_transitive_importers(&identity).await;
         let features = self.client_features();
         for (target_uri, diags) in publish {
@@ -1278,7 +1371,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
         let shape = self.client_features().document_symbol_shape;
-        self.with_current_analysis(&uri, |current| {
+        self.with_current_analysis(&uri.clone(), move |current| {
             let symbols = crate::document_symbols::build_document_symbols(current.get());
             Some(match shape {
                 DocumentSymbolShape::Flat => DocumentSymbolResponse::Flat(
@@ -1296,7 +1389,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        self.with_current_analysis(&uri, |current| {
+        self.with_current_analysis(&uri.clone(), move |current| {
             let analysis = current.get();
             let offset = position_to_byte_offset(&analysis.source, position);
             crate::goto_definition::goto_definition(analysis, &uri, offset)
@@ -1308,7 +1401,7 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
         let format = self.client_features().hover_format;
-        self.with_current_analysis(&uri, |current| {
+        self.with_current_analysis(&uri.clone(), move |current| {
             let analysis = current.get();
             let offset = position_to_byte_offset(&analysis.source, position);
             crate::hover::hover_with_format(analysis, offset, format)
@@ -1320,7 +1413,7 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
         let include_declaration = params.context.include_declaration;
-        self.with_current_analysis(&uri, |current| {
+        self.with_current_analysis(&uri.clone(), move |current| {
             let analysis = current.get();
             let offset = position_to_byte_offset(&analysis.source, position);
             crate::references::references(analysis, &uri, offset, include_declaration)
@@ -1333,10 +1426,10 @@ impl LanguageServer for Backend {
         let range = params.range;
         // A client without inlay-hint refresh (Helix) keeps an empty answer
         // until its view changes, so wait for the pass of the latest text.
-        self.analysis_settlement
-            .wait_for_current(&uri, &self.change_generations, CURRENT_ANALYSIS_WAIT)
+        self.generations
+            .wait_for_current(&uri, CURRENT_ANALYSIS_WAIT)
             .await;
-        self.with_current_analysis(&uri, |current| {
+        self.with_current_analysis(&uri.clone(), move |current| {
             crate::inlay_hints::inlay_hints(current.get(), range)
         })
         .await
@@ -1347,7 +1440,7 @@ impl LanguageServer for Backend {
         let position = params.text_document_position_params.position;
         // Signature help parses the atomically captured current text while
         // reading coordinate-free signatures from the cached analysis.
-        self.with_semantic_analysis(&uri, |semantic, current_source| {
+        self.with_semantic_analysis(&uri.clone(), move |semantic, current_source| {
             let analysis = semantic.get();
             let offset = position_to_byte_offset(current_source, position);
             crate::signature_help::signature_help(analysis, current_source, offset)
@@ -1360,7 +1453,7 @@ impl LanguageServer for Backend {
         let position = params.text_document_position.position;
         // Completion derives context and DAG scope from the atomically
         // captured current text, never from stale declaration spans.
-        self.with_semantic_analysis(&uri, |semantic, current_source| {
+        self.with_semantic_analysis(&uri.clone(), move |semantic, current_source| {
             let analysis = semantic.get();
             let offset = position_to_byte_offset(current_source, position);
             crate::completion::completion(analysis, current_source, offset)
@@ -1398,7 +1491,7 @@ impl LanguageServer for Backend {
         let snapshots = self.latest_text.read().await.clone();
         let workspace_edit_shape = self.client_features().workspace_edit_shape;
         let outcome = self
-            .with_current_analysis(&uri, |current| {
+            .with_current_analysis(&uri.clone(), move |current| {
                 let analysis = current.get();
                 let current_text = current_text.as_ref()?;
                 if current_text.as_str() != analysis.source.as_str() {
@@ -1443,7 +1536,7 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let position = params.position;
         let current_text = self.current_text(&uri).await;
-        self.with_current_analysis(&uri, |current| {
+        self.with_current_analysis(&uri.clone(), move |current| {
             let analysis = current.get();
             let current_text = current_text.as_ref()?;
             if current_text.as_str() != analysis.source.as_str() {
@@ -1457,7 +1550,7 @@ impl LanguageServer for Backend {
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
         let uri = params.text_document.uri;
-        self.with_current_analysis(&uri, |current| {
+        self.with_current_analysis(&uri.clone(), move |current| {
             crate::document_links::document_links(current.get())
         })
         .await
@@ -1507,22 +1600,103 @@ impl LanguageServer for Backend {
 }
 
 pub(crate) fn service() -> (LspService<Backend>, ClientSocket) {
-    LspService::build(|client| Backend {
+    let builder = LspService::build(|client| Backend {
         client,
         client_features: Arc::new(OnceLock::new()),
         documents: Arc::new(RwLock::new(HashMap::new())),
-        change_generations: Arc::new(RwLock::new(HashMap::new())),
+        generations: Arc::new(AnalysisGenerations::default()),
         latest_text: Arc::new(RwLock::new(HashMap::new())),
         formatting_scheduler: Arc::new(FormattingScheduler::new()),
         revision_clock: Arc::new(RevisionClock::default()),
         filesystem_revisions: Arc::new(RwLock::new(HashMap::new())),
         dependency_graph: Arc::new(RwLock::new(DependencyGraph::default())),
+        revision_observers: Arc::new(RevisionObservers::default()),
         plugin_host: Arc::new(graphcal_plugin_host::PluginHost::new()),
         analysis_scheduler: Arc::new(AnalysisScheduler::new()),
-        analysis_settlement: Arc::new(AnalysisSettlement::default()),
+        #[cfg(test)]
+        blocking_feature_probe: Arc::new(BlockingFeatureProbe::default()),
     })
-    .custom_method(ViewModelRequest::METHOD, Backend::view_model)
-    .finish()
+    .custom_method(ViewModelRequest::METHOD, Backend::view_model);
+    #[cfg(test)]
+    let builder = builder.custom_method(BlockingFeatureRequest::METHOD, Backend::blocking_feature);
+    builder.finish()
+}
+
+/// Test-only request whose feature work blocks until the test releases it,
+/// standing in for a slow handler such as `references` on a huge project.
+#[cfg(test)]
+pub(crate) enum BlockingFeatureRequest {}
+
+#[cfg(test)]
+impl BlockingFeatureRequest {
+    pub(crate) const METHOD: &'static str = "graphcal/test/blockingFeature";
+}
+
+/// Observation and release points of [`BlockingFeatureRequest`].
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct BlockingFeatureProbe {
+    pub(crate) started: tokio::sync::Notify,
+    pub(crate) released: std::sync::atomic::AtomicBool,
+    pub(crate) finished: tokio::sync::Notify,
+}
+
+#[cfg(test)]
+impl Backend {
+    /// The change generation of `uri`; it grows once per scheduled analysis.
+    pub(crate) fn generation_for_test(&self, uri: &Url) -> u64 {
+        self.generations.current(uri)
+    }
+
+    /// Wait until the pass of the current generation of `uri` finished.
+    pub(crate) async fn wait_until_settled_for_test(&self, uri: &Url) {
+        assert!(
+            self.generations
+                .wait_for_current(uri, Duration::from_secs(30))
+                .await,
+            "the analysis of {uri} did not settle"
+        );
+    }
+
+    /// Identities that still have a recorded disk revision.
+    pub(crate) async fn disk_revision_identities_for_test(&self) -> HashSet<DocumentIdentity> {
+        self.filesystem_revisions
+            .read()
+            .await
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    /// How many entries the per-document maps hold.
+    pub(crate) async fn tracked_documents_for_test(&self) -> [usize; 3] {
+        [
+            self.documents.read().await.len(),
+            self.latest_text.read().await.len(),
+            self.generations.tracked(),
+        ]
+    }
+
+    async fn blocking_feature(
+        &self,
+        params: tower_lsp::lsp_types::TextDocumentIdentifier,
+    ) -> Result<Option<()>> {
+        /// Bound the block so a regression fails the test instead of hanging.
+        const MAX_BLOCK: Duration = Duration::from_secs(60);
+        let probe = Arc::clone(&self.blocking_feature_probe);
+        self.with_current_analysis(&params.uri, move |_| {
+            probe.started.notify_one();
+            let started = std::time::Instant::now();
+            while !probe.released.load(std::sync::atomic::Ordering::SeqCst)
+                && started.elapsed() < MAX_BLOCK
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            probe.finished.notify_one();
+            Some(())
+        })
+        .await
+    }
 }
 
 /// `graphcal/viewModel`: a view model of a document, as of its latest
@@ -1573,7 +1747,7 @@ impl Backend {
         &self,
         params: ViewModelParams,
     ) -> Result<Option<graphcal_project::view_model::ViewModel>> {
-        self.with_current_analysis(&params.text_document.uri, |analysis| {
+        self.with_current_analysis(&params.text_document.uri.clone(), move |analysis| {
             analysis
                 .get()
                 .view
@@ -2187,6 +2361,31 @@ mod tests {
                     if label.contains("2024-06-01T12:00:00 TT")
             )
         }));
+    }
+
+    /// LSP-10 (#2253): only values some inlay hint displays are formatted;
+    /// include instances the evaluation reports are skipped.
+    #[test]
+    fn only_displayed_declarations_have_formatted_values() {
+        let text = "param p: Length = 200.0 km;\n\
+                    dag inner {\n\
+                        param p: Length;\n\
+                        pub node twice: Length = 2.0 * @p;\n\
+                    }\n\
+                    include inner(p: @p)::{ twice };\n\
+                    node total: Length = @twice;\n";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        let shown = analysis.symbol_table.inlay_hint_declarations();
+        assert!(!analysis.eval_values.is_empty());
+        assert!(
+            analysis
+                .eval_values
+                .keys()
+                .all(|identity| shown.contains(identity)),
+            "{:?}",
+            analysis.eval_values
+        );
     }
 
     #[test]
@@ -3290,8 +3489,14 @@ node bad: Mass = mass + length;
             (root.clone(), root_revision),
             (dependency.clone(), dependency_revision),
         ]);
-        assert!(select_current_analysis(&analysis, &current).is_some());
-        assert!(select_semantic_analysis(&analysis, &current).is_some());
+        assert!(is_current_analysis(
+            &analysis,
+            &CurrentRevisions::new(&current, [])
+        ));
+        assert!(is_semantic_analysis(
+            &analysis,
+            &CurrentRevisions::new(&current, [])
+        ));
 
         // This revision represents a current buffer with deleted CRLF text and
         // an inserted astral character (a two-code-unit UTF-16 shift).
@@ -3299,13 +3504,25 @@ node bad: Mass = mass + length;
             (root.clone(), clock.next().unwrap()),
             (dependency.clone(), dependency_revision),
         ]);
-        assert!(select_current_analysis(&analysis, &shifted_root).is_none());
-        assert!(select_semantic_analysis(&analysis, &shifted_root).is_some());
+        assert!(!is_current_analysis(
+            &analysis,
+            &CurrentRevisions::new(&shifted_root, [])
+        ));
+        assert!(is_semantic_analysis(
+            &analysis,
+            &CurrentRevisions::new(&shifted_root, [])
+        ));
 
         let changed_dependency =
             HashMap::from([(root, root_revision), (dependency, clock.next().unwrap())]);
-        assert!(select_current_analysis(&analysis, &changed_dependency).is_none());
-        assert!(select_semantic_analysis(&analysis, &changed_dependency).is_none());
+        assert!(!is_current_analysis(
+            &analysis,
+            &CurrentRevisions::new(&changed_dependency, [])
+        ));
+        assert!(!is_semantic_analysis(
+            &analysis,
+            &CurrentRevisions::new(&changed_dependency, [])
+        ));
     }
 
     #[test]
@@ -3407,8 +3624,8 @@ node bad: Mass = mass + length;
 
     /// Build a bare `AnalysisResult` carrying only a diagnostics map, for
     /// exercising the per-URI ownership merge.
-    fn analysis_with_diags(diags: HashMap<Url, Vec<Diagnostic>>) -> AnalysisResult {
-        AnalysisResult {
+    fn analysis_with_diags(diags: HashMap<Url, Vec<Diagnostic>>) -> StoredDocument {
+        StoredDocument::new(AnalysisResult {
             inputs: AnalysisInputs::untracked_for_test(DocumentIdentity::virtual_uri(
                 Url::parse("file:///diagnostics.gcl").unwrap(),
             )),
@@ -3425,7 +3642,7 @@ node bad: Mass = mass + length;
             extern_fn_signatures: HashMap::new(),
             import_links: Vec::new(),
             buffer_parsed: true,
-        }
+        })
     }
 
     fn diag(message: &str) -> Diagnostic {
@@ -3552,7 +3769,8 @@ node momentum: Force * Time = @mass * @velocity;
         store_analysis(&mut docs, &uri, good);
         store_analysis(&mut docs, &uri, broken);
 
-        let cached = &docs[&uri];
+        let stored = &docs[&uri];
+        let cached = &stored.analysis;
         for name in ["mass", "velocity", "momentum"] {
             assert!(
                 cached
@@ -3564,7 +3782,10 @@ node momentum: Force * Time = @mass * @velocity;
             );
         }
         assert!(
-            !cached.has_no_diagnostics(),
+            stored
+                .diagnostics
+                .values()
+                .any(|diagnostics| !diagnostics.is_empty()),
             "diagnostics must come from the failed analysis"
         );
         assert_eq!(
@@ -3796,15 +4017,13 @@ node momentum: Force * Time = @mass * @velocity;
                 .dependencies()
                 .any(|identity| identity == &dependency)
         );
-        assert!(analysis.inputs.is_current(&HashMap::from([
-            (root.clone(), root_revision),
-            (dependency.clone(), old_dependency_revision),
-        ])));
+        let disk = HashMap::from([(dependency.clone(), old_dependency_revision)]);
+        let current = CurrentRevisions::new(&disk, [(&root, root_revision)]);
+        assert!(analysis.inputs.is_current(&current));
         let new_dependency_revision = clock.next().unwrap();
-        assert!(!analysis.inputs.is_current(&HashMap::from([
-            (root.clone(), root_revision),
-            (dependency.clone(), new_dependency_revision),
-        ])));
+        let disk = HashMap::from([(dependency.clone(), new_dependency_revision)]);
+        let current = CurrentRevisions::new(&disk, [(&root, root_revision)]);
+        assert!(!analysis.inputs.is_current(&current));
         let refreshed_input = AnalysisInputSnapshot::new(
             root,
             root_revision,
