@@ -2295,12 +2295,17 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "numeric", "mean_tests"]
+path = ["eval_expr", "unit_scale"]
 role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "unit_scale"]
+path = ["eval_expr", "exact_binary_sum"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "exact_binary_sum", "tests"]
 role = "interpreter"
 
 [[module]]
