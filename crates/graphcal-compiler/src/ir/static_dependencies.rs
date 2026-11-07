@@ -11,8 +11,9 @@ use std::collections::{HashMap, HashSet};
 
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast::{DeclKind, Declaration, IndexExpr, TypeExpr, TypeExprKind};
+use crate::ir::static_substitution::StaticSubstitution;
 use crate::resolve::ModuleResolver;
-use crate::resolved_name::ResolvedStaticName;
+use crate::resolved_name::{ResolvedStaticName, ResolvedStructTypeName};
 use crate::static_interface::{
     StaticImportRejections, StaticInputKind, StaticRole, static_interface,
 };
@@ -353,6 +354,22 @@ pub fn declaration_static_references(
     collector.references
 }
 
+/// Collect the resolved Static references of one type annotation, in source
+/// order.
+#[must_use]
+pub fn type_expr_static_references(
+    type_expr: &TypeExpr,
+    scope: StaticScope<'_>,
+) -> Vec<StaticReference> {
+    let mut collector = Collector {
+        scope,
+        generic_parameters: HashSet::new(),
+        references: Vec::new(),
+    };
+    collector.type_expr(type_expr);
+    collector.references
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct StaticDeclarationKey {
     kind: StaticInputKind,
@@ -539,6 +556,168 @@ pub fn first_required_static_dependency(
     )
 }
 
+/// One item a selective include exposes to its importer, as the template
+/// declares it.
+#[derive(Debug, Clone, Copy)]
+pub enum IncludeSurfaceItem<'a> {
+    /// A selected value, through its type annotation.
+    Value(&'a TypeExpr),
+    /// A selected Static declaration, through its whole definition.
+    Static(&'a DeclKind),
+}
+
+/// A template nominal type that a selective include exposes without
+/// specializing it, although its definition depends on a port the include
+/// rebinds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnspecializedReboundType<Item> {
+    nominal: ResolvedStructTypeName,
+    port: ResolvedStaticName,
+    item: Item,
+}
+
+impl<Item> UnspecializedReboundType<Item> {
+    /// The template's nominal type.
+    #[must_use]
+    pub const fn nominal(&self) -> &ResolvedStructTypeName {
+        &self.nominal
+    }
+
+    /// One rebound port the type's definition depends on.
+    #[must_use]
+    pub const fn port(&self) -> &ResolvedStaticName {
+        &self.port
+    }
+
+    /// The first exposed item that reaches the type.
+    #[must_use]
+    pub const fn item(&self) -> &Item {
+        &self.item
+    }
+}
+
+/// Every template nominal type that `surface` reaches but the include does
+/// not select, whose definition depends (transitively) on a port the include
+/// rebinds, in the order the surface reaches them.
+///
+/// An unselected type keeps the template's identity and definition in the
+/// importer, while the instance's values follow the rebound ports. Such a
+/// type would let the importer read an instance value under the template's
+/// definition (an index of the wrong length, or a dimension of the default),
+/// so the include must select it to obtain its specialized projection.
+///
+/// `rebound` is the include's own Static bindings, keyed by the template's
+/// ports. A rebound port itself needs no selection: it is substituted
+/// wherever it appears. `selected` are the template types the include
+/// projects; their definitions belong to `surface` too, because a projection
+/// specializes only the ports and the selected types its definition names.
+#[must_use]
+pub fn unspecialized_rebound_types<'a, Item: Clone>(
+    template: ModuleDeclarations<'_>,
+    surface: impl IntoIterator<Item = (Item, IncludeSurfaceItem<'a>)>,
+    rebound: &StaticSubstitution,
+    selected: &[ResolvedStructTypeName],
+) -> Vec<UnspecializedReboundType<Item>> {
+    let mut closure = ReboundClosure {
+        scope: template.scope,
+        rebound,
+        declarations: template
+            .declarations
+            .iter()
+            .filter_map(|declaration| Some((static_declaration(declaration)?.0, declaration)))
+            .collect(),
+        dependencies: HashMap::new(),
+    };
+    let mut reached = HashSet::new();
+    let mut found = Vec::new();
+    for (item, exposed) in surface {
+        let mut pending = std::collections::VecDeque::from(match exposed {
+            IncludeSurfaceItem::Value(type_expr) => {
+                type_expr_static_references(type_expr, template.scope)
+            }
+            IncludeSurfaceItem::Static(declaration) => {
+                declaration_static_references(declaration, template.scope)
+            }
+        });
+        while let Some(reference) = pending.pop_front() {
+            let Some(key) = closure.local_key(&reference) else {
+                continue;
+            };
+            if !reached.insert(key.clone()) {
+                continue;
+            }
+            if let ResolvedStaticName::Type(nominal) = reference.target()
+                && !selected.contains(nominal)
+                && let Some(port) = closure.port_dependency(&key)
+            {
+                found.push(UnspecializedReboundType {
+                    nominal: nominal.clone(),
+                    port,
+                    item: item.clone(),
+                });
+            }
+            if let Some(declaration) = closure.declarations.get(&key) {
+                pending.extend(declaration_static_references(
+                    &declaration.kind,
+                    template.scope,
+                ));
+            }
+        }
+    }
+    found
+}
+
+/// Memoized dependency of template declarations on rebound ports.
+struct ReboundClosure<'a> {
+    scope: StaticScope<'a>,
+    rebound: &'a StaticSubstitution,
+    declarations: HashMap<StaticDeclarationKey, &'a Declaration>,
+    /// The first rebound port each visited declaration depends on. A
+    /// declaration still being visited reads as independent, which only
+    /// matters for a definition cycle, and those are rejected on their own.
+    dependencies: HashMap<StaticDeclarationKey, Option<ResolvedStaticName>>,
+}
+
+impl ReboundClosure<'_> {
+    fn is_rebound(&self, target: &ResolvedStaticName) -> bool {
+        match target {
+            ResolvedStaticName::Dimension(name) => self.rebound.dimensions.contains_key(name),
+            ResolvedStaticName::Type(name) => self.rebound.types.contains_key(name),
+            ResolvedStaticName::Index(name) => self.rebound.indexes.contains_key(name),
+        }
+    }
+
+    /// The template declaration a reference names, unless it names another
+    /// module or a rebound port.
+    fn local_key(&self, reference: &StaticReference) -> Option<StaticDeclarationKey> {
+        (reference.target().owner() == self.scope.owner() && !self.is_rebound(reference.target()))
+            .then(|| StaticDeclarationKey::new(reference.kind(), reference.target().atom().clone()))
+    }
+
+    fn port_dependency(&mut self, key: &StaticDeclarationKey) -> Option<ResolvedStaticName> {
+        if let Some(dependency) = self.dependencies.get(key) {
+            return dependency.clone();
+        }
+        self.dependencies.insert(key.clone(), None);
+        // A template symbol with no source declaration (a type the template's
+        // own include projects) has no definition here to depend on a port.
+        let declaration = self.declarations.get(key)?;
+        let references = declaration_static_references(&declaration.kind, self.scope);
+        let dependency = references.iter().find_map(|reference| {
+            if reference.target().owner() != self.scope.owner() {
+                None
+            } else if self.is_rebound(reference.target()) {
+                Some(reference.target().clone())
+            } else {
+                let key = self.local_key(reference)?;
+                self.port_dependency(&key)
+            }
+        });
+        self.dependencies.insert(key.clone(), dependency.clone());
+        dependency
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -651,6 +830,130 @@ mod tests {
                 ImportItemNamespace::Type,
             )
             .is_none()
+        );
+    }
+
+    /// The template types the selected values reach that depend on one of
+    /// `ports`, given the `selected` types, as `(type, port, item)`.
+    fn unspecialized(
+        source: &str,
+        ports: &[&str],
+        values: &[&str],
+        selected: &[&str],
+    ) -> Vec<(String, String, String)> {
+        let file = parse(source);
+        let resolver = resolver(&file);
+        let owner = owner();
+        let resolve = |name: &str| {
+            resolver
+                .resolve_static_path(&owner, &NamePath::local(NameAtom::parse(name).unwrap()))
+                .unwrap()
+        };
+        let mut rebound = StaticSubstitution::default();
+        for port in ports {
+            match resolve(port) {
+                ResolvedStaticName::Dimension(name) => {
+                    rebound.dimensions.insert(name.clone(), name);
+                }
+                ResolvedStaticName::Type(name) => {
+                    rebound.types.insert(name.clone(), name);
+                }
+                ResolvedStaticName::Index(name) => {
+                    rebound.indexes.insert(
+                        name.clone(),
+                        crate::ir::static_substitution::InstanceIndexBindingTarget::Declared(name),
+                    );
+                }
+            }
+        }
+        let selected = selected
+            .iter()
+            .map(|name| match resolve(name) {
+                ResolvedStaticName::Type(name) => name,
+                other => panic!("`{name}` is not a type: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        let surface = file
+            .declarations
+            .iter()
+            .filter_map(|declaration| {
+                let introduced = declaration.kind.declared_name()?;
+                let type_expr = match &declaration.kind {
+                    DeclKind::Node(node) => &node.type_ann,
+                    DeclKind::Param(param) => &param.type_ann,
+                    _ => return None,
+                };
+                values.contains(&introduced.atom().as_str()).then(|| {
+                    (
+                        introduced.atom().to_string(),
+                        IncludeSurfaceItem::Value(type_expr),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        unspecialized_rebound_types(
+            ModuleDeclarations::new(&file.declarations, StaticScope::new(&owner, &resolver)),
+            surface,
+            &rebound,
+            &selected,
+        )
+        .into_iter()
+        .map(|found| {
+            (
+                found.nominal().atom().to_string(),
+                found.port().atom().to_string(),
+                found.item().clone(),
+            )
+        })
+        .collect()
+    }
+
+    const TEMPLATE: &str = "pub(bind) index I = { a, b };\n\
+         pub(bind) dim Q;\n\
+         pub dim QR = Q / Time;\n\
+         pub type Rows { Rows(x: Length[I]) }\n\
+         pub type Rate { Rate(r: QR) }\n\
+         pub type Both { Both(rows: Rows, rate: Rate) }\n\
+         pub type Plain { Plain(x: Length) }\n\
+         param rows: Rows;\n\
+         param both: Both;\n\
+         param plain: Plain;\n\
+         param raw: Length[I];\n";
+
+    #[test]
+    fn rebound_ports_reach_types_through_fields_and_derived_dimensions() {
+        let found = |item: &str, from: &str| (item.to_owned(), from.to_owned(), "both".to_owned());
+        assert_eq!(
+            unspecialized(TEMPLATE, &["I", "Q"], &["both"], &[]),
+            vec![found("Both", "I"), found("Rows", "I"), found("Rate", "Q")]
+        );
+        assert_eq!(
+            unspecialized(TEMPLATE, &["Q"], &["both"], &[]),
+            vec![found("Both", "Q"), found("Rate", "Q")]
+        );
+    }
+
+    #[test]
+    fn selected_types_and_independent_types_are_not_reported() {
+        assert_eq!(
+            unspecialized(TEMPLATE, &["I"], &["both"], &["Both", "Rows"]),
+            Vec::new()
+        );
+        assert_eq!(
+            unspecialized(TEMPLATE, &["I", "Q"], &["plain", "raw"], &[]),
+            Vec::new()
+        );
+        assert_eq!(unspecialized(TEMPLATE, &[], &["rows"], &[]), Vec::new());
+    }
+
+    #[test]
+    fn each_type_is_reported_once_for_the_first_item_reaching_it() {
+        assert_eq!(
+            unspecialized(TEMPLATE, &["I"], &["rows", "both"], &[]),
+            vec![
+                ("Rows".to_owned(), "I".to_owned(), "rows".to_owned()),
+                ("Both".to_owned(), "I".to_owned(), "both".to_owned()),
+            ]
         );
     }
 }

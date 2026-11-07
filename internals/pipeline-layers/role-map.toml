@@ -2749,6 +2749,11 @@ role = "checking"
 
 [[module]]
 package = "project"
+path = ["project_compiler", "rebound_type_selection"]
+role = "checking"
+
+[[module]]
+package = "project"
 path = ["project_compiler", "hir_project"]
 role = "checking"
 

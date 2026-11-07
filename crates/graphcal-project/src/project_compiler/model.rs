@@ -131,6 +131,8 @@ pub(super) struct IncludeInstanceRequest<'a> {
         HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
     /// Namespace-agnostic surface atoms selected with `{ pub name }`.
     pub(super) pub_reexport_items: HashSet<graphcal_compiler::syntax::names::NameAtom>,
+    /// Template types selected with `type` items, by their template name.
+    pub(super) selected_types: Vec<graphcal_compiler::syntax::type_name::StructTypeName>,
 }
 
 /// Canonical routing metadata for one module alias.

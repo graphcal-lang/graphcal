@@ -15,6 +15,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::names::NameAtom;
 use crate::syntax::names::NamePath;
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
@@ -116,6 +117,24 @@ impl std::fmt::Display for ReexportedDeclarationKind {
             Self::Type => "type",
         })
     }
+}
+
+/// A template type that a selective include must select because its
+/// definition depends on a port the include rebinds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReboundTypeDependency {
+    pub nominal: StructTypeName,
+    pub port_kind: StaticInputKind,
+    pub port: NameAtom,
+}
+
+/// The `type` items a selective include is missing, as the help lists them.
+fn type_selection_list(types: &NonEmpty<ReboundTypeDependency>) -> String {
+    types
+        .iter()
+        .map(|dependency| format!("`type {}`", dependency.nominal))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Diagnostics of item visibility and bindable interfaces.
@@ -220,6 +239,23 @@ pub enum VisibilityError {
         port_kind: crate::static_interface::StaticInputKind,
         port_name: NameAtom,
     },
+    /// A selective include rebinds a Static port, but a selected item exposes
+    /// a template type whose definition depends on that port, and the include
+    /// does not select the type.
+    ///
+    /// Only a selected type is specialized for the include's bindings. An
+    /// unselected one would keep the template's definition in the importer
+    /// while the instance's values follow the rebound port.
+    #[error(
+        "selected `{item}` exposes type `{}`, which depends on rebound {} `{}`, but the include does not select it",
+        types.first().nominal,
+        types.first().port_kind,
+        types.first().port
+    )]
+    IncludeMustSelectReboundType {
+        item: NameAtom,
+        types: NonEmpty<ReboundTypeDependency>,
+    },
 }
 
 impl DiagnosticKind for VisibilityError {
@@ -232,6 +268,7 @@ impl DiagnosticKind for VisibilityError {
             Self::IncludeMustReconcileOverride { .. } => "graphcal::V005",
             Self::GenericsLeakage { .. } => "graphcal::V006",
             Self::TemplateBodyDependsOnStaticDefault { .. } => "graphcal::V007",
+            Self::IncludeMustSelectReboundType { .. } => "graphcal::V008",
         }
     }
 
@@ -256,6 +293,9 @@ impl DiagnosticKind for VisibilityError {
             Self::TemplateBodyDependsOnStaticDefault { .. } => {
                 Some("uses the bindable port's default definition".to_owned())
             }
+            Self::IncludeMustSelectReboundType { types, .. } => {
+                Some(format!("does not select {}", type_selection_list(types)))
+            }
         }
     }
 
@@ -268,6 +308,7 @@ impl DiagnosticKind for VisibilityError {
             Self::IncludeMustReconcileOverride { orphan_decl, overridden, .. } => Some(format!("add a binding for `{orphan_decl}` to this include, or keep `{overridden}` bound to its default")),
             Self::GenericsLeakage { leaked_name, .. } => Some(format!("make `{leaked_name}` `pub` at the importing file, or drop the per-item `pub` marker on this include / import")),
             Self::TemplateBodyDependsOnStaticDefault { port_name, .. } => Some(format!("pass the required value through a `param`, or make `{port_name}` non-bindable when its concrete definition is part of the template contract")),
+            Self::IncludeMustSelectReboundType { types, .. } => Some(format!("add {} to the selection; a selected type is specialized for this include's bindings", type_selection_list(types))),
         }
     }
 
@@ -278,7 +319,8 @@ impl DiagnosticKind for VisibilityError {
             | Self::PubIndexVariantLiteral { .. }
             | Self::IncludeMustReconcileOverride { .. }
             | Self::GenericsLeakage { .. }
-            | Self::TemplateBodyDependsOnStaticDefault { .. } => Vec::new(),
+            | Self::TemplateBodyDependsOnStaticDefault { .. }
+            | Self::IncludeMustSelectReboundType { .. } => Vec::new(),
             Self::PrivateInPublic { pub_span, .. } => vec![SecondaryLabel {
                 span: *pub_span,
                 text: "visible declaration is here".to_owned(),

@@ -1058,6 +1058,7 @@ pub(super) fn process_file_include<'a>(
             .collect(),
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
+    let selected_types = selected_type_items(&include_decl.kind);
 
     ctx.include_instances.push(IncludeInstanceRequest {
         template: dependency,
@@ -1074,6 +1075,7 @@ pub(super) fn process_file_include<'a>(
         include_span: decl.span,
         import_item_attributes,
         pub_reexport_items,
+        selected_types,
     });
     Ok(())
 }
@@ -1274,6 +1276,7 @@ pub(super) fn process_inline_dag_include<'a>(
             .collect(),
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
+    let selected_types = selected_type_items(&include_decl.kind);
 
     ctx.include_instances.push(IncludeInstanceRequest {
         template: target.module,
@@ -1290,8 +1293,30 @@ pub(super) fn process_inline_dag_include<'a>(
         include_span: decl.span,
         import_item_attributes,
         pub_reexport_items,
+        selected_types,
     });
     Ok(())
+}
+
+/// The template types a selective include selects with `type` items, by
+/// their template name.
+fn selected_type_items(
+    kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
+) -> Vec<graphcal_compiler::syntax::type_name::StructTypeName> {
+    match kind {
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
+            .iter()
+            .filter(|item| {
+                item.namespace == graphcal_compiler::syntax::ast::ImportItemNamespace::Type
+            })
+            .map(|item| {
+                graphcal_compiler::syntax::type_name::StructTypeName::classify(
+                    item.name.name.atom().clone(),
+                )
+            })
+            .collect(),
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => Vec::new(),
+    }
 }
 
 /// Process one pure import from a dependency's compile-time artifact.
