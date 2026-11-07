@@ -185,7 +185,7 @@ impl Parser<'_> {
         }
     }
 
-    fn missing_table_data_row(&mut self) -> ParseError {
+    fn missing_table_data_row(&self) -> ParseError {
         match self.lexer.peek_with_span() {
             Some((token, span)) => Self::unexpected(Expected::TableDataRow, *token, span),
             None => self.unexpected_eof(Expected::TableDataRow),

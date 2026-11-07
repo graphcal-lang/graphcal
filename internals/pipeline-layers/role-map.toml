@@ -1178,11 +1178,6 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["syntax", "lexer", "peek_cache"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["syntax", "lexer", "tests"]
 role = "contracts"
 
@@ -1459,6 +1454,16 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["syntax", "parser", "expr", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "generic_lookahead"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "generic_lookahead", "tests"]
 role = "contracts"
 
 [[module]]

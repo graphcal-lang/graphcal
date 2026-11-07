@@ -1009,13 +1009,14 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     text_with_hardlines(&out)
 }
 
-fn render_multi_decl_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
-    let mut cell_fmt = fmt.fork_skipping_comments_before(expr.span.offset());
-    render_doc_to_string(&format_expr(&mut cell_fmt, expr))
+fn render_multi_decl_cell_value(fmt: &mut Formatter<'_>, expr: &Expr) -> String {
+    fmt.with_fork_skipping_comments_before(expr.span.offset(), |cell_fmt| {
+        render_doc_to_string(&format_expr(cell_fmt, expr))
+    })
 }
 
 fn compute_multi_decl_layout(
-    fmt: &Formatter<'_>,
+    fmt: &mut Formatter<'_>,
     info: &MultiDecl,
 ) -> (usize, Vec<usize>, Vec<Vec<Vec<String>>>) {
     let num_cols = info

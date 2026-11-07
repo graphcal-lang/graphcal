@@ -12,6 +12,7 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
 use crate::syntax::type_name::FieldName;
 
+use super::generic_lookahead::generic_args_close_before;
 use super::{Expected, Found, InvalidNumberReason, ParseError, ParseErrorKind, Parser};
 
 fn skip_ws_and_line_comments(bytes: &[u8], mut pos: usize) -> usize {
@@ -317,16 +318,13 @@ impl Parser<'_> {
                 // is not the base of a power expression.
                 if let Some((&Token::Number, literal_span)) = self.lexer.peek_with_span()
                     && self.lexer.slice_at(literal_span).replace('_', "") == "9223372036854775808"
+                    && self.lexer.peek_second() != Some(&Token::Caret)
                 {
-                    let mut after_literal = self.lexer.clone();
-                    after_literal.next_token();
-                    if after_literal.peek() != Some(&Token::Caret) {
-                        self.lexer.next_token();
-                        return Ok(Expr::new(
-                            ExprKind::Integer(i64::MIN),
-                            op_span.merge(literal_span),
-                        ));
-                    }
+                    self.lexer.next_token();
+                    return Ok(Expr::new(
+                        ExprKind::Integer(i64::MIN),
+                        op_span.merge(literal_span),
+                    ));
                 }
 
                 let operand = self.parse_unary()?;
@@ -551,16 +549,7 @@ impl Parser<'_> {
             return self.finish_inline_dag_call(at_span, NonEmpty::singleton(first));
         }
 
-        let mut probe = self.lexer.clone();
-        while probe.peek() == Some(&Token::Dot)
-            && probe
-                .peek_second()
-                .is_some_and(|token| token.is_identifier())
-        {
-            probe.next_token();
-            probe.next_token();
-        }
-        let terminator = probe.peek().copied();
+        let terminator = self.token_after_dotted_tail();
         if !matches!(terminator, Some(Token::LParen | Token::DoubleColon)) {
             let span = at_span.merge(first.span);
             return Ok(Expr::new(
@@ -641,7 +630,7 @@ impl Parser<'_> {
     /// (`2.0 (m/s)`), or the exact reciprocal shorthand (`2.0 1/s`). The
     /// token-based classification keeps ordinary division (`2.0 / ...`) in
     /// the expression grammar.
-    fn same_line_unit_expr_start(&mut self, literal_span: Span) -> Option<Span> {
+    fn same_line_unit_expr_start(&self, literal_span: Span) -> Option<Span> {
         let (token, start_span) = self.lexer.peek_with_span()?;
         let token = *token;
         let starts_unit_expr = token.is_identifier()
@@ -866,66 +855,11 @@ impl Parser<'_> {
         }
     }
 
-    /// Scan balanced `<…>` angle brackets from the current position and check
-    /// whether the byte immediately after `>` (skipping whitespace) equals `expected`.
-    ///
-    /// Returns `false` if the next token is not `<`, the brackets are
-    /// unbalanced, or a byte that can never occur inside a generic-argument
-    /// list shows up first — in that case the `<` is a comparison operator,
-    /// so an ordinary boolean expression like `a < b && c > (d)` is not
-    /// misparsed as turbofish. Line comments are skipped so their contents
-    /// affect neither the bracket balance nor the operator bail-out.
-    fn are_generic_args_followed_by(&mut self, expected: u8) -> bool {
-        let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
-            return false;
-        };
-        self.angle_brackets_at_followed_by(lt_span.offset() + lt_span.len(), expected)
-    }
-
     /// After peeking `todo`, look ahead for `< … > {`: only that shape is a
     /// typed hole, so `todo` stays an ordinary identifier elsewhere (`todo < x`).
-    fn is_todo_hole(&mut self) -> bool {
-        if self.lexer.peek_second() != Some(&Token::Lt) {
-            return false;
-        }
-        let Some((_, todo_span)) = self.lexer.peek_with_span() else {
-            return false;
-        };
-        let bytes = self.source.as_bytes();
-        let pos = skip_ws_and_line_comments(bytes, todo_span.offset() + todo_span.len());
-        bytes.get(pos) == Some(&b'<') && self.angle_brackets_at_followed_by(pos + 1, b'{')
-    }
-
-    /// Scan from `pos`, the byte after an opening `<`, to its matching `>`
-    /// and report whether the next significant byte is `expected`. Pure byte
-    /// scan; the lexer is not advanced.
-    fn angle_brackets_at_followed_by(&self, mut pos: usize, expected: u8) -> bool {
-        let bytes = self.source.as_bytes();
-        let mut depth: usize = 1;
-        while pos < bytes.len() {
-            match bytes[pos] {
-                b'<' => depth += 1,
-                b'>' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let p = skip_ws_and_line_comments(bytes, pos + 1);
-                        return p < bytes.len() && bytes[p] == expected;
-                    }
-                }
-                b'/' if bytes.get(pos + 1) == Some(&b'/') => {
-                    while pos < bytes.len() && line_ending_at(bytes, pos).is_none() {
-                        pos += 1;
-                    }
-                    continue;
-                }
-                // Sort-aware generic arguments are type or Nat expressions;
-                // none of these bytes can occur in them.
-                b'&' | b'|' | b';' | b'=' | b'{' | b'}' | b'"' | b'@' | b'!' => return false,
-                _ => {}
-            }
-            pos += 1;
-        }
-        false
+    fn is_todo_hole(&self) -> bool {
+        let mut after_todo = self.lexer.upcoming().skip(1);
+        after_todo.next() == Some(Token::Lt) && generic_args_close_before(after_todo, Token::LBrace)
     }
 
     /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.
@@ -933,7 +867,7 @@ impl Parser<'_> {
     /// Scans the raw source string from the current position without consuming tokens.
     /// Returns `true` only if the `(...)` contains only identifiers, commas,
     /// whitespace, and line comments, followed by `)` then `=>`.
-    pub(super) fn is_tuple_key_sugar(&mut self) -> bool {
+    pub(super) fn is_tuple_key_sugar(&self) -> bool {
         let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
             return false;
         };
@@ -971,11 +905,11 @@ impl Parser<'_> {
         }
     }
 
-    /// Look ahead to check if `<...>` is followed by `(`.
-    /// Used to disambiguate `eye<3>()` (turbofish fn call)
-    /// from `f < x` (comparison).
-    fn is_generic_args_followed_by_paren(&mut self) -> bool {
-        self.are_generic_args_followed_by(b'(')
+    /// After peeking `<`, look ahead for `< … > (`. Used to disambiguate
+    /// `eye<3>()` (turbofish fn call) from `f < x` (comparison).
+    fn is_generic_args_followed_by_paren(&self) -> bool {
+        let mut upcoming = self.lexer.upcoming();
+        upcoming.next() == Some(Token::Lt) && generic_args_close_before(upcoming, Token::LParen)
     }
 
     /// After peeking `(`, look ahead to decide whether the parenthesized
@@ -988,7 +922,7 @@ impl Parser<'_> {
     /// zero-argument functions keep their call shape. If name resolution finds
     /// a constructor instead, HIR lowering emits the constructor-specific S010
     /// diagnostic.
-    fn is_named_arg_call(&mut self) -> bool {
+    fn is_named_arg_call(&self) -> bool {
         let Some((&Token::LParen, lp_span)) = self.lexer.peek_with_span() else {
             return false;
         };
@@ -1694,6 +1628,24 @@ mod tests {
             "expected `||` at the top, got {:?}",
             expr.kind
         );
+    }
+
+    #[test]
+    fn comparisons_in_named_arguments_are_not_turbofish() {
+        // FE-6 (#2250): the lookahead crossed `,` and `:`, reading
+        // `a < b, high: a > (…)` as the generic call `a<b, high: a>(…)`.
+        let expr = parse_node_expr("Flags(low: a < b, high: a > (b - 0.5 m))");
+        let ExprKind::ConstructorCall { fields, .. } = &expr.kind else {
+            panic!("expected a constructor call, got {:?}", expr.kind);
+        };
+        let ops: Vec<_> = fields
+            .iter()
+            .map(|field| match &field.value.kind {
+                ExprKind::BinOp { op, .. } => *op,
+                other => panic!("expected a comparison, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(ops, [BinOp::Lt, BinOp::Gt]);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use crate::cancellation::{CancellationToken, Cancelled};
 use crate::syntax::comments::SourceMetadata;
-use crate::syntax::lexer::Lexer;
+use crate::syntax::lexer::{TokenizedSource, tokenize};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
@@ -9,21 +9,50 @@ pub(super) const CANCELLATION_CHECKPOINT_INTERVAL: usize = 256;
 
 /// Parser-owned token stream that applies one cancellation policy to every
 /// grammar production without threading a token through each parser helper.
-#[derive(Clone)]
+///
+/// The source is tokenized once up front, so the stream state that moves
+/// during parsing is only a [`Cursor`] into an immutable token slice. Comments
+/// and blank lines live in the immutable [`TokenizedSource`]: lookahead and
+/// speculative parsing (see [`Self::mark`] and [`Self::rewind`]) therefore
+/// cost O(1) regardless of how much trivia the source records, and a rewound
+/// speculation cannot leave recorded trivia behind.
+///
+/// The stream is intentionally not `Clone`; use [`Self::upcoming`] for
+/// read-only lookahead and a [`TokenMark`] for speculation.
 pub(super) struct ParserTokenStream<'src> {
-    lexer: Lexer<'src>,
+    source: &'src str,
+    tokenized: TokenizedSource,
+    cursor: Cursor,
     cancellation: CancellationPolicy,
+}
+
+/// The only mutable parsing position of a [`ParserTokenStream`].
+#[derive(Clone, Copy)]
+struct Cursor {
+    /// Index of the next unconsumed token.
+    next: usize,
     /// The span of the last token consumed, where a production that just
     /// finished ends.
     last_consumed: Option<Span>,
 }
 
+/// A saved stream position, produced by [`ParserTokenStream::mark`] and
+/// consumed by [`ParserTokenStream::rewind`].
+///
+/// It is neither `Clone` nor `Copy`, so each mark rewinds at most once, and
+/// its fields are private, so no position can be fabricated.
+pub(super) struct TokenMark(Cursor);
+
 impl<'src> ParserTokenStream<'src> {
     pub(super) fn new(source: &'src str) -> Self {
         Self {
-            lexer: Lexer::new(source),
+            source,
+            tokenized: tokenize(source),
+            cursor: Cursor {
+                next: 0,
+                last_consumed: None,
+            },
             cancellation: CancellationPolicy::Unbounded,
-            last_consumed: None,
         }
     }
 
@@ -41,20 +70,54 @@ impl<'src> ParserTokenStream<'src> {
         self.cancellation.checkpoint()
     }
 
-    pub(super) fn peek(&mut self) -> Option<&Token> {
-        self.lexer.peek()
+    fn remaining(&self) -> &[(Token, Span)] {
+        // `next` only advances by consuming an existing token and is only
+        // rewound to an earlier mark, so it never exceeds the token count.
+        &self.tokenized.tokens()[self.cursor.next..]
     }
 
-    pub(super) fn peek_second(&mut self) -> Option<&Token> {
-        self.lexer.peek_second()
+    fn peek_with_span_at(&self, offset: usize) -> Option<(&Token, Span)> {
+        self.remaining()
+            .get(offset)
+            .map(|(token, span)| (token, *span))
     }
 
-    pub(super) fn peek_third(&mut self) -> Option<&Token> {
-        self.lexer.peek_third()
+    pub(super) fn peek(&self) -> Option<&Token> {
+        self.peek_with_span_at(0).map(|(token, _)| token)
     }
 
-    pub(super) fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
-        self.lexer.peek_with_span()
+    pub(super) fn peek_second(&self) -> Option<&Token> {
+        self.peek_with_span_at(1).map(|(token, _)| token)
+    }
+
+    pub(super) fn peek_third(&self) -> Option<&Token> {
+        self.peek_with_span_at(2).map(|(token, _)| token)
+    }
+
+    pub(super) fn peek_with_span(&self) -> Option<(&Token, Span)> {
+        self.peek_with_span_at(0)
+    }
+
+    /// Read-only lookahead over every unconsumed token, in source order.
+    pub(super) fn upcoming(&self) -> impl Iterator<Item = Token> + Clone + '_ {
+        self.remaining().iter().map(|(token, _)| *token)
+    }
+
+    /// Save the current position so a speculative parse can be undone.
+    pub(super) const fn mark(&self) -> TokenMark {
+        TokenMark(self.cursor)
+    }
+
+    /// Return to a position saved by [`Self::mark`]. The cancellation budget
+    /// is deliberately not restored: tokens consumed speculatively still
+    /// count towards the next checkpoint, and a latched cancellation stays
+    /// latched.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "consuming the mark makes every mark single-use"
+    )]
+    pub(super) const fn rewind(&mut self, mark: TokenMark) {
+        self.cursor = mark.0;
     }
 
     /// Consume a token after applying the parser's periodic cancellation
@@ -65,37 +128,40 @@ impl<'src> ParserTokenStream<'src> {
         if self.cancellation.before_next_token().is_err() {
             return None;
         }
-        let token = self.lexer.next_token();
-        if let Some((_, span)) = &token {
+        let token = self.remaining().first().copied();
+        if let Some((_, span)) = token {
             self.cancellation.token_consumed();
-            self.last_consumed = Some(*span);
+            self.cursor = Cursor {
+                next: self.cursor.next + 1,
+                last_consumed: Some(span),
+            };
         }
         token
     }
 
     /// The span of the last token consumed.
     pub(super) const fn last_consumed(&self) -> Option<Span> {
-        self.last_consumed
+        self.cursor.last_consumed
     }
 
     pub(super) const fn first_error_span(&self) -> Option<Span> {
-        self.lexer.first_error_span()
+        self.tokenized.first_error_span()
     }
 
     pub(super) fn slice_at(&self, span: Span) -> &'src str {
-        self.lexer.slice_at(span)
+        &self.source[span.offset()..span.offset() + span.len()]
     }
 
     pub(super) const fn source_len(&self) -> usize {
-        self.lexer.source_len()
+        self.source.len()
     }
 
     pub(super) fn into_source_metadata(self) -> SourceMetadata {
-        self.lexer.into_source_metadata()
+        self.tokenized.into_source_metadata()
     }
 
     pub(super) const fn source_metadata(&self) -> &SourceMetadata {
-        self.lexer.source_metadata()
+        self.tokenized.source_metadata()
     }
 
     #[cfg(test)]
@@ -106,7 +172,6 @@ impl<'src> ParserTokenStream<'src> {
     }
 }
 
-#[derive(Clone)]
 enum CancellationPolicy {
     /// The ordinary parser path performs no atomic loads and has no token
     /// budget to maintain.
@@ -170,7 +235,6 @@ impl CancellationPolicy {
     }
 }
 
-#[derive(Clone)]
 enum CancellationProbe {
     Token(CancellationToken),
     #[cfg(test)]
