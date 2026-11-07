@@ -2173,6 +2173,7 @@ dependencies = [
  "arrow-array",
  "arrow-ipc",
  "arrow-schema",
+ "graphcal-compiler",
  "graphcal-model-protocol",
  "graphcal-project",
  "thiserror",

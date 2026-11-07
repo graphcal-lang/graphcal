@@ -246,6 +246,10 @@ enum ModelCommands {
         /// Serve without checking the interface fingerprint
         #[arg(long)]
         skip_fingerprint_check: bool,
+        /// End the session when one request batch is still evaluating after
+        /// this many seconds; by default a request evaluates until it finishes
+        #[arg(long, value_name = "SECONDS", value_parser = model::parse_request_timeout)]
+        request_timeout: Option<std::time::Duration>,
         /// Values of unvaried params, used instead of their defaults in every
         /// row; stdin is not available as a JSON source
         #[command(flatten)]
@@ -744,6 +748,7 @@ fn run_model_command(command: ModelCommands) {
             unit,
             expect_fingerprint,
             skip_fingerprint_check: _,
+            request_timeout,
             parameters,
             root,
         } => {
@@ -772,6 +777,10 @@ fn run_model_command(command: ModelCommands) {
                     fixed: &overrides,
                 },
                 &fingerprint,
+                request_timeout.map_or(
+                    graphcal_model_server::RequestDeadline::Unbounded,
+                    graphcal_model_server::RequestDeadline::After,
+                ),
                 root.as_deref(),
             );
         }
@@ -782,9 +791,10 @@ fn run_model_serve(
     file: &Path,
     selection: &model::SessionSelection<'_>,
     fingerprint: &model::FingerprintCheck,
+    deadline: graphcal_model_server::RequestDeadline,
     root: Option<&Path>,
 ) {
-    if let Err(error) = model::serve(file, selection, fingerprint, root) {
+    if let Err(error) = model::serve(file, selection, fingerprint, deadline, root) {
         let code = error.exit_code();
         match error {
             model::ModelServeError::Compile(error) => {
