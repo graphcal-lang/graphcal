@@ -2,6 +2,8 @@
 //! recursive with (generic arguments carry type expressions, whose domain
 //! bounds carry value expressions).
 
+use std::collections::HashMap;
+
 use graphcal_compiler::syntax::ast::{
     BinOp, DomainBound, ElementTypeExpr, Expr, ExprKind, FieldInit, ForBinding, GenericArg,
     IndexArg, MapEntry, MapEntryKey, MatchArm, MatchPattern, ModulePath, ParamBinding,
@@ -865,10 +867,6 @@ fn format_table_2d(
 
 /// Format the inner body of a 2D table (header row + data rows).
 /// Shared between 2D tables and 3D+ slice sections.
-#[expect(
-    clippy::too_many_lines,
-    reason = "table body formatting keeps header, row, and comment layout together"
-)]
 fn format_table_2d_body(
     fmt: &mut Formatter<'_>,
     indexes: &[TableIndexSpec],
@@ -881,41 +879,31 @@ fn format_table_2d_body(
     let row_is_nat = indexes[row_idx].is_finite_index();
     let col_is_nat = indexes[col_idx].is_finite_index();
 
-    // Extract unique column labels (from the last key, preserving order)
-    let mut col_labels: Vec<String> = Vec::new();
-    for e in entries {
-        let col_label = e.keys[col_idx].entry_key().to_string();
-        if !col_labels.contains(&col_label) {
-            col_labels.push(col_label);
-        }
-    }
+    // Unique column and row labels in first-appearance order, with the
+    // position of every entry's column and row.
+    let (col_labels, entry_cols) = index_unique_labels(
+        entries
+            .iter()
+            .map(|e| e.keys[col_idx].entry_key().to_string()),
+    );
+    let (row_labels, entry_rows) = index_unique_labels(
+        entries
+            .iter()
+            .map(|e| e.keys[row_idx].entry_key().to_string()),
+    );
     let num_cols = col_labels.len();
-
-    // Extract unique row labels (from the second-to-last key, preserving order)
-    let mut row_labels: Vec<String> = Vec::new();
-    for e in entries {
-        let row_label = e.keys[row_idx].entry_key().to_string();
-        if !row_labels.contains(&row_label) {
-            row_labels.push(row_label);
-        }
-    }
 
     // Build 2D grid of rendered values and track entry indices per cell
     let mut grid: Vec<Vec<String>> = vec![vec![String::new(); num_cols]; row_labels.len()];
     let mut entry_indices: Vec<Vec<Option<usize>>> = vec![vec![None; num_cols]; row_labels.len()];
-    for (ei, e) in entries.iter().enumerate() {
-        let row_label = e.keys[row_idx].entry_key().to_string();
-        let col_label = e.keys[col_idx].entry_key().to_string();
-        // Labels were built from the same entries, so lookup cannot miss.
-        // If it somehow does, skip this entry rather than silently using row/col 0.
-        let Some(ri) = row_labels.iter().position(|r| r == &row_label) else {
-            continue;
-        };
-        let Some(ci) = col_labels.iter().position(|c| c == &col_label) else {
-            continue;
-        };
+    for (ei, ((e, &ri), &ci)) in entries.iter().zip(&entry_rows).zip(&entry_cols).enumerate() {
+        if entry_indices[ri][ci].replace(ei).is_some() {
+            // A duplicated row/column label puts two entries in one cell; the
+            // grid layout would drop a value, so keep the source as written.
+            fmt.request_verbatim();
+            return RcDoc::nil();
+        }
         grid[ri][ci] = render_table_cell_value(fmt, &e.value);
-        entry_indices[ri][ci] = Some(ei);
     }
 
     // Compute column widths: max of (column label width, max cell width in that column)
@@ -1009,6 +997,22 @@ fn format_table_2d_body(
     RcDoc::intersperse(all_rows, RcDoc::hardline())
 }
 
+/// Deduplicate `labels` in first-appearance order, returning the unique
+/// labels and, for each input label, its position among them.
+fn index_unique_labels(labels: impl Iterator<Item = String>) -> (Vec<String>, Vec<usize>) {
+    let mut unique: Vec<String> = Vec::new();
+    let mut positions: HashMap<String, usize> = HashMap::new();
+    let indices = labels
+        .map(|label| {
+            *positions.entry(label).or_insert_with_key(|label| {
+                unique.push(label.clone());
+                unique.len() - 1
+            })
+        })
+        .collect();
+    (unique, indices)
+}
+
 /// Format a 3D+ table with slice sections.
 fn format_table_sliced(
     fmt: &mut Formatter<'_>,
@@ -1022,12 +1026,14 @@ fn format_table_sliced(
     // Group entries by their slice keys (first N-2 keys).
     // Named axes render as `Index#Variant`; finite positions render as `#N`.
     let mut slices: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
+    let mut slice_positions: HashMap<Vec<String>, usize> = HashMap::new();
     for (idx, e) in entries.iter().enumerate() {
         let slice_key: Vec<String> = (0..slice_dims).map(|i| e.keys[i].to_string()).collect();
 
-        if let Some((entry_indices, _)) = slices.iter_mut().find(|(_, key)| key == &slice_key) {
-            entry_indices.push(idx);
+        if let Some(&position) = slice_positions.get(&slice_key) {
+            slices[position].0.push(idx);
         } else {
+            slice_positions.insert(slice_key.clone(), slices.len());
             slices.push((vec![idx], slice_key));
         }
     }
@@ -1519,5 +1525,18 @@ fn todo_dependency_text(dependency: &TodoDependency) -> String {
                 .join(", ")
         ),
         TodoDependency::Local(local) => local.value.as_str().to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::index_unique_labels;
+
+    #[test]
+    fn unique_labels_keep_first_appearance_order_and_positions() {
+        let labels = ["B", "A", "B", "C", "A"].map(String::from);
+        let (unique, positions) = index_unique_labels(labels.into_iter());
+        assert_eq!(unique, ["B", "A", "C"]);
+        assert_eq!(positions, [0, 1, 0, 2, 1]);
     }
 }
