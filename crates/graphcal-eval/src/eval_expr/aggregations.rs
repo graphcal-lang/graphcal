@@ -65,27 +65,34 @@ pub(super) fn count_entries<V>(indexed: &IndexedValue<V>) -> Result<RuntimeValue
 }
 
 /// Key of the extremum element, resolving ties to the first entry in index
-/// order (entries iterate in canonical index order).
+/// order (entries iterate in canonical index order). Only the winning key is
+/// built.
 pub(super) fn extremum_key(
     kind: KeyAggregation,
     indexed: &IndexedValue<FiniteQuantity>,
     control: &mut KernelCheckpoint<'_>,
-) -> Result<KeyValue, Cancelled> {
-    let keys = KeyValue::all(indexed.axis());
-    let (first_key, rest_keys) = keys.split_first();
-    let (first_value, rest_values) = indexed.values().split_first();
-    let (key, _) = rest_keys.iter().zip(rest_values).try_fold(
-        (first_key, *first_value),
-        |incumbent, (key, quantity)| {
-            control.step()?;
-            let better = match kind {
-                KeyAggregation::Argmax => *quantity > incumbent.1,
-                KeyAggregation::Argmin => *quantity < incumbent.1,
-            };
-            Ok::<_, Cancelled>(if better { (key, *quantity) } else { incumbent })
-        },
-    )?;
-    Ok(key.clone())
+) -> Result<KeyValue, Outcome<Invariant>> {
+    let (first, rest) = indexed.values().split_first();
+    let (position, _) =
+        rest.iter()
+            .zip(1..)
+            .try_fold((0, *first), |incumbent, (quantity, position)| {
+                control.step()?;
+                let better = match kind {
+                    KeyAggregation::Argmax => *quantity > incumbent.1,
+                    KeyAggregation::Argmin => *quantity < incumbent.1,
+                };
+                Ok::<_, Cancelled>(if better {
+                    (position, *quantity)
+                } else {
+                    incumbent
+                })
+            })?;
+    KeyValue::at(indexed.axis().clone(), position).ok_or_else(|| {
+        Outcome::Failed(Invariant::violated(format_args!(
+            "extremum position {position} is not a key of its axis"
+        )))
+    })
 }
 
 fn aggregate_sum(
@@ -264,7 +271,7 @@ mod tests {
         for kind in [KeyAggregation::Argmin, KeyAggregation::Argmax] {
             assert_eq!(
                 extremum_key(kind, &entries, &mut KernelCheckpoint::new(&token)),
-                Err(Cancelled)
+                Err(Outcome::Cancelled)
             );
         }
     }
