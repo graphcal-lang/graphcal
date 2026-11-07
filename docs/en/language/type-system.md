@@ -593,16 +593,22 @@ Datetime values follow **point-vs-vector** semantics:
 
 | Operation | Result | Notes |
 |-----------|--------|-------|
-| `Datetime - Datetime` | `Time` | Both must be the same time scale |
-| `Datetime + Time` | `Datetime` | Add a duration |
-| `Time + Datetime` | `Datetime` | Add a duration (commuted form) |
-| `Datetime - Time` | `Datetime` | Subtract a duration |
+| `Datetime - Datetime` | `Time` | Both must be the same non-UTC time scale |
+| `Datetime + Time` | `Datetime` | Add a duration (not in UTC) |
+| `Time + Datetime` | `Datetime` | Add a duration (commuted form; not in UTC) |
+| `Datetime - Time` | `Datetime` | Subtract a duration (not in UTC) |
 | `Datetime == Datetime` | `Bool` | Equality comparison |
 | `Datetime < Datetime` | `Bool` | Ordering comparison |
 
 Datetime values cannot be added together, multiplied, divided, or used as the right-hand operand of duration subtraction (`Time - Datetime`).
 
 Cross-scale operations are type errors: `Datetime<UTC> - Datetime<TT>` does not compile. Use explicit time scale conversion functions (`to_utc`, `to_tt`, etc.) first.
+
+UTC values can be compared but not subtracted or shifted (`D044`). UTC labels
+skip leap seconds, so a UTC difference across one would be a second short of
+the elapsed time. Compute in TAI instead: `to_tai(@end) - to_tai(@start)` for
+an elapsed time, and `to_utc(to_tai(@start) + 90.0 min)` for a shifted UTC
+datetime.
 
 Calendar extractors (`year`, `month`, `day`, `hour`, `minute`, `second`,
 `weekday`, and `day_of_year`) use the value's declared `Datetime<S>` scale.

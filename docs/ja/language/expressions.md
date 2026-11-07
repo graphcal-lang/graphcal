@@ -108,7 +108,7 @@ node with_offset: Complex<Length> = @displacement + to_complex(1.0 m);
 
 すべての比較演算子は、インデックスなしのオペランドに対して `Bool` を返します。複素数の量は、次元が一致する場合に正確な `==` と `!=` をサポートしますが、順序比較はサポートしません。[インデックスキー](indexes.md#index-keys)も同様に、同じ軸上でのみ `==` と `!=` をサポートし、順序を持ちません。順序が必要な場合は、取り出した中身（`coord(t)`、`to_int(i)`）を比較してください。構造体とユニオンの等値比較は再帰的です。インデックス付きのフィールドや座標インデックスキー（その軸と位置の両方が同一性の一部です）を含め、すべてのフィールドが等しくなければなりません。
 
-Datetime の算術は「時点対期間」の規則に従います。`Datetime + Time`、`Time + Datetime`、`Datetime - Time` は `Datetime` を生成し、`Datetime - Datetime` は `Time` の期間を生成します。`Time - Datetime` と `Datetime + Datetime` はエラーです。
+Datetime の算術は「時点対期間」の規則に従います。`Datetime + Time`、`Time + Datetime`、`Datetime - Time` は `Datetime` を生成し、`Datetime - Datetime` は `Time` の期間を生成します。`Time - Datetime` と `Datetime + Datetime` はエラーです。うるう秒を数えない `Datetime<UTC>` の算術もエラーなので、`to_tai` で TAI に変換して計算してください。
 
 比較演算子はブロードキャストしません。すべてのオペランドはインデックスなしでなければなりません。インデックス付きの値を `==`、`!=`、`<`、`>`、`<=`、`>=` に渡すとコンパイルエラー（`D019`）になります。要素ごとの比較は `for` を使って明示的に書き、本体の中で各コレクションをインデックスしてください。
 

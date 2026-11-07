@@ -149,7 +149,8 @@ are both part of their identity).
 Datetime arithmetic follows point-vs-duration rules: `Datetime + Time`,
 `Time + Datetime`, and `Datetime - Time` produce `Datetime`, while
 `Datetime - Datetime` produces a `Time` duration. `Time - Datetime` and
-`Datetime + Datetime` are errors.
+`Datetime + Datetime` are errors, and so is arithmetic on `Datetime<UTC>`,
+whose labels skip leap seconds; compute in TAI with `to_tai` instead.
 
 Comparison operators do not broadcast: every operand must be unindexed.
 Passing an indexed value to `==`, `!=`, `<`, `>`, `<=`, or `>=` is a compile
