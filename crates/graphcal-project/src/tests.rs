@@ -1991,6 +1991,73 @@ fn time_scale_spellings_are_disjoint_from_graph_value_namespaces() {
     ));
 }
 
+/// Selective-include aliases obey the reserved-name policy of the namespace
+/// they occupy, and the diagnostic points at the local alias (RES-3).
+fn assert_include_aliases_take_no_reserved_spelling(library: &str) {
+    let invalid_includes = [
+        ("include pipeline.lib()::{ runtime as E };\n", "E"),
+        ("include pipeline.lib()::{ type Choice, Only as E };\n", "E"),
+        (
+            "dag producer { pub node value: Dimensionless = 1.0; }\ninclude producer()::{ value as E };\n",
+            "E",
+        ),
+        (
+            "dag producer { pub type Choice { Only } }\ninclude producer()::{ type Choice, Only as E };\n",
+            "E",
+        ),
+        // RES-3: selective-include aliases of units, dimensions, types, and
+        // indexes must not redefine a prelude or built-in spelling.
+        ("include pipeline.lib()::{ unit custom_unit as m };\n", "m"),
+        (
+            "include pipeline.lib()::{ dim CustomDim as Length };\n",
+            "Length",
+        ),
+        (
+            "include pipeline.lib()::{ type CustomType as Bool };\n",
+            "Bool",
+        ),
+        (
+            "include pipeline.lib()::{ index CustomIndex as Mass };\n",
+            "Mass",
+        ),
+        ("include pipeline.lib()::{ constant as sum };\n", "sum"),
+        (
+            "dag producer { pub const unit ft: Length = 0.3048 m; }\n\
+             include producer()::{ unit ft as m };\n\
+             node x: Length = 1.0 m;\n",
+            "m",
+        ),
+    ];
+    for (main, expected_name) in invalid_includes {
+        let error = if main.starts_with("dag") {
+            compile_and_eval_named(main, "test.gcl").unwrap_err()
+        } else {
+            let (_directory, root) =
+                write_pipeline_project(&[("lib.gcl", library), ("main.gcl", main)], "main.gcl");
+            compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err()
+        };
+        let CompileError::Eval(RenderedSemanticError {
+            error:
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }),
+                    primary: span,
+                    ..
+                }),
+            ..
+        }) = error
+        else {
+            panic!("{main}: expected N009, got {error:?}");
+        };
+        assert_eq!(name.to_string(), expected_name, "{main}");
+        let alias_start = main.find(&format!("{expected_name} }}")).unwrap();
+        assert_eq!(
+            span,
+            graphcal_compiler::syntax::span::Span::new(alias_start, expected_name.len()),
+            "{main}: the diagnostic points at the local alias"
+        );
+    }
+}
+
 #[test]
 fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
     let library = "pub dim CustomDim = Length;\n\
@@ -2023,25 +2090,7 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
         ));
     }
 
-    let invalid_includes = [
-        "include pipeline.lib()::{ runtime as E };\n",
-        "include pipeline.lib()::{ type Choice, Only as E };\n",
-        "dag producer { pub node value: Dimensionless = 1.0; }\ninclude producer()::{ value as E };\n",
-        "dag producer { pub type Choice { Only } }\ninclude producer()::{ type Choice, Only as E };\n",
-    ];
-    for main in invalid_includes {
-        let error = if main.starts_with("dag") {
-            compile_and_eval_named(main, "test.gcl").unwrap_err()
-        } else {
-            let (_directory, root) =
-                write_pipeline_project(&[("lib.gcl", library), ("main.gcl", main)], "main.gcl");
-            compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err()
-        };
-        assert!(matches!(
-            error,
-            CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::BuiltinNameShadowed { name, .. }), .. }), .. }) if name.to_string() == "E"
-        ));
-    }
+    assert_include_aliases_take_no_reserved_spelling(library);
 
     let (_directory, root) = write_pipeline_project(
         &[

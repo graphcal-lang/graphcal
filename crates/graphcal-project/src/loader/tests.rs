@@ -429,11 +429,11 @@ fn every_module_path_names_its_loaded_module_and_resolver_module() {
         ("graphcal.toml", "[package]\nname = \"pkg\"\n"),
         (
             "src/pkg/lib.gcl",
-            "pub dim Mass;\npub dag present { pub dim Length; }",
+            "pub dim Heft;\npub dag present { pub dim Extent; }",
         ),
         (
             "src/pkg/main.gcl",
-            "import pkg.lib::{dim Mass};\nimport pkg.lib.present::{dim Length};\ndag local { import pkg.lib::{dim Mass}; }",
+            "import pkg.lib::{dim Heft};\nimport pkg.lib.present::{dim Extent};\ndag local { import pkg.lib::{dim Heft}; }",
         ),
     ]);
     let project = load_project(&dir.path().join("src/pkg/main.gcl"), None, &fs()).unwrap();

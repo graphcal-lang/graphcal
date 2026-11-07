@@ -18,6 +18,7 @@ use crate::syntax::type_name::ConstructorName;
 
 use super::category::{DeclSymbolKind, ExportedImportItemKind, SurfaceNameKind, SymbolTable};
 use super::namespace::Namespace;
+use super::reserved_name::ReservedName;
 
 /// What a failed lookup or visibility check searched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -145,6 +146,17 @@ pub enum ModuleResolveError {
         name: NameAtom,
         first: Span,
         duplicate: Span,
+    },
+    /// A selective import / include item's local name takes a spelling
+    /// reserved in the namespace it occupies (for example `unit ft as m`).
+    #[error("imported {kind} name `{name}` in module `{owner}` is reserved by the {reserved}")]
+    ReservedImportName {
+        owner: DagId,
+        kind: ExportedImportItemKind,
+        name: NameAtom,
+        reserved: ReservedName,
+        /// The local name's source span.
+        span: Span,
     },
     /// A name was not found where the lookup searched.
     #[error("unknown {category} `{name}` in module `{owner}`")]

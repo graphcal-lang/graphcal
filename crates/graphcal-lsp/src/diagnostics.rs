@@ -851,7 +851,7 @@ mod tests {
             diagnostic.code,
             Some(NumberOrString::String("graphcal::N009".to_string()))
         );
-        assert!(diagnostic.message.contains("Term alias `E`"));
+        assert!(diagnostic.message.contains("constructor alias `E`"));
         assert_eq!(diagnostic.range.start, Position::new(0, 26));
         assert_eq!(diagnostic.range.end, Position::new(0, 27));
     }
@@ -1694,7 +1694,7 @@ param event: Datetime<TT>(
     #[test]
     fn repeated_include_producer_has_both_selection_spans() {
         let source = "dag producer { pub node value: Dimensionless = 1.0; }\n\
-                      include producer()::{ value as first, value as second };";
+                      include producer()::{ value as alpha, value as beta };";
         let diagnostics = produce_diagnostics(source, "test.gcl");
         let [diagnostic] = diagnostics.as_slice() else {
             panic!("expected one diagnostic, got {diagnostics:?}");
