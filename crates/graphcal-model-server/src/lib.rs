@@ -18,7 +18,7 @@
 
 use std::io::{Read, Write};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
@@ -125,31 +125,85 @@ fn evaluate_within(
     request: &RequestBatch,
     deadline: RequestDeadline,
 ) -> Result<ResultBatch, ServeError> {
-    let RequestDeadline::After(timeout) = deadline else {
-        return Ok(project.evaluate_request(session, request)?);
-    };
+    match deadline {
+        RequestDeadline::Unbounded => Ok(project.evaluate_request(session, request)?),
+        RequestDeadline::After(timeout) => {
+            evaluate_until(project, session, request, &Expiry::starting_now(timeout))
+        }
+    }
+}
+
+/// The monotonic instant a request's deadline expires, fixed before the
+/// request starts evaluating.
+struct Expiry {
+    timeout: Duration,
+    /// `None` when the instant is too far away to represent: it never comes.
+    at: Option<Instant>,
+}
+
+impl Expiry {
+    fn starting_now(timeout: Duration) -> Self {
+        Self {
+            timeout,
+            at: Instant::now().checked_add(timeout),
+        }
+    }
+
+    /// How long from now until the deadline; `None` when it never comes.
+    fn remaining(&self) -> Option<Duration> {
+        self.at
+            .map(|at| at.saturating_duration_since(Instant::now()))
+    }
+
+    fn has_passed(&self) -> bool {
+        self.at.is_some_and(|at| Instant::now() >= at)
+    }
+}
+
+/// Evaluate `request` against `expiry`: a watchdog cancels it when the
+/// deadline passes, and a result completed after the deadline is rejected
+/// even when the watchdog had not run yet.
+fn evaluate_until(
+    project: &PreparedProject,
+    session: &ModelSession,
+    request: &RequestBatch,
+    expiry: &Expiry,
+) -> Result<ResultBatch, ServeError> {
     let source = CancellationSource::new();
     let token = source.token();
     let (finished, watched) = mpsc::channel::<()>();
+    let remaining = expiry.remaining();
     std::thread::scope(|scope| {
         // The watchdog cancels at the deadline unless evaluation finishes
-        // first, which drops `finished` and wakes it.
+        // first, which drops `finished` and wakes it. Only the end of
+        // evaluation wakes a deadline that never comes.
         scope.spawn(move || {
-            if matches!(
-                watched.recv_timeout(timeout),
-                Err(mpsc::RecvTimeoutError::Timeout)
-            ) {
+            let expired = remaining.map_or_else(
+                || {
+                    let _ = watched.recv();
+                    false
+                },
+                |remaining| {
+                    matches!(
+                        watched.recv_timeout(remaining),
+                        Err(mpsc::RecvTimeoutError::Timeout)
+                    )
+                },
+            );
+            if expired {
                 source.cancel();
             }
         });
-        let outcome = project
-            .evaluate_request_with_cancellation(session, request, &token)
-            .map_err(|outcome| match outcome {
-                Outcome::Cancelled => ServeError::DeadlineExceeded(timeout),
-                Outcome::Failed(error) => error.into(),
-            });
+        let outcome = project.evaluate_request_with_cancellation(session, request, &token);
         drop(finished);
-        outcome
+        match outcome {
+            // A result that completed after the deadline has no place in the
+            // stream, whether or not the watchdog had cancelled yet.
+            Ok(_) if expiry.has_passed() => Err(ServeError::DeadlineExceeded(expiry.timeout)),
+            Ok(result) => Ok(result),
+            Err(Outcome::Cancelled) => Err(ServeError::DeadlineExceeded(expiry.timeout)),
+            Err(Outcome::Failed(error)) => Err(error.into()),
+        }
     })
 }
 
@@ -329,6 +383,32 @@ mod tests {
             "the deadline must stop evaluation promptly"
         );
         assert!(!output.is_empty(), "the result header precedes evaluation");
+    }
+
+    #[test]
+    fn a_result_completed_after_the_deadline_is_rejected() {
+        let project =
+            prepare_from_project(&LoadedProject::from_source(MODEL, "model.gcl").unwrap()).unwrap();
+        let session = session(&project);
+        let request = RequestBatch::new(
+            Arc::clone(session.schema()),
+            vec![InputColumn::Quantity(vec![FiniteF64::new(5.0).unwrap()])],
+        )
+        .unwrap();
+        // A deadline that has already passed: the watchdog cancels at once,
+        // and even an evaluation that finishes before observing it is
+        // rejected at completion.
+        let timeout = Duration::from_millis(5);
+        let expired = Expiry {
+            timeout,
+            at: Instant::now().checked_sub(Duration::from_secs(1)),
+        };
+        assert!(expired.at.is_some());
+        let error = evaluate_until(&project, &session, &request, &expired).unwrap_err();
+        assert!(
+            matches!(error, ServeError::DeadlineExceeded(reported) if reported == timeout),
+            "{error:?}"
+        );
     }
 
     #[test]
