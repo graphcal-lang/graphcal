@@ -42,10 +42,7 @@ pub fn dynamic_unit_scale_reads(
                 .dynamic_unit_scales
                 .iter()
                 .map(move |(name, entry)| {
-                    let reads = resolve_reads(
-                        frame,
-                        &crate::hir::expr::collect_expr_dependencies(&entry.expr),
-                    );
+                    let reads = runtime_reads(frame, &entry.expr);
                     (
                         name.clone(),
                         (reads, collect_unit_names(frame, &entry.expr)),
@@ -168,12 +165,18 @@ fn collect_unit_names_from_hir(
     });
 }
 
-/// Every declaration an expression with dependencies `dependencies` reads,
-/// through `@name` or as a constant, as `frame` names it.
-fn resolve_reads(
+/// Every declaration `expr` reads at run time, through `@name` or as a
+/// constant, as `frame` names it.
+///
+/// The single source of the read set for every expression that runs in a
+/// DAG frame (param defaults, node formulas, assertions, presentations,
+/// dynamic unit scales, and include-port bindings), so the TODO reach
+/// analysis, the scheduler, and the graph export see the same edges.
+pub(super) fn runtime_reads(
     frame: &InstanceFrame,
-    dependencies: &crate::hir::expr::ExprDependencies,
+    expr: &crate::hir::expr::Expr,
 ) -> BTreeSet<ResolvedDeclName> {
+    let dependencies = crate::hir::expr::collect_expr_dependencies(expr);
     resolve_all(
         frame,
         dependencies
@@ -241,29 +244,22 @@ pub(super) fn collect_resolved_dag_dependencies(
 
     for entry in decls.params() {
         let key = entry.identity();
-        let deps = entry
+        let reads = entry
             .default
             .as_ref()
-            .map_or_else(crate::hir::expr::ExprDependencies::default, |default| {
-                crate::hir::expr::collect_expr_dependencies(default)
-            });
+            .map_or_else(BTreeSet::new, |default| runtime_reads(frame, default));
         record_call_reads(
             &mut resolved,
             &key,
             entry.default.iter().map(std::ops::Deref::deref),
         );
-        resolved
-            .runtime_deps
-            .insert(key, resolve_reads(frame, &deps));
+        resolved.runtime_deps.insert(key, reads);
     }
 
     for entry in decls.nodes() {
         let key = entry.identity();
         record_call_reads(&mut resolved, &key, std::iter::once(&*entry.definition));
-        let dependencies = resolve_reads(
-            frame,
-            &crate::hir::expr::collect_expr_dependencies(&entry.definition),
-        );
+        let dependencies = runtime_reads(frame, &entry.definition);
         resolved.runtime_deps.insert(key, dependencies);
     }
 
@@ -273,12 +269,7 @@ pub(super) fn collect_resolved_dag_dependencies(
         let references = entry
             .body
             .expressions()
-            .flat_map(|expression| {
-                resolve_reads(
-                    frame,
-                    &crate::hir::expr::collect_expr_dependencies(expression),
-                )
-            })
+            .flat_map(|expression| runtime_reads(frame, expression))
             .collect();
         resolved.assert_deps.insert(key, references);
     }
@@ -325,12 +316,7 @@ fn collect_presentation_dependencies(
         record_call_reads(resolved, &key, expressions.iter().copied());
         let references = expressions
             .iter()
-            .flat_map(|expression| {
-                resolve_reads(
-                    frame,
-                    &crate::hir::expr::collect_expr_dependencies(expression),
-                )
-            })
+            .flat_map(|expression| runtime_reads(frame, expression))
             .collect();
         resolved.presentation_deps.insert(key, references);
     }
