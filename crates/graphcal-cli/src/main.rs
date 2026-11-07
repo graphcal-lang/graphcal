@@ -416,7 +416,7 @@ fn main() {
     }))
     .ok();
 
-    let cli = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|error| stdout::exit_with_clap_output(&error));
     stacker::grow(COMMAND_STACK_SIZE, || run_command(cli));
 }
 

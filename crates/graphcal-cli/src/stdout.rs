@@ -3,9 +3,10 @@
 //! `println!` panics (exit code 101) when stdout is a pipe whose reader has
 //! gone away, as in `graphcal eval model.gcl | head -1`. Every command writes
 //! through [`outln!`]/[`out!`] instead, which write to a locked stdout and end
-//! the process quietly on a broken pipe. The crate does not exempt itself
-//! from `clippy::print_stdout`, so a new `println!` fails the lint instead of
-//! silently reintroducing the panic.
+//! the process quietly on a broken pipe; clap's help and version output goes
+//! through [`exit_with_clap_output`] for the same reason. The crate does not
+//! exempt itself from `clippy::print_stdout`, so a new `println!` fails the
+//! lint instead of silently reintroducing the panic.
 
 use std::fmt;
 use std::io::{self, Write as _};
@@ -46,6 +47,19 @@ pub fn exit_after_write_error(error: &io::Error) -> ! {
         eprintln!("error: could not write to stdout: {error}");
     }
     process::exit(2);
+}
+
+/// Print clap's own output (help, version, or a usage error) and exit with
+/// clap's status, applying the same closed-pipe policy as [`write`] to
+/// stdout output. `clap::Error::exit` ignores every write error and would
+/// report `--help | head -1`-style truncation as success.
+pub fn exit_with_clap_output(error: &clap::Error) -> ! {
+    if let Err(write_error) = error.print()
+        && !error.use_stderr()
+    {
+        exit_after_write_error(&write_error);
+    }
+    process::exit(error.exit_code());
 }
 
 /// `println!` that exits quietly when stdout is a closed pipe.

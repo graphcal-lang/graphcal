@@ -3118,16 +3118,24 @@ fn closed_stdout_pipe_exits_quietly() {
         vec!["graph", rocket.as_str()],
         vec!["dump", "source", rocket.as_str()],
         vec!["model", "describe", rocket.as_str()],
+        // clap writes these itself, before any command runs.
+        vec!["--help"],
+        vec!["--version"],
+        vec!["eval", "--help"],
     ] {
-        let mut child = graphcal_bin()
+        // The child's stdout is a pipe whose only read end is closed before
+        // the child starts, so its first write fails deterministically.
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let mut command = graphcal_bin();
+        command
             .args(&arguments)
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("failed to run graphcal");
-        // Close the only read end before the command writes anything.
-        drop(child.stdout.take());
+            .stdout(writer)
+            .stderr(Stdio::piped());
+        let child = command.spawn().expect("failed to run graphcal");
+        // Drop the parent's copy of the write end with the command.
+        drop(command);
         let output = child.wait_with_output().unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
 
