@@ -43,8 +43,6 @@ pub(super) enum RuntimeFailure {
     Complex(#[from] ComplexEvalError),
     #[error(transparent)]
     Datetime(#[from] DatetimeRangeError),
-    #[error("from_unix() integer argument {0} is too large for exact conversion")]
-    UnixIntegerTooLarge(i64),
     #[error("to_float() argument: {0}")]
     ToFloat(ExactI64ToF64Error),
     #[error("Int operand of `*` or `/` with a quantity: {0}")]

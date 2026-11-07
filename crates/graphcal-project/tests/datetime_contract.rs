@@ -117,3 +117,21 @@ fn to_unix_rejects_every_non_utc_scale() {
         );
     }
 }
+
+// TYC-11: `from_unix` takes no `Int`; the conversion is written explicitly
+// (decision D11).
+#[test]
+fn from_unix_requires_an_explicit_int_conversion() {
+    assert_compile_error(
+        "node t: Datetime = from_unix(1730808000);",
+        "graphcal::D001",
+    );
+    let result = compile_and_eval(
+        r#"
+param seconds: Int = 1730808000;
+node converted: Bool = from_unix(to_float(@seconds)) == datetime("2024-11-05T12:00:00Z");
+"#,
+    )
+    .unwrap();
+    assert_true(&result, "converted");
+}

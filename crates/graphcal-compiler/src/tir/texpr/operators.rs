@@ -273,11 +273,8 @@ pub enum DExpr<C> {
     },
     /// `duration + datetime`.
     ShiftAfter { duration: C, datetime: C },
-    /// `from_unix(seconds)`: the UTC datetime a Unix time given as a
-    /// quantity names.
+    /// `from_unix(seconds)`: the UTC datetime a Unix time names.
     FromUnixTime(C),
-    /// `from_unix(seconds)` with an `Int` count of seconds.
-    FromUnixInt(C),
     /// A datetime re-expressed in another time scale.
     ToScale {
         conversion: TimeScaleConversionFn,
@@ -559,7 +556,6 @@ impl<C> DExpr<C> {
                 datetime: f(datetime)?,
             },
             Self::FromUnixTime(arg) => DExpr::FromUnixTime(f(arg)?),
-            Self::FromUnixInt(arg) => DExpr::FromUnixInt(f(arg)?),
             Self::ToScale { conversion, arg } => DExpr::ToScale {
                 conversion: *conversion,
                 arg: f(arg)?,
@@ -574,7 +570,7 @@ impl<C> DExpr<C> {
                 datetime, duration, ..
             } => vec![datetime, duration],
             Self::ShiftAfter { duration, datetime } => vec![duration, datetime],
-            Self::FromUnixTime(arg) | Self::FromUnixInt(arg) | Self::ToScale { arg, .. } => {
+            Self::FromUnixTime(arg) | Self::ToScale { arg, .. } => {
                 vec![arg]
             }
         }

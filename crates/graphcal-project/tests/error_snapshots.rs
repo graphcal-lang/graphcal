@@ -1169,6 +1169,13 @@ fn error_datetime_unix_non_utc() {
 }
 
 #[test]
+fn error_datetime_from_unix_int() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_from_unix_int.gcl");
+    let rendered = render_error(source, "datetime_from_unix_int.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_datetime_positional_epoch_scale() {
     let source =
         include_str!("../../../tests/fixtures/invalid/datetime_positional_epoch_scale.gcl");

@@ -585,15 +585,6 @@ pub(super) fn datetime<'t>(
             let value = operands.quantity(arg)?.get();
             return from_unix_seconds(value, arg.span(), operands.ctx);
         }
-        DExpr::FromUnixInt(arg) => {
-            let value = operands.int(arg)?;
-            let value = super::numeric::exact_i64_to_f64(value).map_err(|_| {
-                operands
-                    .ctx
-                    .runtime_error(RuntimeFailure::UnixIntegerTooLarge(value), arg.span())
-            })?;
-            return from_unix_seconds(value, arg.span(), operands.ctx);
-        }
         DExpr::ToScale { conversion, arg } => {
             return Ok(crate::time_scale_conversion::to_time_scale(
                 operands.datetime(arg)?,

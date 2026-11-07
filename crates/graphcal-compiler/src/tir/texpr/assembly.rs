@@ -893,9 +893,6 @@ fn builtin_call(
                 (DatetimeFn::Unix(UnixTimeFn::FromUnix), Category::Quantity) => {
                     TExprKind::Datetime(DExpr::FromUnixTime(arg))
                 }
-                (DatetimeFn::Unix(UnixTimeFn::FromUnix), Category::Int) => {
-                    TExprKind::Datetime(DExpr::FromUnixInt(arg))
-                }
                 (DatetimeFn::Unix(UnixTimeFn::ToUnix), Category::Datetime) => {
                     TExprKind::Quantity(QExpr::UnixTime(arg))
                 }
@@ -1377,11 +1374,6 @@ mod tests {
                 BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::FromUnix)),
                 vec![quantity()],
                 "Datetime::FromUnixTime",
-            ),
-            (
-                BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::FromUnix)),
-                vec![CheckedType::Int],
-                "Datetime::FromUnixInt",
             ),
             (
                 BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::ToUnix)),
