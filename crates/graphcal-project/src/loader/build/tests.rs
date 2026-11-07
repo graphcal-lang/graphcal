@@ -44,7 +44,9 @@ fn fetched_at<K: SourceKey>(
     text: &str,
     table: &[(&str, ModuleResolution<K>)],
 ) -> ParsedSource<K> {
-    let parsed = ParsedSource::resolve(location, parse(file.path(), text), |path| {
+    let stem = super::super::source_snapshot::ModuleRoot::SourceDir(PathBuf::from("/p/src"))
+        .stem_reference(file.path());
+    let parsed = ParsedSource::resolve(location, parse(file.path(), text), stem, |path| {
         Ok::<_, std::convert::Infallible>(
             table
                 .iter()
@@ -413,12 +415,14 @@ fn file_root_self_import_is_rejected() {
         "{error:?}"
     );
 
+    // In a package file the stem is no self-reference: `main` is resolved as
+    // a package path, and here names no file (#2242).
     let error = build_error(snapshot(
         "main",
         [fetched("main", "import main::{x};", &[])],
     ));
     assert!(
-        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path.to_string() == "main"),
+        matches!(error, CompileError::Load(LoadError::ImportFileNotFound { ref path, .. }) if path.to_string() == "main"),
         "{error:?}"
     );
 }
@@ -468,7 +472,15 @@ fn same_file_dag_references_are_not_dependencies() {
     ))
     .unwrap();
     assert_eq!(files.len(), 1);
-    assert!(files.root().resolved_imports.is_empty());
+    // The include still has a target: the file's own top-level DAG (#2242).
+    let (_, _, target) = files.root().includes_with_targets().next().unwrap();
+    assert_eq!(
+        target,
+        &ModuleTarget::in_file(
+            dag_id("main"),
+            dag_id("main").inline_dag_child(DeclName::expect_valid("inner"))
+        )
+    );
 }
 
 #[test]
@@ -561,10 +573,10 @@ fn unresolvable_dag_body_import_is_rejected_like_a_file_root_import() {
 }
 
 #[test]
-fn dag_body_reference_to_an_unloaded_file_is_rejected() {
-    // A single-segment body path naming a same-file DAG outside lexical
-    // scope never loads the file it would resolve to, so it names no module.
-    let error = build_error(snapshot(
+fn dag_body_path_naming_a_dag_outside_lexical_scope_is_a_package_path() {
+    // `pkg` names a same-file DAG, but not one visible from `b`'s body, so
+    // the body path loads and names the file it resolves to.
+    let files = build_files(snapshot(
         "main",
         [
             fetched(
@@ -574,10 +586,18 @@ fn dag_body_reference_to_an_unloaded_file_is_rejected() {
             ),
             fetched("other", "param x: Dimensionless = 1.0;", &[]),
         ],
-    ));
-    assert!(
-        matches!(&error, CompileError::Load(LoadError::ImportFileNotFound { path, .. }) if path.to_string() == "pkg"),
-        "{error:?}"
+    ))
+    .unwrap();
+    assert_eq!(order(&files), [dag_id("other"), dag_id("main")]);
+    let b = files
+        .root()
+        .inline_dags
+        .iter()
+        .find(|dag| dag.dag_id == dag_id("main").inline_dag_child(DeclName::expect_valid("b")))
+        .unwrap();
+    assert_eq!(
+        b.resolved_imports.values().collect::<Vec<_>>(),
+        [&ModuleTarget::file_root(dag_id("other"))]
     );
 }
 

@@ -14,7 +14,6 @@ use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::ast::ModulePath;
-use graphcal_compiler::syntax::decl_name::DeclName;
 #[cfg(test)]
 use graphcal_io::hash_source_tree;
 use graphcal_io::{FileSystemEntryKind, FileSystemReader, RealFileSystem};
@@ -26,6 +25,7 @@ pub(crate) mod loaded_file;
 pub(crate) mod loaded_module_resolver;
 pub(crate) mod loaded_project;
 pub(crate) mod module_path;
+mod same_file_reference;
 mod source_authority;
 mod source_snapshot;
 
@@ -37,7 +37,7 @@ use budget::{
 };
 pub use budget::{LoaderArtifactByteLimits, LoaderBudget};
 pub use budget_violation::{LoaderBudgetExceeded, LoaderResource};
-use build::{build_loaded_files, reject_file_root_stem_imports};
+use build::{build_loaded_files, same_file_root_targets};
 use inline_dags::lift_inline_dags;
 pub use loaded_file::{LoadedDag, LoadedFile};
 pub use loaded_project::{
@@ -46,10 +46,11 @@ pub use loaded_project::{
 };
 use module_path::PackageSelector;
 pub use module_path::ResolvedModuleTarget;
+use same_file_reference::SameFileScope;
 use source_authority::{
     ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
 };
-use source_snapshot::{ModuleRoot, PackageFileKey, ParsedFile, ResolveFailure, file_stem};
+use source_snapshot::{ModuleRoot, PackageFileKey, ParsedFile, ResolveFailure};
 
 use graphcal_package::{
     GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError,
@@ -295,8 +296,10 @@ impl LoadedProject {
         )?;
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
-        let stem = file_stem(&path);
-        reject_file_root_stem_imports(&parsed.ast.declarations, stem, &parsed.named_source)?;
+        let same_file = SameFileScope::new(
+            &parsed.ast.declarations,
+            ModuleRoot::Standalone.stem_reference(&path),
+        );
         // `name` is also a diagnostic label and may be an absolute virtual URI
         // path. A standalone in-memory file has no filesystem hierarchy, so a
         // rooted label contributes only its leaf to semantic DAG identity.
@@ -326,12 +329,18 @@ impl LoadedProject {
             )
         })?;
         // No project root or manifest in single-file mode — only same-file
-        // DAGs and the file-stem self-reference (Concept 7) resolve here. Like
-        // the file-root imports of this mode, a cross-file body path has no
-        // target: an editor buffer analyzed without its project stays usable.
-        let Ok(inline_dags) = lift_inline_dags(&parsed.ast, &dag_id, stem, |_| {
-            Ok::<_, std::convert::Infallible>(None)
-        });
+        // DAGs and the file-stem self-reference (Concept 7) resolve here. A
+        // cross-file path, at file root or in a body, has no target: an
+        // editor buffer analyzed without its project stays usable.
+        let resolved_imports =
+            same_file_root_targets(&parsed.ast, &same_file, &dag_id, &parsed.named_source)?;
+        let inline_dags = lift_inline_dags(
+            &parsed.ast,
+            &dag_id,
+            &same_file,
+            &parsed.named_source,
+            |_| Ok(None),
+        )?;
         cancellation.checkpoint()?;
         // No filesystem to read wasm plugin files from; the entries carry
         // the reason so evaluation can report it at the import site.
@@ -355,7 +364,7 @@ impl LoadedProject {
             source,
             source_id,
             ast,
-            HashMap::new(),
+            resolved_imports,
             inline_dags,
         );
         Self::from_parts(
@@ -390,18 +399,6 @@ impl LoadedProject {
             .map(loaded_module_resolver::LoadedModuleResolver::into_resolver)
             .map_err(|loaded_module_resolver::ModuleResolverBuildError { error, .. }| error)
     }
-
-    /// The top-level `dag` of the file root `owner` that a single-segment
-    /// module path names. File-root includes of their own DAGs are same-file
-    /// references, which never drive loading.
-    fn file_root_local_dag(&self, owner: &DagId, path: &ModulePath) -> Option<DagId> {
-        self.file(owner)?;
-        let [segment] = path.segments() else {
-            return None;
-        };
-        let dag_id = owner.inline_dag_child(DeclName::classify(segment.name.atom().clone()));
-        self.inline_dag(&dag_id).map(|_| dag_id)
-    }
 }
 
 impl graphcal_compiler::resolve::builder::ModuleTargets for LoadedProject {
@@ -411,7 +408,6 @@ impl graphcal_compiler::resolve::builder::ModuleTargets for LoadedProject {
 
     fn include_target(&self, owner: &DagId, path: &ModulePath) -> Option<DagId> {
         resolved_module_target_from(owner, path, self)
-            .or_else(|| self.file_root_local_dag(owner, path))
     }
 }
 

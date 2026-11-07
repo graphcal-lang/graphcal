@@ -170,30 +170,30 @@ pub(super) fn process_file_body_declarations<'a>(
         process_file_include(project, target, include, declaration, &including, ctx)?;
     }
 
-    for declaration in &loaded_file.ast().declarations {
-        cancellation.checkpoint()?;
-        let DeclKind::Include(include) = &declaration.kind else {
-            continue;
-        };
-        if include.path.segments.len() != 1 {
-            continue;
-        }
-        let dag_name = &include.path.segments[0].name;
-        // A single-segment include names a top-level `dag` of this file.
-        let dag_id = file_dag_id.inline_dag_child(DeclName::classify(dag_name.atom().clone()));
-        let Some((_, dag_file, loaded_dag)) = project.inline_dag(&dag_id) else {
-            continue;
-        };
-        process_inline_dag_include(
-            &InlineDagIncludeTarget {
-                module: loaded_dag.module(dag_file),
-                dag_name: &loaded_dag.declaration(dag_file).name.value,
-            },
-            include,
-            declaration,
-            &including,
-            ctx,
-        )?;
+    // A project load resolves or rejects every file-root include, including
+    // one naming a top-level `dag` of this file. Only a single in-memory
+    // buffer leaves a cross-file path without a target.
+    if project.project_root().is_some()
+        && let Some(include) = loaded_file
+            .ast()
+            .declarations
+            .iter()
+            .find_map(|declaration| match &declaration.kind {
+                DeclKind::Include(include) if !loaded_file.has_resolved_target(&include.path) => {
+                    Some(include)
+                }
+                _ => None,
+            })
+    {
+        return Err(PipelineError::Semantic(SemanticError::internal_error(
+            format!(
+                "the loader left the include of `{}` without a target",
+                include.path.key()
+            ),
+            file_src,
+            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(include.path.span()),
+        ))
+        .into());
     }
 
     for (declaration, include, target) in loaded_file.includes_with_targets() {

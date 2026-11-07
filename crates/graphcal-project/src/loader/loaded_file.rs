@@ -439,6 +439,16 @@ impl<T> LoadedFile<T> {
         })
     }
 
+    /// Whether the loader recorded a module target for the file-root
+    /// import/include path `path`.
+    #[must_use]
+    pub(crate) fn has_resolved_target(
+        &self,
+        path: &graphcal_compiler::syntax::ast::ModulePath,
+    ) -> bool {
+        self.resolved_imports.contains_key(&path.key())
+    }
+
     /// Iterate over includes together with their exact module targets and owners.
     pub fn includes_with_targets(
         &self,

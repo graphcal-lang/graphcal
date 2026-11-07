@@ -154,7 +154,8 @@ fn fetch_file<A: ModuleSourceAuthority>(
             .unwrap_or_else(|_| file.path())
             .to_path_buf(),
     };
-    ParsedSource::resolve(location, parsed, |path| {
+    let stem = tree.module_root.stem_reference(file.path());
+    ParsedSource::resolve(location, parsed, stem, |path| {
         cancellation.checkpoint()?;
         Ok(resolve_module(authority, path, file))
     })

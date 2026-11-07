@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 
 use graphcal_compiler::cancellation::CancellationToken;
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::plugin::PluginPath;
