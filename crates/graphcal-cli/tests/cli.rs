@@ -3060,7 +3060,92 @@ fn check_rejects_type_only_import_for_constructor() {
     );
 }
 
+/// Output of a child process run under [`output_with_watchdog`].
+struct WatchedOutput {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+/// Run `command` with stdout/stderr captured to files and kill it if it is
+/// still running after `limit`.
+///
+/// The limit is a generous liveness bound for slow CI machines, not a
+/// performance assertion: it only has to separate "finishes" from "hangs or
+/// does super-linear work".
+fn output_with_watchdog(command: &mut Command, limit: std::time::Duration) -> WatchedOutput {
+    let directory = tempfile::tempdir().unwrap();
+    let stdout_path = directory.path().join("stdout");
+    let stderr_path = directory.path().join("stderr");
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(std::fs::File::create(&stdout_path).unwrap())
+        .stderr(std::fs::File::create(&stderr_path).unwrap())
+        .spawn()
+        .expect("failed to run graphcal");
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!(
+                "graphcal exceeded the {limit:?} watchdog; stderr: {}",
+                std::fs::read_to_string(&stderr_path)
+                    .unwrap_or_else(|error| format!("<unreadable: {error}>"))
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    WatchedOutput {
+        status,
+        stdout: std::fs::read_to_string(&stdout_path).unwrap(),
+        stderr: std::fs::read_to_string(&stderr_path).unwrap(),
+    }
+}
+
 // --- JSON parameter source tests ---
+
+#[test]
+fn deeply_nested_params_json_is_rejected_in_linear_time() {
+    // A just-under-1 MiB array nest used to cost quadratic time and memory
+    // (13 GB at 64 KiB); it must now be rejected after one linear scan.
+    let directory = tempfile::tempdir().unwrap();
+    let model = directory.path().join("m.gcl");
+    std::fs::write(
+        &model,
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;\n",
+    )
+    .unwrap();
+    let depth = 500_000;
+    let params = directory.path().join("deep.json");
+    std::fs::write(
+        &params,
+        format!("{{\"x\": {}{}}}", "[".repeat(depth), "]".repeat(depth)),
+    )
+    .unwrap();
+
+    let output = output_with_watchdog(
+        graphcal_bin()
+            .arg("eval")
+            .arg(&model)
+            .arg("--params-json-file")
+            .arg(&params),
+        std::time::Duration::from_secs(60),
+    );
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", output.stderr);
+    assert!(output.stdout.is_empty(), "stdout: {}", output.stdout);
+    assert!(
+        output
+            .stderr
+            .contains("unsupported JSON type `array` for `x`"),
+        "stderr: {}",
+        output.stderr
+    );
+}
 
 #[test]
 fn eval_with_params_json_file() {
