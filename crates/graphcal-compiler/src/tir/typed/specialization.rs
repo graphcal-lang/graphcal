@@ -522,11 +522,8 @@ fn specialize_instance_semantics(
     for (template_port, binding) in &edge.value_bindings {
         // A binding is lowered in the including template and runs here, in
         // the frame that also re-owns the including template's declarations.
-        let dependencies = crate::hir::expr::collect_expr_dependencies(binding)
-            .graph_refs
-            .iter()
-            .map(|dependency| frame.resolve(dependency))
-            .collect();
+        // It reads exactly what a canonical body reads: `@` and const refs.
+        let dependencies = super::collect::runtime_reads(frame, binding);
         let port = frame.rebase(template_port);
         let call_reads = crate::hir::expr::collect_dag_call_reads(binding);
         if call_reads.is_empty() {
