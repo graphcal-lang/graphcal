@@ -3,6 +3,7 @@
 //! bounds carry value expressions).
 
 use std::collections::HashMap;
+use std::hash::Hash;
 
 use graphcal_compiler::syntax::ast::{
     BinOp, DomainBound, ElementTypeExpr, Expr, ExprKind, FieldInit, ForBinding, GenericArg,
@@ -10,7 +11,10 @@ use graphcal_compiler::syntax::ast::{
     PatternBinding, PatternBindings, TableIndexSpec, TodoDependency, TodoHole, TypeExpr,
     TypeExprKind, UnaryOp,
 };
+use graphcal_compiler::syntax::fin_position::FinPosition;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::local_name::LocalName;
+use graphcal_compiler::syntax::names::NamePath;
 use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 
@@ -882,16 +886,13 @@ fn format_table_2d_body(
 
     // Unique column and row labels in first-appearance order, with the
     // position of every entry's column and row.
-    let (col_labels, entry_cols) = index_unique_labels(
-        entries
-            .iter()
-            .map(|e| e.keys[col_idx].entry_key().to_string()),
-    );
-    let (row_labels, entry_rows) = index_unique_labels(
-        entries
-            .iter()
-            .map(|e| e.keys[row_idx].entry_key().to_string()),
-    );
+    // Labels are rendered only after the typed keys are deduplicated.
+    let (col_keys, entry_cols) =
+        index_unique_labels(entries.iter().map(|e| e.keys[col_idx].entry_key()));
+    let (row_keys, entry_rows) =
+        index_unique_labels(entries.iter().map(|e| e.keys[row_idx].entry_key()));
+    let col_labels: Vec<String> = col_keys.iter().map(ToString::to_string).collect();
+    let row_labels: Vec<String> = row_keys.iter().map(ToString::to_string).collect();
     let num_cols = col_labels.len();
 
     // Build 2D grid of rendered values and track entry indices per cell
@@ -1000,9 +1001,11 @@ fn format_table_2d_body(
 
 /// Deduplicate `labels` in first-appearance order, returning the unique
 /// labels and, for each input label, its position among them.
-fn index_unique_labels(labels: impl Iterator<Item = String>) -> (Vec<String>, Vec<usize>) {
-    let mut unique: Vec<String> = Vec::new();
-    let mut positions: HashMap<String, usize> = HashMap::new();
+fn index_unique_labels<K: Hash + Eq + Clone>(
+    labels: impl Iterator<Item = K>,
+) -> (Vec<K>, Vec<usize>) {
+    let mut unique: Vec<K> = Vec::new();
+    let mut positions: HashMap<K, usize> = HashMap::new();
     let indices = labels
         .map(|label| {
             *positions.entry(label).or_insert_with_key(|label| {
@@ -1012,6 +1015,24 @@ fn index_unique_labels(labels: impl Iterator<Item = String>) -> (Vec<String>, Ve
         })
         .collect();
     (unique, indices)
+}
+
+/// The identity of one slice-axis key of a 3D+ table entry: the spelled
+/// index path with its variant, or the `Fin` position. Spans are excluded, so
+/// equal keys from different source sections group into one slice.
+#[derive(PartialEq, Eq, Hash)]
+enum SliceCoordinate<'a> {
+    Named(&'a NamePath, &'a IndexVariantName),
+    Finite(FinPosition),
+}
+
+impl<'a> SliceCoordinate<'a> {
+    const fn of(key: &'a MapEntryKey) -> Self {
+        match key {
+            MapEntryKey::Named { index, variant, .. } => Self::Named(&index.value, &variant.value),
+            MapEntryKey::Finite { position, .. } => Self::Finite(position.value),
+        }
+    }
 }
 
 /// Format a 3D+ table with slice sections.
@@ -1024,25 +1045,38 @@ fn format_table_sliced(
     let ndim = indexes.len();
     let slice_dims = ndim - 2;
 
-    // Group entries by their slice keys (first N-2 keys).
-    // Named axes render as `Index#Variant`; finite positions render as `#N`.
-    let mut slices: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
-    let mut slice_positions: HashMap<Vec<String>, usize> = HashMap::new();
+    // Group entries by their slice keys (first N-2 keys), in first-appearance
+    // order. Each group keeps the indices of its entries.
+    let mut slices: Vec<Vec<usize>> = Vec::new();
+    let mut slice_positions: HashMap<Vec<SliceCoordinate<'_>>, usize> = HashMap::new();
     for (idx, e) in entries.iter().enumerate() {
-        let slice_key: Vec<String> = (0..slice_dims).map(|i| e.keys[i].to_string()).collect();
-
-        if let Some(&position) = slice_positions.get(&slice_key) {
-            slices[position].0.push(idx);
-        } else {
-            slice_positions.insert(slice_key.clone(), slices.len());
-            slices.push((vec![idx], slice_key));
-        }
+        let slice_key: Vec<SliceCoordinate<'_>> = e
+            .keys
+            .iter()
+            .take(slice_dims)
+            .map(SliceCoordinate::of)
+            .collect();
+        let position = *slice_positions.entry(slice_key).or_insert_with(|| {
+            slices.push(Vec::new());
+            slices.len() - 1
+        });
+        slices[position].push(idx);
     }
 
     // Build each slice doc and nest it for indentation.
     let mut slice_docs: Vec<RcDoc<'static>> = Vec::new();
-    for (entry_indices, slice_key) in &slices {
-        let slice_header = format!("[{}]", slice_key.join(", "));
+    for entry_indices in &slices {
+        // Named axes render as `Index#Variant`; finite positions as `#N`.
+        let slice_header = format!(
+            "[{}]",
+            entries[entry_indices[0]]
+                .keys
+                .iter()
+                .take(slice_dims)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         // Drain leading comments before this slice header
         let first_idx = entry_indices[0];
