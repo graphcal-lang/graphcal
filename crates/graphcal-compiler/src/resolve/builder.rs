@@ -430,6 +430,8 @@ fn expand_instances(
         };
         expansion.next += 1;
         cancellation.checkpoint()?;
+        #[cfg(feature = "test-cancellation")]
+        crate::cancellation::ProgressPhase::IncludeExpansion.record();
         let instance = expansion.base.instance_child(include.instance_scope());
         let template_declarations =
             declarations

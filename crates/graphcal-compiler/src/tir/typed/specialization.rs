@@ -915,6 +915,8 @@ pub fn instantiate_semantic_edges(
             }
             let instance =
                 instantiate_semantic_edge(tir, &mut graph, holder, &edge, &mut templates, src)?;
+            #[cfg(feature = "test-cancellation")]
+            crate::cancellation::ProgressPhase::Instantiation.record();
             materialized.push(instance);
             graph.record_edge(holder, instance);
         }

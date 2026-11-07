@@ -3301,79 +3301,66 @@ fn exponential_include_source(stem: &str, depth: usize) -> String {
     )
 }
 
-/// Run `check` of `project` on a worker thread, cancel it shortly after it
-/// starts (after lowering when `cancel_after_lowering`), and return the
-/// outcome, which must arrive promptly.
-fn cancel_exponential_check(
-    project: crate::loader::LoadedProject,
-    cancel_after_lowering: bool,
-) -> Result<(), Outcome<CompileError>> {
-    use std::{sync::mpsc, thread, time::Duration};
-
-    let source = graphcal_compiler::cancellation::CancellationSource::new();
-    let cancellation = source.token();
-    let (lowered_sender, lowered) = mpsc::channel();
-    let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let compiler = ProjectCompiler::new(&project).cancellation(&cancellation);
-        let result = if cancel_after_lowering {
-            compiler.lower().and_then(|hir| {
-                lowered_sender.send(()).unwrap();
-                hir.check_with_host_metadata(
-                    &graphcal_eval::host_fns::HostFunctionMetadata::default(),
-                )
-            })
-        } else {
-            lowered_sender.send(()).unwrap();
-            compiler.check()
-        };
-        sender.send(result.map(|_| ())).unwrap();
-    });
-
-    lowered
-        .recv_timeout(Duration::from_secs(60))
-        .expect("lowering a modest include tree should finish");
-    // Let the check reach the exponential work before cancelling.
-    thread::sleep(Duration::from_millis(200));
-    source.cancel();
-    // One unit of work between checkpoints takes milliseconds; the work
-    // between the cancellation and the next checkpoint must not scale with
-    // the number of instances.
-    receiver
-        .recv_timeout(Duration::from_secs(2))
-        .expect("a cancelled check must stop expanding instances promptly")
+/// Check the exponential include tree of `depth` with a token that cancels
+/// once `phase` has made a few steps, and return the outcome with the steps
+/// `phase` made in all (the whole tree takes thousands).
+fn cancel_during(
+    phase: graphcal_compiler::cancellation::ProgressPhase,
+    depth: usize,
+) -> (Result<(), Outcome<CompileError>>, usize) {
+    const STEPS_BEFORE_CANCELLING: usize = 10;
+    let project = crate::loader::LoadedProject::from_source(
+        &exponential_include_source("exponential", depth),
+        "exponential.gcl",
+    )
+    .unwrap();
+    // The check runs on this thread, whose progress the token watches.
+    let before = phase.steps_on_this_thread();
+    let cancellation = graphcal_compiler::cancellation::CancellationToken::cancel_after_progress(
+        phase,
+        STEPS_BEFORE_CANCELLING,
+    );
+    let result = ProjectCompiler::new(&project)
+        .cancellation(&cancellation)
+        .check()
+        .map(|_| ());
+    (result, phase.steps_on_this_thread().saturating_sub(before))
 }
 
 #[test]
 fn cancellation_stops_exponential_include_expansion() {
-    // 2^41 instances: the resolver can never finish expanding them, so the
-    // check returns only if the expansion observes the token.
-    let project = crate::loader::LoadedProject::from_source(
-        &exponential_include_source("exponential", 40),
-        "exponential.gcl",
-    )
-    .unwrap();
-    let result = cancel_exponential_check(project, false);
+    // The token cancels only once the resolver has expanded some instances,
+    // so the check stops promptly only if the expansion itself observes it.
+    let (result, steps) = cancel_during(
+        graphcal_compiler::cancellation::ProgressPhase::IncludeExpansion,
+        14,
+    );
     assert!(
         matches!(result, Err(Outcome::Cancelled)),
         "unexpected outcome: {result:?}"
+    );
+    assert!(
+        steps <= 11,
+        "expanded {steps} instances, not 10, before stopping"
     );
 }
 
 #[test]
 fn cancellation_stops_exponential_instantiation() {
-    // 16382 instances lower quickly but take far longer than the deadline
-    // to instantiate, so the check returns in time only if instantiation
-    // observes the token.
-    let project = crate::loader::LoadedProject::from_source(
-        &exponential_include_source("exponential", 13),
-        "exponential.gcl",
-    )
-    .unwrap();
-    let result = cancel_exponential_check(project, true);
+    // The token cancels only once instantiation has materialized some
+    // instances, so the check stops promptly only if instantiation itself
+    // observes it.
+    let (result, steps) = cancel_during(
+        graphcal_compiler::cancellation::ProgressPhase::Instantiation,
+        10,
+    );
     assert!(
         matches!(result, Err(Outcome::Cancelled)),
         "unexpected outcome: {result:?}"
+    );
+    assert!(
+        steps <= 11,
+        "instantiated {steps} edges, not 10, before stopping"
     );
 }
 
