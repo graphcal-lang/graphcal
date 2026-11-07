@@ -2293,6 +2293,31 @@ mod tests {
         }));
     }
 
+    /// LSP-10 (#2253): only values some inlay hint displays are formatted;
+    /// include instances the evaluation reports are skipped.
+    #[test]
+    fn only_displayed_declarations_have_formatted_values() {
+        let text = "param p: Length = 200.0 km;\n\
+                    dag inner {\n\
+                        param p: Length;\n\
+                        pub node twice: Length = 2.0 * @p;\n\
+                    }\n\
+                    include inner(p: @p)::{ twice };\n\
+                    node total: Length = @twice;\n";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        let shown = analysis.symbol_table.inlay_hint_declarations();
+        assert!(!analysis.eval_values.is_empty());
+        assert!(
+            analysis
+                .eval_values
+                .keys()
+                .all(|identity| shown.contains(identity)),
+            "{:?}",
+            analysis.eval_values
+        );
+    }
+
     #[test]
     fn inlay_hints_show_no_instance_values_on_dag_body_declarations() {
         // An inline `dag` body is a template: each include instantiates it
