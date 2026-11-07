@@ -244,14 +244,16 @@ pub struct ModuleSymbols {
     /// Index symbols a selective include projects as this module's own
     /// declarations because their port is bound to a structural `Fin(N)`.
     pub(super) finite_index_projections: HashMap<IndexName, FiniteIndex>,
-    /// Nominal type symbols a selective include projects as this module's
-    /// own declarations, specialized by the include's Static bindings.
+    /// Nominal type symbols a selective include projects into this module,
+    /// specialized by the include's Static bindings. Their identity (and
+    /// that of their constructors) is owned by the include's instance, so
+    /// an alias or a second projection never collides with another type.
     pub(super) struct_type_projections:
         HashMap<StructTypeName, StaticProjection<StructTypeNameNamespace>>,
 }
 
-/// A template declaration that one selective include projects as an
-/// importer-owned declaration specialized by the include's Static bindings.
+/// A template declaration that one selective include projects into the
+/// importer, specialized by the include's Static bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticProjection<Ns: NameNamespace> {
     template: ResolvedName<Ns>,

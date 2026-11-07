@@ -240,3 +240,77 @@ fn output_whose_type_depends_on_a_rebound_dimension_requires_the_type() {
     let result = eval(&root);
     assert!((si_value(&result, "m") - 5.0).abs() < 1e-12);
 }
+
+const ALIASED_LIBRARY: &str = "pub(bind) index I = { a, b };\n\
+     pub type T {\n\
+         A(x: Length),\n\
+     }\n\
+     pub node out: Length = 1.0 m;\n";
+
+/// RES-4: a type projected under Static bindings used to be owned by
+/// `(importer, template leaf)`, so projecting it beside the importer's own
+/// `T` or `A`, or projecting it twice, was an internal error (X001).
+#[test]
+fn projected_type_coexists_with_the_importers_own_same_named_type() {
+    let (_dir, root) = write_project(&[
+        ("lib.gcl", ALIASED_LIBRARY),
+        (
+            "main.gcl",
+            "index J = { a, b };\n\
+             type T {\n\
+                 A(y: Mass),\n\
+             }\n\
+             include p.lib(index I: J)::{ type T as U, A as B, out };\n\
+             node n: T = A(y: 1.0 kg);\n\
+             node m: Mass = match @n { A(y: v) => v };\n\
+             node k: U = B(x: 2.0 m);\n\
+             node kx: Length = match @k { B(x: v) => v };\n",
+        ),
+    ]);
+    let result = eval(&root);
+    assert!((si_value(&result, "m") - 1.0).abs() < 1e-12);
+    assert!((si_value(&result, "kx") - 2.0).abs() < 1e-12);
+}
+
+/// RES-4: two includes projecting the same template type get two distinct
+/// types.
+#[test]
+fn two_projections_of_one_template_type_are_distinct_types() {
+    let includes = "index J = { a, b };\n\
+         index K = { c, d, e };\n\
+         include p.lib(index I: J)::{ type T as U1, A as A1 };\n\
+         include p.lib(index I: K)::{ type T as U2, A as A2 };\n";
+    let (_dir, root) = write_project(&[
+        ("lib.gcl", ALIASED_LIBRARY),
+        (
+            "main.gcl",
+            &format!(
+                "{includes}\
+                 node n1: U1 = A1(x: 1.0 m);\n\
+                 node n2: U2 = A2(x: 2.0 m);\n\
+                 node x2: Length = match @n2 {{ A2(x: v) => v }};\n"
+            ),
+        ),
+    ]);
+    let result = eval(&root);
+    assert!((si_value(&result, "x2") - 2.0).abs() < 1e-12);
+
+    let (_dir, root) = write_project(&[
+        ("lib.gcl", ALIASED_LIBRARY),
+        (
+            "main.gcl",
+            &format!("{includes}node n1: U1 = A2(x: 1.0 m);\n"),
+        ),
+    ]);
+    let error = semantic_error(&root);
+    assert!(
+        matches!(
+            &error,
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(_),
+                ..
+            })
+        ),
+        "a value of one projection must not check as the other: {error:?}"
+    );
+}

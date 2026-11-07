@@ -452,10 +452,10 @@ fn invariant_error(message: String, src: SourceId, span: Span) -> SemanticError 
     )
 }
 
-/// Specialize a template's nominal definition as the importer-owned
-/// definition `identity` through `substitution`: the include's Static
-/// bindings plus the template declarations the same include projects as
-/// importer-owned declarations.
+/// Specialize a template's nominal definition as the projected definition
+/// `identity` (owned by the projecting include's instance) through
+/// `substitution`: the include's Static bindings plus the template
+/// declarations the same include projects.
 ///
 /// Constructors and generic parameters are re-owned by `identity`; every
 /// signature reference the substitution names is replaced. Domain bounds
