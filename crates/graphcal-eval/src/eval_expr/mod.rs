@@ -6,6 +6,7 @@ mod conversions;
 mod datetime;
 mod hir_eval;
 pub mod j2000_seconds;
+mod kernel_checkpoint;
 mod linear_algebra;
 mod linear_algebra_error;
 mod linear_algebra_lu;
@@ -14,7 +15,6 @@ mod operations;
 mod presentation;
 mod runtime_failure;
 mod unit_scale;
-mod work_budget;
 
 pub use crate::constant_pools::RuntimeValueMap;
 pub use crate::runtime_value::RuntimeValue;

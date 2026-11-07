@@ -2305,12 +2305,12 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "work_budget"]
+path = ["eval_expr", "kernel_checkpoint"]
 role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "work_budget", "tests"]
+path = ["eval_expr", "kernel_checkpoint", "tests"]
 role = "interpreter"
 
 [[module]]
