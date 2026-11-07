@@ -128,44 +128,6 @@ pub fn static_binding_valid(input: StaticInterface, target: StaticInterface) -> 
     input.kind() == target.kind() && input.role().is_bindable() && target.role().is_concrete()
 }
 
-/// Semantic identity selected by projecting one Static declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StaticProjectionIdentity {
-    SourceDeclaration,
-    BindingTarget,
-}
-
-/// Typed failure while projecting one Static declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StaticProjectionError {
-    MissingBinding,
-    InvalidBinding,
-}
-
-/// Select the effective semantic identity for a Static include projection.
-///
-/// Fixed declarations preserve source identity. Optional inputs preserve source
-/// identity when omitted and become the concrete binding target when supplied.
-/// Required inputs must become a valid concrete binding target.
-pub fn project_static_identity(
-    source: StaticInterface,
-    target: Option<StaticInterface>,
-) -> Result<StaticProjectionIdentity, StaticProjectionError> {
-    match (source.role(), target) {
-        (StaticRole::Fixed, _) | (StaticRole::OptionalInput, None) => {
-            Ok(StaticProjectionIdentity::SourceDeclaration)
-        }
-        (StaticRole::RequiredInput, None) => Err(StaticProjectionError::MissingBinding),
-        (StaticRole::OptionalInput | StaticRole::RequiredInput, Some(target)) => {
-            if static_binding_valid(source, target) {
-                Ok(StaticProjectionIdentity::BindingTarget)
-            } else {
-                Err(StaticProjectionError::InvalidBinding)
-            }
-        }
-    }
-}
-
 /// Construct the semantic role represented by visibility and requirement.
 ///
 /// A required declaration without `pub(bind)` is rejected by V002 before this

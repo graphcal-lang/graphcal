@@ -668,11 +668,6 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["ir", "static_external_surface_formal_conformance"]
-role = "checking"
-
-[[module]]
-package = "compiler"
 path = ["generic_param"]
 role = "contracts"
 

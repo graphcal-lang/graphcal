@@ -69,7 +69,7 @@ just formal-conformance
 - the required-bindability oracle's complete 20-case matrix against Graphcal's parser, desugaring, and V002 production pass;
 - the template-closure oracle's complete 36-case matrix against the production V007 semantic core;
 - the namespace-resolution oracle's 72 reviewed scenarios against the production single-file and project pipeline;
-- the external-surface oracle's 55 import, typed Static binding, effective projection-identity, constructor-owner, and DAG-blueprint states against Rust's shared semantic core.
+- the external-surface oracle's 55 import, typed Static binding, effective projection-identity, constructor-owner, and DAG-blueprint states against the production project pipeline and module resolver.
 
 The namespace matrix covers visible and `::` member lookups for every Static/Term/Unit occupancy, duplicate slots, every DAG-input selector/target category pair, and owner-qualified labels. The external-surface matrix exhaustively combines fixed, optional-input, and required-input roles with dependency, target-role, and exact-category choices, then checks constructor owner rebinding and non-projectable DAG blueprints explicitly.
 
