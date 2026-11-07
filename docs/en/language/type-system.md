@@ -442,10 +442,12 @@ positions.
 
 Units are referenced only in unit syntax, such as quantity literals and conversion
 targets. A unit name can match a type, index, or value leaf without changing
-which declaration a type, index, or value position resolves. The reverse lookup
-is deliberately strict: if unit syntax finds a same-spelled non-unit declaration,
-it reports that wrong-universe declaration instead of silently falling through
-to a prelude or registry unit with a different semantic identity.
+which declaration a type, index, or value position resolves. Value declarations
+are always read with `@`, so a `node s` does not affect the unit `s`. A local
+bound by a `match` pattern, a `for` binding, or a `scan`/`unfold` lambda is read
+by its bare name, though, so unit syntax must not use a unit name that is also
+a local in scope: with a local `s`, `2.0 m / s` is an error (`N037`). Write
+`(2.0 m) / s` to divide by the local, or rename the local to use the unit.
 
 ## Type Categories
 

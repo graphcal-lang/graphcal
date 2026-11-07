@@ -36,11 +36,19 @@ fn format_expr_in_context(
     expr: &Expr,
     context: ExprContext,
 ) -> RcDoc<'static> {
+    format_expr_parenthesized_if(fmt, expr, context.needs_parentheses(expr))
+}
+
+fn format_expr_parenthesized_if(
+    fmt: &mut Formatter<'_>,
+    expr: &Expr,
+    parenthesized: bool,
+) -> RcDoc<'static> {
     // Recursion choke point: formatting recurses once per tree level
     // (unbounded for left-nested operator chains).
     graphcal_compiler::stack::with_stack_growth(|| {
         let doc = format_expr_inner(fmt, expr);
-        if context.needs_parentheses(expr) {
+        if parenthesized {
             soft_parenthesized(doc)
         } else {
             doc
@@ -119,12 +127,137 @@ impl ExprContext {
     }
 }
 
+/// Whether the left operand of `lhs op rhs` must be parenthesized.
+///
+/// Besides precedence, a left operand whose printed form ends with a quantity
+/// literal must be parenthesized when the literal's unit suffix would
+/// greedily continue into the operator: the parser always reads `2.0 m^2`
+/// as the unit `m^2`, and reads `2.0 m * PI` or `2.0 m / (s)` as the units
+/// `m*PI` and `m/s`, while `2.0 m / @t` stays an arithmetic division.
+fn infix_left_needs_parentheses(op: BinOp, lhs: &Expr, rhs: &Expr) -> bool {
+    ExprContext::InfixOperand {
+        parent: op,
+        side: InfixSide::Left,
+    }
+    .needs_parentheses(lhs)
+        || (ends_with_quantity_literal(lhs)
+            && match op {
+                BinOp::Pow(_) => true,
+                BinOp::Mul | BinOp::Div => starts_unit_continuation(
+                    rhs,
+                    ExprContext::InfixOperand {
+                        parent: op,
+                        side: InfixSide::Right,
+                    },
+                ),
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mod
+                | BinOp::Eq
+                | BinOp::Ne
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::Le
+                | BinOp::Ge
+                | BinOp::And
+                | BinOp::Or => false,
+            })
+}
+
+/// Whether the printed form of `expr` ends with an unparenthesized quantity
+/// literal, whose unit suffix could continue into a following operator.
+///
+/// Walks the right spine of the expression as the formatter prints it,
+/// stopping at the first parenthesized subexpression.
+fn ends_with_quantity_literal(expr: &Expr) -> bool {
+    let mut current = expr;
+    loop {
+        let (child, child_context) = match &current.kind {
+            ExprKind::QuantityLiteral { .. } => return true,
+            ExprKind::UnaryOp { operand, .. } => (operand.as_ref(), ExprContext::PrefixOperand),
+            ExprKind::BinOp { op, rhs, .. } => (
+                rhs.as_ref(),
+                ExprContext::InfixOperand {
+                    parent: *op,
+                    side: InfixSide::Right,
+                },
+            ),
+            _ => return false,
+        };
+        if child_context.needs_parentheses(child) {
+            return false;
+        }
+        current = child;
+    }
+}
+
+/// Whether `expr`, printed in `context` right after a `*` or `/`, begins with
+/// tokens that the parser takes as the continuation of a preceding unit
+/// suffix: a name, or `(` followed by a name or another `(`.
+///
+/// Walks the left spine of the expression as the formatter prints it,
+/// counting the opening parentheses before the first other token. Leading
+/// tokens other than `@`, a number, a prefix operator, a string or `{` are
+/// conservatively treated as names.
+fn starts_unit_continuation(expr: &Expr, context: ExprContext) -> bool {
+    let mut open_parentheses = usize::from(context.needs_parentheses(expr));
+    let mut current = expr;
+    loop {
+        if open_parentheses >= 2 {
+            return true;
+        }
+        let (child, child_parenthesized) = match &current.kind {
+            ExprKind::BinOp { op, lhs, rhs } => {
+                (lhs.as_ref(), infix_left_needs_parentheses(*op, lhs, rhs))
+            }
+            ExprKind::FieldAccess { expr: inner, .. } => (
+                inner.as_ref(),
+                ExprContext::PostfixBase(PostfixOperator::Field).needs_parentheses(inner),
+            ),
+            ExprKind::IndexAccess { expr: inner, .. } => (
+                inner.as_ref(),
+                ExprContext::PostfixBase(PostfixOperator::Index).needs_parentheses(inner),
+            ),
+            ExprKind::Convert { expr: inner, .. }
+            | ExprKind::DisplayTimezone { expr: inner, .. } => (
+                inner.as_ref(),
+                ExprContext::ConversionOperand.needs_parentheses(inner),
+            ),
+            ExprKind::Number(_)
+            | ExprKind::Integer(_)
+            | ExprKind::QuantityLiteral { .. }
+            | ExprKind::UnaryOp { .. }
+            | ExprKind::StringLiteral(_)
+            | ExprKind::GraphRef(_)
+            | ExprKind::InlineDagRef { .. }
+            | ExprKind::MapLiteral { .. } => return false,
+            ExprKind::Bool(_)
+            | ExprKind::UnresolvedRef(_)
+            | ExprKind::FnCall { .. }
+            | ExprKind::If { .. }
+            | ExprKind::ConstructorCall { .. }
+            | ExprKind::Sugar(_)
+            | ExprKind::ForComp { .. }
+            | ExprKind::Scan { .. }
+            | ExprKind::Unfold { .. }
+            | ExprKind::KeyForm { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::TodoHole(_) => return true,
+        };
+        open_parentheses += usize::from(child_parenthesized);
+        current = child;
+    }
+}
+
 const fn binding_strength(expr: &Expr) -> BindingStrength {
     match &expr.kind {
         ExprKind::Convert { .. } | ExprKind::DisplayTimezone { .. } => BindingStrength::Conversion,
         ExprKind::If { .. } => BindingStrength::Conditional,
         ExprKind::BinOp { op, .. } => binop_binding_strength(*op),
-        ExprKind::UnaryOp { .. } => BindingStrength::Prefix,
+        // The parser folds `-9223372036854775808` into one literal, which
+        // still prints with its leading `-` and so binds like a prefix
+        // negation (`(-9223372036854775808)^1` must keep its parentheses).
+        ExprKind::UnaryOp { .. } | ExprKind::Integer(i64::MIN) => BindingStrength::Prefix,
         ExprKind::FieldAccess { .. } | ExprKind::IndexAccess { .. } => BindingStrength::Postfix,
         ExprKind::Number(_)
         | ExprKind::Integer(_)
@@ -365,14 +498,8 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
         return format_logical_chain(fmt, op, lhs, rhs);
     }
 
-    let lhs_doc = format_expr_in_context(
-        fmt,
-        lhs,
-        ExprContext::InfixOperand {
-            parent: op,
-            side: InfixSide::Left,
-        },
-    );
+    let lhs_doc =
+        format_expr_parenthesized_if(fmt, lhs, infix_left_needs_parentheses(op, lhs, rhs));
     // Drain any comment between lhs and rhs (e.g. `1.0 + // comment\n 2.0`)
     let comment = fmt.drain_comments_before(rhs.span.offset());
     let rhs_doc = format_expr_in_context(

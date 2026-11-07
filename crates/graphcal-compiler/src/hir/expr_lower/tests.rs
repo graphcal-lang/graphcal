@@ -1014,3 +1014,93 @@ fn constructor_head_lowers_callee_and_generic_arguments_only() {
         Err(ExprLowerError::NamedArgumentsOnFunction { .. })
     ));
 }
+
+const UNIT_LOCAL_PRELUDE: &str = "type Pair { Pair(a: Length, b: Time), }\n\
+     index Leg = { A, B };\n\
+     index Phase = { Early, Late };\n\
+     param p: Pair;\n\
+     param durations: Time[Leg];\n\
+     param speed: Velocity;\n";
+
+#[test]
+fn unit_name_spelled_like_a_visible_local_is_rejected_for_every_binder_kind() {
+    use crate::semantic_error::name::UnitNameSite;
+    use crate::syntax::ast::MulDivOp;
+
+    let cases = [
+        (
+            "match-arm field binding",
+            "match @p { Pair(a: _, b: s) => 2.0 m / s, }",
+            UnitNameSite::LiteralContinuation(MulDivOp::Div),
+        ),
+        (
+            "for binder",
+            "for m: Leg { 5.0 N * m }",
+            UnitNameSite::LiteralContinuation(MulDivOp::Mul),
+        ),
+        (
+            "for binder named by a tuple-key marker",
+            "for leg: Leg, s: Phase { (leg, s) => 2.0 m / s }",
+            UnitNameSite::LiteralContinuation(MulDivOp::Div),
+        ),
+        (
+            "scan lambda parameter",
+            "scan(@durations, 0.0 m, |acc, s| acc + 2.0 m / s * 1.0 s)",
+            UnitNameSite::LiteralContinuation(MulDivOp::Div),
+        ),
+        (
+            "unfold lambda parameter",
+            "unfold(Leg, 0.0 s, |s, previous, current| 1.0 s)",
+            UnitNameSite::LiteralLeading,
+        ),
+        (
+            "conversion target",
+            "match @p { Pair(a: _, b: h) => @speed -> km / h, }",
+            UnitNameSite::ConversionTarget,
+        ),
+    ];
+    for (binder, body, expected_site) in cases {
+        let source = format!("{UNIT_LOCAL_PRELUDE}node out: Dimensionless = {body};\n");
+        let error = lower_strict_node(&source, "out").unwrap_err();
+        let ExprLowerError::UnitNameIsLocal {
+            name,
+            site,
+            local,
+            span,
+        } = error
+        else {
+            panic!("{binder}: expected UnitNameIsLocal, got {error:?}");
+        };
+        assert_eq!(site, expected_site, "{binder}");
+        assert_eq!(
+            &source[span.offset()..span.offset() + span.len()],
+            name.as_str(),
+            "{binder}"
+        );
+        assert_eq!(
+            &source[local.offset()..local.offset() + local.len()],
+            name.as_str(),
+            "{binder}"
+        );
+        assert!(
+            local.offset() < span.offset(),
+            "{binder}: local is bound before its use"
+        );
+    }
+}
+
+#[test]
+fn unit_names_without_a_same_named_local_still_resolve() {
+    for body in [
+        // Parentheses end the literal, so `s` is the local.
+        "match @p { Pair(a: _, b: s) => (2.0 m) / s, }",
+        // A local with another spelling leaves the unit alone.
+        "match @p { Pair(a: _, b: duration) => 2.0 m / s, }",
+        // A local is visible only inside its binder's body.
+        "(match @p { Pair(a: _, b: s) => s, }) + 2.0 s",
+    ] {
+        let source = format!("{UNIT_LOCAL_PRELUDE}node out: Dimensionless = {body};\n");
+        lower_strict_node(&source, "out")
+            .unwrap_or_else(|error| panic!("`{body}` should lower: {error:?}"));
+    }
+}

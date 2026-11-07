@@ -5105,22 +5105,22 @@ fn recurrence_reads_are_classified_from_their_written_form() {
     let action = || DeclName::expect_valid("action");
     for (closure, expected, anchor) in [
         (
-            "s + sum(@action)",
+            "x + sum(@action)",
             RecurrenceRejection::WholeValueRead { target: action() },
             "@action",
         ),
         (
-            "s + sum(for u: Step { @action[u] })",
+            "x + sum(for u: Step { @action[u] })",
             RecurrenceRejection::NotStepKeyed { target: action() },
             "@action",
         ),
         (
-            "s + @action[nearest_key(Step, 0.0 s)]",
+            "x + @action[nearest_key(Step, 0.0 s)]",
             RecurrenceRejection::NotStepKeyed { target: action() },
             "@action",
         ),
         (
-            "s + @action[prev_t] + @action[t]",
+            "x + @action[prev_t] + @action[t]",
             RecurrenceRejection::SameStepCycle {
                 cycle: vec![action(), DeclName::expect_valid("state")],
             },
@@ -5130,7 +5130,7 @@ fn recurrence_reads_are_classified_from_their_written_form() {
         let source = format!(
             "{RECURRENCE_AXIS}\
              node action: Dimensionless[Step] = for t: Step {{ @state[t] }};\n\
-             node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| {closure});"
+             node state: Dimensionless[Step] = unfold(Step, 1.0, |x, prev_t, t| {closure});"
         );
         let (reason, _, text) = recurrence_rejection(&source);
         assert_eq!(reason, expected, "{closure}");

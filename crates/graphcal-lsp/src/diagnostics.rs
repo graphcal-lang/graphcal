@@ -872,6 +872,22 @@ mod tests {
     }
 
     #[test]
+    fn unit_name_spelled_like_a_local_is_reported_at_the_unit() {
+        let source = "index Leg = { A, B };\n\
+                      node torque: Dimensionless[Leg] = for m: Leg { 5.0 N * m };\n";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("graphcal::N037".to_string()))
+        );
+        assert_eq!(diagnostic.range.start, Position::new(1, 55));
+        assert_eq!(diagnostic.range.end, Position::new(1, 56));
+    }
+
+    #[test]
     fn eval_error_range_points_at_declaration_name() {
         // `@bad` references a non-existent node; the E001 runtime error for
         // `broken` should point at `broken`'s name-span, not at line 0 col 0.

@@ -1,0 +1,34 @@
+{
+  "check": {
+    "code": "graphcal::N037",
+    "labels": [
+      {
+        "length": 1,
+        "location": {
+          "column": 33,
+          "line": 9,
+          "source": "<root>/tests/fixtures/invalid/unit_name_is_local.gcl"
+        },
+        "offset": 289,
+        "primary": false
+      },
+      {
+        "length": 1,
+        "location": {
+          "column": 19,
+          "line": 9,
+          "source": "<root>/tests/fixtures/invalid/unit_name_is_local.gcl"
+        },
+        "offset": 275,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

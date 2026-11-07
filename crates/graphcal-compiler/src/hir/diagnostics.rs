@@ -197,6 +197,20 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             *span,
             NameError::TimeScaleInValuePosition { scale: *scale },
         ),
+        ExprLowerError::UnitNameIsLocal {
+            name,
+            site,
+            local,
+            span,
+        } => SemanticError::located(
+            src,
+            *span,
+            NameError::UnitNameIsLocal {
+                name: name.clone(),
+                site: *site,
+                local: *local,
+            },
+        ),
         ExprLowerError::UnknownUnit { name, span } => SemanticError::located(
             src,
             *span,

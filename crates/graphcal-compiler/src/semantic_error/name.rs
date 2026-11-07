@@ -18,6 +18,7 @@ use crate::resolve::category::DeclSymbolKind;
 use crate::resolved_name::ResolvedConstructorName;
 use crate::semantic::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
+use crate::syntax::ast::MulDivOp;
 use crate::syntax::function_name::FnName;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::index_name::QualifiedIndexVariantName;
@@ -28,6 +29,19 @@ use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::GenericParamName;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+
+/// Where a unit name that is also a visible local was written; selects which
+/// fixes the diagnostic can offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitNameSite {
+    /// The first unit of a quantity literal (`2.0 s`).
+    LiteralLeading,
+    /// A unit that continues a quantity literal after `*` or `/`
+    /// (`2.0 m / s`), where the source may have meant arithmetic on the local.
+    LiteralContinuation(MulDivOp),
+    /// A unit of a `->` conversion target.
+    ConversionTarget,
+}
 
 /// The function an arity diagnostic names: a closed built-in or a plugin
 /// function spelled by its declared name.
@@ -239,6 +253,12 @@ pub enum NameError {
         arity: BuiltinArity,
         got: usize,
     },
+    #[error("unit `{name}` has the same name as a local in scope")]
+    UnitNameIsLocal {
+        name: LocalName,
+        site: UnitNameSite,
+        local: Span,
+    },
 }
 
 impl DiagnosticKind for NameError {
@@ -276,6 +296,7 @@ impl DiagnosticKind for NameError {
             Self::LocalBindingShadowsTerm { .. } => "graphcal::N034",
             Self::TypeSystemRefAsValue { .. } => "graphcal::N035",
             Self::WrongOptionalArity { .. } => "graphcal::N036",
+            Self::UnitNameIsLocal { .. } => "graphcal::N037",
         }
     }
 
@@ -308,6 +329,7 @@ impl DiagnosticKind for NameError {
             }
             Self::GraphRefInConst { .. } => Some("@ reference not allowed here".to_owned()),
             Self::WrongArity { .. } => Some("wrong number of arguments".to_owned()),
+            Self::UnitNameIsLocal { name, .. } => Some(format!("read as the unit `{name}`")),
             Self::UnknownTypeName { .. }
             | Self::IndexLabelAsType { .. }
             | Self::IndexAsType { .. }
@@ -351,6 +373,7 @@ impl DiagnosticKind for NameError {
                     .join(", ")
             )),
             Self::GraphRefInConst { .. } => Some("const expressions are evaluated at compile time and cannot reference params or nodes".to_owned()),
+            Self::UnitNameIsLocal { name, site, .. } => Some(unit_name_is_local_help(name, *site)),
             Self::WrongArity { .. }
             | Self::UnknownTypeName { .. }
             | Self::IndexLabelAsType { .. }
@@ -383,6 +406,10 @@ impl DiagnosticKind for NameError {
                 span: *first,
                 text: format!("first `{field}` field declared here"),
             }],
+            Self::UnitNameIsLocal { name, local, .. } => vec![SecondaryLabel {
+                span: *local,
+                text: format!("local `{name}` bound here"),
+            }],
             Self::BuiltinNameShadowed { .. }
             | Self::InvalidPlotProperty { .. }
             | Self::UnknownPlotReference { .. }
@@ -413,6 +440,27 @@ impl DiagnosticKind for NameError {
             | Self::LocalBindingShadowsTerm { .. }
             | Self::TypeSystemRefAsValue { .. }
             | Self::WrongOptionalArity { .. } => Vec::new(),
+        }
+    }
+}
+
+/// The fixes for a unit name that is also a local in scope: inside a quantity
+/// literal the source may have meant arithmetic on the local, which needs the
+/// literal closed by parentheses; otherwise only renaming the local helps.
+fn unit_name_is_local_help(name: &LocalName, site: UnitNameSite) -> String {
+    let rename = format!("to use the unit `{name}`, rename the local");
+    match site {
+        UnitNameSite::LiteralContinuation(op) => {
+            let (verb, operator) = match op {
+                MulDivOp::Mul => ("multiply", '*'),
+                MulDivOp::Div => ("divide", '/'),
+            };
+            format!(
+                "a quantity literal reads `{operator} {name}` as part of its unit; to {verb} by the local `{name}`, close the literal with parentheses, as in `(2.0 m) {operator} {name}`; {rename}"
+            )
+        }
+        UnitNameSite::LiteralLeading | UnitNameSite::ConversionTarget => {
+            format!("unit names and local names must not coincide where both are visible; {rename}")
         }
     }
 }

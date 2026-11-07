@@ -67,6 +67,13 @@ fn error_duplicate_name() {
 }
 
 #[test]
+fn error_unit_name_is_local() {
+    let source = include_str!("../../../tests/fixtures/invalid/unit_name_is_local.gcl");
+    let rendered = render_error(source, "unit_name_is_local.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_cross_universe_name_collision() {
     let source = include_str!("../../../tests/fixtures/invalid/cross_universe_name_collision.gcl");
     let rendered = render_error(source, "cross_universe_name_collision.gcl");
