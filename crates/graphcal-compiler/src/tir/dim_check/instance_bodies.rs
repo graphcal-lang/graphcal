@@ -264,6 +264,9 @@ pub(super) fn instance_bodies<'t>(
         tir,
         bodies: &published,
     };
+    // Every instance of one template rebinding the same ports specializes
+    // the same port-generic trees: infer them once per template and port set.
+    let mut port_generic = PortGenericCache::new();
     instances.try_map_ref(|instance| {
         let (template, template_bodies) = template_of(tir, canonical, instance.origin);
         instance_body(
@@ -271,11 +274,22 @@ pub(super) fn instance_bodies<'t>(
             instance,
             template,
             template_bodies,
+            &mut port_generic,
             src,
             cancellation,
         )
     })
 }
+
+/// The port-generic trees of each template, by the defaulted dimension ports
+/// rebound (in port order).
+type PortGenericCache = std::collections::HashMap<
+    (
+        crate::tir::typed::dag_position::DagPosition,
+        Vec<crate::resolved_name::ResolvedDimName>,
+    ),
+    super::template_closure::PortGenericTrees,
+>;
 
 /// Check one semantic instance's own defaults and specialize the rest of its
 /// checked trees from its template's, with the template plot channel shapes
@@ -290,6 +304,7 @@ fn instance_body(
     }: &InstanceOf<'_>,
     template: &crate::tir::typed::model::DagTIR,
     template_bodies: &CheckedBodies,
+    port_generic_cache: &mut PortGenericCache,
     src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<InstanceChecked, Outcome<SemanticError>> {
@@ -302,18 +317,25 @@ fn instance_body(
     let ports = tir
         .project_type_store()
         .bound_defaulted_dimension_ports(&origin.specialization().substitution);
+    let no_port_generic = DerivedTrees::default();
     let (port_generic, port_generic_plot_channels) = if ports.is_empty() {
-        (DerivedTrees::default(), None)
+        (&no_port_generic, None)
     } else {
-        let generic = super::template_closure::port_generic_trees(
-            tir,
-            origin.template_position(),
-            template,
-            &ports,
-            src,
-            cancellation,
-        )?;
-        (generic.trees, Some(generic.plot_channels))
+        let generic = match port_generic_cache.entry((origin.template_position(), ports)) {
+            std::collections::hash_map::Entry::Occupied(cached) => cached.into_mut(),
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                let generic = super::template_closure::port_generic_trees(
+                    tir,
+                    origin.template_position(),
+                    template,
+                    &vacant.key().1,
+                    src,
+                    cancellation,
+                )?;
+                vacant.insert(generic)
+            }
+        };
+        (&generic.trees, Some(generic.plot_channels.clone()))
     };
     let observations = infer::hir::BodyObservations::default();
     let ctx = DimCheckContext {
@@ -344,7 +366,7 @@ fn instance_body(
         checking,
         independent,
         template_bodies,
-        &port_generic,
+        port_generic,
         substitution,
         src,
     )?;

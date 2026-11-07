@@ -548,13 +548,44 @@ fn specialize_instance_semantics(
     Ok(())
 }
 
+/// What every instance materialized in one run starts from: the
+/// project-wide type definitions, and each template in the view where the
+/// defaulted dimension ports an include rebinds are rigid, built once per
+/// template and rebound ports (in port order).
+struct InstanceTemplates {
+    type_defs: super::ResolvedTypeDefs,
+    rigid: HashMap<(DagPosition, Vec<ResolvedDimName>), DagTIR>,
+}
+
+impl InstanceTemplates {
+    /// The template at `position` for an include rebinding `ports`.
+    fn template<'a>(
+        &'a mut self,
+        tir: &'a UncheckedTir,
+        position: DagPosition,
+        ports: Vec<ResolvedDimName>,
+        src: SourceId,
+    ) -> Result<&'a DagTIR, SemanticError> {
+        if ports.is_empty() {
+            return Ok(tir.dags.at(position));
+        }
+        match self.rigid.entry((position, ports)) {
+            std::collections::hash_map::Entry::Occupied(rigid) => Ok(rigid.into_mut()),
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                let rigid = super::rigid_template_dag(tir, position, &vacant.key().1, src)?;
+                Ok(vacant.insert(rigid))
+            }
+        }
+    }
+}
+
 fn clone_checked_instance(
     template_position: super::dag_position::DagPosition,
     edge: &HirInstanceRecord,
     parent: &InstanceFrame,
     runtime_units: impl IntoIterator<Item = UnitName>,
     tir: &UncheckedTir,
-    type_defs: &super::ResolvedTypeDefs,
+    templates: &mut InstanceTemplates,
     src: SourceId,
 ) -> Result<DagTIR, SemanticError> {
     // An instance rebinding a defaulted dimension port is built from the
@@ -563,18 +594,12 @@ fn clone_checked_instance(
     let ports = tir
         .project_type_store()
         .bound_defaulted_dimension_ports(&edge.instance.specialization().substitution);
-    let rigid_tir;
-    let template = if ports.is_empty() {
-        tir.dags.at(template_position)
-    } else {
-        rigid_tir = super::rigid_dimension_view(tir, template_position, &ports, src)?;
-        rigid_tir.dags.at(template_position)
-    };
+    let template = templates.template(tir, template_position, ports, src)?;
     let mut instance = template.clone();
     initialize_instance_identity(&mut instance, template, edge, parent, runtime_units);
     // A substitution can bind a port to a type of any module, so an instance
     // sees every definition: the shared project-wide table, not a copy.
-    instance.semantic.type_defs = type_defs.clone();
+    instance.semantic.type_defs = templates.type_defs.clone();
     specialize_instance_declarations(&mut instance, edge, src)?;
     rebase_dynamic_unit_scales(&mut instance);
     Ok(instance)
@@ -754,7 +779,7 @@ fn instantiate_semantic_edge(
     graph: &mut InstanceGraph,
     parent: DagPosition,
     edge: &HirInstanceRecord,
-    type_defs: &super::ResolvedTypeDefs,
+    templates: &mut InstanceTemplates,
     src: SourceId,
 ) -> Result<DagPosition, SemanticError> {
     let owner = edge.instance.id().owner();
@@ -812,7 +837,7 @@ fn instantiate_semantic_edge(
         parent_frame,
         runtime_unit_names,
         tir,
-        type_defs,
+        templates,
         src,
     )?;
     specialize_instance_semantics(&mut instance, edge, &substitution, src)?;
@@ -860,8 +885,12 @@ pub fn instantiate_semantic_edges(
     let mut graph = InstanceGraph::new(&tir.dags);
     // Every instance is a copy of a DAG present now, so the definitions of
     // the DAGs present now are every definition an instance can see.
-    let type_defs =
-        super::ResolvedTypeDefs::union(tir.dags.iter().map(|(_, dag)| &dag.semantic.type_defs));
+    let mut templates = InstanceTemplates {
+        type_defs: super::ResolvedTypeDefs::union(
+            tir.dags.iter().map(|(_, dag)| &dag.semantic.type_defs),
+        ),
+        rigid: HashMap::new(),
+    };
     let mut holders = tir.dags.iter_positions().collect::<Vec<_>>();
     while !holders.is_empty() {
         let edges = holders
@@ -885,7 +914,7 @@ pub fn instantiate_semantic_edges(
                 continue;
             }
             let instance =
-                instantiate_semantic_edge(tir, &mut graph, holder, &edge, &type_defs, src)?;
+                instantiate_semantic_edge(tir, &mut graph, holder, &edge, &mut templates, src)?;
             materialized.push(instance);
             graph.record_edge(holder, instance);
         }

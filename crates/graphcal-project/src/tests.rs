@@ -3416,6 +3416,52 @@ fn instances_share_one_type_definition_table() {
 }
 
 #[test]
+fn includes_rebinding_a_defaulted_dimension_cost_like_plain_includes() {
+    // Each rebinding include used to rebuild its template's rigid view from
+    // a clone of the whole TIR, so N rebinding includes cost O(N^2): at 600
+    // includes, about 40 times the plain ones. The rigid template is now
+    // built once per template and port set.
+    const INCLUDES: usize = 600;
+    let source = |rebind: bool| {
+        let includes = (0..INCLUDES)
+            .map(|index| {
+                if rebind {
+                    format!("include lib(dim Out: Time, value: {index}.0 s) as i{index};\n")
+                } else {
+                    format!("include lib(value: {index}.0 m) as i{index};\n")
+                }
+            })
+            .collect::<Vec<_>>()
+            .concat();
+        format!(
+            "dag lib {{\n\
+             pub(bind) dim Out = Length;\n\
+             param value: Out;\n\
+             pub node v: Out = @value;\n\
+             }}\n\
+             {includes}"
+        )
+    };
+    // The fastest of a few runs filters out scheduling noise.
+    let check_time = |source: &str| {
+        (0..3)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                compile_to_tir(source, "rigid.gcl").unwrap();
+                started.elapsed()
+            })
+            .min()
+            .unwrap()
+    };
+    let plain = check_time(&source(false));
+    let rebinding = check_time(&source(true));
+    assert!(
+        rebinding < plain * 5,
+        "{INCLUDES} rebinding includes took {rebinding:?}, plain ones {plain:?}"
+    );
+}
+
+#[test]
 fn cancellation_stops_an_in_flight_evaluation() {
     use std::{
         collections::HashMap,
