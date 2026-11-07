@@ -3,7 +3,7 @@
 //! Explicit call arguments cut off parameter defaults. No expression is executed
 //! and no hypothetical runtime value is introduced during this analysis.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -17,7 +17,7 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::scoped_node::{NodeKind, ScopedNode};
 
 use crate::execution_plan::{ComputedBody, ExecPlan, PlannedBody};
-use crate::unfinished_reach::{BoundParameters, Origins, Query};
+use crate::unfinished_reach::{BoundParameters, Origins, Query, UnfinishedReachMemo};
 
 /// The inline calls an expression's availability depends on.
 ///
@@ -61,13 +61,11 @@ pub fn collect(
     let Some(memo) = plan.unfinished_reach() else {
         return Ok(Vec::new());
     };
-    // The analysis never evaluates an expression, so it cannot re-enter
-    // `collect` while it holds the plan's answers.
     let mut analysis = Analysis {
         plan,
         source,
         cancellation,
-        memo: memo.answers(),
+        memo,
         active: HashSet::new(),
     };
     expression
@@ -108,7 +106,7 @@ struct Analysis<'a> {
     source: SourceId,
     cancellation: &'a CancellationToken,
     /// The plan's completed answers; an interrupted query stores nothing.
-    memo: std::sync::MutexGuard<'a, HashMap<Query, Origins>>,
+    memo: &'a UnfinishedReachMemo,
     active: HashSet<Query>,
 }
 
@@ -136,7 +134,7 @@ impl Analysis<'_> {
         }
         let query = (name.clone(), bound.clone());
         if let Some(origins) = self.memo.get(&query) {
-            return Ok(origins.clone());
+            return Ok(origins);
         }
         if !self.active.insert(query.clone()) {
             return Err(self
@@ -176,7 +174,7 @@ impl Analysis<'_> {
             }
         }
         self.active.remove(&query);
-        self.memo.insert(query, origins.clone());
+        self.memo.record(query, origins.clone());
         Ok(origins)
     }
 }
