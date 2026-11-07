@@ -1257,7 +1257,7 @@ impl<'p> SourceFiles<'p> {
                 Some(relative) => Ok(relative),
                 None => Ok(checked
                     .sources()
-                    .named_source(file.source_id())?
+                    .source(file.source_id())?
                     .name()
                     .to_string()),
             }

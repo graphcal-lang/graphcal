@@ -546,6 +546,48 @@ async fn assert_imported_factor_features(
     wait_for_hint(service, main_uri, expected_hint).await;
 }
 
+/// The codes of a published diagnostic list.
+fn diagnostic_codes(diagnostics: &Value) -> Vec<String> {
+    diagnostics
+        .as_array()
+        .expect("diagnostic array")
+        .iter()
+        .map(|diagnostic| {
+            diagnostic["code"]
+                .as_str()
+                .expect("diagnostic code")
+                .to_owned()
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn compile_errors_reach_a_root_opened_through_a_symlink() {
+    let directory = tempfile::tempdir().unwrap();
+    let real = directory.path().join("real");
+    let source_dir = real.join("src/linked");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(real.join("graphcal.toml"), "[package]\nname = \"linked\"\n").unwrap();
+    let source = "node bad: Length = 1.0 kg;\n";
+    std::fs::write(source_dir.join("main.gcl"), source).unwrap();
+    let alias = directory.path().join("alias");
+    std::os::unix::fs::symlink(&real, &alias).unwrap();
+    let uri = Url::from_file_path(alias.join("src/linked/main.gcl")).unwrap();
+
+    let (mut service, mut socket) = service();
+    initialize(&mut service, json!({})).await;
+    let ((), diagnostics) = tokio::join!(
+        notify(
+            &mut service,
+            "textDocument/didOpen",
+            open_params(&uri, 1, source),
+        ),
+        next_diagnostics(&mut socket, &uri),
+    );
+    assert_eq!(diagnostic_codes(&diagnostics), ["graphcal::D002"]);
+}
+
 #[tokio::test]
 async fn external_dependency_delete_and_recreate_refreshes_open_importer() {
     let project = tempfile::tempdir().unwrap();

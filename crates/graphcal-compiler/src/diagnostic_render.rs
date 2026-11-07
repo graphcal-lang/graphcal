@@ -10,12 +10,11 @@
 //! [`SourceId`]: crate::source_id::SourceId
 
 use std::fmt;
-use std::sync::Arc;
 
-use miette::{LabeledSpan, NamedSource, SourceCode};
+use miette::{LabeledSpan, SourceCode};
 
 use crate::diagnostic::{Diagnostic, DiagnosticKind};
-use crate::source_registry::{ForeignSourceId, SourceRegistry};
+use crate::source_registry::{ForeignSourceId, RegisteredSource, SourceRegistry};
 use crate::syntax::span::Span;
 
 /// A core diagnostic payload with its source attached, ready for `miette`.
@@ -23,7 +22,7 @@ use crate::syntax::span::Span;
 pub struct RenderableDiagnostic<K> {
     kind: K,
     primary: Span,
-    source: NamedSource<Arc<String>>,
+    source: RegisteredSource,
 }
 
 impl<K> RenderableDiagnostic<K> {
@@ -37,7 +36,7 @@ impl<K> RenderableDiagnostic<K> {
         diagnostic: Diagnostic<K>,
         registry: &SourceRegistry,
     ) -> Result<Self, ForeignSourceId> {
-        let source = registry.named_source(diagnostic.src)?.clone();
+        let source = registry.source(diagnostic.src)?.clone();
         Ok(Self::in_source(diagnostic.kind, diagnostic.primary, source))
     }
 
@@ -46,7 +45,7 @@ impl<K> RenderableDiagnostic<K> {
     /// For shells that hold exactly the one source the payload was produced
     /// from (such as a parser run over one file), so there is no source id
     /// to resolve.
-    pub const fn in_source(kind: K, primary: Span, source: NamedSource<Arc<String>>) -> Self {
+    pub const fn in_source(kind: K, primary: Span, source: RegisteredSource) -> Self {
         Self {
             kind,
             primary,
@@ -64,8 +63,8 @@ impl<K> RenderableDiagnostic<K> {
         self.primary
     }
 
-    /// The named source the diagnostic's spans index into.
-    pub const fn named_source(&self) -> &NamedSource<Arc<String>> {
+    /// The registered source the diagnostic's spans index into.
+    pub const fn registered_source(&self) -> &RegisteredSource {
         &self.source
     }
 }
@@ -106,7 +105,9 @@ impl<K: DiagnosticKind + fmt::Debug> miette::Diagnostic for RenderableDiagnostic
 
 #[cfg(test)]
 mod tests {
-    use miette::{NarratableReportHandler, SourceSpan};
+    use std::sync::Arc;
+
+    use miette::{NamedSource, NarratableReportHandler, SourceSpan};
 
     use super::*;
     use crate::syntax::ast::{DomainBoundKind, NatExpr};
@@ -755,7 +756,11 @@ mod tests {
             )
             .expect("own source id");
             assert_eq!(render(&registered), expected);
-            let single = RenderableDiagnostic::in_source(kind, primary, named());
+            let single = RenderableDiagnostic::in_source(
+                kind,
+                primary,
+                RegisteredSource::detached("main.gcl", Arc::clone(&text)),
+            );
             assert_eq!(render(&single), expected);
         }
     }
@@ -766,11 +771,11 @@ mod tests {
         let rendered = RenderableDiagnostic::in_source(
             ParseErrorKind::UnknownToken,
             Span::new(3, 1),
-            NamedSource::new("main.gcl", Arc::clone(&text)),
+            RegisteredSource::detached("main.gcl", Arc::clone(&text)),
         );
         assert!(matches!(rendered.kind(), ParseErrorKind::UnknownToken));
         assert_eq!(rendered.primary(), Span::new(3, 1));
-        assert_eq!(rendered.named_source().name(), "main.gcl");
+        assert_eq!(rendered.registered_source().name(), "main.gcl");
     }
 
     #[test]

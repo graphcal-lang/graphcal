@@ -838,7 +838,7 @@ fn included_dynamic_unit_error_uses_producer_source() {
             ..
         })
     ));
-    let source = error.named_source();
+    let source = error.registered_source();
     assert!(
         source.name().ends_with("lib.gcl"),
         "wrong source: {source:?}"
@@ -846,7 +846,7 @@ fn included_dynamic_unit_error_uses_producer_source() {
     let label = error.labels().unwrap().next().unwrap();
     let span = label.inner();
     assert_eq!(
-        &source.inner()[span.offset()..span.offset() + span.len()],
+        &source.text()[span.offset()..span.offset() + span.len()],
         "@missing"
     );
 }
@@ -881,16 +881,16 @@ fn include_binding_lowering_error_uses_importer_source() {
             else {
                 panic!("expected UnknownGraphRef, got {:?}", rendered.error);
             };
-            let src = rendered.named_source();
+            let src = rendered.registered_source();
             assert_eq!(name.leaf().as_str(), "missing");
             assert!(
                 src.name().ends_with("main.gcl"),
                 "wrong source: {}",
                 src.name()
             );
-            assert!(span.offset() + span.len() <= src.inner().len());
+            assert!(span.offset() + span.len() <= src.text().len());
             assert_eq!(
-                &src.inner()[span.offset()..span.offset() + span.len()],
+                &src.text()[span.offset()..span.offset() + span.len()],
                 "@missing"
             );
         }

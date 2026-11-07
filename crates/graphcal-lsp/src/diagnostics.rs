@@ -22,6 +22,7 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::convert::LineIndex;
+use crate::file_identity::DocumentUris;
 use crate::symbol_identity::SymbolId;
 use crate::symbol_table::SymbolTable;
 
@@ -301,18 +302,20 @@ pub fn eval_result_to_diagnostics(
 /// Convert a `CompileError` to LSP diagnostics, grouped by the URI of the
 /// source file the error actually belongs to.
 ///
-/// The (URI, source) pair is read directly from the error's
-/// [`CompileError::named_source`]: the source text is the exact buffer whose
-/// byte offsets the error's labels index into, and the URI is parsed from the
-/// name miette already carries on the source. This makes it structurally
-/// impossible to pair offsets from one file with the line index of another —
-/// e.g., an `import`ed file's parse error cannot be rendered against the
-/// importer's text, no matter how nested the import graph is.
+/// The source is read directly from the error's
+/// [`CompileError::registered_source`]: its text is the exact buffer whose
+/// byte offsets the error's labels index into, and its typed
+/// [`SourceOrigin`](graphcal_compiler::source_registry::SourceOrigin) names the
+/// file, which `documents` maps to the URI the editor opened it under. This
+/// makes it structurally impossible to pair offsets from one file with the
+/// line index of another — e.g., an `import`ed file's parse error cannot be
+/// rendered against the importer's text, no matter how nested the import
+/// graph is — and the display name (which may be `pkg-name:/abs/path.gcl`) is
+/// never parsed back.
 ///
-/// `fallback_uri` is used only for source-less errors (loader-stage
-/// `FileNotFound`, `CircularImport`, `ManifestError`) and as a last-ditch
-/// fallback when the error's source name can be neither parsed as a URL nor
-/// converted from a file path (e.g., synthetic test names).
+/// Source-less errors (loader-stage `FileNotFound`, `CircularImport`,
+/// `ManifestError`) and errors about a detached text belong to the analyzed
+/// document.
 ///
 /// When an error has multiple labeled spans (e.g., "duplicate definition here" +
 /// "first defined here"), the first label becomes the primary diagnostic and the
@@ -321,23 +324,16 @@ pub fn eval_result_to_diagnostics(
 /// information references the same URI.
 pub fn compile_error_to_diagnostics_grouped(
     error: &CompileError,
-    fallback_uri: &Url,
+    documents: &DocumentUris,
 ) -> HashMap<Url, Vec<Diagnostic>> {
     let diag: &dyn miette::Diagnostic = error;
     let data = structured_data(error);
 
     // Source-less errors carry no labels either, so an empty source is safe
     // for the LineIndex (which is unused when there are no labels).
-    let (uri, source) = error.named_source().map_or_else(
-        || (fallback_uri.clone(), ""),
-        |ns| {
-            let name = ns.name();
-            let uri = Url::parse(name)
-                .ok()
-                .or_else(|| Url::from_file_path(name).ok())
-                .unwrap_or_else(|| fallback_uri.clone());
-            (uri, ns.inner().as_str())
-        },
+    let (uri, source) = error.registered_source().map_or_else(
+        || (documents.root().clone(), ""),
+        |source| (documents.of_source(source.origin()), source.text().as_str()),
     );
 
     let diags = compile_error_to_diagnostics_in_source(diag, source, &uri, data);
@@ -504,7 +500,7 @@ fn compile_error_to_diagnostics_in_source(
 fn compile_error_to_diagnostics(error: &CompileError) -> Vec<Diagnostic> {
     // Static URL literal — always parses.
     let fallback_uri = Url::parse("file:///unknown").unwrap();
-    compile_error_to_diagnostics_grouped(error, &fallback_uri)
+    compile_error_to_diagnostics_grouped(error, &DocumentUris::new(&fallback_uri, []))
         .into_values()
         .flatten()
         .collect()
@@ -712,6 +708,40 @@ mod tests {
         );
         assert!(diagnostics[0].message.contains("SI value retained"));
         assert!(!diagnostics[0].message.contains("dependency failed"));
+    }
+
+    #[test]
+    fn package_mode_errors_route_by_source_origin_not_display_name() {
+        use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
+
+        let root = std::path::PathBuf::from("/graphcal-test/project/src/my_app/main.gcl");
+        let dependency = std::path::PathBuf::from("/graphcal-test/cache/unit_lib/lib.gcl");
+        let mut sources = SourceRegistry::new();
+        // Package mode displays a file as `<package instance>:<path>`; with an
+        // `_` in the package name that is not even a valid URL.
+        let mut register = |path: &std::path::PathBuf, package: &str| {
+            sources.register_with_origin(
+                SourceOrigin::File(path.clone()),
+                format!("{package}:{}", path.display()),
+                Arc::new("node x".to_string()),
+            )
+        };
+        let in_root = register(&root, "pkg-my_app");
+        let in_dependency = register(&dependency, "pkg-unit_lib-0123");
+        let root_uri = Url::from_file_path(&root).unwrap();
+        let documents = DocumentUris::new(&root_uri, []);
+
+        for (source, expected) in [
+            (in_root, root_uri),
+            (in_dependency, Url::from_file_path(&dependency).unwrap()),
+        ] {
+            let error = CompileError::semantic(
+                SemanticError::internal_error("failure", source, DiagnosticAnchor::WholeFile),
+                &sources,
+            );
+            let grouped = compile_error_to_diagnostics_grouped(&error, &documents);
+            assert_eq!(grouped.keys().collect::<Vec<_>>(), [&expected]);
+        }
     }
 
     #[test]

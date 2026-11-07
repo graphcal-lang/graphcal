@@ -18,6 +18,7 @@ use graphcal_compiler::semantic::time_scale::TimeScale;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::source_registry::RegisteredSource;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::static_interface::StaticInputKind;
 use graphcal_compiler::syntax::decl_name::DeclName;
@@ -147,7 +148,7 @@ impl ParameterBindingBuilder<'_> {
             .map_err(|error| CompileError::ExternalBinding {
                 name: name.clone(),
                 reason: error.to_string(),
-                src: src.clone(),
+                src: RegisteredSource::detached(src.name(), Arc::clone(src.inner())),
                 span,
             })?;
         self.bind_value(value)

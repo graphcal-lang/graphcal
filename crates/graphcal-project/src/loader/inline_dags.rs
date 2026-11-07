@@ -16,9 +16,7 @@ use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use super::loaded_file::{DagBodyLocator, LoadedDag};
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
-use std::sync::Arc;
-
-use miette::NamedSource;
+use graphcal_compiler::source_registry::RegisteredSource;
 
 use super::module_path::ModuleTarget;
 use super::same_file_reference::{LexicalSite, PathScope, SameFileScope};
@@ -29,7 +27,7 @@ struct InlineDagLiftContext<'a, ResolveExternal> {
     file_dag_id: &'a DagId,
     same_file: &'a SameFileScope,
     /// The file's source, for diagnostics.
-    src: &'a NamedSource<Arc<String>>,
+    src: &'a RegisteredSource,
     resolve_external: ResolveExternal,
 }
 
@@ -51,7 +49,7 @@ pub(super) fn lift_inline_dags<ResolveExternal>(
     ast: &File,
     file_dag_id: &DagId,
     same_file: &SameFileScope,
-    src: &NamedSource<Arc<String>>,
+    src: &RegisteredSource,
     resolve_external: ResolveExternal,
 ) -> Result<Vec<LoadedDag<ModuleTarget>>, CompileError>
 where
@@ -161,7 +159,7 @@ where
 fn package_file_stem_error(
     path: &ModulePath,
     module_path: Option<&ModulePathKey>,
-    src: &NamedSource<Arc<String>>,
+    src: &RegisteredSource,
 ) -> CompileError {
     let stem = path.leaf().name.atom().clone();
     let refer_to_file = module_path.map_or_else(

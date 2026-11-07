@@ -6,7 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Args, Subcommand};
-use miette::{Diagnostic, NamedSource};
+use graphcal_compiler::source_registry::RegisteredSource;
+use miette::Diagnostic;
 use thiserror::Error;
 
 use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
@@ -284,7 +285,10 @@ fn read_source(file: &Path, root: Option<&Path>) -> Result<SourceUnit, DumpError
 /// Parse `source`, rendering a parse failure against the file it came from.
 fn parse_source(source: &SourceUnit) -> Result<File, DumpError> {
     Parser::new(&source.text).parse_file().map_err(|error| {
-        let named = NamedSource::new(source.path.to_string_lossy(), Arc::new(source.text.clone()));
+        let named = RegisteredSource::detached(
+            source.path.to_string_lossy(),
+            Arc::new(source.text.clone()),
+        );
         DumpError::Parse(RenderableDiagnostic::in_source(
             error.kind, error.span, named,
         ))

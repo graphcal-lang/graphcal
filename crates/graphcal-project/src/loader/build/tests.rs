@@ -1,5 +1,6 @@
 use crate::load_error::LoadError;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use graphcal_compiler::dag_id::DagPackageId;
 use graphcal_compiler::import_cycle::ImportChainFile;
@@ -29,6 +30,7 @@ fn resolved(name: &str, inline: &[&str]) -> ModuleResolution<PathBuf> {
 fn parse(file: &Path, text: &str) -> ParsedFile {
     ParsedFile::parse(
         &mut graphcal_compiler::source_registry::SourceRegistry::new(),
+        graphcal_compiler::source_registry::SourceOrigin::File(file.to_path_buf()),
         &file.display().to_string(),
         Arc::new(text.to_string()),
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),

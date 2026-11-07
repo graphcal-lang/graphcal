@@ -5,7 +5,7 @@ use crate::binding_error::{BindingError, BindingLiteralError, BindingValueKind};
 use std::sync::Arc;
 
 use graphcal_compiler::source_id::SourceId;
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{RegisteredSource, SourceRegistry};
 use graphcal_compiler::syntax::ast::{
     FieldInit, GenericArg, Ident, IdentPath, MapEntry, MapEntryKey,
 };
@@ -18,7 +18,7 @@ use graphcal_compiler::syntax::token::SourceIdentifier;
 use graphcal_compiler::syntax::token::SourceIdentifierError;
 use graphcal_compiler::syntax::type_name::ConstructorName;
 use graphcal_eval::invariant::Failure;
-use miette::{NamedSource, SourceSpan};
+use miette::SourceSpan;
 
 use super::{
     AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalSession,
@@ -147,7 +147,7 @@ impl ValueSite<'_> {
     fn error(
         self,
         span: Span,
-        error: impl FnOnce(DeclName, NamedSource<Arc<String>>, SourceSpan) -> BindingError,
+        error: impl FnOnce(DeclName, RegisteredSource, SourceSpan) -> BindingError,
     ) -> CompileError {
         CompileError::Binding(error(
             self.name.clone(),
@@ -1038,7 +1038,7 @@ impl PreparedProject {
     pub(super) fn port_error(
         &self,
         port: &ParameterPort,
-        error: impl FnOnce(DeclName, NamedSource<Arc<String>>, SourceSpan) -> BindingError,
+        error: impl FnOnce(DeclName, RegisteredSource, SourceSpan) -> BindingError,
     ) -> CompileError {
         CompileError::Binding(error(
             port.name.clone(),

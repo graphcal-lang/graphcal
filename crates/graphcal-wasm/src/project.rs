@@ -353,9 +353,10 @@ impl VirtualProject {
         self.filesystem.clone()
     }
 
-    pub fn relative_source_name(source_name: &str) -> Option<String> {
-        Path::new(source_name)
-            .strip_prefix(Self::root_path())
+    /// The project-relative name of the file at `path` in the project's
+    /// virtual filesystem; `None` for a path outside it.
+    pub fn relative_source_name(path: &Path) -> Option<String> {
+        path.strip_prefix(Self::root_path())
             .ok()
             .map(|path| path.to_string_lossy().into_owned())
     }

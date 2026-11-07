@@ -15,8 +15,6 @@ use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
 use super::module_path::ModuleTarget;
@@ -32,7 +30,7 @@ use graphcal_package::PackageName;
 
 use super::budget::PackageAuthorityError;
 use graphcal_compiler::source_id::SourceId;
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{RegisteredSource, SourceOrigin, SourceRegistry};
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::parser::Parser;
@@ -215,8 +213,9 @@ pub(super) struct ParsedFile {
     /// Identity of the text in the project's source registry; core
     /// diagnostics refer to it.
     pub(super) source_id: SourceId,
-    /// The registered text under its name, for the loader's own diagnostics.
-    pub(super) named_source: NamedSource<Arc<String>>,
+    /// The registered text with its origin and name, for the loader's own
+    /// diagnostics.
+    pub(super) registered_source: RegisteredSource,
     pub(super) ast: File,
 }
 
@@ -226,17 +225,18 @@ impl ParsedFile {
         (self.source, self.source_id, self.ast)
     }
 
-    /// Register `source` under the diagnostic `name` in `sources`, then parse
-    /// and desugar it, rendering a parse failure against the registered text.
-    /// This is the loader's only parse sequence.
+    /// Register `source` from `origin` under the diagnostic `name` in
+    /// `sources`, then parse and desugar it, rendering a parse failure
+    /// against the registered text. This is the loader's only parse sequence.
     pub(super) fn parse(
         sources: &mut SourceRegistry,
+        origin: SourceOrigin,
         name: &str,
         source: Arc<String>,
         cancellation: &CancellationToken,
     ) -> Result<Self, Outcome<CompileError>> {
-        let source_id = sources.register(name, Arc::clone(&source));
-        let named_source = sources.renderable(source_id);
+        let source_id = sources.register_with_origin(origin, name, Arc::clone(&source));
+        let registered_source = sources.renderable(source_id);
         let registered: &SourceRegistry = sources;
         let raw_ast = Parser::new(&source)
             .parse_file_with_cancellation(cancellation)
@@ -246,7 +246,7 @@ impl ParsedFile {
         Ok(Self {
             source,
             source_id,
-            named_source,
+            registered_source,
             ast: File::from(raw_ast),
         })
     }
@@ -293,8 +293,8 @@ impl<K: SourceKey> ParsedSource<K> {
         &self.location
     }
 
-    pub(super) const fn named_source(&self) -> &NamedSource<Arc<String>> {
-        &self.file.named_source
+    pub(super) const fn registered_source(&self) -> &RegisteredSource {
+        &self.file.registered_source
     }
 
     /// Identity of this file's text in the project's source registry.
@@ -403,11 +403,7 @@ pub(super) enum ResolveFailure {
 
 impl ResolveFailure {
     /// Render this failure at the importing `path` of the file `src`.
-    pub(super) fn to_error(
-        &self,
-        path: &ModulePath,
-        src: &NamedSource<Arc<String>>,
-    ) -> CompileError {
+    pub(super) fn to_error(&self, path: &ModulePath, src: &RegisteredSource) -> CompileError {
         let src = src.clone();
         let span = path.span().into();
         match self {
@@ -452,7 +448,7 @@ impl ResolveFailure {
 }
 
 /// Error for a path that resolved outside the permitted source root.
-pub(super) fn outside_root(path: &ModulePath, src: NamedSource<Arc<String>>) -> LoadError {
+pub(super) fn outside_root(path: &ModulePath, src: RegisteredSource) -> LoadError {
     LoadError::ImportOutsideRoot {
         path: path.key(),
         src,

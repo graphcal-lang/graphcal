@@ -4074,13 +4074,15 @@ fn rejected_expression_bindings_report_typed_binding_errors() {
     );
     assert_eq!(binding_error_code(&error), "graphcal::O006");
     // Value diagnostics are drawn against the value's own text.
-    let source = error.named_source().expect("located in the value");
+    let source = error.registered_source().expect("located in the value");
     assert_eq!(source.name(), "<--param>");
-    assert_eq!(source.inner().as_str(), "@n");
+    assert_eq!(source.text().as_str(), "@n");
     // Declaration diagnostics stay in the entry source.
     let error = bind("d", "-1.0 m");
     assert_eq!(
-        error.named_source().map(miette::NamedSource::name),
+        error
+            .registered_source()
+            .map(graphcal_compiler::source_registry::RegisteredSource::name),
         Some("bindings.gcl")
     );
     assert!(ExternalValue::parse("<--param>", "1.0 +").is_err());
@@ -7864,7 +7866,7 @@ fn template_closure_error_renders_against_dependency_source() {
             else {
                 panic!("expected V007, got {:?}", rendered.error);
             };
-            let src = rendered.named_source();
+            let src = rendered.registered_source();
             assert_eq!(body_name.as_str(), "v");
             assert_eq!(port_name.as_str(), "Speed");
             assert!(
@@ -7873,7 +7875,7 @@ fn template_closure_error_renders_against_dependency_source() {
                 src.name()
             );
             // The span must index into the source it renders against.
-            let len = src.inner().len();
+            let len = src.text().len();
             assert!(
                 span.offset() + span.len() <= len,
                 "span (offset {}, len {}) is out of bounds for `{}` of length {len}",

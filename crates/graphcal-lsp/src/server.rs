@@ -732,10 +732,7 @@ async fn analyze_store_publish_once(
         .iter()
         .filter(|(open_uri, _)| **open_uri != uri)
         .filter_map(|(open_uri, snapshot)| {
-            open_uri.to_file_path().ok().map(|path| OpenBuffer {
-                path,
-                text: Arc::clone(&snapshot.text),
-            })
+            OpenBuffer::new(open_uri.clone(), Arc::clone(&snapshot.text))
         })
         .collect();
     drop(snapshots);
@@ -2817,11 +2814,11 @@ node bad: Mass = mass + length;
         ]);
         let main_path = dir.path().join("src/helper/main.gcl");
         let helper_path = dir.path().join("src/helper/lib.gcl");
-        // The loader stores the canonical path on every NamedSource, so the
-        // diagnostic's URI is built from the canonical form too. Canonicalize
-        // here so the test matches what the LSP actually publishes (on macOS,
-        // this turns `/var/folders/...` into `/private/var/folders/...`).
-        let main_uri = Url::from_file_path(main_path.canonicalize().unwrap()).unwrap();
+        // The analyzed document keeps the URI the editor opened it under (on
+        // macOS a temporary directory is a `/var/folders/...` symlink). The
+        // imported file is not open, so its diagnostic is published under its
+        // canonical path, as the loader identifies it.
+        let main_uri = Url::from_file_path(&main_path).unwrap();
         let helper_uri = Url::from_file_path(helper_path.canonicalize().unwrap()).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
         let analysis = run_analysis(&main_uri, &text, &[], test_plugin_host());
@@ -3608,10 +3605,13 @@ node momentum: Force * Time = @mass * @velocity;
             "expected diagnostics from the broken on-disk lib.gcl"
         );
 
-        let open_buffers = vec![OpenBuffer {
-            path: lib_path,
-            text: Arc::new("pub const node g0: Acceleration = 9.80665 m/s^2;\n".to_string()),
-        }];
+        let open_buffers = vec![
+            OpenBuffer::new(
+                Url::from_file_path(&lib_path).unwrap(),
+                Arc::new("pub const node g0: Acceleration = 9.80665 m/s^2;\n".to_string()),
+            )
+            .unwrap(),
+        ];
         let analysis = run_analysis(&main_uri, &text, &open_buffers, test_plugin_host());
         assert!(
             analysis.has_no_diagnostics(),
@@ -3633,10 +3633,13 @@ node momentum: Force * Time = @mass * @velocity;
         let main_path = project.path().join("src/active/main.gcl");
         let main_uri = Url::from_file_path(&main_path).unwrap();
         let text = std::fs::read_to_string(&main_path).unwrap();
-        let open_buffers = vec![OpenBuffer {
-            path: unrelated.path().join("src/other/main.gcl"),
-            text: Arc::new("this unrelated buffer is mid-edit }{".to_string()),
-        }];
+        let open_buffers = vec![
+            OpenBuffer::new(
+                Url::from_file_path(unrelated.path().join("src/other/main.gcl")).unwrap(),
+                Arc::new("this unrelated buffer is mid-edit }{".to_string()),
+            )
+            .unwrap(),
+        ];
 
         let analysis = run_analysis(&main_uri, &text, &open_buffers, test_plugin_host());
 
@@ -3778,10 +3781,13 @@ node momentum: Force * Time = @mass * @velocity;
             .unwrap()
             .analysis
         };
-        let overlay = vec![OpenBuffer {
-            path: lib_path,
-            text: Arc::new("pub const node y: Dimensionless = 2.0;\n".to_string()),
-        }];
+        let overlay = vec![
+            OpenBuffer::new(
+                Url::from_file_path(&lib_path).unwrap(),
+                Arc::new("pub const node y: Dimensionless = 2.0;\n".to_string()),
+            )
+            .unwrap(),
+        ];
         let analysis = analyze(&overlay, &input);
         assert!(analysis.has_no_diagnostics());
         assert!(
@@ -3804,10 +3810,13 @@ node momentum: Force * Time = @mass * @velocity;
             root_revision,
             HashMap::from([(dependency, new_dependency_revision)]),
         );
-        let refreshed_overlay = vec![OpenBuffer {
-            path: dir.path().join("src/fresh/lib.gcl"),
-            text: Arc::new("pub const node q: Dimensionless = 4.0;\n".to_string()),
-        }];
+        let refreshed_overlay = vec![
+            OpenBuffer::new(
+                Url::from_file_path(dir.path().join("src/fresh/lib.gcl")).unwrap(),
+                Arc::new("pub const node q: Dimensionless = 4.0;\n".to_string()),
+            )
+            .unwrap(),
+        ];
         let refreshed = analyze(&refreshed_overlay, &refreshed_input);
         assert!(!refreshed.has_no_diagnostics());
         let use_offset = main_text.rfind('y').unwrap();

@@ -19,7 +19,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::{EvaluationError, EvaluatorFailure};
 use graphcal_compiler::source_id::SourceId;
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{RegisteredSource, SourceRegistry};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
@@ -83,8 +83,8 @@ impl EvalEnvironment<'_> {
     #[must_use]
     pub(crate) fn source_name(&self, source: SourceId) -> &str {
         self.sources
-            .named_source(source)
-            .map_or("<unknown source>", miette::NamedSource::name)
+            .source(source)
+            .map_or("<unknown source>", RegisteredSource::name)
     }
 }
 
