@@ -1898,12 +1898,27 @@ pub(crate) fn rigid_template_dag(
     Ok(template)
 }
 
+#[cfg(any(test, feature = "test-identities"))]
+thread_local! {
+    static RIGID_VIEW_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many rigid views (of a template or of the whole TIR) this thread has
+/// built, so tests can bound that work without timing it.
+#[cfg(any(test, feature = "test-identities"))]
+#[must_use]
+pub fn rigid_view_builds_for_test() -> usize {
+    RIGID_VIEW_BUILDS.with(std::cell::Cell::get)
+}
+
 /// The project types in which the optional dimension `ports` are rigid.
 fn rigid_project_types(
     tir: &UncheckedTir,
     ports: &[ResolvedDimName],
     src: SourceId,
 ) -> Result<ProjectTypeStore, SemanticError> {
+    #[cfg(any(test, feature = "test-identities"))]
+    RIGID_VIEW_BUILDS.with(|builds| builds.set(builds.get().saturating_add(1)));
     tir.project_type_store()
         .with_rigid_dimensions(ports)
         .map_err(|_| {
