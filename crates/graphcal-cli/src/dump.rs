@@ -1,7 +1,6 @@
 //! Thin imperative shell for the experimental `graphcal dump` namespace.
 
 use std::fmt::Debug;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -111,19 +110,13 @@ pub enum DumpError {
         #[source]
         source: graphcal_compiler::resolve::error::ModuleResolveError,
     },
-    #[error("could not write dump output: {source}")]
-    #[diagnostic(code(graphcal::dump::D005))]
-    Output {
-        #[source]
-        source: std::io::Error,
-    },
 }
 
 /// Run one nested dump command.
 ///
 /// # Errors
 ///
-/// Returns an input, compiler, evaluator, or output diagnostic.
+/// Returns an input, compiler, or evaluator diagnostic.
 pub fn run(command: DumpCommands) -> Result<DumpStatus, DumpError> {
     eprintln!(
         "warning: `graphcal dump` is experimental; its Rust Debug output may change without notice"
@@ -143,20 +136,20 @@ pub fn run(command: DumpCommands) -> Result<DumpStatus, DumpError> {
 }
 
 fn run_source(args: &FileArgs) -> Result<DumpStatus, DumpError> {
-    write_debug(&read_source(&args.file, args.root.as_deref())?)?;
+    write_debug(&read_source(&args.file, args.root.as_deref())?);
     Ok(DumpStatus::Success)
 }
 
 fn run_tokens(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let source = read_source(&args.file, args.root.as_deref())?;
-    write_debug(&tokenize(&source.text))?;
+    write_debug(&tokenize(&source.text));
     Ok(DumpStatus::Success)
 }
 
 fn run_ast(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let source = read_source(&args.file, args.root.as_deref())?;
     let artifact = parse_source(&source)?;
-    write_debug(&artifact)?;
+    write_debug(&artifact);
     Ok(DumpStatus::Success)
 }
 
@@ -164,7 +157,7 @@ fn run_desugared(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let source = read_source(&args.file, args.root.as_deref())?;
     let raw = parse_source(&source)?;
     let artifact = graphcal_compiler::desugar::desugared_ast::File::from(raw);
-    write_debug(&artifact)?;
+    write_debug(&artifact);
     Ok(DumpStatus::Success)
 }
 
@@ -175,7 +168,7 @@ fn run_modules(args: &FileArgs) -> Result<DumpStatus, DumpError> {
         project.build_module_resolver(cancellation)
     })
     .map_err(|source| DumpError::ModuleIndex { source })?;
-    write_debug(&(project, resolver))?;
+    write_debug(&(project, resolver));
     Ok(DumpStatus::Success)
 }
 
@@ -183,7 +176,7 @@ fn run_hir(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let project = load_project(&args.file, args.root.as_deref(), &fs)?;
     let hir = ProjectCompiler::new(&project).lower()?;
-    write_debug(&hir)?;
+    write_debug(&hir);
     Ok(DumpStatus::Success)
 }
 
@@ -192,13 +185,13 @@ fn run_tir(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let (project, host_fns) =
         crate::load_project_with_plugins(&args.file, args.root.as_deref(), &fs)?;
     let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
-    write_debug(checked.tir())?;
+    write_debug(checked.tir());
     Ok(DumpStatus::Success)
 }
 
 fn run_plan(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let prepared = prepare(&args.file, args.root.as_deref())?;
-    write_debug(&prepared.debug_plan())?;
+    write_debug(&prepared.debug_plan());
     Ok(DumpStatus::Success)
 }
 
@@ -211,7 +204,7 @@ fn run_runtime(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
     } else {
         DumpStatus::Success
     };
-    write_debug(&outcome)?;
+    write_debug(&outcome);
     Ok(status)
 }
 
@@ -224,7 +217,7 @@ fn run_result(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
     } else {
         DumpStatus::Success
     };
-    write_debug(&result)?;
+    write_debug(&result);
     Ok(status)
 }
 
@@ -296,6 +289,6 @@ fn parse_source(source: &SourceUnit) -> Result<File, DumpError> {
     })
 }
 
-fn write_debug<T: Debug + ?Sized>(value: &T) -> Result<(), DumpError> {
-    writeln!(std::io::stdout().lock(), "{value:#?}").map_err(|source| DumpError::Output { source })
+fn write_debug<T: Debug + ?Sized>(value: &T) {
+    outln!("{value:#?}");
 }
