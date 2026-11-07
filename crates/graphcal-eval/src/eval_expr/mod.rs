@@ -4,6 +4,7 @@ mod complex;
 mod context;
 mod conversions;
 mod datetime;
+mod exact_binary_sum;
 mod hir_eval;
 pub mod j2000_seconds;
 mod kernel_checkpoint;

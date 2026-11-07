@@ -4,6 +4,8 @@
 //! the quantity aggregations and the extremum keys receive quantities, and
 //! `count()` receives entries that are not indexed further.
 
+use std::num::NonZeroUsize;
+
 use crate::invariant::{Failure, Invariant};
 use crate::runtime_value::{IndexedValue, KeyValue, RuntimeValue};
 use graphcal_compiler::builtin::{KeyAggregation, ValueAggregation};
@@ -12,6 +14,7 @@ use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::outcome::Outcome;
 use thiserror::Error;
 
+use super::exact_binary_sum::ExactBinarySum;
 use super::kernel_checkpoint::KernelCheckpoint;
 use super::numeric;
 
@@ -153,18 +156,28 @@ fn aggregate_maximum(
     numeric::computed_finite_quantity(maximum, "maximum()").map_err(quantity_error)
 }
 
+/// Average the exact binary64 inputs, rounding only the final quotient.
+///
+/// A common floating scale can erase a small term before cancellation reveals
+/// it. The exact sum retains that term and also avoids overflowing a
+/// representable mean's intermediate sum. This is not decimal reinterpretation.
 fn aggregate_mean(
     entries: &[FiniteQuantity],
     control: &mut KernelCheckpoint<'_>,
 ) -> Result<FiniteQuantity, AggregationStop> {
-    let values = entries
-        .iter()
-        .map(|value| {
-            control.step()?;
-            Ok(value.get())
-        })
-        .collect::<Result<Vec<_>, Cancelled>>()?;
-    numeric::exact_mean(&values, "mean()").map_err(quantity_error)
+    let Some(count) = NonZeroUsize::new(entries.len()) else {
+        return Err(quantity_error(
+            numeric::QuantityValidationError::NanResult {
+                context: "mean()".to_string(),
+            },
+        ));
+    };
+    let mut sum = ExactBinarySum::new();
+    for entry in entries {
+        control.step()?;
+        sum.add(*entry);
+    }
+    numeric::rounded_rational(&sum.mean(count), "mean()").map_err(quantity_error)
 }
 
 /// No in-memory axis has more entries than `Int` can count.
@@ -318,6 +331,118 @@ mod tests {
             panic!("mean must return a quantity");
         };
         assert!((mean.get() / 1.0e308 - 1.0).abs() < f64::EPSILON);
+    }
+
+    /// The bits of `mean()` over `values`.
+    fn mean_bits(values: &[f64]) -> u64 {
+        let RuntimeValue::Quantity(mean) = aggregate(ValueAggregation::Mean, values).unwrap()
+        else {
+            panic!("mean must return a quantity");
+        };
+        mean.get().to_bits()
+    }
+
+    /// The `mean()` this accumulator replaced: one exact rational addition
+    /// (with its gcd) per term, then one rounded division.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "arbitrary-precision rationals cannot overflow; the count is non-zero"
+    )]
+    fn reference_mean_bits(values: &[f64]) -> u64 {
+        use num_rational::BigRational;
+        use num_traits::ToPrimitive;
+        let total = values.iter().fold(BigRational::default(), |total, value| {
+            total + BigRational::from_float(*value).unwrap()
+        });
+        let count = BigRational::from_integer(values.len().into());
+        (total / count).to_f64().unwrap().to_bits()
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn mean_matches_independent_bounded_integer_reference(
+            integers in proptest::collection::vec(-1_000_000_i32..=1_000_000, 1..32),
+        ) {
+            // Both integer accumulation and conversion are exact in this range;
+            // the independent reference performs one binary64 division.
+            let total: i32 = integers.iter().sum();
+            let count = i32::try_from(integers.len()).unwrap();
+            let values = integers.into_iter().map(f64::from).collect::<Vec<_>>();
+            proptest::prop_assert_eq!(
+                mean_bits(&values),
+                (f64::from(total) / f64::from(count)).to_bits()
+            );
+        }
+
+        /// The scaled-integer accumulator leaves every `mean()` bit-identical
+        /// to the per-term rational sum it replaced (#2251).
+        #[test]
+        fn mean_is_bit_identical_to_the_per_term_rational_sum(
+            values in proptest::collection::vec(
+                proptest::num::f64::NORMAL
+                    | proptest::num::f64::SUBNORMAL
+                    | proptest::num::f64::ZERO
+                    | proptest::num::f64::POSITIVE
+                    | proptest::num::f64::NEGATIVE,
+                1..48,
+            ),
+        ) {
+            let values = values
+                .into_iter()
+                .filter(|value| value.is_finite())
+                .collect::<Vec<_>>();
+            proptest::prop_assume!(!values.is_empty());
+            // A mean whose rounding overflows is an error in both.
+            let reference = f64::from_bits(reference_mean_bits(&values));
+            proptest::prop_assume!(reference.is_finite());
+            proptest::prop_assert_eq!(mean_bits(&values), reference.to_bits());
+        }
+    }
+
+    #[test]
+    fn mean_is_bit_identical_on_extreme_alternating_magnitudes() {
+        let values = (0..4_096)
+            .map(|index| if index % 2 == 0 { 1.0e300 } else { 3.0e-300 })
+            .chain([f64::MAX, -f64::MAX, f64::from_bits(1), -0.0])
+            .collect::<Vec<_>>();
+        assert_eq!(mean_bits(&values), reference_mean_bits(&values));
+    }
+
+    #[test]
+    fn cancellation_preserves_a_small_representable_mean_in_every_order() {
+        for values in [
+            [1.0e308, 1.0e-100, -1.0e308],
+            [1.0e-100, -1.0e308, 1.0e308],
+            [-1.0e308, 1.0e308, 1.0e-100],
+            [1.0e308, -1.0e308, 1.0e-100],
+            [-1.0e308, 1.0e-100, 1.0e308],
+            [1.0e-100, 1.0e308, -1.0e308],
+        ] {
+            assert_eq!(mean_bits(&values), (1.0e-100_f64 / 3.0).to_bits());
+        }
+        assert_eq!(mean_bits(&[f64::MAX, f64::MAX]), f64::MAX.to_bits());
+        assert_eq!(
+            mean_bits(&[f64::MAX, f64::MAX, 1.0e-100, -f64::MAX, -f64::MAX]),
+            (1.0e-100_f64 / 5.0).to_bits()
+        );
+    }
+
+    #[test]
+    fn mean_rounds_subnormals_once_and_rejects_an_empty_input() {
+        let tiny = f64::from_bits(1);
+        for value in [tiny, -tiny, f64::MIN_POSITIVE, f64::MAX] {
+            assert_eq!(mean_bits(&[value, value]), value.to_bits());
+        }
+        assert_eq!(mean_bits(&[tiny, f64::from_bits(2)]), 2);
+        assert_eq!(mean_bits(&[tiny, -tiny]), 0.0_f64.to_bits());
+        assert!(matches!(
+            aggregate_quantities(
+                ValueAggregation::Mean,
+                &[],
+                &mut KernelCheckpoint::new(&UNBOUNDED),
+            ),
+            Err(Outcome::Failed(Failure::Error(_)))
+        ));
     }
 
     #[test]

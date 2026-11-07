@@ -2085,6 +2085,7 @@ dependencies = [
  "indexmap",
  "jiff",
  "miette",
+ "num-bigint 0.4.8",
  "num-rational",
  "num-traits",
  "proptest",
