@@ -3106,6 +3106,43 @@ fn output_with_watchdog(command: &mut Command, limit: std::time::Duration) -> Wa
     }
 }
 
+/// A reader that closes stdout early (`graphcal eval … | head -1`) ends the
+/// command quietly with the conventional `SIGPIPE` status instead of a panic.
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_exits_quietly() {
+    let rocket = fixture("valid/rocket.gcl");
+    for arguments in [
+        vec!["eval", rocket.as_str()],
+        vec!["check", rocket.as_str()],
+        vec!["graph", rocket.as_str()],
+        vec!["dump", "source", rocket.as_str()],
+        vec!["model", "describe", rocket.as_str()],
+    ] {
+        let mut child = graphcal_bin()
+            .args(&arguments)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to run graphcal");
+        // Close the only read end before the command writes anything.
+        drop(child.stdout.take());
+        let output = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+
+        assert_eq!(
+            output.status.code(),
+            Some(141),
+            "{arguments:?}\nstderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked") && !stderr.contains("Broken pipe"),
+            "{arguments:?}\nstderr: {stderr}"
+        );
+    }
+}
+
 // --- JSON parameter source tests ---
 
 #[test]

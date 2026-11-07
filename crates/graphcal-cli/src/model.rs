@@ -87,7 +87,7 @@ pub fn resolve_units(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let json = serde_json::to_string_pretty(&resolved).map_err(ModelServeError::Json)?;
-    println!("{json}");
+    outln!("{json}");
     Ok(())
 }
 
@@ -96,7 +96,7 @@ pub fn describe(file: &Path, root: Option<&Path>) -> Result<(), ModelServeError>
     let prepared = prepare(file, root)?;
     let document = DescribeDocument::new(env!("CARGO_PKG_VERSION"), prepared.model_interface()?);
     let json = serde_json::to_string_pretty(&document).map_err(ModelServeError::Json)?;
-    println!("{json}");
+    outln!("{json}");
     Ok(())
 }
 
