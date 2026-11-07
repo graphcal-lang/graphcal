@@ -1927,3 +1927,26 @@ proptest! {
         prop_assert_eq!(format_source(&formatted).unwrap(), formatted);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Tables with duplicate labels (FE-12, #2250)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tables_with_duplicate_labels_are_kept_verbatim() {
+    let tables = [
+        // Duplicate row label.
+        "param t: Dimensionless[R, C] = table[R, C] {\n    : X, Y;\n    A: 1.0, 2.0;\n    A: 3.0, 4.0;\n    B: 5.0, 6.0;\n};\n",
+        // Duplicate column label.
+        "param t: Dimensionless[R, C] = table[R, C] {\n    : X, X;\n    A: 1.0,   2.0;\n    B: 5.0,   6.0;\n};\n",
+        // Row label repeated across two sections of the same slice.
+        "param t: Dimensionless[S, R, C] = table[S, R, C] {\n    [S#P]\n     : X, Y;\n    A: 1.0, 2.0;\n\n    [S#Q]\n     : X, Y;\n    A: 3.0, 4.0;\n\n    [S#P]\n     : X, Y;\n    A: 5.0, 6.0;\n};\n",
+    ];
+    for table in tables {
+        let source =
+            format!("index S = {{ P, Q }};\nindex R = {{ A, B }};\nindex C = {{ X, Y }};\n{table}");
+        let formatted = format_source(&source)
+            .unwrap_or_else(|error| panic!("formatting failed for:\n{source}\n{error}"));
+        assert_eq!(formatted, source);
+    }
+}
