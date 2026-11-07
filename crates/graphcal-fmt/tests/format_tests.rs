@@ -1950,3 +1950,23 @@ fn tables_with_duplicate_labels_are_kept_verbatim() {
         assert_eq!(formatted, source);
     }
 }
+
+#[test]
+fn nested_tables_with_duplicate_labels_are_kept_verbatim() {
+    // A cell is pre-rendered on a forked formatter; its verbatim request must
+    // still reach the enclosing declaration.
+    let declarations = [
+        // Table cell inside a table.
+        "param t: Dimensionless[S] = table[S] {\n    P: table[R, C] { : X, X; A: 1.0, 2.0; };\n    Q: 3.0;\n};\n",
+        // Cell of a multi-declaration header.
+        "param a: Dimensionless[S],\nparam b: Dimensionless[S]\n    = table[S, (_, _)] {\n        : _, _;\n        P: table[R, C] { : X, X; A: 1.0, 2.0; }, 1.0;\n        Q: 2.0, 3.0;\n    };\n",
+    ];
+    for declaration in declarations {
+        let source = format!(
+            "index S = {{ P, Q }};\nindex R = {{ A, B }};\nindex C = {{ X, Y }};\n{declaration}"
+        );
+        let formatted = format_source(&source)
+            .unwrap_or_else(|error| panic!("formatting failed for:\n{source}\n{error}"));
+        assert_eq!(formatted, source);
+    }
+}
