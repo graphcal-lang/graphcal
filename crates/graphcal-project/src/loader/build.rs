@@ -13,7 +13,7 @@
 
 use crate::load_error::LoadError;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use miette::NamedSource;
@@ -22,16 +22,16 @@ use super::budget::io_not_found;
 use super::inline_dags::lift_inline_dags;
 use super::loaded_file::{FileSite, LoadedFile};
 use super::module_path::ModuleTarget;
+use super::same_file_reference::{LexicalSite, PathScope, SameFileModule, SameFileScope};
 use super::source_snapshot::{
     DependencySite, FetchedFile, FileRootDependencyKind, ModuleResolution, ParsedSource,
-    ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot, collect_inline_dag_names,
-    file_root_dependency, file_stem, loading_dependency_paths, outside_root,
+    ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot, file_root_dependency, outside_root,
 };
 use crate::compile_error::CompileError;
 use crate::dependency_ordered::DependencyOrdered;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::dependency_graph::DependencyGraph;
-use graphcal_compiler::desugar::desugared_ast::Declaration;
+use graphcal_compiler::desugar::desugared_ast::File;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::import_cycle::ImportCycle;
 use graphcal_compiler::semantic_error::SemanticError;
@@ -165,12 +165,7 @@ impl<K: SourceKey> Builder<'_, K> {
     fn build_parsed(&mut self, file: &K, parsed: ParsedSource<K>) -> Result<DagId, Stop> {
         self.loading.push(file.clone());
 
-        let stem = file_stem(file.path());
         let named_source = parsed.named_source();
-        reject_file_root_stem_imports(&parsed.ast().declarations, stem, named_source)?;
-        let imports = self.load_file_root_dependencies(file, &parsed)?;
-        self.load_dag_body_dependencies(file, &parsed)?;
-
         let location = parsed.location();
         let module_path = location.module_path.clone();
         let dag_id = DagId::from_relative_path(location.package.clone(), &location.relative_path)
@@ -187,17 +182,19 @@ impl<K: SourceKey> Builder<'_, K> {
                 self.sources,
             )
         })?;
-        let resolved_imports = imports
-            .into_iter()
-            .map(|(key, (owner, resolved))| {
-                let source_file = match owner {
-                    ImportOwner::ThisFile => dag_id.clone(),
-                    ImportOwner::Dependency(dependency) => dependency,
-                };
-                (key, resolved.target_from(&source_file))
-            })
-            .collect();
-        let inline_dags = lift_inline_dags(parsed.ast(), &dag_id, stem, |path| {
+        let mut resolved_imports =
+            same_file_root_targets(parsed.ast(), parsed.same_file(), &dag_id, named_source)?;
+        let imports = self.load_file_root_dependencies(file, &parsed)?;
+        self.load_dag_body_dependencies(file, &parsed)?;
+
+        resolved_imports.extend(imports.into_iter().map(|(key, (owner, resolved))| {
+            let source_file = match owner {
+                ImportOwner::ThisFile => dag_id.clone(),
+                ImportOwner::Dependency(dependency) => dependency,
+            };
+            (key, resolved.target_from(&source_file))
+        }));
+        let inline_dags = lift_inline_dags(parsed.ast(), &dag_id, parsed.same_file(), |path| {
             self.dag_body_target(file, &dag_id, &parsed, path).map(Some)
         })?;
 
@@ -229,7 +226,7 @@ impl<K: SourceKey> Builder<'_, K> {
     ) -> Result<HashMap<ModulePathKey, (ImportOwner, &'p ResolvedFile<K>)>, Stop> {
         let src = parsed.named_source();
         let mut imports = HashMap::new();
-        for dependency in loading_dependency_paths(parsed.ast(), file_stem(file.path())) {
+        for dependency in parsed.loading_dependencies() {
             let DependencySite::FileRoot(kind) = dependency.site else {
                 continue;
             };
@@ -269,8 +266,8 @@ impl<K: SourceKey> Builder<'_, K> {
         file: &K,
         parsed: &ParsedSource<K>,
     ) -> Result<(), Stop> {
-        for dependency in loading_dependency_paths(parsed.ast(), file_stem(file.path())) {
-            if dependency.site != DependencySite::DagBody {
+        for dependency in parsed.loading_dependencies() {
+            if !matches!(dependency.site, DependencySite::DagBody { .. }) {
                 continue;
             }
             match parsed.resolution(dependency.path) {
@@ -313,11 +310,22 @@ impl<K: SourceKey> Builder<'_, K> {
         if resolved.file == *file {
             return Ok(resolved.target_from(dag_id));
         }
-        // A body path spelled like a same-file DAG that is not in lexical
-        // scope does not drive loading (`loading_dependency_paths`), so the
-        // file it names may be unloaded: it names no module of this load.
+        // Every body path classified as a package path drove loading
+        // (`load_dag_body_dependencies`), so the file it names is built.
         self.built.get(&resolved.file).map_or_else(
-            || Err(ResolveFailure::FileNotFound.to_error(path, src)),
+            || {
+                Err(CompileError::semantic(
+                    SemanticError::internal_error(
+                        format!(
+                            "the file named by `{}` was not loaded before its dependent",
+                            path.key()
+                        ),
+                        parsed.source_id(),
+                        DiagnosticAnchor::WholeFile,
+                    ),
+                    self.sources,
+                ))
+            },
             |loaded| Ok(resolved.target_from(&loaded.dag_id)),
         )
     }
@@ -334,27 +342,31 @@ pub(super) fn file_root_self_import_error(
     })
 }
 
-/// Reject `import <file stem>` at file root: a file cannot import itself as a
-/// module, unless the stem also names one of its inline DAGs.
-pub(super) fn reject_file_root_stem_imports(
-    declarations: &[Declaration],
-    file_stem: &str,
+/// Targets of the file-root paths of `ast` (the file `file`) that name a
+/// module of the same file: a top-level `dag`, or the file root itself through
+/// a stem self-reference.
+///
+/// # Errors
+///
+/// Rejects a file-root `import` of the file root (M033): its top-level
+/// declarations are already in scope.
+pub(super) fn same_file_root_targets(
+    ast: &File,
+    same_file: &SameFileScope,
+    file: &DagId,
     src: &NamedSource<Arc<String>>,
-) -> Result<(), CompileError> {
-    let dag_names: HashSet<String> = collect_inline_dag_names(declarations);
-    declarations.iter().try_for_each(|declaration| {
-        let Some((path, FileRootDependencyKind::Import)) = file_root_dependency(declaration) else {
-            return Ok(());
+) -> Result<HashMap<ModulePathKey, ModuleTarget>, CompileError> {
+    let mut targets = HashMap::new();
+    for (path, kind) in ast.declarations.iter().filter_map(file_root_dependency) {
+        let PathScope::SameFile(module) = same_file.classify(path, LexicalSite::FileRoot) else {
+            continue;
         };
-        let is_file_root_self_import = path.segments.len() == 1
-            && path.segments[0].name.as_str() == file_stem
-            && !dag_names.contains(path.segments[0].name.as_str());
-        if is_file_root_self_import {
-            Err(file_root_self_import_error(path, src))
-        } else {
-            Ok(())
+        if kind == FileRootDependencyKind::Import && module == SameFileModule::FileRoot {
+            return Err(file_root_self_import_error(path, src));
         }
-    })
+        targets.insert(path.key(), module.target_in(file));
+    }
+    Ok(targets)
 }
 
 #[cfg(test)]

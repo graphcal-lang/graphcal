@@ -27,7 +27,7 @@ use super::budget::{
 use super::module_path::PackageSelector;
 use super::source_snapshot::{
     FetchedFile, ModuleLocation, ModuleResolution, ModuleRoot, ParsedFile, ParsedSource,
-    ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot,
+    ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot, stem_reference,
 };
 use crate::compile_error::CompileError;
 
@@ -154,7 +154,8 @@ fn fetch_file<A: ModuleSourceAuthority>(
             .unwrap_or_else(|_| file.path())
             .to_path_buf(),
     };
-    ParsedSource::resolve(location, parsed, |path| {
+    let stem = stem_reference(file.path());
+    ParsedSource::resolve(location, parsed, stem, |path| {
         cancellation.checkpoint()?;
         Ok(resolve_module(authority, path, file))
     })

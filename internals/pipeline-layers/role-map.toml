@@ -2607,6 +2607,16 @@ role = "loading"
 
 [[module]]
 package = "project"
+path = ["loader", "same_file_reference"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "same_file_reference", "tests"]
+role = "contracts"
+
+[[module]]
+package = "project"
 path = ["package_cache"]
 role = "loading"
 
