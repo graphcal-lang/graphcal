@@ -31,3 +31,4 @@ pub mod runtime_value;
 mod static_incompleteness;
 #[cfg(test)]
 mod test_tir;
+pub(crate) mod time_scale_conversion;

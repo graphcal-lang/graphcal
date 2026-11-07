@@ -2230,6 +2230,16 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["time_scale_conversion"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["time_scale_conversion", "tests"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["eval_expr", "j2000_seconds"]
 role = "interpreter"
 

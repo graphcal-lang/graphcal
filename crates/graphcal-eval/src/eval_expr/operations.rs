@@ -601,9 +601,10 @@ pub(super) fn datetime<'t>(
             return from_numeric(function, value, arg.span(), operands.ctx);
         }
         DExpr::ToScale { conversion, arg } => {
-            return Ok(operands
-                .datetime(arg)?
-                .to_time_scale(conversion.target().to_hifitime()));
+            return Ok(crate::time_scale_conversion::to_time_scale(
+                operands.datetime(arg)?,
+                conversion.target(),
+            ));
         }
     };
     result
