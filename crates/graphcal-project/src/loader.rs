@@ -50,7 +50,7 @@ use same_file_reference::SameFileScope;
 use source_authority::{
     ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
 };
-use source_snapshot::{ModuleRoot, PackageFileKey, ParsedFile, ResolveFailure, stem_reference};
+use source_snapshot::{ModuleRoot, PackageFileKey, ParsedFile, ResolveFailure};
 
 use graphcal_package::{
     GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError,
@@ -296,7 +296,10 @@ impl LoadedProject {
         )?;
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
-        let same_file = SameFileScope::new(&parsed.ast.declarations, stem_reference(&path));
+        let same_file = SameFileScope::new(
+            &parsed.ast.declarations,
+            ModuleRoot::Standalone.stem_reference(&path),
+        );
         // `name` is also a diagnostic label and may be an absolute virtual URI
         // path. A standalone in-memory file has no filesystem hierarchy, so a
         // rooted label contributes only its leaf to semantic DAG identity.
@@ -331,9 +334,13 @@ impl LoadedProject {
         // editor buffer analyzed without its project stays usable.
         let resolved_imports =
             same_file_root_targets(&parsed.ast, &same_file, &dag_id, &parsed.named_source)?;
-        let Ok(inline_dags) = lift_inline_dags(&parsed.ast, &dag_id, &same_file, |_| {
-            Ok::<_, std::convert::Infallible>(None)
-        });
+        let inline_dags = lift_inline_dags(
+            &parsed.ast,
+            &dag_id,
+            &same_file,
+            &parsed.named_source,
+            |_| Ok(None),
+        )?;
         cancellation.checkpoint()?;
         // No filesystem to read wasm plugin files from; the entries carry
         // the reason so evaluation can report it at the import site.

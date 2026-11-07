@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use graphcal_eval::eval::{AssertResult, EvalResult, Value};
 use graphcal_io::RealFileSystem;
 use graphcal_project::compile_error::CompileError;
+use graphcal_project::load_error::LoadError;
 use graphcal_project::prepare::compile_and_eval_project;
+use miette::Diagnostic;
 
 /// A package `name` whose files are written below `src/`, by path relative
 /// to `src/`.
@@ -197,4 +199,114 @@ fn file_root_import_of_a_top_level_dag_conflicts_with_a_same_named_declaration()
         format!("{error:?}").contains("Duplicate"),
         "expected a duplicate-name error, got {error:?}"
     );
+}
+
+const NASA_ROOT: &str = "pub const node g0: Dimensionless = 1.0;\n";
+
+const NASA_INLINE_IMPORT: &str = "\
+pub const node g0: Dimensionless = 2.0;
+pub dag inner {
+    import nasa::{g0};
+    pub node got: Dimensionless = @g0;
+}
+include inner() as i;
+pub node result: Bool = @i::got == 1.0;
+";
+
+fn entry_is_true(result: &EvalResult, name: &str) -> bool {
+    result.entries.iter().any(|entry| {
+        entry.name.to_string() == name && matches!(entry.outcome, Ok(Value::Bool(true)))
+    })
+}
+
+#[test]
+fn package_dag_body_path_spelled_as_the_file_stem_is_rejected() {
+    // Earlier releases bound the file's own `g0` here; the package root is the
+    // documented meaning, so the ambiguous spelling fails loudly instead of
+    // silently changing which module it names.
+    let dir = package(
+        "nasa",
+        &[
+            ("nasa.gcl", NASA_ROOT),
+            ("nasa/nasa.gcl", NASA_INLINE_IMPORT),
+        ],
+    );
+    let error = eval_error(&source_path(&dir, "nasa/nasa.gcl"));
+    let CompileError::Load(LoadError::PackageFileStemInDagBody { stem, help, .. }) = &error else {
+        panic!("expected M037, got {error:?}");
+    };
+    assert_eq!(stem.as_str(), "nasa");
+    assert!(help.contains("`nasa.nasa`"), "{help}");
+    assert_eq!(
+        error.code().map(|code| code.to_string()).as_deref(),
+        Some("graphcal::M037")
+    );
+}
+
+#[test]
+fn package_dag_body_path_naming_the_package_resolves_from_another_file() {
+    let dir = package(
+        "nasa",
+        &[
+            ("nasa.gcl", NASA_ROOT),
+            ("nasa/other.gcl", NASA_INLINE_IMPORT),
+        ],
+    );
+    let result = eval(&source_path(&dir, "nasa/other.gcl"));
+    assert!(entry_is_true(&result, "result"), "{:?}", result.entries);
+}
+
+#[test]
+fn package_file_root_import_spelled_as_the_file_stem_names_the_package() {
+    // Not a self-import (M033): `nasa` is the package root `src/nasa.gcl`.
+    let dir = package(
+        "nasa",
+        &[
+            ("nasa.gcl", NASA_ROOT),
+            (
+                "nasa/nasa.gcl",
+                "import nasa::{g0};\nnode result: Bool = @g0 == 1.0;\n",
+            ),
+        ],
+    );
+    let result = eval(&source_path(&dir, "nasa/nasa.gcl"));
+    assert!(entry_is_true(&result, "result"), "{:?}", result.entries);
+}
+
+#[test]
+fn package_file_root_include_spelled_as_the_file_stem_names_the_package() {
+    let dir = package(
+        "pipeline",
+        &[
+            ("pipeline.gcl", PIPELINE_ROOT),
+            (
+                "pipeline/pipeline.gcl",
+                "include pipeline(x: -1.0) as p;\nnode a: Dimensionless = 1.0;\n",
+            ),
+        ],
+    );
+    let result = eval(&source_path(&dir, "pipeline/pipeline.gcl"));
+    assert!(
+        assertion_failed(&result, "p::positive"),
+        "{:?}",
+        result.assertions
+    );
+}
+
+#[test]
+fn standalone_dag_body_stem_is_a_self_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("solo.gcl");
+    std::fs::write(
+        &root,
+        "pub const node g0: Dimensionless = 2.0;\n\
+         dag inner {\n\
+             import solo::{g0};\n\
+             pub node got: Dimensionless = @g0;\n\
+         }\n\
+         node result: Bool = @inner()::got == 2.0;\n",
+    )
+    .unwrap();
+    let result = eval(&root);
+    assert!(entry_is_true(&result, "result"), "{:?}", result.entries);
 }

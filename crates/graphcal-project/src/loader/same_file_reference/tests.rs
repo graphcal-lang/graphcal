@@ -121,3 +121,41 @@ fn stem_self_reference_names_the_file_root_after_dags() {
         PathScope::SameFile(SameFileModule::InlineDag(engine))
     );
 }
+
+#[test]
+fn package_stem_is_a_package_path_at_file_root_and_rejected_in_dag_bodies() {
+    let own_path = Some(ModulePathKey::new(
+        graphcal_compiler::syntax::non_empty::NonEmpty::try_from_vec(vec![
+            atom("nasa"),
+            atom("nasa"),
+        ])
+        .unwrap(),
+    ));
+    let scope = scope(StemReference::RejectedInDagBody {
+        stem: atom("nasa"),
+        module_path: own_path.clone(),
+    });
+    let engine = dag_path(&["engine"]);
+    assert_eq!(
+        scope.classify(&module_path("nasa"), LexicalSite::FileRoot),
+        PathScope::Package
+    );
+    assert_eq!(
+        scope.classify(&module_path("nasa"), LexicalSite::DagBody(&engine)),
+        PathScope::RejectedStem {
+            module_path: own_path
+        }
+    );
+    // A visible DAG of the same name still takes precedence.
+    let shadowed = SameFileScope::new(
+        &declarations(),
+        StemReference::RejectedInDagBody {
+            stem: atom("rocket"),
+            module_path: None,
+        },
+    );
+    assert_eq!(
+        shadowed.classify(&module_path("rocket"), LexicalSite::DagBody(&engine)),
+        PathScope::SameFile(SameFileModule::InlineDag(dag_path(&["engine", "rocket"])))
+    );
+}

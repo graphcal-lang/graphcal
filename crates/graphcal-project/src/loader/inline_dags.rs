@@ -16,12 +16,20 @@ use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use super::loaded_file::{DagBodyLocator, LoadedDag};
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
+use std::sync::Arc;
+
+use miette::NamedSource;
+
 use super::module_path::ModuleTarget;
 use super::same_file_reference::{LexicalSite, PathScope, SameFileScope};
+use crate::compile_error::CompileError;
+use crate::load_error::LoadError;
 
 struct InlineDagLiftContext<'a, ResolveExternal> {
     file_dag_id: &'a DagId,
     same_file: &'a SameFileScope,
+    /// The file's source, for diagnostics.
+    src: &'a NamedSource<Arc<String>>,
     resolve_external: ResolveExternal,
 }
 
@@ -36,19 +44,23 @@ struct InlineDagLiftContext<'a, ResolveExternal> {
 ///
 /// # Errors
 ///
-/// Returns the first error `resolve_external` reports, in source preorder.
-pub(super) fn lift_inline_dags<ResolveExternal, E>(
+/// Returns the first error in source preorder: a body path of a package file
+/// spelled as the file's own stem (M037), or an error `resolve_external`
+/// reports.
+pub(super) fn lift_inline_dags<ResolveExternal>(
     ast: &File,
     file_dag_id: &DagId,
     same_file: &SameFileScope,
+    src: &NamedSource<Arc<String>>,
     resolve_external: ResolveExternal,
-) -> Result<Vec<LoadedDag<ModuleTarget>>, E>
+) -> Result<Vec<LoadedDag<ModuleTarget>>, CompileError>
 where
-    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, E>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, CompileError>,
 {
     let context = InlineDagLiftContext {
         file_dag_id,
         same_file,
+        src,
         resolve_external,
     };
     let mut out = Vec::new();
@@ -63,16 +75,16 @@ where
     Ok(out)
 }
 
-fn lift_inline_dags_from_declarations<ResolveExternal, E>(
+fn lift_inline_dags_from_declarations<ResolveExternal>(
     declarations: &[Declaration],
     lexical_parent_id: &DagId,
     lexical_parent_path: &mut Vec<DeclName>,
     context: &InlineDagLiftContext<'_, ResolveExternal>,
     parent_path: &[usize],
     out: &mut Vec<LoadedDag<ModuleTarget>>,
-) -> Result<(), E>
+) -> Result<(), CompileError>
 where
-    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, E>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, CompileError>,
 {
     for (index, decl) in declarations.iter().enumerate() {
         let DeclKind::Dag(dag) = &decl.kind else {
@@ -106,13 +118,13 @@ where
 
 /// Targets of the import/include paths in `body`, the body of the inline DAG
 /// at `owner` (its path from the file root).
-fn resolve_inline_body_imports<ResolveExternal, E>(
+fn resolve_inline_body_imports<ResolveExternal>(
     body: &[Declaration],
     owner: &[DeclName],
     context: &InlineDagLiftContext<'_, ResolveExternal>,
-) -> Result<HashMap<ModulePathKey, ModuleTarget>, E>
+) -> Result<HashMap<ModulePathKey, ModuleTarget>, CompileError>
 where
-    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, E>,
+    ResolveExternal: Fn(&ModulePath) -> Result<Option<ModuleTarget>, CompileError>,
 {
     let mut resolved = HashMap::new();
     for path in body.iter().filter_map(|body_decl| match &body_decl.kind {
@@ -126,10 +138,45 @@ where
         {
             PathScope::SameFile(module) => Some(module.target_in(context.file_dag_id)),
             PathScope::Package => (context.resolve_external)(path)?,
+            PathScope::RejectedStem { module_path } => {
+                return Err(package_file_stem_error(
+                    path,
+                    module_path.as_ref(),
+                    context.src,
+                ));
+            }
         };
         if let Some(target) = target {
             resolved.insert(path.key(), target);
         }
     }
     Ok(resolved)
+}
+
+/// A DAG-body path of a package file spelled as the file's own stem.
+///
+/// In a package the path names the package or a dependency, but standalone
+/// files and earlier releases read it as the file itself, so it is rejected
+/// rather than silently naming another module.
+fn package_file_stem_error(
+    path: &ModulePath,
+    module_path: Option<&ModulePathKey>,
+    src: &NamedSource<Arc<String>>,
+) -> CompileError {
+    let stem = path.leaf().name.atom().clone();
+    let refer_to_file = module_path.map_or_else(
+        || "This file has no module path, so a DAG body cannot import from it.".to_owned(),
+        |module_path| format!("To refer to this file, write its module path `{module_path}`."),
+    );
+    CompileError::Load(LoadError::PackageFileStemInDagBody {
+        help: format!(
+            "in a package, a one-segment path names the package or one of its dependencies, \
+             never the current file, so `{stem}` would name another module than earlier \
+             releases did. {refer_to_file} To import from the package or dependency `{stem}`, \
+             rename this file."
+        ),
+        stem,
+        src: src.clone(),
+        span: path.span().into(),
+    })
 }

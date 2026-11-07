@@ -9,7 +9,11 @@
 //! - In a standalone (virtual-package) file, the file's own stem names the
 //!   file root unless one of the DAGs above takes precedence.
 //!
-//! Every other path names a module through package resolution.
+//! Every other path names a module through package resolution. In a package
+//! file the stem is an ordinary first path segment (the package name or a
+//! dependency alias); a DAG body that spells its own file's stem there is
+//! rejected rather than resolved (M037), because standalone files and earlier
+//! releases read that spelling as the file itself.
 
 use std::collections::HashSet;
 
@@ -17,6 +21,7 @@ use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::desugar::desugared_ast::Declaration;
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 use graphcal_compiler::syntax::names::NameAtom;
 
 use super::module_path::ModuleTarget;
@@ -24,8 +29,15 @@ use super::module_path::ModuleTarget;
 /// How a file refers to its own root by a one-segment path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum StemReference {
-    /// The stem names the file's own root.
+    /// A standalone file: its stem names its own root.
     SelfReference(NameAtom),
+    /// A package file: its stem is not a self-reference, and a DAG body path
+    /// spelled as the stem is rejected.
+    RejectedInDagBody {
+        stem: NameAtom,
+        /// The module path that does name the file, when it has one.
+        module_path: Option<ModulePathKey>,
+    },
     /// The stem is not a name, so no one-segment path can spell it.
     Unspellable,
 }
@@ -71,6 +83,10 @@ pub(super) enum PathScope {
     /// A module found by package resolution (possibly in this same file, when
     /// the path spells the file's full module path).
     Package,
+    /// A DAG-body path of a package file spelled as the file's own stem
+    /// ([`StemReference::RejectedInDagBody`]), with the module path that does
+    /// name the file, when it has one.
+    RejectedStem { module_path: Option<ModulePathKey> },
 }
 
 /// The same-file names one file's dependency paths can spell.
@@ -98,9 +114,16 @@ impl SameFileScope {
         if let Some(dag) = self.visible_dag(&name, site) {
             return PathScope::SameFile(SameFileModule::InlineDag(dag));
         }
-        match &self.stem {
-            StemReference::SelfReference(stem) if stem == segment.name.atom() => {
+        match (&self.stem, site) {
+            (StemReference::SelfReference(stem), _) if stem == segment.name.atom() => {
                 PathScope::SameFile(SameFileModule::FileRoot)
+            }
+            (StemReference::RejectedInDagBody { stem, module_path }, LexicalSite::DagBody(_))
+                if stem == segment.name.atom() =>
+            {
+                PathScope::RejectedStem {
+                    module_path: module_path.clone(),
+                }
             }
             _ => PathScope::Package,
         }

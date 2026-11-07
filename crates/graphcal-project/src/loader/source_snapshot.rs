@@ -165,6 +165,26 @@ pub(super) enum ModuleRoot {
 }
 
 impl ModuleRoot {
+    /// How `file` (a canonical path) refers to its own root by its stem: a
+    /// self-reference in a standalone file only. In a package the stem is an
+    /// ordinary first path segment, and a DAG body that spells it is rejected.
+    pub(super) fn stem_reference(&self, file: &Path) -> StemReference {
+        let Some(stem) = file
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| NameAtom::parse(stem).ok())
+        else {
+            return StemReference::Unspellable;
+        };
+        match self {
+            Self::Standalone => StemReference::SelfReference(stem),
+            Self::SourceDir(_) => StemReference::RejectedInDagBody {
+                stem,
+                module_path: self.module_path_of(file),
+            },
+        }
+    }
+
     /// The module path that names `file` (a canonical path) in this tree.
     pub(super) fn module_path_of(&self, file: &Path) -> Option<ModulePathKey> {
         use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -528,12 +548,4 @@ fn push_inline_dag_dependency_paths<'a>(
         push_inline_dag_dependency_paths(&dag.body, owner, out);
         owner.pop();
     }
-}
-
-/// How the file at `path` refers to its own root by its stem.
-pub(super) fn stem_reference(path: &Path) -> StemReference {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .and_then(|stem| NameAtom::parse(stem).ok())
-        .map_or(StemReference::Unspellable, StemReference::SelfReference)
 }

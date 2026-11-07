@@ -44,7 +44,8 @@ fn fetched_at<K: SourceKey>(
     text: &str,
     table: &[(&str, ModuleResolution<K>)],
 ) -> ParsedSource<K> {
-    let stem = super::super::source_snapshot::stem_reference(file.path());
+    let stem = super::super::source_snapshot::ModuleRoot::SourceDir(PathBuf::from("/p/src"))
+        .stem_reference(file.path());
     let parsed = ParsedSource::resolve(location, parse(file.path(), text), stem, |path| {
         Ok::<_, std::convert::Infallible>(
             table
@@ -414,12 +415,14 @@ fn file_root_self_import_is_rejected() {
         "{error:?}"
     );
 
+    // In a package file the stem is no self-reference: `main` is resolved as
+    // a package path, and here names no file (#2242).
     let error = build_error(snapshot(
         "main",
         [fetched("main", "import main::{x};", &[])],
     ));
     assert!(
-        matches!(error, CompileError::Load(LoadError::FileRootSelfImport { ref path, .. }) if path.to_string() == "main"),
+        matches!(error, CompileError::Load(LoadError::ImportFileNotFound { ref path, .. }) if path.to_string() == "main"),
         "{error:?}"
     );
 }

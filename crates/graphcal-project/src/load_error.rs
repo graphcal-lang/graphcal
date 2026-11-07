@@ -126,6 +126,20 @@ pub enum LoadError {
         span: SourceSpan,
     },
 
+    #[error("`{stem}` in a DAG body of a package file does not name this file")]
+    #[diagnostic(code(graphcal::M037))]
+    PackageFileStemInDagBody {
+        /// The one-segment path, which is the file's own stem.
+        stem: NameAtom,
+        /// How to name this file, or the module `stem` names.
+        #[help]
+        help: String,
+        #[source_code]
+        src: NamedSource<Arc<String>>,
+        #[label("spelled like this file's stem")]
+        span: SourceSpan,
+    },
+
     #[error("unknown dependency `{name}` in package `{package}`")]
     #[diagnostic(
         code(graphcal::M035),
@@ -161,6 +175,7 @@ impl LoadError {
             | Self::StdlibNotImplemented { src, .. }
             | Self::CrossFileImportInVirtualPackage { src, .. }
             | Self::FileRootSelfImport { src, .. }
+            | Self::PackageFileStemInDagBody { src, .. }
             | Self::UnknownDependency { src, .. } => Some(src),
         }
     }

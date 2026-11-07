@@ -194,9 +194,13 @@ impl<K: SourceKey> Builder<'_, K> {
             };
             (key, resolved.target_from(&source_file))
         }));
-        let inline_dags = lift_inline_dags(parsed.ast(), &dag_id, parsed.same_file(), |path| {
-            self.dag_body_target(file, &dag_id, &parsed, path).map(Some)
-        })?;
+        let inline_dags = lift_inline_dags(
+            parsed.ast(),
+            &dag_id,
+            parsed.same_file(),
+            named_source,
+            |path| self.dag_body_target(file, &dag_id, &parsed, path).map(Some),
+        )?;
 
         self.loading.pop();
         self.built.insert(file.clone(), {
