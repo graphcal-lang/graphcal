@@ -3,6 +3,7 @@ use crate::syntax::comments::{BlankLine, Comment, CommentBody, CommentDelimiter,
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{LexicalItem, LexicalToken, Token, TriviaToken};
 use logos::Logos;
+use std::num::NonZeroUsize;
 
 /// Complete output of lexing one physical source string.
 ///
@@ -44,15 +45,35 @@ impl TokenizedSource {
 /// Tokenize one source string to completion.
 #[must_use]
 pub fn tokenize(source: &str) -> TokenizedSource {
+    let never_interrupted: Result<_, std::convert::Infallible> =
+        tokenize_with_checkpoints(source, NonZeroUsize::MAX, || Ok(()));
+    match never_interrupted {
+        Ok(tokenized) => tokenized,
+    }
+}
+
+/// Tokenize one source string, calling `checkpoint` after every `interval`
+/// syntax tokens and stopping with its error as soon as it fails.
+pub(crate) fn tokenize_with_checkpoints<E>(
+    source: &str,
+    interval: NonZeroUsize,
+    mut checkpoint: impl FnMut() -> Result<(), E>,
+) -> Result<TokenizedSource, E> {
     let mut lexer = Lexer::new(source);
-    let tokens = std::iter::from_fn(|| lexer.next_token()).collect();
+    let mut tokens = Vec::new();
+    while let Some(token) = lexer.next_token() {
+        tokens.push(token);
+        if tokens.len() % interval == 0 {
+            checkpoint()?;
+        }
+    }
     let first_error_span = lexer.first_error_span();
     let source_metadata = lexer.into_source_metadata();
-    TokenizedSource {
+    Ok(TokenizedSource {
         tokens,
         source_metadata,
         first_error_span,
-    }
+    })
 }
 
 /// A streaming wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
@@ -291,6 +312,26 @@ mod tests {
         assert!(lexer.next_token().is_none());
         let err_span = lexer.first_error_span().expect("expected an error span");
         assert_eq!(err_span.offset(), 0);
+    }
+
+    #[test]
+    fn failing_checkpoint_stops_tokenization() {
+        let source = "x ".repeat(10_000);
+        let interval = NonZeroUsize::new(100).unwrap();
+        let mut checkpoints = 0;
+        let result = tokenize_with_checkpoints(&source, interval, || {
+            checkpoints += 1;
+            if checkpoints == 3 { Err(()) } else { Ok(()) }
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            checkpoints, 3,
+            "tokenization continued after the failed checkpoint"
+        );
+
+        let tokenized = tokenize_with_checkpoints(&source, interval, || Ok::<_, ()>(()))
+            .expect("checkpoints succeed");
+        assert_eq!(tokenized.tokens().len(), 10_000);
     }
 
     #[test]

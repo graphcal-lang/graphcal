@@ -41,7 +41,7 @@ pub struct Parser<'src> {
 
 impl<'src> Parser<'src> {
     #[must_use]
-    pub fn new(source: &'src str) -> Self {
+    pub const fn new(source: &'src str) -> Self {
         Self {
             lexer: ParserTokenStream::new(source),
             source,
@@ -272,6 +272,7 @@ impl<'src> Parser<'src> {
         &mut self,
     ) -> Result<crate::syntax::ast::File, Outcome<ParseError>> {
         self.lexer.checkpoint()?;
+        self.lexer.tokenize_with_cancellation()?;
         let result = self.parse_file_inner();
         while self.lexer.peek().is_some() {
             if self.lexer.next_token().is_none() {
@@ -557,14 +558,34 @@ mod tests {
 
         for source in cases {
             let mut parser = Parser::new(&source);
-            // The operation-boundary checkpoint succeeds, then the next
-            // periodic checkpoint deterministically cancels after tokens from
-            // the sole top-level declaration have already been consumed.
-            parser.lexer.cancel_after_successful_checkpoints(1);
+            // The operation-boundary checkpoint and every tokenization
+            // checkpoint succeed, then the next periodic checkpoint
+            // deterministically cancels after tokens from the sole top-level
+            // declaration have already been consumed.
+            let tokenization_checkpoints = crate::syntax::lexer::tokenize(&source).tokens().len()
+                / CANCELLATION_CHECKPOINT_INTERVAL;
+            parser
+                .lexer
+                .cancel_after_successful_checkpoints(1 + tokenization_checkpoints);
             let error = parser
                 .parse_file_with_active_cancellation()
                 .expect_err("large declaration should reach an internal checkpoint");
             assert!(matches!(error, Outcome::Cancelled));
+            assert!(parser.lexer.last_consumed().is_some());
         }
+    }
+
+    #[test]
+    fn cancellation_stops_tokenizing_a_large_source() {
+        let source = "node x: Dimensionless = 1.0;\n".repeat(10_000);
+        let mut parser = Parser::new(&source);
+        // The operation-boundary checkpoint and the first tokenization
+        // checkpoint succeed; the second cancels while lexing.
+        parser.lexer.cancel_after_successful_checkpoints(2);
+        let error = parser
+            .parse_file_with_active_cancellation()
+            .expect_err("tokenization should observe cancellation");
+        assert!(matches!(error, Outcome::Cancelled));
+        assert!(!parser.lexer.is_tokenized(), "the whole source was lexed");
     }
 }

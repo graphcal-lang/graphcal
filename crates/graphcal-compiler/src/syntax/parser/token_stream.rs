@@ -1,16 +1,24 @@
 use crate::cancellation::{CancellationToken, Cancelled};
 use crate::syntax::comments::SourceMetadata;
-use crate::syntax::lexer::{TokenizedSource, tokenize};
+use std::cell::OnceCell;
+use std::num::NonZeroUsize;
+
+use crate::syntax::lexer::{TokenizedSource, tokenize, tokenize_with_checkpoints};
 use crate::syntax::span::Span;
 use crate::syntax::token::Token;
 
 /// Maximum number of syntax tokens consumed between cancellation checkpoints.
 pub(super) const CANCELLATION_CHECKPOINT_INTERVAL: usize = 256;
 
+/// [`CANCELLATION_CHECKPOINT_INTERVAL`], applied to tokens lexed rather than
+/// consumed.
+const TOKENIZATION_CHECKPOINT_INTERVAL: NonZeroUsize =
+    NonZeroUsize::new(CANCELLATION_CHECKPOINT_INTERVAL).unwrap();
+
 /// Parser-owned token stream that applies one cancellation policy to every
 /// grammar production without threading a token through each parser helper.
 ///
-/// The source is tokenized once up front, so the stream state that moves
+/// The source is tokenized once, on first use, so the stream state that moves
 /// during parsing is only a [`Cursor`] into an immutable token slice. Comments
 /// and blank lines live in the immutable [`TokenizedSource`]: lookahead and
 /// speculative parsing (see [`Self::mark`] and [`Self::rewind`]) therefore
@@ -21,7 +29,10 @@ pub(super) const CANCELLATION_CHECKPOINT_INTERVAL: usize = 256;
 /// read-only lookahead and a [`TokenMark`] for speculation.
 pub(super) struct ParserTokenStream<'src> {
     source: &'src str,
-    tokenized: TokenizedSource,
+    /// Filled on first access: by [`Self::tokenize_with_cancellation`] on the
+    /// cancellable path, otherwise lazily by [`Self::tokenized`]. Creating a
+    /// parser therefore never lexes the source.
+    tokenized: OnceCell<TokenizedSource>,
     cursor: Cursor,
     cancellation: CancellationPolicy,
 }
@@ -44,10 +55,10 @@ struct Cursor {
 pub(super) struct TokenMark(Cursor);
 
 impl<'src> ParserTokenStream<'src> {
-    pub(super) fn new(source: &'src str) -> Self {
+    pub(super) const fn new(source: &'src str) -> Self {
         Self {
             source,
-            tokenized: tokenize(source),
+            tokenized: OnceCell::new(),
             cursor: Cursor {
                 next: 0,
                 last_consumed: None,
@@ -70,10 +81,30 @@ impl<'src> ParserTokenStream<'src> {
         self.cancellation.checkpoint()
     }
 
+    /// Tokenize the source now, checking cancellation every
+    /// [`CANCELLATION_CHECKPOINT_INTERVAL`] tokens so a cancelled parse of a
+    /// large source stops lexing promptly. A no-op once tokenized.
+    pub(super) fn tokenize_with_cancellation(&mut self) -> Result<(), Cancelled> {
+        if self.tokenized.get().is_none() {
+            let cancellation = &mut self.cancellation;
+            let tokenized =
+                tokenize_with_checkpoints(self.source, TOKENIZATION_CHECKPOINT_INTERVAL, || {
+                    cancellation.checkpoint()
+                })?;
+            // Checked empty above, and `&mut self` excludes a concurrent fill.
+            let _ = self.tokenized.set(tokenized);
+        }
+        Ok(())
+    }
+
+    fn tokenized(&self) -> &TokenizedSource {
+        self.tokenized.get_or_init(|| tokenize(self.source))
+    }
+
     fn remaining(&self) -> &[(Token, Span)] {
         // `next` only advances by consuming an existing token and is only
         // rewound to an earlier mark, so it never exceeds the token count.
-        &self.tokenized.tokens()[self.cursor.next..]
+        &self.tokenized().tokens()[self.cursor.next..]
     }
 
     fn peek_with_span_at(&self, offset: usize) -> Option<(&Token, Span)> {
@@ -144,8 +175,8 @@ impl<'src> ParserTokenStream<'src> {
         self.cursor.last_consumed
     }
 
-    pub(super) const fn first_error_span(&self) -> Option<Span> {
-        self.tokenized.first_error_span()
+    pub(super) fn first_error_span(&self) -> Option<Span> {
+        self.tokenized().first_error_span()
     }
 
     pub(super) fn slice_at(&self, span: Span) -> &'src str {
@@ -157,11 +188,20 @@ impl<'src> ParserTokenStream<'src> {
     }
 
     pub(super) fn into_source_metadata(self) -> SourceMetadata {
-        self.tokenized.into_source_metadata()
+        let source = self.source;
+        self.tokenized
+            .into_inner()
+            .unwrap_or_else(|| tokenize(source))
+            .into_source_metadata()
     }
 
-    pub(super) const fn source_metadata(&self) -> &SourceMetadata {
-        self.tokenized.source_metadata()
+    pub(super) fn source_metadata(&self) -> &SourceMetadata {
+        self.tokenized().source_metadata()
+    }
+
+    #[cfg(test)]
+    pub(super) fn is_tokenized(&self) -> bool {
+        self.tokenized.get().is_some()
     }
 
     #[cfg(test)]
