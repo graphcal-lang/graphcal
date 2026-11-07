@@ -82,15 +82,23 @@ impl<'a> ExprLowerer<'a> {
         self.local_scopes.pop();
     }
 
+    /// The innermost lexical local named `name`, if one is in scope.
+    ///
+    /// This is the single lexical-scope lookup: value references and the
+    /// unit-name ambiguity check both consult it.
+    pub(super) fn visible_local(&self, name: &LocalName) -> Option<&LocalDef> {
+        self.local_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name))
+    }
+
     pub(super) fn lookup_local(
         &self,
         name: &LocalName,
         span: Span,
     ) -> Result<LocalId, ExprLowerError> {
-        self.local_scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name))
+        self.visible_local(name)
             .map(|def| def.id)
             .ok_or_else(|| ExprLowerError::UnknownLocalRef {
                 name: name.clone(),

@@ -10,6 +10,7 @@ use crate::resolve::category::DeclSymbolKind;
 use crate::resolve::error::ModuleResolveError;
 use crate::semantic::time_scale::TimeScale;
 use crate::semantic::time_zone::IanaTimeZoneId;
+use crate::semantic_error::name::UnitNameSite;
 use crate::syntax::index_name::{IndexName, IndexVariantName};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::module_name::{ModuleAliasName, ScopedName};
@@ -183,6 +184,16 @@ pub enum ExprLowerError {
     TimeZoneRegistryInvariant {
         time_zone: IanaTimeZoneId,
         reason: String,
+        span: Span,
+    },
+    /// A bare unit name in a quantity literal or conversion target is spelled
+    /// like a lexical local in scope, so the reader cannot tell which one is
+    /// meant (`2.0 m / s` with a local `s`).
+    #[error("unit `{name}` has the same name as a local in scope")]
+    UnitNameIsLocal {
+        name: LocalName,
+        site: UnitNameSite,
+        local: Span,
         span: Span,
     },
     /// A unit reference was not found in the defining module's unit scope.

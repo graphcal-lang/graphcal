@@ -7685,12 +7685,12 @@ node v_exhaust: Velocity = @isp * @g0;
 node delta_v: Velocity = @v_exhaust * ln((@dry_mass + @fuel_mass) / @dry_mass) -> km/s;
 assert delta_v_positive = @delta_v > 0.0 m/s;
 pub index Steps = { S1, S2 };
-node per_step: Velocity[Steps] = for s: Steps { @delta_v / 2.0 };
+node per_step: Velocity[Steps] = for step: Steps { @delta_v / 2.0 };
 plot dv_plot = {
     mark: line,
     encode: {
-        x: for s: Steps { 1.0 },
-        y: for s: Steps { @per_step[s] -> km/s },
+        x: for step: Steps { 1.0 },
+        y: for step: Steps { @per_step[step] -> km/s },
     },
 };
 ";

@@ -15,7 +15,7 @@ use crate::syntax::span::{Span, Spanned};
 use super::context::{ExprLoweringContext, TodoHolePolicy};
 use super::error::ExprLowerError;
 use super::lowerer::ExprLowerer;
-use super::resolve::{ResolvedCallable, spanned};
+use super::resolve::{ResolvedCallable, UnitExprSite, spanned};
 use super::tolerant::{LoweringFailure, Tolerant, assert_body_into_draft, into_draft};
 use crate::hir::expr::{
     AssertBody, Expr, ExprKind, FieldInit, ForBinding, ForBindingIndex, IndexArg, IndexVariantRef,
@@ -361,11 +361,11 @@ impl ExprLowerer<'_> {
             },
             ast::ExprKind::QuantityLiteral { value, unit } => ExprKind::QuantityLiteral {
                 value: *value,
-                unit: self.lower_unit_expr(unit)?,
+                unit: self.lower_unit_expr(unit, UnitExprSite::QuantityLiteral)?,
             },
             ast::ExprKind::Convert { expr, target } => ExprKind::Convert {
                 expr: Box::new(self.lower_expr(expr)),
-                target: self.lower_unit_expr(target)?,
+                target: self.lower_unit_expr(target, UnitExprSite::ConversionTarget)?,
             },
             ast::ExprKind::DisplayTimezone {
                 expr: operand,
