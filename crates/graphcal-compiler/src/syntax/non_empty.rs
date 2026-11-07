@@ -247,6 +247,14 @@ impl<T> NonEmpty<T> {
         self.items.push(item);
     }
 
+    /// Borrow every item, preserving non-emptiness.
+    #[must_use]
+    pub fn as_refs(&self) -> NonEmpty<&T> {
+        NonEmpty {
+            items: self.items.iter().collect(),
+        }
+    }
+
     /// Map borrowed items while preserving non-emptiness.
     #[must_use]
     pub fn map_ref<U>(&self, f: impl FnMut(&T) -> U) -> NonEmpty<U> {

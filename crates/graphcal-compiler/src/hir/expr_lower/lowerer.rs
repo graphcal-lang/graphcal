@@ -15,6 +15,19 @@ pub(super) struct ExprLowerer<'a> {
     pub(super) ctx: ExprLoweringContext<'a>,
     pub(super) local_scopes: Vec<HashMap<LocalName, LocalDef>>,
     pub(super) next_local: u32,
+    /// Expression levels lowered so far, failed ones included. Failure
+    /// recovery relowers a failed level's children, so a level must fail
+    /// before it lowers any child; this count checks that, and lets tests
+    /// prove lowering work is linear in the tree size.
+    pub(super) lowered_levels: usize,
+}
+
+/// A lexical scope whose bindings were validated against the scopes visible
+/// at depth `depth`, ready to enter once the binder's non-scoped children are
+/// lowered (child lowering leaves the scope stack as it found it).
+pub(super) struct PreparedScope {
+    depth: usize,
+    bindings: HashMap<LocalName, LocalDef>,
 }
 
 impl<'a> ExprLowerer<'a> {
@@ -23,6 +36,7 @@ impl<'a> ExprLowerer<'a> {
             ctx,
             local_scopes: Vec::new(),
             next_local: 0,
+            lowered_levels: 0,
         }
     }
 
@@ -40,6 +54,17 @@ impl<'a> ExprLowerer<'a> {
     }
 
     pub(super) fn push_scope(&mut self, bindings: Vec<LocalDef>) -> Result<(), ExprLowerError> {
+        let scope = self.prepare_scope(bindings)?;
+        self.enter_scope(scope);
+        Ok(())
+    }
+
+    /// Validate a binder's scope without entering it, so the binder can fail
+    /// before it lowers any child (see [`Self::lowered_levels`]).
+    pub(super) fn prepare_scope(
+        &self,
+        bindings: Vec<LocalDef>,
+    ) -> Result<PreparedScope, ExprLowerError> {
         let mut scope = HashMap::new();
         for binding in bindings {
             if let Some(first) = scope.get(&binding.name).cloned().or_else(|| {
@@ -74,8 +99,20 @@ impl<'a> ExprLowerer<'a> {
             }
             scope.insert(binding.name.clone(), binding);
         }
-        self.local_scopes.push(scope);
-        Ok(())
+        Ok(PreparedScope {
+            depth: self.local_scopes.len(),
+            bindings: scope,
+        })
+    }
+
+    /// Enter a scope prepared at the current scope depth.
+    pub(super) fn enter_scope(&mut self, scope: PreparedScope) {
+        assert_eq!(
+            scope.depth,
+            self.local_scopes.len(),
+            "a prepared scope must be entered at the depth it was validated against"
+        );
+        self.local_scopes.push(scope.bindings);
     }
 
     pub(super) fn pop_scope(&mut self) {
