@@ -477,11 +477,6 @@ floating-point and is not an exact determinant algorithm. A nonsingular
 factorization whose determinant overflows or underflows entirely to zero
 reports an evaluation error; representable subnormal determinants are retained.
 
-Dense kernels share a checked budget of 10,000,000 estimated arithmetic
-operations per declaration evaluation. Work such as an oversized matrix
-multiplication or cubic factorization fails explicitly before the expensive
-kernel runs.
-
 ## Prelude Base Dimensions
 
 | Dimension | Description |

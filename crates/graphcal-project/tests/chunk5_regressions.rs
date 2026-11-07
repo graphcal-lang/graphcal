@@ -392,8 +392,10 @@ node unreachable: Dimensionless = count(@giant::values);
     );
 }
 
+/// Evaluation has no operation budget (#2251): large dense kernels run to
+/// completion and long-running work is stopped by cancellation instead.
 #[test]
-fn cubic_kernel_work_is_rejected_before_the_kernel_runs() {
+fn cubic_kernel_work_beyond_the_former_budget_completes() {
     let result = compile_and_eval(
         r"
 node lhs: Dimensionless[Fin(216), Fin(216)] =
@@ -409,8 +411,16 @@ node matrix_product: Dimensionless[Fin(216), Fin(216)] = matmul(@lhs, @rhs);
         .nodes()
         .find(|(name, _)| name.to_string() == "matrix_product")
         .unwrap();
-    let error = matrix_product.as_ref().unwrap_err().to_string();
-    assert!(error.contains("evaluation budget"), "{error}");
+    let graphcal_eval::eval::Value::Indexed { entries, .. } = matrix_product.as_ref().unwrap()
+    else {
+        panic!("matmul() must return an indexed value");
+    };
+    assert_eq!(entries.len(), 216);
+    let graphcal_eval::eval::Value::Indexed { entries: row, .. } = &entries[0] else {
+        panic!("matmul() rows must be indexed values");
+    };
+    assert_eq!(row.len(), 216);
+    assert!((row[0].si_value().unwrap().get() - 216.0).abs() < f64::EPSILON);
 }
 
 #[test]

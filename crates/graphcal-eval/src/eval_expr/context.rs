@@ -37,7 +37,6 @@ use crate::invariant::Failure;
 use crate::static_incompleteness::ExpressionDependencies;
 
 use super::runtime_failure::RuntimeFailure;
-use super::work_budget::WorkBudget;
 
 #[derive(Clone)]
 enum Capabilities<'a> {
@@ -57,7 +56,6 @@ enum Capabilities<'a> {
 #[derive(Clone)]
 pub struct EvalEnvironment<'a> {
     pub cancellation: CancellationToken,
-    pub(super) work_budget: WorkBudget,
     pub registry: &'a FormattingRegistry,
     pub src: SourceId,
     /// Names of the sources `src` and every diagnostic id resolve in, for
@@ -107,7 +105,7 @@ impl<'a> Deref for EvalSession<'a> {
 }
 
 impl<'a> EvalSession<'a> {
-    fn environment(
+    const fn environment(
         tir: &'a CheckedTir,
         src: SourceId,
         sources: &'a SourceRegistry,
@@ -115,7 +113,6 @@ impl<'a> EvalSession<'a> {
     ) -> EvalEnvironment<'a> {
         EvalEnvironment {
             cancellation,
-            work_budget: WorkBudget::default(),
             registry: tir.registry(),
             src,
             sources,
@@ -140,7 +137,7 @@ impl<'a> EvalSession<'a> {
     }
 
     /// Share the sealing pass's obligations across constant and bound evaluation.
-    pub(crate) fn provisional_constants_with_checks(
+    pub(crate) const fn provisional_constants_with_checks(
         tir: &'a CheckedTir,
         src: SourceId,
         sources: &'a SourceRegistry,
@@ -203,7 +200,7 @@ impl<'a> EvalSession<'a> {
     /// be omitted or supplied independently of the selected checked project
     /// facts.
     #[must_use]
-    pub fn checked(
+    pub const fn checked(
         plan: &'a ExecPlan<'a>,
         src: SourceId,
         sources: &'a SourceRegistry,
