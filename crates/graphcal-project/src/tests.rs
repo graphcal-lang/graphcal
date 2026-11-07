@@ -3583,10 +3583,18 @@ fn todo_reachability_is_computed_once_per_plan() {
 /// chain must stop promptly on cancellation instead.
 #[test]
 fn cancellation_stops_an_exponential_dag_call_chain() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
     use std::{fmt::Write as _, sync::mpsc, thread, time::Duration};
 
     const DEPTH: usize = 48;
-    let mut source = String::from("dag d0 { pub node out: Dimensionless = 1.0; }\n");
+    // The leaf DAG, reached only through every level of the chain, reports
+    // each evaluation through a test host function.
+    let mut source = String::from(
+        "import plugin \"graphcal:chain-test\" as test {\n    fn leaf(x: Dimensionless) -> Dimensionless;\n}\n\
+         dag d0 { pub node out: Dimensionless = test::leaf(1.0); }\n",
+    );
     for level in 1..=DEPTH {
         let previous = level - 1;
         writeln!(
@@ -3597,31 +3605,46 @@ fn cancellation_stops_an_exponential_dag_call_chain() {
     }
     writeln!(source, "node result: Dimensionless = @d{DEPTH}()::out;").unwrap();
     let project = crate::loader::LoadedProject::from_source(&source, "calls.gcl").unwrap();
+    let leaves = Arc::new(AtomicUsize::new(0));
+    let observed_leaves = Arc::clone(&leaves);
+    let mut host_fns = graphcal_eval::host_fns::HostFunctionRegistry::new();
+    host_fns.register_for_test(
+        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:chain-test"),
+        graphcal_compiler::syntax::function_name::FnName::expect_valid("leaf"),
+        move |arguments| {
+            observed_leaves.fetch_add(1, Ordering::SeqCst);
+            Ok(graphcal_eval::host_fns::HostFnValue::from_argument(
+                &arguments[0],
+            ))
+        },
+    );
     let cancellation_source = graphcal_compiler::cancellation::CancellationSource::new();
     let cancellation = cancellation_source.token();
-    let (prepared_sender, prepared_receiver) = mpsc::channel();
     let (sender, receiver) = mpsc::channel();
 
     thread::spawn(move || {
         // Compile without the token so that cancellation can only stop the
         // evaluation itself.
-        let prepared = ProjectCompiler::new(&project).prepare().unwrap();
+        let prepared = ProjectCompiler::new(&project)
+            .host_fns(&host_fns)
+            .prepare()
+            .unwrap();
         let row = prepared.binding_builder().finish().unwrap();
-        prepared_sender.send(()).unwrap();
         sender
             .send(prepared.evaluate_with_cancellation(&row, &cancellation))
             .unwrap();
     });
 
-    prepared_receiver
-        .recv_timeout(Duration::from_secs(60))
-        .expect("the call chain should compile");
-    // The uncancelled evaluation needs about 2^48 additions, so it is still
-    // running deep inside the call chain when cancellation is requested.
-    assert!(
-        receiver.recv_timeout(Duration::from_millis(200)).is_err(),
-        "the call chain must not finish without cancellation"
-    );
+    // Cancel only once evaluation has descended through the whole chain:
+    // the leaf has been evaluated inside `DEPTH` nested calls.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while leaves.load(Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "evaluation never reached the leaf"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
     cancellation_source.cancel();
 
     let result = receiver
@@ -3631,6 +3654,11 @@ fn cancellation_stops_an_exponential_dag_call_chain() {
     assert!(
         matches!(error, Outcome::Cancelled),
         "unexpected outcome: {error:?}"
+    );
+    let evaluated = leaves.load(Ordering::SeqCst);
+    assert!(
+        u64::try_from(evaluated).unwrap() < 1_u64 << DEPTH,
+        "the chain stopped inside its 2^{DEPTH} leaf evaluations, after {evaluated}"
     );
 }
 
