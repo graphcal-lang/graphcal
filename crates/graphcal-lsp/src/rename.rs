@@ -298,11 +298,12 @@ pub fn rename(
     let changes: HashMap<Url, Vec<TextEdit>> =
         if let Some(project) = analysis.project_symbols.complete() {
             let mut changes = HashMap::new();
+            let mut lines = project.line_indexes();
             for occurrence in reference_lookup_keys(&resolved.key)
                 .iter()
                 .flat_map(|target| project.rename_occurrences(target))
             {
-                let Some(document) = project.document(&occurrence.uri) else {
+                let Some(range) = lines.range(&occurrence) else {
                     return Err(RenameRefusal::IncompleteProjectIndex {
                         name: definition.name.clone(),
                     });
@@ -311,7 +312,7 @@ pub fn rename(
                     .entry(occurrence.uri)
                     .or_insert_with(Vec::new)
                     .push(TextEdit {
-                        range: LineIndex::new(&document.source).span_to_range(occurrence.span),
+                        range,
                         new_text: new_name.to_string(),
                     });
             }
