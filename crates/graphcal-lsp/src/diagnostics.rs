@@ -715,7 +715,9 @@ mod tests {
         use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
 
         // `Url::from_file_path` needs a platform-absolute path (a drive on Windows).
-        let base = std::env::temp_dir().join("graphcal-test");
+        let base = std::path::absolute(std::env::temp_dir())
+            .unwrap()
+            .join("graphcal-test");
         let root = base.join("project/src/my_app/main.gcl");
         let dependency = base.join("cache/unit_lib/lib.gcl");
         let mut sources = SourceRegistry::new();
