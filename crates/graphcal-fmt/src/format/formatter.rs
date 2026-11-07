@@ -104,14 +104,22 @@ impl<'src> Formatter<'src> {
         }
     }
 
-    /// Make a speculative formatter for pre-rendering aligned table cells.
+    /// Run `render` on a speculative formatter, used for pre-rendering
+    /// aligned table cells.
     ///
     /// Cell width pre-rendering must not consume row/slice comments from the
     /// real formatter cursor. Comments before the cell value are skipped in the
     /// fork so row-level drains can decide where they belong; comments inside
     /// the cell remain undrained in the real formatter and trigger the usual
-    /// declaration-level verbatim fallback.
-    pub fn fork_skipping_comments_before(&self, offset: usize) -> Self {
+    /// declaration-level verbatim fallback. The fork's comment cursor is
+    /// discarded, but a verbatim request made while rendering is carried back
+    /// to `self`: the fork only exists inside this call, so no request can be
+    /// lost with it.
+    pub fn with_fork_skipping_comments_before<T>(
+        &mut self,
+        offset: usize,
+        render: impl FnOnce(&mut Self) -> T,
+    ) -> T {
         let mut next_comment = self.next_comment;
         while self
             .metadata
@@ -121,12 +129,15 @@ impl<'src> Formatter<'src> {
         {
             next_comment += 1;
         }
-        Self {
+        let mut fork = Self {
             source: self.source,
             metadata: self.metadata,
             next_comment,
             verbatim_requested: false,
-        }
+        };
+        let rendered = render(&mut fork);
+        self.verbatim_requested |= fork.verbatim_requested;
+        rendered
     }
 
     /// Report that the region being formatted has a shape the formatter

@@ -58,9 +58,10 @@ fn format_expr_parenthesized_if(
     })
 }
 
-fn render_table_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
-    let mut cell_fmt = fmt.fork_skipping_comments_before(expr.span.offset());
-    render_doc_to_string(&format_delimited_expr(&mut cell_fmt, expr))
+fn render_table_cell_value(fmt: &mut Formatter<'_>, expr: &Expr) -> String {
+    fmt.with_fork_skipping_comments_before(expr.span.offset(), |cell_fmt| {
+        render_doc_to_string(&format_delimited_expr(cell_fmt, expr))
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
