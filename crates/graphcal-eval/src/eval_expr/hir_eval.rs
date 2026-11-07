@@ -401,11 +401,11 @@ fn eval_texpr_inner(
             AggregationFn::Key(function) => {
                 let quantities = operands.quantities(arg)?;
                 let mut control = KernelCheckpoint::new(&ctx.cancellation);
-                Ok(plain(RuntimeValue::Key(super::aggregations::extremum_key(
-                    function,
-                    &quantities,
-                    &mut control,
-                )?)))
+                super::aggregations::extremum_key(function, &quantities, &mut control)
+                    .map(|key| plain(RuntimeValue::Key(key)))
+                    .map_err(|outcome| {
+                        outcome.map_failed(|invariant| invariant_error(invariant, span, ctx))
+                    })
             }
             AggregationFn::Value(ValueAggregation::Count) => {
                 super::aggregations::count_entries(&operands.rank_one(arg)?)
@@ -686,7 +686,8 @@ fn eval_key_form<'t>(
     }
 }
 
-/// The key a coordinate search of `axis` for `quantity` selects.
+/// The key a coordinate search of `axis` for `quantity` selects. Only the
+/// selected key is built.
 fn coordinate_search(
     search: CoordinateSearch,
     axis: &IndexAxis,
@@ -694,41 +695,21 @@ fn coordinate_search(
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<KeyValue, SemanticError> {
-    let keys = KeyValue::all(axis);
-    let mut best: Option<(&KeyValue, f64)> = None;
-    // A coordinate axis has one finite coordinate per key.
-    for (key, coordinate) in keys.iter().zip(axis.coordinates()) {
-        let coordinate = coordinate.get();
-        let candidate = match search {
-            CoordinateSearch::Floor => coordinate <= quantity,
-            CoordinateSearch::Ceil => coordinate >= quantity,
-            CoordinateSearch::Nearest => true,
-        };
-        if !candidate {
-            continue;
-        }
-        let better = match (&best, search) {
-            (None, _) => true,
-            // Nearest: strictly closer wins, so midpoint ties keep
-            // the earlier position (toward the axis start).
-            (Some((_, incumbent)), CoordinateSearch::Nearest) => {
-                (coordinate - quantity).abs() < (incumbent - quantity).abs()
-            }
-            // Floor: the greatest coordinate at or below the target.
-            (Some((_, incumbent)), CoordinateSearch::Floor) => coordinate > *incumbent,
-            // Ceil: the smallest coordinate at or above the target.
-            (Some((_, incumbent)), CoordinateSearch::Ceil) => coordinate < *incumbent,
-        };
-        if better {
-            best = Some((key, coordinate));
-        }
-    }
-    best.map(|(key, _)| key.clone()).ok_or_else(|| {
-        ctx.runtime_error(
+    let Some(position) =
+        super::coordinate_search::search_position(search, axis.coordinates(), quantity)
+    else {
+        return Err(ctx.runtime_error(
             RuntimeFailure::NoCoordinate {
                 search,
                 axis: axis.index().clone(),
             },
+            span,
+        ));
+    };
+    // A coordinate axis has one coordinate per key.
+    KeyValue::at(axis.clone(), position).ok_or_else(|| {
+        ctx.internal_error(
+            format!("coordinate position {position} is not a key of its axis"),
             span,
         )
     })

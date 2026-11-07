@@ -3,6 +3,7 @@ mod arithmetic;
 mod complex;
 mod context;
 mod conversions;
+mod coordinate_search;
 mod datetime;
 mod exact_binary_sum;
 mod hir_eval;
