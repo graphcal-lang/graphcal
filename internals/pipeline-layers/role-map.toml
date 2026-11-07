@@ -6,6 +6,11 @@ path = ["static_incompleteness"]
 role = "interpreter"
 
 [[module]]
+package = "eval"
+path = ["unfinished_reach"]
+role = "contracts"
+
+[[module]]
 package = "compiler"
 path = ["node_unavailable"]
 role = "contracts"

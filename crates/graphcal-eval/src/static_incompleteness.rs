@@ -3,7 +3,7 @@
 //! Explicit call arguments cut off parameter defaults. No expression is executed
 //! and no hypothetical runtime value is introduced during this analysis.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -17,11 +17,7 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::scoped_node::{NodeKind, ScopedNode};
 
 use crate::execution_plan::{ComputedBody, ExecPlan, PlannedBody};
-
-type BoundParameters = BTreeSet<ResolvedDeclName>;
-/// A call output and the parameters its call binds explicitly.
-pub type Query = (ResolvedDeclName, BoundParameters);
-type Origins = BTreeSet<ResolvedDeclName>;
+use crate::unfinished_reach::{BoundParameters, Origins, Query};
 
 /// The inline calls an expression's availability depends on.
 ///
@@ -62,14 +58,16 @@ pub fn collect(
     source: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<Vec<(ResolvedDeclName, RuntimeUnavailable)>, Outcome<SemanticError>> {
-    if !plan.has_unfinished_definitions() {
+    let Some(memo) = plan.unfinished_reach() else {
         return Ok(Vec::new());
-    }
+    };
+    // The analysis never evaluates an expression, so it cannot re-enter
+    // `collect` while it holds the plan's answers.
     let mut analysis = Analysis {
         plan,
         source,
         cancellation,
-        memo: HashMap::new(),
+        memo: memo.answers(),
         active: HashSet::new(),
     };
     expression
@@ -109,7 +107,8 @@ struct Analysis<'a> {
     plan: &'a ExecPlan<'a>,
     source: SourceId,
     cancellation: &'a CancellationToken,
-    memo: HashMap<Query, Origins>,
+    /// The plan's completed answers; an interrupted query stores nothing.
+    memo: std::sync::MutexGuard<'a, HashMap<Query, Origins>>,
     active: HashSet<Query>,
 }
 
@@ -144,6 +143,8 @@ impl Analysis<'_> {
                 .internal_error(format!("cyclic checked call dependency at `{name}`"))
                 .into());
         }
+        #[cfg(any(test, feature = "test-internals"))]
+        crate::pipeline_metrics::record(crate::pipeline_metrics::Event::UnfinishedReachAnalysis);
         let plan = self.plan;
         let declaration = plan.declaration(name).ok_or_else(|| {
             self.internal_error(format!(
