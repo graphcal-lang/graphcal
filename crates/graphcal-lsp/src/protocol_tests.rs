@@ -660,6 +660,47 @@ async fn watched_file_burst_schedules_each_root_once() {
     assert_eq!(refreshes, 1, "one refresh for the whole burst");
 }
 
+/// LSP-9 (#2253): `didOpen` and `didSave` return before their analysis
+/// finishes. Here the pass cannot finish until the client answers its
+/// inlay-hint refresh request, which the client only reads after the
+/// notifications returned.
+#[tokio::test]
+async fn open_and_save_do_not_wait_for_their_analysis() {
+    let (mut service, socket) = service();
+    initialize(
+        &mut service,
+        json!({ "workspace": { "inlayHint": { "refreshSupport": true } } }),
+    )
+    .await;
+    let uri = Url::parse("untitled:unawaited.gcl").unwrap();
+    timeout(
+        Duration::from_secs(30),
+        notify(
+            &mut service,
+            "textDocument/didOpen",
+            open_params(&uri, 1, SOURCE),
+        ),
+    )
+    .await
+    .expect("didOpen returns before its analysis");
+    timeout(
+        Duration::from_secs(30),
+        notify(
+            &mut service,
+            "textDocument/didSave",
+            json!({ "textDocument": { "uri": uri }, "text": SOURCE }),
+        ),
+    )
+    .await
+    .expect("didSave returns before its analysis");
+
+    let mut events = spawn_refresh_client(socket);
+    while !matches!(
+        next_client_event(&mut events).await,
+        ClientEvent::Diagnostics(published) if published == uri
+    ) {}
+}
+
 async fn assert_imported_factor_features(
     service: &mut LspService<Backend>,
     main_uri: &Url,

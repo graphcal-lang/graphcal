@@ -562,7 +562,12 @@ impl Backend {
             .map(|stored| Arc::clone(&stored.analysis.source))
     }
 
-    async fn analyze_and_publish(&self, uri: Url, text: Arc<String>, version: Option<i32>) {
+    /// Record `text` as the latest editor text of `uri` and start its
+    /// analysis at once (no debounce).
+    ///
+    /// The analysis runs on its own task: a notification handler that awaited
+    /// it would hold one of tower-lsp's few handler slots for the whole pass.
+    async fn record_and_analyze(&self, uri: Url, text: Arc<String>, version: Option<i32>) {
         if !Self::is_graphcal_file(&uri) {
             return;
         }
@@ -586,14 +591,10 @@ impl Backend {
         // becomes stale and refuses to overwrite fresh results.
         let generation = self.bump_generation(&uri).await;
 
-        analyze_store_publish(
-            &self.analysis_worker(),
-            uri,
-            text,
-            recorded.revision,
-            generation,
-        )
-        .await;
+        let worker = self.analysis_worker();
+        tokio::spawn(async move {
+            analyze_store_publish(&worker, uri, text, recorded.revision, generation).await;
+        });
     }
 
     /// Spawn a debounced analysis task for a `did_change` event.
@@ -1213,7 +1214,7 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
-        self.analyze_and_publish(
+        self.record_and_analyze(
             params.text_document.uri,
             Arc::new(params.text_document.text),
             Some(params.text_document.version),
@@ -1257,7 +1258,7 @@ impl LanguageServer for Backend {
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         if let Some(text) = params.text {
-            self.analyze_and_publish(params.text_document.uri, Arc::new(text), None)
+            self.record_and_analyze(params.text_document.uri, Arc::new(text), None)
                 .await;
         }
     }
