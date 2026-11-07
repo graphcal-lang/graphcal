@@ -18,10 +18,6 @@
           "si_value": 0.0,
           "unit": "s"
         },
-        "same_instant_check": {
-          "si_value": 0.0,
-          "unit": "s"
-        },
         "t_gpst": {
           "datetime": "2024-11-05T11:59:08.816000000 GPST",
           "time_scale": "GPST"

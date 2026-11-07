@@ -127,6 +127,13 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             *span,
             NameError::UnknownFunction { name: path.clone() },
         ),
+        ExprLowerError::RemovedBuiltinFunction { function, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::RemovedBuiltinFunction {
+                function: *function,
+            },
+        ),
         ExprLowerError::UnknownExternFunction { alias, name, span } => SemanticError::located(
             src,
             *span,

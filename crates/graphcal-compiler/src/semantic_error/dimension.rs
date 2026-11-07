@@ -193,6 +193,18 @@ impl PartialEq for DatetimeLiteralError {
 
 impl Eq for DatetimeLiteralError {}
 
+impl DatetimeLiteralError {
+    /// Whether the literal was rejected for naming a leap second (`:60`).
+    #[must_use]
+    pub const fn is_leap_second(&self) -> bool {
+        matches!(
+            self,
+            Self::Offset(crate::datetime_literal::ParseOffsetDateTimeLiteralError::LeapSecond)
+                | Self::Civil(crate::datetime_literal::ParseCivilDateTimeLiteralError::LeapSecond)
+        )
+    }
+}
+
 impl std::fmt::Display for DatetimeLiteralError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -201,6 +213,25 @@ impl std::fmt::Display for DatetimeLiteralError {
             Self::Zoned(error) => error.fmt(f),
             Self::Epoch(error) => error.fmt(f),
         }
+    }
+}
+
+/// Datetime arithmetic that `Datetime<UTC>` does not define, because a UTC
+/// reading skips every leap second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UtcArithmetic {
+    /// `Datetime<UTC> - Datetime<UTC>`.
+    Difference,
+    /// `Datetime<UTC> ± Time` or `Time + Datetime<UTC>`.
+    Shift,
+}
+
+impl std::fmt::Display for UtcArithmetic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Difference => "the difference of two `Datetime<UTC>` values",
+            Self::Shift => "shifting a `Datetime<UTC>` by a duration",
+        })
     }
 }
 
@@ -235,6 +266,8 @@ pub enum DimensionError {
     DimensionOverflow,
     #[error("`/` is not defined for two `Int` operands")]
     IntOperandDivision,
+    #[error("{operation} is not defined")]
+    UtcDatetimeArithmetic { operation: UtcArithmetic },
     #[error("dimension mismatch: expected {expected}, found {found}")]
     DimensionMismatch {
         expected: Box<MismatchOperand>,
@@ -385,6 +418,7 @@ impl DiagnosticKind for DimensionError {
             Self::DimensionOverflow => "graphcal::D010",
             Self::DimensionMismatch { .. } => "graphcal::D001",
             Self::IntOperandDivision => "graphcal::D043",
+            Self::UtcDatetimeArithmetic { .. } => "graphcal::D044",
             Self::IndexedShapeMismatch { .. } => "graphcal::D011",
             Self::LinearAlgebraShapeMismatch { .. } => "graphcal::D022",
             Self::IndexedComparisonOperand { .. } => "graphcal::D019",
@@ -438,6 +472,7 @@ impl DiagnosticKind for DimensionError {
             Self::DimensionOverflow => Some("overflow here".to_owned()),
             Self::DimensionMismatch { found, .. } => Some(found.found_label()),
             Self::IntOperandDivision => Some("both operands are Int".to_owned()),
+            Self::UtcDatetimeArithmetic { .. } => Some("UTC readings skip leap seconds".to_owned()),
             Self::IndexedShapeMismatch { rhs, .. } => Some(format!("has type {rhs}")),
             Self::LinearAlgebraShapeMismatch { mismatch, .. } => {
                 Some(format!("found {}", mismatch.found()))
@@ -533,6 +568,8 @@ impl DiagnosticKind for DimensionError {
             Self::DimensionOverflow => Some("dimension exponents are stored as `i32`; reduce the magnitude of the exponent".to_owned()),
             Self::DimensionMismatch { help, .. } => Some(help.to_string()),
             Self::IntOperandDivision => Some("integer division must name its rounding. `div_trunc(a, b)` rounds toward zero and reproduces the previous result of `a / b`, but it may not be the rounding you need: `div_floor(a, b)` or `div_ceil(a, b)` is often intended. For a real quotient write `to_float(a) / b`. While `a` is below `2 ^ 52` in magnitude, `to_int(round(to_float(a) / b))` gives the nearest Int and `to_int(to_float(a) / b)` fails unless the division is exact; for larger values, binary64 rounding can break both guarantees".to_owned()),
+            Self::UtcDatetimeArithmetic { operation: UtcArithmetic::Difference } => Some("a UTC difference across a leap second is one second short of the elapsed time; subtract in TAI instead, for example `to_tai(@end) - to_tai(@start)`".to_owned()),
+            Self::UtcDatetimeArithmetic { operation: UtcArithmetic::Shift } => Some("a UTC shift across a leap second lands one second off; shift in TAI and convert back, for example `to_utc(to_tai(@start) + 90.0 min)`".to_owned()),
             Self::LinearAlgebraShapeMismatch { function, mismatch } => Some(mismatch.help(*function)),
             Self::FloatPowerExponent { replacement } => Some(replacement.as_ref().map_or_else(
                 || "write the exponent as an exact integer or parenthesized rational".to_owned(),
@@ -562,6 +599,7 @@ impl DiagnosticKind for DimensionError {
             Self::IneffectiveConversion => Some("a conversion only affects how a declaration's final value is displayed; move it to the top level of the declaration (or a selected `if`/`match` branch, constructor field, map entry, for-comprehension body, or scan/unfold init), or remove it".to_owned()),
             Self::AffineProneUnitDefinition { .. } => Some("common units of this dimension (e.g. \u{b0}C, \u{b0}F for Temperature) are affine scales with an offset; a purely multiplicative `unit` definition would display silently wrong values. Keep values in the base unit, or model the offset explicitly in your expressions".to_string()),
             Self::InvalidTimezone { tzdb_version, .. } => Some(format!("use a name present in Graphcal's bundled IANA tzdb {tzdb_version}, such as \"UTC\", \"America/New_York\", or \"Asia/Tokyo\"")),
+            Self::InvalidDatetimeLiteral { reason, .. } if reason.is_leap_second() => Some("leap seconds are not supported in any time scale; to name the instant of a UTC leap second, write it in TAI, for example `epoch<TAI>(\"2017-01-01T00:00:36\")` for `2016-12-31T23:59:60Z`".to_owned()),
             Self::InvalidDatetimeLiteral { expectation, .. } => Some(format!("{expectation}")),
             Self::EpochTimeScaleArgumentCount { .. } => Some("write a supported scale in angle brackets, for example `epoch<TT>(\"2024-11-05T12:00:00\")`".to_owned()),
             Self::InvalidEpochTimeScaleArgument | Self::UnsupportedEpochTimeScale { .. } => Some(format!(
@@ -584,6 +622,7 @@ impl DiagnosticKind for DimensionError {
             | Self::DimensionOverflow
             | Self::DimensionMismatch { .. }
             | Self::IntOperandDivision
+            | Self::UtcDatetimeArithmetic { .. }
             | Self::IndexedShapeMismatch { .. }
             | Self::LinearAlgebraShapeMismatch { .. }
             | Self::IndexedComparisonOperand { .. }

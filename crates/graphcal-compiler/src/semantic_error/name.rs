@@ -6,7 +6,7 @@
 
 use thiserror::Error;
 
-use crate::builtin::{BuiltinArity, BuiltinFn};
+use crate::builtin::{BuiltinArity, BuiltinFn, RemovedBuiltinFn};
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::expression_source::ExpressionSourceError;
 use crate::generic_param::{
@@ -175,6 +175,8 @@ pub enum NameError {
     TimeScaleInValuePosition { scale: TimeScale },
     #[error("unknown function `{name}`")]
     UnknownFunction { name: NamePath },
+    #[error("built-in function `{function}` was removed")]
+    RemovedBuiltinFunction { function: RemovedBuiltinFn },
     #[error("function `{function}` uses positional arguments")]
     NamedArgumentsOnFunction {
         function: UnappliedFunctionRef,
@@ -261,6 +263,18 @@ pub enum NameError {
     },
 }
 
+/// How to replace a call to a removed built-in function.
+const fn removed_builtin_help(function: RemovedBuiltinFn) -> &'static str {
+    match function {
+        RemovedBuiltinFn::ToJd | RemovedBuiltinFn::ToMjd => {
+            "a Julian date depends on its time scale, and this function silently read every scale as UTC. Subtract datetimes in the scale your formula needs instead, for example `(to_tt(@t) - epoch<TT>(\"2000-01-01T12:00:00\")) / (1.0 day)` for TT days since J2000.0; for a Unix timestamp use `to_unix(@t)` on a `Datetime<UTC>`"
+        }
+        RemovedBuiltinFn::FromJd | RemovedBuiltinFn::FromMjd => {
+            "a Julian date depends on its time scale, and this function silently read it as UTC. Add a duration to an epoch in the scale your data uses instead, for example `epoch<TT>(\"2000-01-01T12:00:00\") + @days_since_j2000 * 1.0 day`; for a Unix timestamp use `from_unix(seconds)`"
+        }
+    }
+}
+
 impl DiagnosticKind for NameError {
     fn code(&self) -> &'static str {
         match self {
@@ -275,6 +289,7 @@ impl DiagnosticKind for NameError {
             Self::BareGraphDeclarationRef { .. } => "graphcal::N017",
             Self::TimeScaleInValuePosition { .. } => "graphcal::N018",
             Self::UnknownFunction { .. } => "graphcal::N004",
+            Self::RemovedBuiltinFunction { .. } => "graphcal::N038",
             Self::NamedArgumentsOnFunction { .. } => "graphcal::N015",
             Self::GraphRefInConst { .. } => "graphcal::N005",
             Self::WrongArity { .. } => "graphcal::N006",
@@ -324,6 +339,7 @@ impl DiagnosticKind for NameError {
                 Some(format!("no Term named `{scale}` is in scope"))
             }
             Self::UnknownFunction { .. } => Some("unknown function".to_owned()),
+            Self::RemovedBuiltinFunction { .. } => Some("no longer a built-in function".to_owned()),
             Self::NamedArgumentsOnFunction { .. } => {
                 Some("named arguments are not allowed in function calls".to_owned())
             }
@@ -364,6 +380,7 @@ impl DiagnosticKind for NameError {
             Self::BareGraphDeclarationRef { kind, name, .. } => Some(format!("write `@{name}` to reference this {kind}")),
             Self::TimeScaleInValuePosition { scale, .. } => Some(format!("time scales are Static atoms; use `{scale}` in `Datetime<{scale}>` or `epoch<{scale}>(...)`")),
             Self::UnknownFunction { .. } => Some("check function name and ensure it is defined".to_owned()),
+            Self::RemovedBuiltinFunction { function } => Some(removed_builtin_help(*function).to_owned()),
             Self::NamedArgumentsOnFunction { function, arguments } => Some(format!(
                 "write `{function}({})`",
                 arguments
@@ -419,6 +436,7 @@ impl DiagnosticKind for NameError {
             | Self::BareGraphDeclarationRef { .. }
             | Self::TimeScaleInValuePosition { .. }
             | Self::UnknownFunction { .. }
+            | Self::RemovedBuiltinFunction { .. }
             | Self::NamedArgumentsOnFunction { .. }
             | Self::GraphRefInConst { .. }
             | Self::WrongArity { .. }

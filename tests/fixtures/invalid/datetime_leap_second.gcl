@@ -1,0 +1,3 @@
+// Error: a leap second `:60` cannot be represented, so the literal is rejected
+// instead of being clamped to `:59`.
+node bad: Datetime = datetime("2016-12-31T23:59:60Z");

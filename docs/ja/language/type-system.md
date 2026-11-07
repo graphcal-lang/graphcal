@@ -385,16 +385,22 @@ param t_tt: Datetime<TT> = epoch<TT>("2024-11-05T12:00:00");
 
 | 演算 | 結果 | 備考 |
 |-----------|--------|-------|
-| `Datetime - Datetime` | `Time` | 両方が同じ時刻系でなければなりません |
-| `Datetime + Time` | `Datetime` | 時間幅を加算します |
-| `Time + Datetime` | `Datetime` | 時間幅を加算します（交換した形式） |
-| `Datetime - Time` | `Datetime` | 時間幅を減算します |
+| `Datetime - Datetime` | `Time` | 両方が UTC 以外の同じ時刻系でなければなりません |
+| `Datetime + Time` | `Datetime` | 時間幅を加算します（UTC では不可） |
+| `Time + Datetime` | `Datetime` | 時間幅を加算します（交換した形式。UTC では不可） |
+| `Datetime - Time` | `Datetime` | 時間幅を減算します（UTC では不可） |
 | `Datetime == Datetime` | `Bool` | 等値比較 |
 | `Datetime < Datetime` | `Bool` | 順序比較 |
 
 日時値同士の加算、乗算、除算はできず、時間幅の減算の右オペランド（`Time - Datetime`）にも使用できません。
 
 異なる時刻系間の演算は型エラーです。`Datetime<UTC> - Datetime<TT>` はコンパイルできません。先に明示的な時刻系変換関数（`to_utc`、`to_tt` など）を使用してください。
+
+UTC の値は比較できますが、差を取ったり時間幅でずらしたりはできません（`D044`）。
+UTC の表記はうるう秒を数えないため、うるう秒をまたぐ UTC の差は経過時間より
+1 秒短くなります。代わりに TAI で計算してください。経過時間は
+`to_tai(@end) - to_tai(@start)`、ずらした UTC の日時は
+`to_utc(to_tai(@start) + 90.0 min)` で求めます。
 
 暦の各成分を取り出す関数（`year`、`month`、`day`、`hour`、`minute`、`second`、`weekday`、`day_of_year`）は、値に宣言された `Datetime<S>` の時刻系を使用します。`weekday` は ISO 8601 の番号付けに従い、月曜日を 1、日曜日を 7 とします。`-> "Area/Location"` で適用したタイムゾーンメタデータは表示だけに影響し、これらの計算上のフィールドを変更することはありません。
 

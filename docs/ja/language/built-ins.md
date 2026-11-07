@@ -220,9 +220,7 @@ node selected: Pressure = @readings[@channel];
 | `datetime("...")` | `OffsetDateTimeLiteral -> Datetime` | 明示的な `Z` または数値オフセット付きの RFC 3339 を解析 |
 | `datetime("...", "tz")` | `(CivilDateTimeLiteral, TimezoneLiteral) -> Datetime` | ローカルの暦時刻を IANA タイムゾーンで解釈 |
 | `epoch<S>("...")` | `CivilDateTimeLiteral -> Datetime<S>` | 時刻系を持たない暦座標を静的な時刻系 `S` で解釈 |
-| `from_jd(x)` | `Dimensionless -> Datetime` | ユリウス日（UTC）から構築 |
-| `from_mjd(x)` | `Dimensionless -> Datetime` | 修正ユリウス日（UTC）から構築 |
-| `from_unix(x)` | `Dimensionless -> Datetime` | 秒単位の Unix タイムスタンプから構築 |
+| `from_unix(x)` | `Dimensionless -> Datetime` | 秒単位の Unix タイムスタンプから UTC の日時を構築 |
 
 各コンストラクターの解釈元はちょうど 1 つです。
 
@@ -243,6 +241,10 @@ Graphcal に同梱された tzdb に対して解決されます。夏時間の�
 選択したりせず、拒否されます。特定の瞬間を選ぶには、明示的な数値オフセット
 付きの 1 引数 `datetime` を使用してください。
 
+うるう秒は表現できません。秒の欄が `60` のリテラルは、どのコンストラクターと
+時刻系でも拒否されます。UTC のうるう秒の瞬間は TAI で書いてください。たとえば
+`2016-12-31T23:59:60Z` は `epoch<TAI>("2017-01-01T00:00:36")` です。
+
 #### 時刻系の変換 { #time-scale-conversions }
 
 | 関数 | シグネチャ | 説明 |
@@ -261,9 +263,14 @@ Graphcal に同梱された tzdb に対して解決されます。夏時間の�
 
 | 関数 | シグネチャ | 説明 |
 |----------|-----------|-------------|
-| `to_jd(x)` | `Datetime -> Dimensionless` | ユリウス日（UTC 日数）に変換 |
-| `to_mjd(x)` | `Datetime -> Dimensionless` | 修正ユリウス日（UTC 日数）に変換 |
-| `to_unix(x)` | `Datetime -> Dimensionless` | Unix タイムスタンプ（1970-01-01 からの秒数）に変換 |
+| `to_unix(x)` | `Datetime -> Dimensionless` | UTC の日時を Unix タイムスタンプ（1970-01-01 からの秒数）に変換 |
+
+`to_unix` と `from_unix` が受け取り、返すのは `Datetime<UTC>` だけです。ほかの
+時刻系は `to_unix(to_utc(@t))` のように明示的に変換してください。Unix
+タイムスタンプは UTC の表記を符号化したものでうるう秒を数えないため、2 つの
+タイムスタンプの差は経過時間ではありません。経過時間には
+`to_tai(@b) - to_tai(@a)` を使います。`from_unix` は `Dimensionless` の秒数を
+受け取ります。`Int` は `from_unix(to_float(@n))` のように変換してください。
 
 #### 抽出関数 { #extraction-functions }
 

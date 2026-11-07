@@ -13,8 +13,9 @@ use crate::desugar::desugared_ast::{BinOp, UnaryOp};
 use crate::dimension::{BaseDimId, Dimension, PreludeBaseDimension, Rational};
 use crate::exact_rational::ExactRational;
 use crate::semantic::dimension_table::DimensionFormattingRegistry;
+use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticError;
-use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension::{DimensionError, UtcArithmetic};
 use crate::semantic_error::dimension_mismatch::{
     FinKeyArithmeticRule, MismatchOperand, MismatchRule, NonQuantityValue, OperandExpectation,
 };
@@ -169,6 +170,32 @@ fn fin_key_additive_rule(
 /// `Int * Q`, `Q * Int`, `Q / Int`, and `Int / Q` follow quantity arithmetic,
 /// and the same holds for `Complex<D>`. `+`, `-`, and comparisons never mix
 /// `Int` with a quantity. The caller rules on two `Int` operands first.
+/// Reject `operation` on a `scale` datetime when that scale is UTC, whose
+/// readings skip leap seconds (#2246, decision D1). Every other scale is a
+/// continuous count of seconds and keeps its arithmetic.
+fn reject_utc_arithmetic(
+    scale: TimeScale,
+    operation: UtcArithmetic,
+    expr_span: Span,
+    src: SourceId,
+) -> Result<(), SemanticError> {
+    match scale {
+        TimeScale::UTC => Err(SemanticError::located(
+            src,
+            expr_span,
+            DimensionError::UtcDatetimeArithmetic { operation },
+        )),
+        TimeScale::TAI
+        | TimeScale::TT
+        | TimeScale::TDB
+        | TimeScale::ET
+        | TimeScale::GPST
+        | TimeScale::GST
+        | TimeScale::BDT
+        | TimeScale::QZSST => Ok(()),
+    }
+}
+
 fn product_operand(
     operand: &Operand,
     registry: &DimensionFormattingRegistry,
@@ -408,6 +435,7 @@ pub fn binop_rule(
                                 },
                             ));
                         }
+                        reject_utc_arithmetic(*ls, UtcArithmetic::Difference, expr_span, src)?;
                         return Ok(CheckedType::Quantity(time_dim));
                     }
                     // Datetime + Datetime -> error
@@ -438,6 +466,7 @@ pub fn binop_rule(
                         },
                     ));
                 }
+                reject_utc_arithmetic(*ls, UtcArithmetic::Shift, expr_span, src)?;
                 return Ok(CheckedType::Datetime(*ls));
             }
             if let CheckedType::Datetime(rs) = rhs_type {
@@ -460,6 +489,7 @@ pub fn binop_rule(
                             },
                         ));
                     }
+                    reject_utc_arithmetic(*rs, UtcArithmetic::Shift, expr_span, src)?;
                     return Ok(CheckedType::Datetime(*rs));
                 }
                 // Quantity - Datetime -> error

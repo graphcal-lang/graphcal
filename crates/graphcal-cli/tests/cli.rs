@@ -4819,9 +4819,9 @@ fn eval_datetime_extract_non_datetime_error() {
 }
 
 #[test]
-fn eval_datetime_jd_unix() {
+fn eval_datetime_unix() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("valid/datetime_jd_unix.gcl")])
+        .args(["eval", &fixture("valid/datetime_unix.gcl")])
         .output()
         .expect("failed to run graphcal");
 

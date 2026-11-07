@@ -20,25 +20,13 @@
       "const": {},
       "incomplete": false,
       "node": {
-        "check_same": {
-          "si_value": 0.0,
-          "unit": "s"
-        },
-        "delta": {
-          "si_value": 0.0,
-          "unit": "s"
-        },
-        "delta_ny": {
-          "si_value": 0.0,
-          "unit": "s"
-        },
         "dur": {
           "si_value": 3600.0,
           "unit": "s"
         },
         "later": {
-          "datetime": "2024-11-05T02:00:00 UTC",
-          "time_scale": "UTC"
+          "datetime": "2024-11-05T02:00:37 TAI",
+          "time_scale": "TAI"
         },
         "launch_ny": {
           "datetime": "2024-11-05T07:00:00-05:00[America/New_York]",

@@ -575,7 +575,9 @@ pub fn datetime_literal(
     epoch: &hifitime::Epoch,
     scale: graphcal_compiler::semantic::time_scale::TimeScale,
 ) -> String {
-    let (year, month, day, hour, minute, second, nanos) = epoch.to_gregorian(scale.to_hifitime());
+    let (year, month, day, hour, minute, second, nanos) =
+        crate::time_scale_conversion::to_time_scale(*epoch, scale)
+            .to_gregorian(scale.to_hifitime());
     let fractional = if nanos == 0 {
         String::new()
     } else {
@@ -615,7 +617,12 @@ fn epoch_to_jiff_timestamp(
     epoch: &hifitime::Epoch,
 ) -> Result<jiff::Timestamp, EpochProjectionError> {
     const NANOS_PER_SECOND: i128 = 1_000_000_000;
-    let unix_nanos = epoch.to_unix_duration().total_nanoseconds();
+    let unix_nanos = crate::time_scale_conversion::to_time_scale(
+        *epoch,
+        graphcal_compiler::semantic::time_scale::TimeScale::UTC,
+    )
+    .to_unix_duration()
+    .total_nanoseconds();
     let seconds = unix_nanos.div_euclid(NANOS_PER_SECOND);
     let nanoseconds = unix_nanos.rem_euclid(NANOS_PER_SECOND);
     let seconds = i64::try_from(seconds).map_err(|_| EpochProjectionError::SecondsOutOfRange)?;

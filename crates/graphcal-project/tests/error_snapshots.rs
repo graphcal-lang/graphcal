@@ -1127,6 +1127,55 @@ fn error_datetime_invalid_date() {
 }
 
 #[test]
+fn error_datetime_leap_second() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_leap_second.gcl");
+    let rendered = render_error(source, "datetime_leap_second.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_epoch_leap_second() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_epoch_leap_second.gcl");
+    let rendered = render_error(source, "datetime_epoch_leap_second.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_utc_difference() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_utc_difference.gcl");
+    let rendered = render_error(source, "datetime_utc_difference.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_utc_shift() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_utc_shift.gcl");
+    let rendered = render_error(source, "datetime_utc_shift.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_removed_julian_date() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_removed_julian_date.gcl");
+    let rendered = render_error(source, "datetime_removed_julian_date.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_unix_non_utc() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_unix_non_utc.gcl");
+    let rendered = render_error(source, "datetime_unix_non_utc.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_from_unix_int() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_from_unix_int.gcl");
+    let rendered = render_error(source, "datetime_from_unix_int.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_datetime_positional_epoch_scale() {
     let source =
         include_str!("../../../tests/fixtures/invalid/datetime_positional_epoch_scale.gcl");

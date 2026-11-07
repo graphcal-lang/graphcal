@@ -1,16 +1,19 @@
 // Basic datetime construction and arithmetic
 param launch: Datetime = datetime("2024-11-05T12:00:00Z");
 
+// UTC readings skip leap seconds, so arithmetic happens in TAI.
+node launch_tai: Datetime<TAI> = to_tai(@launch);
+
 // Datetime + Time -> Datetime
-node one_hour_later: Datetime = @launch + 3600.0 s;
+node one_hour_later: Datetime = to_utc(@launch_tai + 3600.0 s);
 
 // Datetime - Datetime -> Time
-node duration: Time = @one_hour_later - @launch;
+node duration: Time = to_tai(@one_hour_later) - @launch_tai;
 
 // Datetime - Time -> Datetime
-node one_hour_before: Datetime = @launch - 3600.0 s;
+node one_hour_before: Datetime = to_utc(@launch_tai - 3600.0 s);
 
-// Datetime comparisons
+// Datetime comparisons, including UTC ones
 assert later_is_after = @one_hour_later > @launch;
 assert before_is_before = @one_hour_before < @launch;
 assert same_equals = @launch == @launch;

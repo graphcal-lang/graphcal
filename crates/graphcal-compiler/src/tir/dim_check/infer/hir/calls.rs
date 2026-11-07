@@ -10,7 +10,7 @@ use crate::semantic_error::dimension_mismatch::{
 };
 
 use crate::builtin::{
-    AggregationFn, BuiltinFn, DatetimeFn, IntDivisionFn, ScalarFn, ValueAggregation,
+    AggregationFn, BuiltinFn, DatetimeFn, IntDivisionFn, ScalarFn, UnixTimeFn, ValueAggregation,
 };
 use crate::dimension::{Dimension, Rational};
 use crate::semantic_error::SemanticError;
@@ -259,39 +259,41 @@ impl Infer<'_> {
             BuiltinFn::Datetime(DatetimeFn::Field(_)) => {
                 self.infer_hir_datetime_unary(builtin, args, CheckedType::Int)
             }
-            BuiltinFn::Datetime(DatetimeFn::FromNumeric(_)) => {
+            BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::FromUnix)) => {
                 let arg_type = self.infer_arg(&args[0])?;
-                match &arg_type {
-                    t if t
-                        .quantity_dimension()
-                        .is_some_and(Dimension::is_dimensionless) => {}
-                    CheckedType::Int => {}
-                    _ => {
-                        return Err(SemanticError::located(
-                            self.env.src,
-                            args[0].span,
-                            DimensionError::DimensionMismatch {
-                                expected: Box::new(MismatchOperand::Expected(
-                                    OperandExpectation::DimensionlessOrInt,
-                                )),
-                                found: Box::new(MismatchOperand::Type(
-                                    arg_type.spelling(&self.env.registry.dimensions),
-                                )),
-                                help: Box::new(MismatchRule::DimensionlessNumericArgument(builtin)),
-                            },
-                        )
-                        .into());
-                    }
+                if !arg_type
+                    .quantity_dimension()
+                    .is_some_and(Dimension::is_dimensionless)
+                {
+                    // An `Int` count converts to a real number only where the
+                    // conversion is written (#2246, decision D11).
+                    let help = if matches!(arg_type, CheckedType::Int) {
+                        MismatchRule::FromUnixInt
+                    } else {
+                        MismatchRule::DimensionlessNumericArgument(builtin)
+                    };
+                    return Err(SemanticError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::DimensionMismatch {
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::Dimensionless,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(help),
+                        },
+                    )
+                    .into());
                 }
                 Ok(CheckedType::Datetime(
                     crate::semantic::time_scale::TimeScale::UTC,
                 ))
             }
-            BuiltinFn::Datetime(DatetimeFn::ToNumeric(_)) => self.infer_hir_datetime_unary(
-                builtin,
-                args,
-                CheckedType::Quantity(Dimension::dimensionless()),
-            ),
+            BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::ToUnix)) => {
+                self.infer_hir_to_unix(builtin, args)
+            }
             BuiltinFn::Scalar(function) => {
                 self.infer_hir_builtin_fn(function, callee.span, checked)
             }

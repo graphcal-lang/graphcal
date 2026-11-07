@@ -222,9 +222,7 @@ node selected: Pressure = @readings[@channel];
 | `datetime("...")` | `OffsetDateTimeLiteral -> Datetime` | Parse RFC 3339 with an explicit `Z` or numeric offset |
 | `datetime("...", "tz")` | `(CivilDateTimeLiteral, TimezoneLiteral) -> Datetime` | Interpret local civil time in an IANA timezone |
 | `epoch<S>("...")` | `CivilDateTimeLiteral -> Datetime<S>` | Interpret scale-free calendar coordinates in static time scale `S` |
-| `from_jd(x)` | `Dimensionless -> Datetime` | Construct from Julian Date (UTC) |
-| `from_mjd(x)` | `Dimensionless -> Datetime` | Construct from Modified Julian Date (UTC) |
-| `from_unix(x)` | `Dimensionless -> Datetime` | Construct from Unix timestamp in seconds |
+| `from_unix(x)` | `Dimensionless -> Datetime` | Construct a UTC datetime from a Unix timestamp in seconds |
 
 Each constructor has exactly one interpretation source:
 
@@ -245,6 +243,11 @@ bundled tzdb during checking: nonexistent times in DST gaps and repeated times
 in DST folds are rejected rather than shifted or selected silently. To choose a
 specific instant, use one-argument `datetime` with an explicit numeric offset.
 
+Leap seconds cannot be represented: a seconds field of `60` is rejected in
+every constructor and time scale. Write the instant of a UTC leap second in
+TAI instead, for example `epoch<TAI>("2017-01-01T00:00:36")` for
+`2016-12-31T23:59:60Z`.
+
 #### Time Scale Conversions
 
 | Function | Signature | Description |
@@ -263,9 +266,14 @@ specific instant, use one-argument `datetime` with an explicit numeric offset.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `to_jd(x)` | `Datetime -> Dimensionless` | Convert to Julian Date (UTC days) |
-| `to_mjd(x)` | `Datetime -> Dimensionless` | Convert to Modified Julian Date (UTC days) |
-| `to_unix(x)` | `Datetime -> Dimensionless` | Convert to Unix timestamp (seconds since 1970-01-01) |
+| `to_unix(x)` | `Datetime -> Dimensionless` | Convert a UTC datetime to a Unix timestamp (seconds since 1970-01-01) |
+
+`to_unix` and `from_unix` accept and return only `Datetime<UTC>`; convert
+another scale explicitly, as in `to_unix(to_utc(@t))`. A Unix timestamp
+encodes the UTC label and skips leap seconds, so the difference of two
+timestamps is not the elapsed time; use `to_tai(@b) - to_tai(@a)` for that.
+`from_unix` takes a `Dimensionless` count; convert an `Int` with
+`from_unix(to_float(@n))`.
 
 #### Extraction Functions
 

@@ -12,8 +12,7 @@
 //! the tree that holds them.
 
 use crate::builtin::{
-    BuiltinConst, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn, IntDivisionFn,
-    LinearAlgebraFn, ScalarFn, TimeScaleConversionFn,
+    BuiltinConst, DatetimeField, IntDivisionFn, LinearAlgebraFn, ScalarFn, TimeScaleConversionFn,
 };
 use crate::exact_rational::ExactRational;
 
@@ -153,11 +152,8 @@ pub enum QExpr<C> {
     },
     /// `coord(k)`: the coordinate of a coordinate-axis key.
     Coordinate(C),
-    /// A numeric epoch count of a datetime.
-    FromDatetime {
-        function: DatetimeToNumericFn,
-        arg: C,
-    },
+    /// `to_unix(t)`: the Unix time of a UTC datetime.
+    UnixTime(C),
 }
 
 /// An operation whose checked result is an `Int`.
@@ -277,16 +273,8 @@ pub enum DExpr<C> {
     },
     /// `duration + datetime`.
     ShiftAfter { duration: C, datetime: C },
-    /// A UTC datetime from a numeric epoch count given as a quantity.
-    FromQuantity {
-        function: DatetimeFromNumericFn,
-        arg: C,
-    },
-    /// A UTC datetime from a numeric epoch count given as an `Int`.
-    FromInt {
-        function: DatetimeFromNumericFn,
-        arg: C,
-    },
+    /// `from_unix(seconds)`: the UTC datetime a Unix time names.
+    FromUnixTime(C),
     /// A datetime re-expressed in another time scale.
     ToScale {
         conversion: TimeScaleConversionFn,
@@ -341,10 +329,7 @@ impl<C> QExpr<C> {
                 arg: f(arg)?,
             },
             Self::Coordinate(arg) => QExpr::Coordinate(f(arg)?),
-            Self::FromDatetime { function, arg } => QExpr::FromDatetime {
-                function: *function,
-                arg: f(arg)?,
-            },
+            Self::UnixTime(arg) => QExpr::UnixTime(f(arg)?),
         })
     }
 
@@ -366,7 +351,7 @@ impl<C> QExpr<C> {
             | Self::Exp(arg)
             | Self::FromInt { arg, .. }
             | Self::Coordinate(arg)
-            | Self::FromDatetime { arg, .. } => vec![arg],
+            | Self::UnixTime(arg) => vec![arg],
         }
     }
 }
@@ -570,14 +555,7 @@ impl<C> DExpr<C> {
                 duration: f(duration)?,
                 datetime: f(datetime)?,
             },
-            Self::FromQuantity { function, arg } => DExpr::FromQuantity {
-                function: *function,
-                arg: f(arg)?,
-            },
-            Self::FromInt { function, arg } => DExpr::FromInt {
-                function: *function,
-                arg: f(arg)?,
-            },
+            Self::FromUnixTime(arg) => DExpr::FromUnixTime(f(arg)?),
             Self::ToScale { conversion, arg } => DExpr::ToScale {
                 conversion: *conversion,
                 arg: f(arg)?,
@@ -592,9 +570,7 @@ impl<C> DExpr<C> {
                 datetime, duration, ..
             } => vec![datetime, duration],
             Self::ShiftAfter { duration, datetime } => vec![duration, datetime],
-            Self::FromQuantity { arg, .. }
-            | Self::FromInt { arg, .. }
-            | Self::ToScale { arg, .. } => {
+            Self::FromUnixTime(arg) | Self::ToScale { arg, .. } => {
                 vec![arg]
             }
         }
