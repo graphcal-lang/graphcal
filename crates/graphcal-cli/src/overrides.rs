@@ -27,6 +27,9 @@ use graphcal_project::prepare::{ExternalValue, ParameterBindingBuilder};
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
+use graphcal_compiler::outcome::without_cancellation;
+use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, RealFileSystem};
+
 use crate::json_input::{self, JsonInputError};
 
 /// Default maximum size for a JSON parameter document: 1 MiB.
@@ -282,14 +285,12 @@ pub enum OverrideParseError {
 
     /// A JSON parameter document exceeded the configured size cap.
     #[error(
-        "parameter JSON from {origin} is {size} bytes, exceeds limit of {limit} bytes (use --params-json-max-bytes to override)"
+        "parameter JSON from {origin} exceeds the limit of {limit} bytes (use --params-json-max-bytes to override)"
     )]
     #[diagnostic(code(graphcal::cli::O006))]
     JsonTooLarge {
         /// Where the JSON was supplied.
         origin: ParameterJsonOrigin,
-        /// The document size in bytes.
-        size: u64,
         /// The active limit in bytes.
         limit: u64,
     },
@@ -497,24 +498,32 @@ fn load_parameter_json(
     }
 }
 
+/// Read a parameter file through the bounded regular-file capability, which
+/// validates the opened handle, so a FIFO or device is rejected instead of
+/// blocking or streaming forever.
 fn read_parameter_json_file(
     path: &Path,
     limit: u64,
 ) -> Result<LoadedParameterJson, OverrideParseError> {
     let origin = ParameterJsonOrigin::File(path.to_path_buf());
-    let file = std::fs::File::open(path).map_err(|source| OverrideParseError::JsonRead {
-        origin: origin.clone(),
-        source,
-    })?;
-    let size = file
-        .metadata()
-        .map_err(|source| OverrideParseError::JsonRead {
+    let bytes = without_cancellation(|cancellation| {
+        RealFileSystem::default().read_bytes_bounded(path, ByteLimit::new(limit), cancellation)
+    })
+    .map_err(|error| match error {
+        FileSystemReadError::Io(source) => OverrideParseError::JsonRead {
             origin: origin.clone(),
             source,
-        })?
-        .len();
-    ensure_json_size(&origin, size, limit)?;
-    read_parameter_json_bounded(file, origin, limit)
+        },
+        FileSystemReadError::ByteLimitExceeded { .. } => OverrideParseError::JsonTooLarge {
+            origin: origin.clone(),
+            limit,
+        },
+        error @ FileSystemReadError::EntryLimitExceeded { .. } => OverrideParseError::JsonRead {
+            origin: origin.clone(),
+            source: io::Error::other(error),
+        },
+    })?;
+    loaded_parameter_json(bytes, origin)
 }
 
 fn read_parameter_json_bounded(
@@ -532,6 +541,13 @@ fn read_parameter_json_bounded(
         })?;
     let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     ensure_json_size(&origin, size, limit)?;
+    loaded_parameter_json(bytes, origin)
+}
+
+fn loaded_parameter_json(
+    bytes: Vec<u8>,
+    origin: ParameterJsonOrigin,
+) -> Result<LoadedParameterJson, OverrideParseError> {
     let text = String::from_utf8(bytes).map_err(|source| OverrideParseError::JsonRead {
         origin: origin.clone(),
         source: io::Error::new(io::ErrorKind::InvalidData, source),
@@ -547,7 +563,6 @@ fn ensure_json_size(
     if size > limit {
         return Err(OverrideParseError::JsonTooLarge {
             origin: origin.clone(),
-            size,
             limit,
         });
     }
@@ -591,11 +606,7 @@ mod tests {
         assert!(ensure_json_size(&origin, 42, 42).is_ok());
         assert!(matches!(
             ensure_json_size(&origin, 43, 42),
-            Err(OverrideParseError::JsonTooLarge {
-                size: 43,
-                limit: 42,
-                ..
-            })
+            Err(OverrideParseError::JsonTooLarge { limit: 42, .. })
         ));
     }
 
@@ -710,10 +721,7 @@ mod tests {
 
         let err = parse_values(&args).unwrap_err();
         match err {
-            OverrideParseError::JsonTooLarge { size, limit, .. } => {
-                assert_eq!(limit, 256);
-                assert!(size > 256);
-            }
+            OverrideParseError::JsonTooLarge { limit, .. } => assert_eq!(limit, 256),
             other => panic!("unexpected error: {other}"),
         }
     }

@@ -1226,7 +1226,16 @@ fn run_format(paths: &[PathBuf], check: bool) {
     let mut unformatted_count = 0;
     let mut error_count = 0;
     for file in &targets {
-        let source = match std::fs::read_to_string(file) {
+        // The bounded regular-file read validates the opened handle, so a
+        // FIFO or device is reported instead of blocking the whole batch.
+        let read = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            RealFileSystem::default().read_to_string_bounded(
+                file,
+                ProjectIngestionPolicy::default().source_file(),
+                cancellation,
+            )
+        });
+        let source = match read {
             Ok(s) => s,
             Err(e) => {
                 // Match `run_check`'s behavior: accumulate errors across the
