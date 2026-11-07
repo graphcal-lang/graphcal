@@ -262,7 +262,8 @@ const SPECIALIZED_TYPE_LIBRARY: &str = "pub(bind) dim Q;\n\
 /// Bug fix: a type projected under Static bindings is specialized from the
 /// template's canonical definition, so its fields may name other template
 /// types. The template signature used to be re-read in the importer's scope,
-/// where `Inner` is unknown.
+/// where `Inner` is unknown. `Inner` mentions the bound port too, so the
+/// include selects it as well (V008).
 #[test]
 fn specialized_type_projection_keeps_template_field_types() {
     let (_dir, root) = write_project(
@@ -271,7 +272,7 @@ fn specialized_type_projection_keeps_template_field_types() {
             ("lib.gcl", SPECIALIZED_TYPE_LIBRARY),
             (
                 "main.gcl",
-                "include p.lib(dim Q: Length, q: 2.0 m)::{type Box, Box, b};\n\
+                "include p.lib(dim Q: Length, q: 2.0 m)::{type Box, type Inner, Box, b};\n\
                  node v: Length = match @b { Box(v: value, i: _) => value };\n",
             ),
         ],

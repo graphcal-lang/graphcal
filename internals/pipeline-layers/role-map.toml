@@ -668,11 +668,6 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["ir", "static_external_surface_formal_conformance"]
-role = "checking"
-
-[[module]]
-package = "compiler"
 path = ["generic_param"]
 role = "contracts"
 
@@ -2745,6 +2740,11 @@ role = "checking"
 [[module]]
 package = "project"
 path = ["project_compiler", "generic_leakage", "tests"]
+role = "checking"
+
+[[module]]
+package = "project"
+path = ["project_compiler", "rebound_type_selection"]
 role = "checking"
 
 [[module]]

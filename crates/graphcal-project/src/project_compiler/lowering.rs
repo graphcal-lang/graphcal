@@ -1186,8 +1186,20 @@ fn elaborate_include_instances(
             instance.include_span,
         )?;
 
-        // ---- 5. Retain one typed semantic edge -------------------------------
         let selective_alias_declarations = selective_alias_declarations(instance, dep_unfrozen);
+        super::rebound_type_selection::check_rebound_type_selection(
+            &super::rebound_type_selection::IncludedTemplate {
+                owner: &dep_resolution_owner,
+                declarations: body_decls_for_aliases,
+                resolver: module_resolver,
+                values: dep_unfrozen,
+            },
+            instance,
+            importer_src,
+            instance.include_span,
+        )?;
+
+        // ---- 5. Retain one typed semantic edge -------------------------------
         record_semantic_instance(
             unfrozen,
             instance,

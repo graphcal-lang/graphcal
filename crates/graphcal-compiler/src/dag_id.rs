@@ -369,6 +369,13 @@ impl DagId {
         self.with_child(DagSegment::Instance(scope))
     }
 
+    /// Whether `self` is a concrete include instance allocated directly in
+    /// `parent` (`parent.instance_child(scope)` for some scope).
+    #[must_use]
+    pub fn is_instance_child_of(&self, parent: &Self) -> bool {
+        self.leaf().is_instance() && self.parent().as_ref() == Some(parent)
+    }
+
     /// Return the module this one is nested in, or `None` for a file root.
     ///
     /// File roots have no lexical parent: a file submodule (`lib/x.gcl`) is
@@ -819,6 +826,22 @@ mod tests {
         assert!(module < named);
         assert!(root < module);
         assert!(DagId::root_in_package("a", "z") < DagId::root_in_package("b", "a"));
+    }
+
+    #[test]
+    fn instance_child_of_is_only_a_direct_instance() {
+        let root = DagId::root_in_package("test", "main");
+        let instance = root.instance_child(named("inst"));
+        let module = root.inline_dag_child(dag("inst"));
+
+        assert!(instance.is_instance_child_of(&root));
+        assert!(!module.is_instance_child_of(&root));
+        assert!(!root.is_instance_child_of(&root));
+        assert!(
+            !instance
+                .instance_child(named("nested"))
+                .is_instance_child_of(&root)
+        );
     }
 
     #[test]

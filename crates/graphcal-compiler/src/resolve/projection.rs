@@ -54,6 +54,7 @@ impl ModuleResolver {
             .param_bindings
             .iter()
             .any(|binding| binding.category == InputBindingCategory::Dimension);
+        let instance = owner.instance_child(include.instance_scope());
         for item in items {
             let category = match item.namespace {
                 ImportItemNamespace::Type => Some(InputBindingCategory::Type),
@@ -108,7 +109,7 @@ impl ModuleResolver {
                             Symbol::new(
                                 ResolvedStructTypeName::from_def(
                                     super::mint::ResolverMint(()),
-                                    owner.clone(),
+                                    instance.clone(),
                                     source_name,
                                 ),
                                 visibility,
@@ -264,22 +265,20 @@ impl ModuleResolver {
                             candidate.namespace == ImportItemNamespace::Type
                                 && candidate.name.name.atom() == owner_type.atom()
                         });
+                    // A constructor of a type this include projects belongs
+                    // to the projection: the instance owns both, and its own
+                    // symbols already declare the constructor.
                     let constructor = if has_specialized_owner {
-                        let specialized = Symbol::new(
+                        Symbol::new(
                             ResolvedConstructorName::from_def(
                                 super::mint::ResolverMint(()),
-                                owner.clone(),
+                                instance.clone(),
                                 constructor.resolved().to_unowned_def_name(),
                             ),
                             visibility,
                             local_span,
                             constructor.data().clone(),
-                        );
-                        self.entry_mut(owner)?.symbols.constructors.insert(
-                            specialized.resolved().to_unowned_def_name(),
-                            specialized.clone(),
-                        );
-                        specialized
+                        )
                     } else {
                         constructor
                     };

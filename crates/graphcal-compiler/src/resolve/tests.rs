@@ -707,6 +707,60 @@ fn include_selective_private_decl_is_rejected() {
     ));
 }
 
+/// RES-4: a type and its constructors that a selective include projects
+/// under Static bindings are owned by that include's instance, so aliasing
+/// them or projecting the same template type twice never collides with the
+/// importer's own declarations.
+#[test]
+fn projected_types_and_constructors_are_owned_by_the_include_instance() {
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let lib = desugared_source("pub(bind) index I = { a, b };\npub type T { A(x: Length) }");
+    let main = desugared_source(
+        "index J = { a, b };\n\
+         index K = { c, d, e };\n\
+         type T { A(y: Mass) }\n\
+         include lib(index I: J)::{ type T as U1, A as A1 };\n\
+         include lib(index I: K)::{ type T as U2, A as A2 };",
+    );
+    let includes = main
+        .declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            ast::DeclKind::Include(include) => Some(include),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    for include in &includes {
+        modules.edge(&main_id, &include.path, &lib_id);
+    }
+    let resolver = modules.build().unwrap();
+
+    let own = resolver
+        .resolve_struct_type_path(&main_id, &path(&["T"]))
+        .unwrap()
+        .into_resolved();
+    assert_eq!(own.owner(), &main_id);
+    for (include, (projected, constructor)) in includes.iter().zip([("U1", "A1"), ("U2", "A2")]) {
+        let instance = main_id.instance_child(include.instance_scope());
+        let projected = resolver
+            .resolve_struct_type_path(&main_id, &path(&[projected]))
+            .unwrap()
+            .into_resolved();
+        assert_eq!(projected.owner(), &instance);
+        assert_eq!(projected.atom().as_str(), "T");
+        let constructor = resolver
+            .resolve_constructor_path(&main_id, &path(&[constructor]))
+            .unwrap();
+        assert_eq!(constructor.resolved().owner(), &instance);
+        assert_eq!(constructor.owner_type_identity(), projected);
+    }
+}
+
 #[test]
 fn include_projection_classification_is_shared_and_exhaustive() {
     let cases = [
