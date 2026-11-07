@@ -1178,11 +1178,6 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
-path = ["syntax", "lexer", "peek_cache"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
 path = ["syntax", "lexer", "tests"]
 role = "contracts"
 
