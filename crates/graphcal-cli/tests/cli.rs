@@ -3147,6 +3147,68 @@ fn deeply_nested_params_json_is_rejected_in_linear_time() {
     );
 }
 
+/// `check`, `format --check` and `--params-json-file` reject FIFOs instead
+/// of blocking on them.
+#[cfg(unix)]
+#[test]
+fn special_file_inputs_are_rejected_without_blocking() {
+    use std::ffi::OsStr;
+
+    let directory = tempfile::tempdir().unwrap();
+    let model = directory.path().join("m.gcl");
+    std::fs::write(&model, "param x: Dimensionless = 1.0;\n").unwrap();
+    let fifo_source = directory.path().join("f.gcl");
+    let fifo_params = directory.path().join("p.json");
+    for fifo in [&fifo_source, &fifo_params] {
+        assert!(Command::new("mkfifo").arg(fifo).status().unwrap().success());
+    }
+
+    let limit = std::time::Duration::from_secs(60);
+    for (arguments, expected_code) in [
+        (vec![OsStr::new("check"), fifo_source.as_os_str()], 1),
+        (
+            vec![
+                OsStr::new("format"),
+                OsStr::new("--check"),
+                fifo_source.as_os_str(),
+            ],
+            1,
+        ),
+        (
+            vec![
+                OsStr::new("eval"),
+                model.as_os_str(),
+                OsStr::new("--params-json-file"),
+                fifo_params.as_os_str(),
+            ],
+            2,
+        ),
+    ] {
+        let mut command = graphcal_bin();
+        command.args(&arguments);
+        let output = output_with_watchdog(&mut command, limit);
+        assert_eq!(
+            output.status.code(),
+            Some(expected_code),
+            "{command:?}\nstdout: {}\nstderr: {}",
+            output.stdout,
+            output.stderr
+        );
+        // miette wraps long messages behind a `│` gutter.
+        let flat = output
+            .stderr
+            .split_whitespace()
+            .filter(|word| *word != "│")
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            flat.contains("cannot read non-regular file"),
+            "{command:?}\nstderr: {}",
+            output.stderr
+        );
+    }
+}
+
 #[test]
 fn eval_with_params_json_file() {
     let output = graphcal_bin()
