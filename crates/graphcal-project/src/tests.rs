@@ -3478,6 +3478,43 @@ fn cancellation_stops_an_in_flight_evaluation() {
     );
 }
 
+/// Static TODO reachability is value-independent, so one prepared plan
+/// answers each query once, however many expressions and evaluations ask
+/// it (#2251).
+#[test]
+fn todo_reachability_is_computed_once_per_plan() {
+    use std::fmt::Write as _;
+
+    const CALLERS: usize = 64;
+    let mut source = String::from(
+        "dag helper { node pending: Dimensionless = todo<Dimensionless> {}; pub node out: Dimensionless = 1.0; }\n",
+    );
+    for caller in 0..CALLERS {
+        writeln!(
+            source,
+            "node caller{caller}: Dimensionless = @helper()::out + {caller}.0;"
+        )
+        .unwrap();
+    }
+    let project = crate::loader::LoadedProject::from_source(&source, "reach.gcl").unwrap();
+    let prepared = ProjectCompiler::new(&project).prepare().unwrap();
+    let row = prepared.binding_builder().finish().unwrap();
+    let (_, first) = graphcal_eval::pipeline_metrics::measure(|| prepared.evaluate(&row));
+    let (_, second) = graphcal_eval::pipeline_metrics::measure(|| prepared.evaluate(&row));
+    assert!(
+        first.unfinished_reach_analyses > 0,
+        "the program has a todo, so reachability must be analysed: {first:?}"
+    );
+    assert!(
+        first.unfinished_reach_analyses < 8,
+        "each query must be answered once, not once per caller: {first:?}"
+    );
+    assert_eq!(
+        second.unfinished_reach_analyses, 0,
+        "a later evaluation of the same plan must reuse every answer: {second:?}"
+    );
+}
+
 /// A chain of DAGs each calling the previous one twice does `2^depth` work
 /// from linear source (#2251). Evaluation has no operation budget, so the
 /// chain must stop promptly on cancellation instead.
