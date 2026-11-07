@@ -523,6 +523,143 @@ async fn creating_previously_missing_dependency_repairs_open_importer() {
     drain.abort();
 }
 
+/// What a refresh-capable test client observed, in arrival order.
+#[derive(Debug)]
+enum ClientEvent {
+    InlayHintRefresh,
+    Diagnostics(Url),
+}
+
+/// Answer every server request and report what arrived.
+fn spawn_refresh_client(socket: ClientSocket) -> tokio::sync::mpsc::UnboundedReceiver<ClientEvent> {
+    let (events, received) = tokio::sync::mpsc::unbounded_channel();
+    let (mut requests, mut responses) = socket.split();
+    tokio::spawn(async move {
+        while let Some(message) = requests.next().await {
+            let event = match message.method() {
+                "workspace/inlayHint/refresh" => ClientEvent::InlayHintRefresh,
+                "textDocument/publishDiagnostics" => {
+                    let uri = message.params().expect("diagnostic params")["uri"]
+                        .as_str()
+                        .and_then(|uri| Url::parse(uri).ok())
+                        .expect("diagnostic uri");
+                    ClientEvent::Diagnostics(uri)
+                }
+                _ => continue,
+            };
+            if let Some(id) = message.id().cloned() {
+                let _ = responses.send(Response::from_ok(id, json!(null))).await;
+            }
+            if events.send(event).is_err() {
+                break;
+            }
+        }
+    });
+    received
+}
+
+async fn next_client_event(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<ClientEvent>,
+) -> ClientEvent {
+    timeout(Duration::from_secs(30), events.recv())
+        .await
+        .expect("client event timeout")
+        .expect("client closed")
+}
+
+/// LSP-4 (#2253): one `didChangeWatchedFiles` batch touching many
+/// dependencies of an open root schedules that root once, with one refresh.
+#[tokio::test]
+async fn watched_file_burst_schedules_each_root_once() {
+    const LIBRARIES: usize = 5;
+
+    let project = tempfile::tempdir().unwrap();
+    let source_dir = project.path().join("src/burst");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        project.path().join("graphcal.toml"),
+        "[package]\nname = \"burst\"\n",
+    )
+    .unwrap();
+    let library_paths: Vec<_> = (0..LIBRARIES)
+        .map(|index| source_dir.join(format!("lib{index}.gcl")))
+        .collect();
+    for (index, path) in library_paths.iter().enumerate() {
+        std::fs::write(
+            path,
+            format!("pub const node v{index}: Dimensionless = 1.0;\n"),
+        )
+        .unwrap();
+    }
+    let imports = (0..LIBRARIES)
+        .map(|index| format!("import burst.lib{index}::{{v{index}}};"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let sum = (0..LIBRARIES)
+        .map(|index| format!("@v{index}"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let main_source = format!("{imports}\nnode total: Dimensionless = {sum};\n");
+    let main_path = source_dir.join("main.gcl");
+    std::fs::write(&main_path, &main_source).unwrap();
+    let main_uri = Url::from_file_path(&main_path).unwrap();
+
+    let (mut service, socket) = service();
+    initialize(
+        &mut service,
+        json!({ "workspace": { "inlayHint": { "refreshSupport": true } } }),
+    )
+    .await;
+    let mut events = spawn_refresh_client(socket);
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&main_uri, 1, &main_source),
+    )
+    .await;
+    // The open's pass publishes, then asks for a refresh.
+    while !matches!(next_client_event(&mut events).await, ClientEvent::Diagnostics(uri) if uri == main_uri)
+    {
+    }
+    while !matches!(
+        next_client_event(&mut events).await,
+        ClientEvent::InlayHintRefresh
+    ) {}
+    let generation = service.inner().generation_for_test(&main_uri).await;
+
+    for (index, path) in library_paths.iter().enumerate() {
+        std::fs::write(
+            path,
+            format!("pub const node v{index}: Dimensionless = 2.0;\n"),
+        )
+        .unwrap();
+    }
+    let changes: Vec<_> = library_paths
+        .iter()
+        .map(|path| json!({ "uri": Url::from_file_path(path).unwrap(), "type": 2 }))
+        .collect();
+    notify(
+        &mut service,
+        "workspace/didChangeWatchedFiles",
+        json!({ "changes": changes }),
+    )
+    .await;
+    assert_eq!(
+        service.inner().generation_for_test(&main_uri).await,
+        generation + 1,
+        "the burst schedules the root exactly once"
+    );
+    let mut refreshes = 0;
+    loop {
+        match next_client_event(&mut events).await {
+            ClientEvent::InlayHintRefresh => refreshes += 1,
+            ClientEvent::Diagnostics(uri) if uri == main_uri => break,
+            ClientEvent::Diagnostics(_) => {}
+        }
+    }
+    assert_eq!(refreshes, 1, "one refresh for the whole burst");
+}
+
 async fn assert_imported_factor_features(
     service: &mut LspService<Backend>,
     main_uri: &Url,
