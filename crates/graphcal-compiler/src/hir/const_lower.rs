@@ -626,7 +626,7 @@ mod tests {
         let Some(DeclKind::Unit(unit)) = file.declarations.first().map(|decl| &decl.kind) else {
             panic!("expected a unit declaration");
         };
-        unit.definition.as_ref().unwrap().scale_expr.clone()
+        unit.definition().unwrap().scale_expr.clone()
     }
 
     fn scale(source: &str) -> Result<UnitScaleExpr, ConstLowerError> {

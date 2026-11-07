@@ -77,6 +77,8 @@ pub enum Expected {
     ImportItemName,
     /// The body of a non-base unit declaration.
     UnitDefinition,
+    /// The `;` ending a `base unit` declaration, which has no body.
+    BaseUnitEnd,
     /// A domain constraint inside `( … )`.
     DomainConstraint,
     /// An atom of an index expression.
@@ -221,6 +223,9 @@ impl fmt::Display for Expected {
             ),
             Self::UnitDefinition => f.write_str(
                 "`=` followed by a unit definition (use `base unit` for a no-body declaration)",
+            ),
+            Self::BaseUnitEnd => f.write_str(
+                "`;` (a `base unit` has no `= ...` body; declare a unit with an explicit scale as `const unit` or `unit`)",
             ),
             Self::DomainConstraint => {
                 f.write_str("at least one domain constraint (e.g., `min: 0`)")
@@ -476,6 +481,10 @@ mod tests {
             (
                 Expected::UnitDefinition,
                 "`=` followed by a unit definition (use `base unit` for a no-body declaration)",
+            ),
+            (
+                Expected::BaseUnitEnd,
+                "`;` (a `base unit` has no `= ...` body; declare a unit with an explicit scale as `const unit` or `unit`)",
             ),
             (
                 Expected::DomainConstraint,

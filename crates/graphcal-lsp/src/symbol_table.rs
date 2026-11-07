@@ -1742,7 +1742,7 @@ fn collect_unit_decl(
         );
     }
     collect_dim_expr_refs(&u.dim_type, table);
-    if let Some(unit_def) = &u.definition {
+    if let Some(unit_def) = u.definition() {
         refs.collect_body(&unit_def.scale_expr, table);
         collect_unit_expr_refs(&unit_def.unit_expr, table);
     }

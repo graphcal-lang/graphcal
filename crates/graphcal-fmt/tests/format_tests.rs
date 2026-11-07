@@ -653,6 +653,20 @@ fn format_unit_decl() {
 }
 
 #[test]
+fn format_base_unit_decl() {
+    let source = "base unit bit: Information;\n";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(formatted, "base unit bit: Information;\n");
+}
+
+#[test]
+fn base_unit_with_a_body_is_not_rewritten_to_const_unit() {
+    // FE-9: the parser rejects the body, so the formatter never sees a
+    // `base unit` it could silently turn into a `const unit`.
+    assert!(format_source("base unit kfoot: Length = 304.8 m;\n").is_err());
+}
+
+#[test]
 fn format_const_unit_decl() {
     let source = "const unit km: Length = 1000 m;\n";
     let formatted = format_source(source).unwrap();

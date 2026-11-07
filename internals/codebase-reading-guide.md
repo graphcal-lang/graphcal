@@ -1835,10 +1835,10 @@ figure, static or live, is themed.
 135. `crates/graphcal-compiler/src/semantic/index_def.rs`
 136. `crates/graphcal-compiler/src/tir/materialized_shape.rs`
 137. `crates/graphcal-compiler/src/ir/static_substitution.rs`
-138. `crates/graphcal-compiler/src/resolve/error.rs`
-139. `crates/graphcal-compiler/src/hir/expr/local_unit.rs`
-140. `crates/graphcal-compiler/src/semantic/prelude.rs`
-141. `crates/graphcal-compiler/src/resolve/reserved_name.rs`
+138. `crates/graphcal-compiler/src/hir/expr/local_unit.rs`
+139. `crates/graphcal-compiler/src/semantic/prelude.rs`
+140. `crates/graphcal-compiler/src/resolve/reserved_name.rs`
+141. `crates/graphcal-compiler/src/resolve/error.rs`
 142. `crates/graphcal-compiler/src/display/formatting_registry.rs`
 143. `crates/graphcal-compiler/src/resolve/prelude.rs`
 144. `crates/graphcal-compiler/src/ir/instance/identity.rs`

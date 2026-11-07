@@ -16,6 +16,7 @@ use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace
 use super::category::{DeclSymbolKind, ExportedImportItemKind};
 use super::error::ModuleResolveError;
 use super::namespace::{Namespace, Occupant};
+use super::reserved_name::validate_reserved_name;
 use super::symbols::{
     ConstructorSignature, GenericParamSignature, ModuleSymbols, Symbol, Table, occupant_in,
 };
@@ -176,14 +177,21 @@ impl ModuleScope {
 
     /// Install the names one `import` / `include` edge introduces.
     ///
-    /// Each name must claim a free slot of the owner's collision unit: local
-    /// declarations, earlier imports, and the edge's own earlier names all
-    /// occupy it.
+    /// Each selective item's local name must not take a spelling reserved in
+    /// its namespace (a prelude unit or dimension, a built-in type, function,
+    /// or constant), and each name must claim a free slot of the owner's
+    /// collision unit: local declarations, earlier imports, and the edge's own
+    /// earlier names all occupy it.
+    ///
+    /// Module aliases are exempt from the reserved-name policy: they are only
+    /// reachable as a path qualifier, never as a bare name.
     ///
     /// # Errors
     ///
     /// Returns [`ModuleResolveError::DuplicateImportName`] for the first
-    /// addition whose slot is already occupied.
+    /// addition whose slot is already occupied, and
+    /// [`ModuleResolveError::ReservedImportName`] for the first selective
+    /// item whose local name is reserved.
     pub(super) fn add_imports(
         &mut self,
         symbols: &ModuleSymbols,
@@ -202,6 +210,17 @@ impl ModuleScope {
                     name: local.value.clone(),
                     first: first.span,
                     duplicate: local.span,
+                });
+            }
+            if let Some(kind) = addition.target.item_kind()
+                && let Err(error) = validate_reserved_name(namespace, &local.value)
+            {
+                return Err(ModuleResolveError::ReservedImportName {
+                    owner: symbols.owner().clone(),
+                    kind,
+                    name: local.value.clone(),
+                    reserved: error.reserved,
+                    span: local.span,
                 });
             }
             self.install(addition);

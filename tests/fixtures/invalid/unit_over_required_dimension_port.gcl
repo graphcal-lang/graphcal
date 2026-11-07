@@ -1,0 +1,8 @@
+// Any unit whose dimension mentions a required dimension port is rejected,
+// not only a `base unit` declared directly on the port.
+dag spring {
+    pub(bind) dim Q;
+    const unit q_m: Q * Length = 1000.0 m;
+    pub node out: Dimensionless = 1.0;
+}
+include spring(dim Q: Mass)::{ out };

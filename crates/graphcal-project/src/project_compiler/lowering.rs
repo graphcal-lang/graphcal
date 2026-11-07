@@ -601,7 +601,6 @@ fn process_dag_body_include_declarations<'a>(
         else {
             imports::process_file_include(
                 project,
-                modules,
                 target,
                 include_decl,
                 decl,
@@ -617,7 +616,6 @@ fn process_dag_body_include_declarations<'a>(
         imports::process_inline_dag_include(
             &imports::InlineDagIncludeTarget {
                 module: target_dag.module(target_file),
-                resolved: modules.target(target),
                 dag_name: &target_dag.declaration(target_file).name.value,
             },
             include_decl,

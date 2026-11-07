@@ -20,7 +20,7 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace};
 use graphcal_compiler::syntax::decl_name::DeclName;
 
-use crate::import_surface::{import_item_not_found_error, validate_constructor_alias};
+use crate::import_surface::import_item_not_found_error;
 
 /// Pre-process `import <self>::{...}` declarations inside a dag body.
 ///
@@ -55,10 +55,6 @@ use crate::import_surface::{import_item_not_found_error, validate_constructor_al
 /// Returns a [`SemanticError`] if a self-import names a runtime declaration
 /// (a param input port or node), a private non-param declaration, or a name
 /// that does not exist in the parent.
-#[expect(
-    clippy::too_many_lines,
-    reason = "one pass classifies and strips every namespace of selective self-import"
-)]
 pub fn preprocess_dag_body_self_imports(
     body: &[Declaration],
     parent_dag_id: &DagId,
@@ -126,9 +122,6 @@ pub fn preprocess_dag_body_self_imports(
                         &binding.name == orig_name.atom()
                             && binding.target.kind().namespace() == item.namespace
                     });
-                    if let Some(binding) = exported {
-                        validate_constructor_alias(binding.target.kind(), item, src)?;
-                    }
                     let not_found = || {
                         import_item_not_found_error(
                             parent_interface,

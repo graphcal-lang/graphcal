@@ -3,7 +3,7 @@ use graphcal_compiler::syntax::ast::{
     Encoding, Expr, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl,
     IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis,
     NodeDecl, ParamBinding, ParamDecl, PlotDecl, SlotKind, TableIndexSpec, TypeDecl, TypeDeclBody,
-    TypeExpr, UnionMember, UnitConstness, UnitDecl, UnitDef, Visibility,
+    TypeExpr, UnionMember, UnitBody, UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
 
@@ -218,16 +218,16 @@ fn format_dim_decl(d: &DimDecl) -> RcDoc<'static> {
 
 /// `const unit name: Dim = scale unit_expr;`, `unit name: Dim = ...`, or `base unit name: Dim;`.
 fn format_unit_decl(fmt: &mut Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
-    let head = match (&d.definition, d.constness) {
-        (None, _) => RcDoc::text("base unit "),
-        (Some(_), UnitConstness::Const) => RcDoc::text("const unit "),
-        (Some(_), UnitConstness::Dynamic) => RcDoc::text("unit "),
+    let (keyword, definition) = match &d.body {
+        UnitBody::Base => ("base unit ", None),
+        UnitBody::Const(definition) => ("const unit ", Some(definition)),
+        UnitBody::Dynamic(definition) => ("unit ", Some(definition)),
     };
-    let mut doc = head
+    let mut doc = RcDoc::text(keyword)
         .append(RcDoc::text(d.name.value.as_str().to_string()))
         .append(RcDoc::text(": "))
         .append(format_dim_expr_inline(&d.dim_type));
-    if let Some(ref def) = d.definition {
+    if let Some(def) = definition {
         doc = doc
             .append(RcDoc::text(" = "))
             .append(format_unit_def(fmt, def));

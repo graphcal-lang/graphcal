@@ -39,9 +39,7 @@ use super::model::{
     ImportAlias, ImportContext, IncludeInstanceRequest, ProjectModuleBinding, UnitProjectionAlias,
 };
 use super::module_resolve_errors::module_resolve_compile_error;
-use crate::import_surface::{
-    import_item_not_found_error, validate_constructor_alias, validate_reserved_alias,
-};
+use crate::import_surface::import_item_not_found_error;
 use graphcal_compiler::declaration_kind::DeclarationKind;
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
 use graphcal_compiler::ir::module_interface::{
@@ -57,7 +55,6 @@ use graphcal_compiler::ir::static_dependencies::{
 use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::resolve::category::DeclSymbolKind;
 use graphcal_compiler::resolve::exports::ExportedBindingTarget;
-use graphcal_compiler::resolve::namespace::Namespace;
 use graphcal_compiler::static_interface::{
     StaticInputKind, StaticInterface, StaticRole, static_binding_valid,
 };
@@ -125,8 +122,6 @@ fn static_input_is_bindable(
 
 pub(super) struct InlineDagIncludeTarget<'a> {
     pub(super) module: crate::loader::loaded_file::LoadedModule<'a>,
-    /// The same module in the module resolver.
-    pub(super) resolved: graphcal_compiler::resolve::ModuleRef<'a>,
     pub(super) dag_name: &'a DeclName,
 }
 
@@ -172,15 +167,7 @@ pub(super) fn process_file_body_declarations<'a>(
         if !matches!(project.target_module(target), LoadedModule::FileRoot(_)) {
             continue;
         }
-        process_file_include(
-            project,
-            modules,
-            target,
-            include,
-            declaration,
-            &including,
-            ctx,
-        )?;
+        process_file_include(project, target, include, declaration, &including, ctx)?;
     }
 
     for declaration in &loaded_file.ast().declarations {
@@ -194,13 +181,12 @@ pub(super) fn process_file_body_declarations<'a>(
         let dag_name = &include.path.segments[0].name;
         // A single-segment include names a top-level `dag` of this file.
         let dag_id = file_dag_id.inline_dag_child(DeclName::classify(dag_name.atom().clone()));
-        let Some((module, dag_file, loaded_dag)) = project.inline_dag(&dag_id) else {
+        let Some((_, dag_file, loaded_dag)) = project.inline_dag(&dag_id) else {
             continue;
         };
         process_inline_dag_include(
             &InlineDagIncludeTarget {
                 module: loaded_dag.module(dag_file),
-                resolved: modules.module(module),
                 dag_name: &loaded_dag.declaration(dag_file).name.value,
             },
             include,
@@ -235,7 +221,6 @@ pub(super) fn process_file_body_declarations<'a>(
         process_inline_dag_include(
             &InlineDagIncludeTarget {
                 module: target_dag.module(target_loaded),
-                resolved: modules.target(target),
                 dag_name: &target_dag.declaration(target_loaded).name.value,
             },
             include,
@@ -875,7 +860,6 @@ fn validate_required_param_bindings(
 )]
 pub(super) fn process_file_include<'a>(
     project: &'a crate::loader::loaded_project::LoadedProject,
-    modules: &crate::loader::loaded_module_resolver::LoadedModuleResolver,
     target: &crate::loader::module_path::ResolvedModuleTarget,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
@@ -890,7 +874,6 @@ pub(super) fn process_file_include<'a>(
     let dependency = project.target_module(target);
     let import_dag_id = dependency.dag_id();
     let dep = dependency.interface();
-    let exported_bindings = modules.target(target).exported_bindings();
 
     // A module-form include introduces a source-visible alias and therefore
     // participates in duplicate-alias checks. A selective include introduces
@@ -976,12 +959,6 @@ pub(super) fn process_file_include<'a>(
                     file_src,
                     import_item.name.span,
                 )?;
-                if let Some(binding) = exported_bindings.iter().find(|binding| {
-                    &binding.name == orig_name.atom()
-                        && binding.target.kind().namespace() == import_item.namespace
-                }) {
-                    validate_constructor_alias(binding.target.kind(), import_item, file_src)?;
-                }
 
                 let is_term_namespace = import_item.namespace
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
@@ -991,12 +968,6 @@ pub(super) fn process_file_include<'a>(
                         || file_exports_plot(project, import_dag_id, orig_name.atom()));
                 let is_assert =
                     is_term_namespace && dep.declares(orig_name.atom(), IntroducedKind::Assert);
-                let is_graph_value = is_term_namespace
-                    && (dep.declares(orig_name.atom(), IntroducedKind::ConstNode)
-                        || declares_runtime_value(dep, orig_name.atom()));
-                if is_graph_value {
-                    validate_reserved_alias(Namespace::Term, import_item, file_src)?;
-                }
                 let visibility =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
@@ -1164,8 +1135,6 @@ pub(super) fn process_inline_dag_include<'a>(
         );
     }
 
-    let exported_bindings = target.resolved.exported_bindings();
-
     // Classify bindings against the DAG body's declarations. Typed index
     // compatibility is deferred to the same registry-backed path as file DAGs.
     let ClassifiedBindings {
@@ -1211,12 +1180,6 @@ pub(super) fn process_inline_dag_include<'a>(
                     file_src,
                     import_item.name.span,
                 )?;
-                if let Some(binding) = exported_bindings.iter().find(|binding| {
-                    &binding.name == orig_name.atom()
-                        && binding.target.kind().namespace() == import_item.namespace
-                }) {
-                    validate_constructor_alias(binding.target.kind(), import_item, file_src)?;
-                }
 
                 let is_term_namespace = import_item.namespace
                     == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
@@ -1225,13 +1188,6 @@ pub(super) fn process_inline_dag_include<'a>(
                     is_term_namespace && dep.declares(orig_name.atom(), IntroducedKind::Plot);
                 let is_assert =
                     is_term_namespace && dep.declares(orig_name.atom(), IntroducedKind::Assert);
-                let is_graph_value = is_term_namespace
-                    && dep
-                        .declared_kinds(orig_name.atom(), ImportItemNamespace::Term)
-                        .any(is_graph_value_kind);
-                if is_graph_value {
-                    validate_reserved_alias(Namespace::Term, import_item, file_src)?;
-                }
                 let visibility =
                     validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
                 if is_plot {
@@ -1380,9 +1336,6 @@ pub(super) fn process_pure_import<'a>(
                     &binding.name == orig_name.atom()
                         && binding.target.kind().namespace() == import_item.namespace
                 });
-                if let Some(binding) = resolved_export {
-                    validate_constructor_alias(binding.target.kind(), import_item, file_src)?;
-                }
                 // Boundary check: resolver exports include transitive public
                 // re-exports, while the source scan preserves input-port
                 // semantics for directly authored params.
@@ -1418,11 +1371,6 @@ pub(super) fn process_pure_import<'a>(
                 )?;
 
                 if import_item.namespace != ImportItemNamespace::Term {
-                    validate_reserved_alias(
-                        Namespace::of(import_item.namespace),
-                        import_item,
-                        file_src,
-                    )?;
                     if import_item.namespace == ImportItemNamespace::Unit {
                         reject_runtime_unit_import(
                             dep_interface,
@@ -1470,7 +1418,6 @@ pub(super) fn process_pure_import<'a>(
 
                 match term_import {
                     TermImport::Constant(canonical) => {
-                        validate_reserved_alias(Namespace::Term, import_item, file_src)?;
                         import_selective_resolved_item(
                             canonical.clone(),
                             &local_name,

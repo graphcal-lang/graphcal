@@ -270,7 +270,7 @@ impl ModuleInterface {
                     kind: IntroducedKind::Node,
                 });
             }
-            DeclKind::Unit(unit) if unit.visibility.is_public() && !unit.constness.is_const() => {
+            DeclKind::Unit(unit) if unit.visibility.is_public() && !unit.constness().is_const() => {
                 self.runtime_units.insert(unit.name.value.clone());
             }
             DeclKind::Import(ImportDecl::Selective { items, .. }) => {

@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+cannot declare unit `degC` over required dimension port `T`
+    Diagnostic severity: error
+Begin snippet for base_unit_required_dimension_port.gcl starting at line 4, column 1
+
+snippet line 4:     pub(bind) dim T;
+snippet line 5:     base unit degC: T;
+    label at line 5, columns 15 to 18: `T` is a required port; the binding owns its canonical unit
+snippet line 6:     param room: T = 21.0 degC;
+diagnostic help: a template cannot define units over a required dimension port: each include binds `T` to a concrete dimension that already has its own units; remove `degC` and take values of `T` through a `param` input port, which the including module writes in its own units
+diagnostic code: graphcal::D036

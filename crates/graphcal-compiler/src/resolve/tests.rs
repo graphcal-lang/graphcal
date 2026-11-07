@@ -13,6 +13,7 @@ use super::category::*;
 use super::error::*;
 use super::exports::*;
 use super::namespace::Namespace;
+use super::reserved_name::ReservedName;
 use super::symbols::*;
 use crate::syntax::ast::Ident;
 use crate::syntax::parser::Parser;
@@ -260,6 +261,83 @@ fn unit_import_colliding_with_local_unit_is_rejected() {
             ..
         } if owner == main_id && name.as_str() == "m"
     ));
+}
+
+#[test]
+fn selective_aliases_cannot_take_reserved_spellings() {
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let lib = desugared_source(
+        "pub const unit ft: Length = 0.3048 m;\n\
+         pub dim Foo = Mass;\n\
+         pub type Choice { Only }\n\
+         pub const node one: Dimensionless = 1.0;",
+    );
+    for (items, namespace, reserved, alias) in [
+        (
+            "unit ft as m",
+            Namespace::Unit,
+            ReservedName::PreludeUnit,
+            "m",
+        ),
+        (
+            "dim Foo as Length",
+            Namespace::Static,
+            ReservedName::PreludeDimension,
+            "Length",
+        ),
+        (
+            "type Choice as Bool",
+            Namespace::Static,
+            ReservedName::BuiltinType,
+            "Bool",
+        ),
+        (
+            "one as sum",
+            Namespace::Term,
+            ReservedName::BuiltinFunction(crate::builtin::BuiltinFn::parse("sum").unwrap()),
+            "sum",
+        ),
+        (
+            "Only as scan",
+            Namespace::Term,
+            ReservedName::ContextualCallable,
+            "scan",
+        ),
+    ] {
+        for keyword in ["import", "include"] {
+            let parens = if keyword == "include" { "()" } else { "" };
+            let source = format!("{keyword} lib{parens}::{{ {items} }};");
+            let main = desugared_source(&source);
+            let mut modules = TestModules::default();
+            modules.add(lib_id.clone(), &lib.declarations);
+            modules.add(main_id.clone(), &main.declarations);
+            let path = if keyword == "include" {
+                first_include(&main).0
+            } else {
+                first_import(&main).path()
+            };
+            modules.edge(&main_id, path, &lib_id);
+            let err = modules.build().unwrap_err();
+            let alias_start = source.find(&format!("{alias} }}")).unwrap();
+            assert!(
+                matches!(
+                    &err,
+                    ModuleResolveError::ReservedImportName {
+                        owner,
+                        name,
+                        reserved: actual,
+                        span,
+                        ..
+                    } if owner == &main_id
+                        && name.as_str() == alias
+                        && *actual == reserved
+                        && *span == Span::new(alias_start, alias.len())
+                ),
+                "{source} ({namespace:?}): {err:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -1112,8 +1190,8 @@ fn aliased_include_does_not_expose_same_named_file_module() {
 fn source_modules_keep_the_handles_they_took_when_added() {
     let main_id = DagId::root_in_package("test", "main");
     let lib_id = DagId::root_in_package("test", "lib");
-    let main = desugared_source("import lib::{dim Length}; include lib() as inst;");
-    let lib = desugared_source("pub dim Length;");
+    let main = desugared_source("import lib::{dim Extent}; include lib() as inst;");
+    let lib = desugared_source("pub dim Extent;");
     let mut tables = SymbolTables::default();
     let main_handle = tables
         .add_module(main_id.clone(), &main.declarations)
@@ -1132,7 +1210,7 @@ fn source_modules_keep_the_handles_they_took_when_added() {
             .iter()
             .map(|binding| binding.name.as_str())
             .collect::<Vec<_>>(),
-        ["Length"]
+        ["Extent"]
     );
     assert_eq!(resolver.exported_bindings(&lib_id), Ok(exported));
     assert_eq!(
@@ -1383,9 +1461,9 @@ fn selective_pub_reexport_resolves_to_original_owner() {
     let leaf_id = DagId::root_in_package("test", "leaf");
     let middle_id = DagId::root_in_package("test", "middle");
     let main_id = DagId::root_in_package("test", "main");
-    let leaf = desugared_source("pub dim Acceleration = Length / Time^2;");
-    let middle = desugared_source("import leaf::{ pub dim Acceleration };");
-    let main = desugared_source("import middle::{ dim Acceleration };");
+    let leaf = desugared_source("pub dim Jerkiness = Length / Time^2;");
+    let middle = desugared_source("import leaf::{ pub dim Jerkiness };");
+    let main = desugared_source("import middle::{ dim Jerkiness };");
     let middle_import = first_import(&middle);
     let main_import = first_import(&main);
 
@@ -1403,16 +1481,16 @@ fn selective_pub_reexport_resolves_to_original_owner() {
             .iter()
             .map(ExportedImportItem::render)
             .collect::<Vec<_>>(),
-        ["dim Acceleration"]
+        ["dim Jerkiness"]
     );
 
     let resolved_name = resolver
-        .resolve_dimension_path(&main_id, &path(&["Acceleration"]))
+        .resolve_dimension_path(&main_id, &path(&["Jerkiness"]))
         .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap();
 
     assert_eq!(resolved_name.owner(), &leaf_id);
-    assert_eq!(resolved_name.as_str(), "Acceleration");
+    assert_eq!(resolved_name.as_str(), "Jerkiness");
 }
 
 #[test]

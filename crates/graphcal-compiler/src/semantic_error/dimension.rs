@@ -315,6 +315,8 @@ pub enum DimensionError {
         dim: DimensionSpelling,
         rejection: BaseUnitRejection,
     },
+    #[error("cannot declare unit `{name}` over required dimension port `{port}`")]
+    UnitOverRequiredDimensionPort { name: UnitName, port: DimName },
     #[error("user-defined units on dimension `{dim}` are not supported")]
     AffineProneUnitDefinition { dim: DimensionSpelling },
     // --- Domain constraint errors ---
@@ -402,7 +404,8 @@ impl DiagnosticKind for DimensionError {
             Self::ConversionDimensionMismatch { .. } => "graphcal::D006",
             Self::NestedConversion => "graphcal::D012",
             Self::IneffectiveConversion => "graphcal::D013",
-            Self::InvalidBaseUnitDeclaration { .. } => "graphcal::D036",
+            Self::InvalidBaseUnitDeclaration { .. }
+            | Self::UnitOverRequiredDimensionPort { .. } => "graphcal::D036",
             Self::AffineProneUnitDefinition { .. } => "graphcal::D014",
             Self::InvalidTimezone { .. } => "graphcal::D007",
             Self::InvalidDatetimeLiteral { .. } => "graphcal::D028",
@@ -485,6 +488,9 @@ impl DiagnosticKind for DimensionError {
                 }
                 BaseUnitRejection::NotBaseDimension => format!("`{dim}` is not a base dimension"),
             }),
+            Self::UnitOverRequiredDimensionPort { port, .. } => Some(format!(
+                "`{port}` is a required port; the binding owns its canonical unit"
+            )),
             Self::AffineProneUnitDefinition { .. } => {
                 Some("unit defined on an affine-prone dimension".to_owned())
             }
@@ -536,6 +542,7 @@ impl DiagnosticKind for DimensionError {
                 BaseUnitRejection::CanonicalUnitTaken { .. } => "a dimension can have only one canonical base unit; if another multiplicative unit is valid for this dimension, define its scale explicitly with `const unit` or `unit`".to_owned(),
                 BaseUnitRejection::NotBaseDimension => format!("`base unit` can only define the canonical unit of a bare base dimension; define `{name}` with an explicit `const unit` or `unit` scale instead"),
             }),
+            Self::UnitOverRequiredDimensionPort { name, port } => Some(format!("a template cannot define units over a required dimension port: each include binds `{port}` to a concrete dimension that already has its own units; remove `{name}` and take values of `{port}` through a `param` input port, which the including module writes in its own units")),
             Self::IndexedShapeMismatch { .. } => Some("element-wise operands must be indexed by the same axes in the same order; an unindexed operand broadcasts to every key".to_owned()),
             Self::IndexedComparisonOperand { .. } => Some("comparison operators do not broadcast; use an explicit `for` comprehension and compare individual indexed elements in its body".to_owned()),
             Self::MultiAxisAggregation { .. } => Some("reduce one axis at a time with an explicit `for` comprehension; total- and partial-axis aggregation are not yet defined".to_owned()),
@@ -597,6 +604,7 @@ impl DiagnosticKind for DimensionError {
             | Self::NestedConversion
             | Self::IneffectiveConversion
             | Self::InvalidBaseUnitDeclaration { .. }
+            | Self::UnitOverRequiredDimensionPort { .. }
             | Self::AffineProneUnitDefinition { .. }
             | Self::InvalidTimezone { .. }
             | Self::InvalidDatetimeLiteral { .. }
