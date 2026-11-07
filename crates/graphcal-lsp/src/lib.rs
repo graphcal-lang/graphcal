@@ -5,9 +5,9 @@
 )]
 
 mod analysis;
+mod analysis_generations;
 mod analysis_pipeline;
 mod analysis_schedule_state;
-mod analysis_settlement;
 mod cancel_on_drop;
 mod client_capabilities;
 mod code_actions;

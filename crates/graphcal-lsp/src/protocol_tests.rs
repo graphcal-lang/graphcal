@@ -625,7 +625,7 @@ async fn watched_file_burst_schedules_each_root_once() {
         next_client_event(&mut events).await,
         ClientEvent::InlayHintRefresh
     ) {}
-    let generation = service.inner().generation_for_test(&main_uri).await;
+    let generation = service.inner().generation_for_test(&main_uri);
 
     for (index, path) in library_paths.iter().enumerate() {
         std::fs::write(
@@ -645,7 +645,7 @@ async fn watched_file_burst_schedules_each_root_once() {
     )
     .await;
     assert_eq!(
-        service.inner().generation_for_test(&main_uri).await,
+        service.inner().generation_for_test(&main_uri),
         generation + 1,
         "the burst schedules the root exactly once"
     );
@@ -699,6 +699,83 @@ async fn open_and_save_do_not_wait_for_their_analysis() {
         next_client_event(&mut events).await,
         ClientEvent::Diagnostics(published) if published == uri
     ) {}
+}
+
+/// LSP-16 (#2253): disk revisions of documents no analysis depends on are
+/// pruned, and closing the last document empties every per-document map.
+#[tokio::test]
+async fn per_document_state_shrinks_after_analysis_and_close() {
+    let project = tempfile::tempdir().unwrap();
+    let source_dir = project.path().join("src/shrink");
+    std::fs::create_dir_all(&source_dir).unwrap();
+    std::fs::write(
+        project.path().join("graphcal.toml"),
+        "[package]\nname = \"shrink\"\n",
+    )
+    .unwrap();
+    let library_path = source_dir.join("lib.gcl");
+    let unrelated_path = source_dir.join("unrelated.gcl");
+    let main_path = source_dir.join("main.gcl");
+    let main_source = "import shrink.lib::{v};\nnode total: Dimensionless = @v;\n";
+    std::fs::write(&library_path, "pub const node v: Dimensionless = 1.0;\n").unwrap();
+    std::fs::write(&unrelated_path, "node u: Dimensionless = 1.0;\n").unwrap();
+    std::fs::write(&main_path, main_source).unwrap();
+    let main_uri = Url::from_file_path(&main_path).unwrap();
+
+    let (mut service, socket) = service();
+    initialize(&mut service, json!({})).await;
+    let drain = tokio::spawn(async move {
+        let mut socket = socket;
+        while socket.next().await.is_some() {}
+    });
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&main_uri, 1, main_source),
+    )
+    .await;
+    service.inner().wait_until_settled_for_test(&main_uri).await;
+
+    std::fs::write(&library_path, "pub const node v: Dimensionless = 2.0;\n").unwrap();
+    std::fs::write(&unrelated_path, "node u: Dimensionless = 2.0;\n").unwrap();
+    let changes: Vec<_> = [&library_path, &unrelated_path]
+        .into_iter()
+        .map(|path| json!({ "uri": Url::from_file_path(path).unwrap(), "type": 2 }))
+        .collect();
+    notify(
+        &mut service,
+        "workspace/didChangeWatchedFiles",
+        json!({ "changes": changes }),
+    )
+    .await;
+    service.inner().wait_until_settled_for_test(&main_uri).await;
+    let disk = service.inner().disk_revision_identities_for_test().await;
+    assert_eq!(disk.len(), 1, "{disk:?}");
+    assert!(
+        disk.iter().all(|identity| identity
+            .file_path()
+            .is_some_and(|path| path.ends_with("lib.gcl"))),
+        "only the dependency keeps its revision: {disk:?}"
+    );
+
+    notify(
+        &mut service,
+        "textDocument/didClose",
+        json!({ "textDocument": { "uri": main_uri } }),
+    )
+    .await;
+    assert!(
+        service
+            .inner()
+            .disk_revision_identities_for_test()
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        service.inner().tracked_documents_for_test().await,
+        [0, 0, 0]
+    );
+    drain.abort();
 }
 
 async fn assert_imported_factor_features(

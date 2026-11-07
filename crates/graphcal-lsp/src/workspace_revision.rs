@@ -140,19 +140,51 @@ pub struct AnalysisInputs {
     expected_revisions: HashMap<DocumentIdentity, Option<DocumentRevision>>,
 }
 
-/// Combine observed disk revisions with authoritative open-buffer revisions.
+/// The current revision of every document identity: observed disk revisions
+/// overlaid with authoritative open-buffer revisions.
 ///
 /// An open editor snapshot always replaces the disk revision for the same
 /// identity, preserving dirty-buffer authority when a client reports duplicate
-/// save/watcher events.
-#[must_use]
-pub fn current_revisions(
-    disk: &HashMap<DocumentIdentity, DocumentRevision>,
-    open: impl IntoIterator<Item = (DocumentIdentity, DocumentRevision)>,
-) -> HashMap<DocumentIdentity, DocumentRevision> {
-    let mut current = disk.clone();
-    current.extend(open);
-    current
+/// save/watcher events. The view borrows the disk layer, so a request that
+/// checks a few identities never copies every disk revision.
+#[derive(Debug)]
+pub struct CurrentRevisions<'a> {
+    open: HashMap<&'a DocumentIdentity, DocumentRevision>,
+    disk: &'a HashMap<DocumentIdentity, DocumentRevision>,
+}
+
+impl<'a> CurrentRevisions<'a> {
+    #[must_use]
+    pub fn new(
+        disk: &'a HashMap<DocumentIdentity, DocumentRevision>,
+        open: impl IntoIterator<Item = (&'a DocumentIdentity, DocumentRevision)>,
+    ) -> Self {
+        Self {
+            open: open.into_iter().collect(),
+            disk,
+        }
+    }
+
+    #[must_use]
+    pub fn get(&self, identity: &DocumentIdentity) -> Option<DocumentRevision> {
+        self.open
+            .get(identity)
+            .or_else(|| self.disk.get(identity))
+            .copied()
+    }
+
+    /// Owned copy of every current revision, for an analysis snapshot that
+    /// must outlive the locks this view borrows from.
+    #[must_use]
+    pub fn to_map(&self) -> HashMap<DocumentIdentity, DocumentRevision> {
+        let mut current = self.disk.clone();
+        current.extend(
+            self.open
+                .iter()
+                .map(|(identity, revision)| ((*identity).clone(), *revision)),
+        );
+        current
+    }
 }
 
 impl AnalysisInputs {
@@ -182,13 +214,9 @@ impl AnalysisInputs {
     }
 
     #[must_use]
-    pub fn freshness(
-        &self,
-        current: &HashMap<DocumentIdentity, DocumentRevision>,
-    ) -> AnalysisFreshness {
+    pub fn freshness(&self, current: &CurrentRevisions<'_>) -> AnalysisFreshness {
         let dependency_changed = self.dependencies.iter().any(|identity| {
-            self.expected_revisions.get(identity).copied().flatten()
-                != current.get(identity).copied()
+            self.expected_revisions.get(identity).copied().flatten() != current.get(identity)
         });
         if dependency_changed {
             return AnalysisFreshness::DependencyChanged;
@@ -201,16 +229,16 @@ impl AnalysisInputs {
     }
 
     #[must_use]
-    pub fn root_is_current(&self, current: &HashMap<DocumentIdentity, DocumentRevision>) -> bool {
+    pub fn root_is_current(&self, current: &CurrentRevisions<'_>) -> bool {
         self.expected_revisions
             .get(&self.root)
-            .is_some_and(|expected| current.get(&self.root).copied() == *expected)
+            .is_some_and(|expected| current.get(&self.root) == *expected)
     }
 
     /// True only when every consumed identity has the same open/closed state
     /// and revision as it had when analysis started.
     #[must_use]
-    pub fn is_current(&self, current: &HashMap<DocumentIdentity, DocumentRevision>) -> bool {
+    pub fn is_current(&self, current: &CurrentRevisions<'_>) -> bool {
         self.freshness(current) == AnalysisFreshness::Current
     }
 }
@@ -228,6 +256,18 @@ impl DependencyGraph {
 
     pub fn remove(&mut self, root: &DocumentIdentity) {
         self.dependencies_by_root.remove(root);
+    }
+
+    /// Keep only the entries of `revisions` whose identity some root or
+    /// dependency edge references; a revision of any other document cannot
+    /// affect a result the graph describes.
+    pub fn retain_referenced<V>(&self, revisions: &mut HashMap<DocumentIdentity, V>) {
+        let referenced: HashSet<&DocumentIdentity> = self
+            .dependencies_by_root
+            .iter()
+            .flat_map(|(root, dependencies)| std::iter::once(root).chain(dependencies))
+            .collect();
+        revisions.retain(|identity, _| referenced.contains(identity));
     }
 
     /// Return every analyzed root that transitively consumes `changed`.
@@ -254,6 +294,10 @@ mod tests {
         DocumentIdentity::file(PathBuf::from(name))
     }
 
+    fn view(disk: &HashMap<DocumentIdentity, DocumentRevision>) -> CurrentRevisions<'_> {
+        CurrentRevisions::new(disk, [])
+    }
+
     #[test]
     fn analysis_inputs_detect_dependency_edit_save_and_close() {
         let clock = RevisionClock::default();
@@ -272,13 +316,16 @@ mod tests {
             (root.clone(), root_revision),
             (dependency.clone(), dependency_revision),
         ]);
-        assert_eq!(inputs.freshness(&current), AnalysisFreshness::Current);
+        assert_eq!(
+            inputs.freshness(&view(&current)),
+            AnalysisFreshness::Current
+        );
         let root_changed = HashMap::from([
             (root.clone(), clock.next().unwrap()),
             (dependency.clone(), dependency_revision),
         ]);
         assert_eq!(
-            inputs.freshness(&root_changed),
+            inputs.freshness(&view(&root_changed)),
             AnalysisFreshness::RootChanged
         );
         let dependency_changed = HashMap::from([
@@ -286,10 +333,10 @@ mod tests {
             (dependency, clock.next().unwrap()),
         ]);
         assert_eq!(
-            inputs.freshness(&dependency_changed),
+            inputs.freshness(&view(&dependency_changed)),
             AnalysisFreshness::DependencyChanged
         );
-        assert!(!inputs.is_current(&HashMap::from([(root, root_revision)])));
+        assert!(!inputs.is_current(&view(&HashMap::from([(root, root_revision)]))));
     }
 
     #[test]
@@ -301,26 +348,31 @@ mod tests {
         let snapshot = AnalysisInputSnapshot::new(root.clone(), root_revision, HashMap::new());
         let inputs = snapshot.finish_loaded_project(HashSet::from([dependency.clone()]));
 
-        assert!(inputs.is_current(&HashMap::from([(root.clone(), root_revision)])));
-        assert!(!inputs.is_current(&HashMap::from([
+        assert!(inputs.is_current(&view(&HashMap::from([(root.clone(), root_revision)]))));
+        assert!(!inputs.is_current(&view(&HashMap::from([
             (root, root_revision),
             (dependency, clock.next().unwrap()),
-        ])));
+        ]))));
     }
 
     #[test]
     fn open_revisions_override_disk_revisions() {
         let clock = RevisionClock::default();
         let file = file("dep.gcl");
+        let disk_only = self::file("disk.gcl");
         let disk_revision = clock.next().unwrap();
         let open_revision = clock.next().unwrap();
+        let disk = HashMap::from([
+            (file.clone(), disk_revision),
+            (disk_only.clone(), disk_revision),
+        ]);
+        let current = CurrentRevisions::new(&disk, [(&file, open_revision)]);
 
+        assert_eq!(current.get(&file), Some(open_revision));
+        assert_eq!(current.get(&disk_only), Some(disk_revision));
         assert_eq!(
-            current_revisions(
-                &HashMap::from([(file.clone(), disk_revision)]),
-                [(file.clone(), open_revision)]
-            ),
-            HashMap::from([(file, open_revision)])
+            current.to_map(),
+            HashMap::from([(file, open_revision), (disk_only, disk_revision)])
         );
     }
 
@@ -335,13 +387,38 @@ mod tests {
         let inputs = snapshot.finish_partially_loaded_project(HashSet::from([missing.clone()]));
 
         assert_eq!(
-            inputs.freshness(&HashMap::from([
+            inputs.freshness(&view(&HashMap::from([
                 (root, root_revision),
                 (missing, created_revision)
-            ])),
+            ]))),
             AnalysisFreshness::DependencyChanged
         );
         assert!(!inputs.has_complete_dependencies());
+    }
+
+    /// LSP-16 (#2253): revisions no root or dependency edge references are
+    /// pruned.
+    #[test]
+    fn retain_referenced_drops_revisions_outside_the_graph() {
+        let clock = RevisionClock::default();
+        let root = file("root.gcl");
+        let dependency = file("dep.gcl");
+        let unrelated = file("unrelated.gcl");
+        let mut graph = DependencyGraph::default();
+        graph.update(root.clone(), HashSet::from([dependency.clone()]));
+        let mut revisions: HashMap<_, _> = [&root, &dependency, &unrelated]
+            .into_iter()
+            .map(|identity| (identity.clone(), clock.next().unwrap()))
+            .collect();
+
+        graph.retain_referenced(&mut revisions);
+        assert_eq!(
+            revisions.keys().collect::<HashSet<_>>(),
+            HashSet::from([&root, &dependency])
+        );
+        graph.remove(&root);
+        graph.retain_referenced(&mut revisions);
+        assert!(revisions.is_empty());
     }
 
     #[test]
