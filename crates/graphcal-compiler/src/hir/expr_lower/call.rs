@@ -137,22 +137,27 @@ impl ExprLowerer<'_> {
         datetime_arg: &ast::Expr,
         time_zone_arg: &ast::Expr,
     ) -> Result<Vec<Expr<Tolerant>>, ExprLowerError> {
+        // Parse both literals before lowering either expression argument: a
+        // level must fail before it lowers any child (see `lower_expr`).
         let datetime = match &datetime_arg.kind {
-            ast::ExprKind::StringLiteral(source) => Self::lower_civil_datetime_literal(
+            ast::ExprKind::StringLiteral(source) => Some(Self::lower_civil_datetime_literal(
                 source,
                 DatetimeLiteralExpectation::ZonedCivilDateTime,
                 datetime_arg.span,
-            )?,
-            _ => self.lower_expr(datetime_arg),
+            )?),
+            _ => None,
         };
         let time_zone = match &time_zone_arg.kind {
-            ast::ExprKind::StringLiteral(source) => self
-                .lower_iana_time_zone_id(source, time_zone_arg.span)
-                .map(|time_zone| {
-                    Expr::new(ExprKind::IanaTimeZoneLiteral(time_zone), time_zone_arg.span)
-                })?,
-            _ => self.lower_expr(time_zone_arg),
+            ast::ExprKind::StringLiteral(source) => Some(
+                self.lower_iana_time_zone_id(source, time_zone_arg.span)
+                    .map(|time_zone| {
+                        Expr::new(ExprKind::IanaTimeZoneLiteral(time_zone), time_zone_arg.span)
+                    })?,
+            ),
+            _ => None,
         };
+        let datetime = datetime.unwrap_or_else(|| self.lower_expr(datetime_arg));
+        let time_zone = time_zone.unwrap_or_else(|| self.lower_expr(time_zone_arg));
 
         let resolution_inputs = match (datetime.kind(), time_zone.kind()) {
             (

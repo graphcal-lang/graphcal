@@ -216,12 +216,7 @@ fn single_module_resolver(
     let mut tables = crate::resolve::builder::SymbolTables::default();
     tables
         .add_file(dag_id.clone(), &ast.declarations)
-        .and_then(|()| {
-            tables
-                .scopes(&crate::resolve::builder::NoModuleTargets)?
-                .freeze()
-                .map_err(|crate::resolve::error::ScopeError { error, .. }| error)
-        })
+        .and_then(|()| tables.freeze_without_edges())
         .map_err(|error| {
             SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })

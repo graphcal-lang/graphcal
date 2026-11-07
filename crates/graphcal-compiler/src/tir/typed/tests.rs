@@ -561,8 +561,11 @@ fn check_draft(
     draft: TirDraft,
     src: crate::source_id::SourceId,
 ) -> Result<CheckedTir, SemanticError> {
-    let instantiated = draft.instantiate(&CheckedOverrideDependencies::default(), src)?;
-    crate::outcome::without_cancellation(|cancellation| instantiated.check(src, cancellation))
+    crate::outcome::without_cancellation(|cancellation| {
+        draft
+            .instantiate(&CheckedOverrideDependencies::default(), src, cancellation)?
+            .check(src, cancellation)
+    })
 }
 
 fn importer_tir(path: &str, stores: &[&DagStore]) -> CheckedTir {

@@ -1,6 +1,8 @@
 //! The module resolver of one loaded project, with the resolver handle of
 //! every loaded module.
 
+use graphcal_compiler::cancellation::CancellationToken;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolve::error::{ModuleResolveError, ScopeError};
 use graphcal_compiler::resolve::{ModuleHandle, ModuleRef, ModuleResolver};
 use graphcal_compiler::source_id::SourceId;
@@ -46,8 +48,12 @@ impl LoadedModuleResolver {
     ///
     /// Returns the [`ModuleResolveError`] of
     /// [`LoadedProject::build_module_resolver`], with the loaded source it
-    /// was raised in.
-    pub(crate) fn build(project: &LoadedProject) -> Result<Self, ModuleResolverBuildError> {
+    /// was raised in, or [`Outcome::Cancelled`] once `cancellation` is
+    /// cancelled.
+    pub(crate) fn build(
+        project: &LoadedProject,
+        cancellation: &CancellationToken,
+    ) -> Result<Self, Outcome<ModuleResolverBuildError>> {
         let mut tables = graphcal_compiler::resolve::builder::SymbolTables::default();
         let handles = project
             .files()
@@ -68,19 +74,24 @@ impl LoadedModuleResolver {
                     .map_err(in_file)?;
                 Ok(FileModuleHandles { root, inline_dags })
             })
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<_, _>>()
+            .map_err(Outcome::Failed)?;
         let resolver = tables
-            .scopes(project)
-            .map_err(|error| ModuleResolverBuildError {
-                source: None,
-                error,
+            .scopes(project, cancellation)
+            .map_err(|outcome| {
+                outcome.map_failed(|error| ModuleResolverBuildError {
+                    source: None,
+                    error,
+                })
             })?
-            .freeze()
-            .map_err(|ScopeError { module, error }| ModuleResolverBuildError {
-                source: project
-                    .file(&module.file_root())
-                    .map(super::loaded_file::LoadedFile::source_id),
-                error,
+            .freeze(cancellation)
+            .map_err(|outcome| {
+                outcome.map_failed(|ScopeError { module, error }| ModuleResolverBuildError {
+                    source: project
+                        .file(&module.file_root())
+                        .map(super::loaded_file::LoadedFile::source_id),
+                    error,
+                })
             })?;
         Ok(Self { resolver, handles })
     }

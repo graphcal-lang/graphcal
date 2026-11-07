@@ -88,16 +88,15 @@ fn check_draft(
     draft: crate::tir::typed::TirDraft,
     src: crate::source_id::SourceId,
 ) -> Result<crate::tir::typed::CheckedTir, SemanticError> {
-    draft
-        .instantiate(
-            &crate::tir::typed::CheckedOverrideDependencies::default(),
-            src,
-        )
-        .and_then(|instantiated| {
-            crate::outcome::without_cancellation(|cancellation| {
-                instantiated.check(src, cancellation)
-            })
-        })
+    crate::outcome::without_cancellation(|cancellation| {
+        draft
+            .instantiate(
+                &crate::tir::typed::CheckedOverrideDependencies::default(),
+                src,
+                cancellation,
+            )?
+            .check(src, cancellation)
+    })
 }
 
 /// The checked declared type of every root value declaration and imported

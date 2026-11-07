@@ -5,6 +5,7 @@ use crate::desugar::desugared_ast as ast;
 use crate::exact_rational::ExactRational;
 use crate::resolve::error::{ModuleResolveError, NameCategory};
 use crate::resolve::namespace::Namespace;
+use crate::resolved_name::ResolvedDeclName;
 use crate::syntax::ast::{InputBindingCategory, PowerExponent, UnresolvedRef};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::names::NamePath;
@@ -25,6 +26,16 @@ use crate::hir::expr::{
 use crate::hir::expr::{CheckedAssertBody, CheckedExpr, Draft};
 use crate::hir::lower::{lower_generic_args, lower_nat_expr};
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
+
+/// An index argument after name resolution: resolved outright, or an
+/// expression still to lower.
+enum IndexArgHead<'e> {
+    Resolved(IndexArg<Tolerant>),
+    Expr(&'e ast::Expr),
+}
+
+/// The value bindings of an inline DAG call, resolved but not yet lowered.
+type ValueBindings<'e> = Vec<(Spanned<ResolvedDeclName>, &'e ast::Expr)>;
 
 /// The literal an exact power exponent denotes.
 ///
@@ -190,18 +201,30 @@ impl ExprLowerer<'_> {
     /// Lower one expression level, localizing failures.
     ///
     /// A failed parent becomes an [`ExprKind::Error`] node that retains every
-    /// independently lowerable descendant expression. Any tentative child
-    /// lowering performed before the parent failed is rolled back first, so
+    /// independently lowerable descendant expression. Any binder allocation
+    /// performed before the parent failed is rolled back first, so
     /// diagnostics and lexical IDs are emitted exactly once.
+    ///
+    /// Every level performs its fallible checks (name resolution, binder
+    /// validation, literal parsing) before it lowers any child, so recovery
+    /// lowers each child once: were a level to fail after lowering a child,
+    /// recovery would lower that child again, and nested failures would cost
+    /// time exponential in their depth.
     pub(super) fn lower_expr(&mut self, expr: &ast::Expr) -> Expr<Tolerant> {
         let next_local_checkpoint = self.next_local;
         let scope_depth_checkpoint = self.local_scopes.len();
+        self.lowered_levels += 1;
+        let levels_checkpoint = self.lowered_levels;
 
         // Recursion choke point: lowering recurses once per tree level
         // (unbounded for left-nested operator chains).
         crate::stack::with_stack_growth(|| match self.lower_expr_inner(expr) {
             Ok(lowered) => lowered,
             Err(err) => {
+                debug_assert_eq!(
+                    self.lowered_levels, levels_checkpoint,
+                    "an expression level failed after lowering a child: {err:?}"
+                );
                 self.next_local = next_local_checkpoint;
                 self.local_scopes.truncate(scope_depth_checkpoint);
                 let children = self.lower_error_children(expr);
@@ -363,17 +386,23 @@ impl ExprLowerer<'_> {
                 value: *value,
                 unit: self.lower_unit_expr(unit, UnitExprSite::QuantityLiteral)?,
             },
-            ast::ExprKind::Convert { expr, target } => ExprKind::Convert {
-                expr: Box::new(self.lower_expr(expr)),
-                target: self.lower_unit_expr(target, UnitExprSite::ConversionTarget)?,
-            },
+            ast::ExprKind::Convert { expr, target } => {
+                let target = self.lower_unit_expr(target, UnitExprSite::ConversionTarget)?;
+                ExprKind::Convert {
+                    expr: Box::new(self.lower_expr(expr)),
+                    target,
+                }
+            }
             ast::ExprKind::DisplayTimezone {
                 expr: operand,
                 timezone,
-            } => ExprKind::DisplayTimezone {
-                expr: Box::new(self.lower_expr(operand)),
-                timezone: self.lower_iana_time_zone_id(timezone, expr.span)?,
-            },
+            } => {
+                let timezone = self.lower_iana_time_zone_id(timezone, expr.span)?;
+                ExprKind::DisplayTimezone {
+                    expr: Box::new(self.lower_expr(operand)),
+                    timezone,
+                }
+            }
             ast::ExprKind::FieldAccess { expr, field } => ExprKind::FieldAccess {
                 expr: Box::new(self.lower_expr(expr)),
                 field: field.clone(),
@@ -394,12 +423,22 @@ impl ExprLowerer<'_> {
                         .collect(),
                 }
             }
-            ast::ExprKind::MapLiteral { entries } => ExprKind::MapLiteral {
-                entries: entries
+            ast::ExprKind::MapLiteral { entries } => {
+                let keys = entries
                     .iter()
-                    .map(|entry| self.lower_map_entry(entry, expr.span))
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
+                    .map(|entry| self.lower_map_entry_keys(entry, expr.span))
+                    .collect::<Result<Vec<_>, _>>()?;
+                ExprKind::MapLiteral {
+                    entries: entries
+                        .iter()
+                        .zip(keys)
+                        .map(|(entry, keys)| MapEntry {
+                            keys,
+                            value: self.lower_expr(&entry.value),
+                        })
+                        .collect(),
+                }
+            }
             ast::ExprKind::ForComp { bindings, body } => {
                 let bindings = bindings
                     .iter()
@@ -414,10 +453,16 @@ impl ExprLowerer<'_> {
                 self.pop_scope();
                 ExprKind::ForComp { bindings, body }
             }
-            ast::ExprKind::IndexAccess { expr, args } => ExprKind::IndexAccess {
-                expr: Box::new(self.lower_expr(expr)),
-                args: args.try_map_ref(|arg| self.lower_index_arg(arg))?,
-            },
+            ast::ExprKind::IndexAccess { expr, args } => {
+                let args = args.as_refs().try_map(|arg| self.resolve_index_arg(arg))?;
+                ExprKind::IndexAccess {
+                    expr: Box::new(self.lower_expr(expr)),
+                    args: args.map(|arg| match arg {
+                        IndexArgHead::Resolved(arg) => arg,
+                        IndexArgHead::Expr(expr) => IndexArg::Expr(Box::new(self.lower_expr(expr))),
+                    }),
+                }
+            }
             ast::ExprKind::Scan {
                 source,
                 init,
@@ -425,11 +470,12 @@ impl ExprLowerer<'_> {
                 val_name,
                 body,
             } => {
-                let source = Box::new(self.lower_expr(source));
-                let init = Box::new(self.lower_expr(init));
                 let acc = self.allocate_local(acc_name.value.clone(), acc_name.span)?;
                 let val = self.allocate_local(val_name.value.clone(), val_name.span)?;
-                self.push_scope(vec![acc.clone(), val.clone()])?;
+                let scope = self.prepare_scope(vec![acc.clone(), val.clone()])?;
+                let source = Box::new(self.lower_expr(source));
+                let init = Box::new(self.lower_expr(init));
+                self.enter_scope(scope);
                 let body = Box::new(self.lower_expr(body));
                 self.pop_scope();
                 ExprKind::Scan {
@@ -458,13 +504,18 @@ impl ExprLowerer<'_> {
                         source,
                         span: axis.span,
                     })?;
-                let init = Box::new(self.lower_expr(init));
                 let prev_state =
                     self.allocate_local(prev_state_name.value.clone(), prev_state_name.span)?;
                 let prev_index =
                     self.allocate_local(prev_index_name.value.clone(), prev_index_name.span)?;
                 let index = self.allocate_local(index_name.value.clone(), index_name.span)?;
-                self.push_scope(vec![prev_state.clone(), prev_index.clone(), index.clone()])?;
+                let scope = self.prepare_scope(vec![
+                    prev_state.clone(),
+                    prev_index.clone(),
+                    index.clone(),
+                ])?;
+                let init = Box::new(self.lower_expr(init));
+                self.enter_scope(scope);
                 let body = Box::new(self.lower_expr(body));
                 self.pop_scope();
                 ExprKind::Unfold {
@@ -516,13 +567,33 @@ impl ExprLowerer<'_> {
                     arg: Box::new(self.lower_expr(arg)),
                 }
             }
-            ast::ExprKind::Match { scrutinee, arms } => ExprKind::Match {
-                scrutinee: Box::new(self.lower_expr(scrutinee)),
-                arms: arms
+            ast::ExprKind::Match { scrutinee, arms } => {
+                let patterns = arms
                     .iter()
-                    .map(|arm| self.lower_match_arm(arm))
-                    .collect::<Result<Vec<_>, _>>()?,
-            },
+                    .map(|arm| {
+                        let pattern = self.lower_match_pattern(&arm.pattern)?;
+                        let scope = self.prepare_scope(pattern.bound_locals())?;
+                        Ok((pattern, scope))
+                    })
+                    .collect::<Result<Vec<_>, ExprLowerError>>()?;
+                ExprKind::Match {
+                    scrutinee: Box::new(self.lower_expr(scrutinee)),
+                    arms: arms
+                        .iter()
+                        .zip(patterns)
+                        .map(|(arm, (pattern, scope))| {
+                            self.enter_scope(scope);
+                            let body = self.lower_expr(&arm.body);
+                            self.pop_scope();
+                            MatchArm {
+                                pattern,
+                                body,
+                                span: arm.span,
+                            }
+                        })
+                        .collect(),
+                }
+            }
             ast::ExprKind::InlineDagRef { path, args, output } => {
                 let target = self
                     .ctx
@@ -533,8 +604,8 @@ impl ExprLowerer<'_> {
                         source,
                         span: path.span(),
                     })?;
-                let (lowered_args, static_bindings) =
-                    self.lower_dag_call_bindings(&target, args)?;
+                let (param_targets, static_bindings) =
+                    self.resolve_dag_call_bindings(&target, args)?;
                 let output_path = NamePath::local(output.value.atom().clone());
                 let lowered_output = self
                     .ctx
@@ -546,6 +617,13 @@ impl ExprLowerer<'_> {
                         source,
                         span: output.span,
                     })?;
+                let lowered_args = param_targets
+                    .into_iter()
+                    .map(|(target, value)| ParamBinding {
+                        target,
+                        value: self.lower_expr(value),
+                    })
+                    .collect();
                 ExprKind::DagCall {
                     target: Spanned::new(target, path.span()),
                     args: lowered_args,
@@ -627,18 +705,25 @@ impl ExprLowerer<'_> {
         }
     }
 
-    pub(super) fn lower_dag_call_bindings(
-        &mut self,
+    /// Resolve the bindings of an inline DAG call: the target of every value
+    /// binding, paired with the value expression to lower once every binding
+    /// has resolved, and the static bindings.
+    #[expect(clippy::too_many_lines, reason = "one arm per input-binding category")]
+    fn resolve_dag_call_bindings<'e>(
+        &self,
         target: &DagId,
-        bindings: &[ast::ParamBinding],
-    ) -> Result<(Vec<ParamBinding<Tolerant>>, StaticSubstitution), ExprLowerError> {
+        bindings: &'e [ast::ParamBinding],
+    ) -> Result<(ValueBindings<'e>, StaticSubstitution), ExprLowerError> {
         let mut params = Vec::new();
         let mut static_bindings = StaticSubstitution::default();
         for binding in bindings {
             let input_path = NamePath::local(binding.name.name.atom().clone());
             match binding.category {
                 InputBindingCategory::Unmarked => {
-                    params.push(self.lower_param_binding(target, binding)?);
+                    params.push((
+                        self.resolve_param_binding_target(target, binding)?,
+                        &binding.value,
+                    ));
                 }
                 InputBindingCategory::Type => {
                     let resolver = self.ctx.scope.resolver;
@@ -734,11 +819,11 @@ impl ExprLowerer<'_> {
         Ok((params, static_bindings))
     }
 
-    pub(super) fn lower_param_binding(
-        &mut self,
+    fn resolve_param_binding_target(
+        &self,
         target: &DagId,
         binding: &ast::ParamBinding,
-    ) -> Result<ParamBinding<Tolerant>, ExprLowerError> {
+    ) -> Result<Spanned<ResolvedDeclName>, ExprLowerError> {
         let path = NamePath::local(binding.name.name.atom().clone());
         let target_name = self
             .ctx
@@ -750,21 +835,7 @@ impl ExprLowerer<'_> {
                 source,
                 span: binding.name.span,
             })?;
-        Ok(ParamBinding {
-            target: Spanned::new(target_name, binding.name.span),
-            value: self.lower_expr(&binding.value),
-        })
-    }
-
-    pub(super) fn lower_map_entry(
-        &mut self,
-        entry: &ast::MapEntry,
-        map_span: Span,
-    ) -> Result<MapEntry<Tolerant>, ExprLowerError> {
-        Ok(MapEntry {
-            keys: self.lower_map_entry_keys(entry, map_span)?,
-            value: self.lower_expr(&entry.value),
-        })
+        Ok(Spanned::new(target_name, binding.name.span))
     }
 
     /// The keys of one map entry, in source order.
@@ -896,11 +967,13 @@ impl ExprLowerer<'_> {
         Ok(ForBinding { local, index })
     }
 
-    pub(super) fn lower_index_arg(
-        &mut self,
-        arg: &ast::IndexArg,
-    ) -> Result<IndexArg<Tolerant>, ExprLowerError> {
-        match arg {
+    /// Resolve an index argument, leaving an expression argument to be
+    /// lowered once every argument has resolved.
+    fn resolve_index_arg<'e>(
+        &self,
+        arg: &'e ast::IndexArg,
+    ) -> Result<IndexArgHead<'e>, ExprLowerError> {
+        let resolved = match arg {
             ast::IndexArg::Variant { index, variant } => {
                 let resolved = self.resolve_index_variant_parts(
                     &index.value,
@@ -908,34 +981,20 @@ impl ExprLowerer<'_> {
                     index.span,
                     variant.span,
                 )?;
-                Ok(IndexArg::Variant(IndexVariantRef {
+                IndexArg::Variant(IndexVariantRef {
                     variant: resolved,
                     index_span: Some(index.span),
                     additional_index_spans: Vec::new(),
                     variant_span: variant.span,
-                }))
+                })
             }
-            ast::IndexArg::Var(ident) => Ok(IndexArg::Var(Spanned::new(
+            ast::IndexArg::Var(ident) => IndexArg::Var(Spanned::new(
                 self.lookup_local(&LocalName::classify(ident.name.atom().clone()), ident.span)?,
                 ident.span,
-            ))),
-            ast::IndexArg::Expr(expr) => Ok(IndexArg::Expr(Box::new(self.lower_expr(expr)))),
-        }
-    }
-
-    pub(super) fn lower_match_arm(
-        &mut self,
-        arm: &ast::MatchArm,
-    ) -> Result<MatchArm<Tolerant>, ExprLowerError> {
-        let pattern = self.lower_match_pattern(&arm.pattern)?;
-        self.push_scope(pattern.bound_locals())?;
-        let body = self.lower_expr(&arm.body);
-        self.pop_scope();
-        Ok(MatchArm {
-            pattern,
-            body,
-            span: arm.span,
-        })
+            )),
+            ast::IndexArg::Expr(expr) => return Ok(IndexArgHead::Expr(expr)),
+        };
+        Ok(IndexArgHead::Resolved(resolved))
     }
 
     pub(super) fn lower_match_pattern(

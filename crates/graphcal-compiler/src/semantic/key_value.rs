@@ -78,8 +78,8 @@ impl KeyValue {
 
     /// The entry key this key selects on its axis.
     #[must_use]
-    pub fn entry_key(&self) -> &IndexEntryKey {
-        &self.axis.keys().as_slice()[self.position]
+    pub fn entry_key(&self) -> std::borrow::Cow<'_, IndexEntryKey> {
+        self.axis.key_at(self.position)
     }
 
     /// What this key denotes: a variant, a coordinate, or a `Fin` position.
@@ -170,7 +170,7 @@ mod tests {
     }
 
     fn fin(n: u64) -> IndexAxis {
-        IndexAxis::finite(FiniteIndex::try_from_u64(n).unwrap()).unwrap()
+        IndexAxis::finite(FiniteIndex::try_from_u64(n).unwrap())
     }
 
     #[test]
@@ -180,7 +180,7 @@ mod tests {
         let cruise = IndexEntryKey::named(IndexVariantName::expect_valid("Cruise"));
         let key = KeyValue::for_entry(phase(), &cruise).unwrap();
         assert_eq!(key.position(), 1);
-        assert_eq!(key.entry_key(), &cruise);
+        assert_eq!(*key.entry_key(), cruise);
         assert!(KeyValue::for_entry(phase(), &IndexEntryKey::position(0)).is_none());
     }
 

@@ -32,11 +32,7 @@ fn resolver(
 ) -> graphcal_compiler::resolve::ModuleResolver {
     let mut tables = graphcal_compiler::resolve::builder::SymbolTables::default();
     tables.add_file(dependency(), declarations).unwrap();
-    tables
-        .scopes(&graphcal_compiler::resolve::builder::NoModuleTargets)
-        .unwrap()
-        .freeze()
-        .unwrap()
+    tables.freeze_without_edges().unwrap()
 }
 
 /// The resolution of an include that binds nothing.

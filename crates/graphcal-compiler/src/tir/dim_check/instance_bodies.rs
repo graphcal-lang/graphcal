@@ -1,6 +1,8 @@
 //! Check each semantic instance's own bodies and specialize the rest of its
 //! checked trees from its template's, without re-inferring the template.
 
+use std::collections::HashMap;
+
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::outcome::Outcome;
@@ -253,6 +255,7 @@ pub(super) fn instance_bodies<'t>(
     graph: &InstanceGraph,
     canonical: &CanonicalFacts<CanonicalChecked>,
     instances: &InstanceFacts<InstanceOf<'t>>,
+    axes: &crate::tir::texpr::AxisCache,
     src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<InstanceFacts<InstanceChecked>, Outcome<SemanticError>> {
@@ -264,6 +267,10 @@ pub(super) fn instance_bodies<'t>(
         tir,
         bodies: &published,
     };
+    let mut shared = SharedFacts {
+        port_generic: HashMap::new(),
+        axes,
+    };
     instances.try_map_ref(|instance| {
         let (template, template_bodies) = template_of(tir, canonical, instance.origin);
         instance_body(
@@ -271,10 +278,27 @@ pub(super) fn instance_bodies<'t>(
             instance,
             template,
             template_bodies,
+            &mut shared,
             src,
             cancellation,
         )
     })
+}
+
+/// What every instance body is built from, built once for all of them.
+struct SharedFacts<'a> {
+    /// Every instance of one template rebinding the same ports specializes
+    /// the same port-generic trees: they are inferred once per template and
+    /// rebound ports (in port order).
+    port_generic: HashMap<
+        (
+            crate::tir::typed::dag_position::DagPosition,
+            Vec<crate::resolved_name::ResolvedDimName>,
+        ),
+        super::template_closure::PortGenericTrees,
+    >,
+    /// The project's concrete axes.
+    axes: &'a crate::tir::texpr::AxisCache,
 }
 
 /// Check one semantic instance's own defaults and specialize the rest of its
@@ -290,6 +314,7 @@ fn instance_body(
     }: &InstanceOf<'_>,
     template: &crate::tir::typed::model::DagTIR,
     template_bodies: &CheckedBodies,
+    shared: &mut SharedFacts<'_>,
     src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<InstanceChecked, Outcome<SemanticError>> {
@@ -302,18 +327,28 @@ fn instance_body(
     let ports = tir
         .project_type_store()
         .bound_defaulted_dimension_ports(&origin.specialization().substitution);
+    let no_port_generic = DerivedTrees::default();
     let (port_generic, port_generic_plot_channels) = if ports.is_empty() {
-        (DerivedTrees::default(), None)
+        (&no_port_generic, None)
     } else {
-        let generic = super::template_closure::port_generic_trees(
-            tir,
-            origin.template_position(),
-            template,
-            &ports,
-            src,
-            cancellation,
-        )?;
-        (generic.trees, Some(generic.plot_channels))
+        let generic = match shared
+            .port_generic
+            .entry((origin.template_position(), ports))
+        {
+            std::collections::hash_map::Entry::Occupied(cached) => cached.into_mut(),
+            std::collections::hash_map::Entry::Vacant(vacant) => {
+                let generic = super::template_closure::port_generic_trees(
+                    tir,
+                    origin.template_position(),
+                    template,
+                    &vacant.key().1,
+                    src,
+                    cancellation,
+                )?;
+                vacant.insert(generic)
+            }
+        };
+        (&generic.trees, Some(generic.plot_channels.clone()))
     };
     let observations = infer::hir::BodyObservations::default();
     let ctx = DimCheckContext {
@@ -343,9 +378,12 @@ fn instance_body(
         dag,
         checking,
         independent,
-        template_bodies,
-        &port_generic,
+        super::body_specialization::TemplateTrees {
+            checked: template_bodies,
+            port_generic,
+        },
         substitution,
+        shared.axes,
         src,
     )?;
     Ok(InstanceChecked {

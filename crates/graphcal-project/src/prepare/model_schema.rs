@@ -434,9 +434,9 @@ fn model_index_schema(
             kind: ModelIndexKind::Finite { index: finite },
         });
     }
-    let axis = IndexAxis::resolve(tir, index).ok_or_else(|| {
+    let axis = IndexAxis::resolve(tir, index).map_err(|error| {
         SemanticError::internal_error(
-            format!("model index `{index}` has no concrete definition"),
+            format!("model index `{index}` has no concrete axis: {error}"),
             source,
             DiagnosticAnchor::WholeFile,
         )

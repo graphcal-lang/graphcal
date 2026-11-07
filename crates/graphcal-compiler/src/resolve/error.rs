@@ -229,6 +229,14 @@ pub enum ModuleResolveError {
     },
 }
 
+/// A cancellable resolver stage that fails with a [`ModuleResolveError`]
+/// reports it as [`Outcome::Failed`](crate::outcome::Outcome::Failed).
+impl From<ModuleResolveError> for crate::outcome::Outcome<ModuleResolveError> {
+    fn from(error: ModuleResolveError) -> Self {
+        Self::Failed(error)
+    }
+}
+
 /// A [`ModuleResolveError`] raised while registering the import/include edges
 /// of one source module, whose source the error's spans belong to.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

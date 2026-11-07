@@ -787,11 +787,7 @@ mod tests {
     fn resolver(file: &crate::desugar::desugared_ast::File) -> ModuleResolver {
         let mut tables = crate::resolve::builder::SymbolTables::default();
         tables.add_file(owner(), &file.declarations).unwrap();
-        tables
-            .scopes(&crate::resolve::builder::NoModuleTargets)
-            .unwrap()
-            .freeze()
-            .unwrap()
+        tables.freeze_without_edges().unwrap()
     }
 
     fn first_required(

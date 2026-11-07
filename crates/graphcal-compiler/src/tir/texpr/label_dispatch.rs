@@ -124,7 +124,7 @@ mod tests {
         let dispatch = LabelDispatch::try_new(phase(), &labels.iter().collect::<Vec<_>>()).unwrap();
         let arm = |position| dispatch.arm(&KeyValue::at(phase(), position).unwrap());
         assert_eq!([arm(0), arm(1), arm(2)], [Some(2), Some(0), Some(1)]);
-        let fin = IndexAxis::finite(FiniteIndex::try_from_u64(3).unwrap()).unwrap();
+        let fin = IndexAxis::finite(FiniteIndex::try_from_u64(3).unwrap());
         assert_eq!(dispatch.arm(&KeyValue::at(fin, 0).unwrap()), None);
         assert_eq!(dispatch.axis(), &phase());
     }

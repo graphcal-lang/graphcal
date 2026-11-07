@@ -473,9 +473,11 @@ pub fn run_analysis_with_cancellation(
             cancellation.checkpoint()?;
             // A failed session has no checked resolver continuation. Rebuild a
             // best-effort resolver only for partial editor information.
-            let (module_resolver, degradations) = match project.build_module_resolver() {
+            let (module_resolver, degradations) = match project.build_module_resolver(cancellation)
+            {
                 Ok(module_resolver) => (module_resolver, Vec::new()),
-                Err(resolver_error) => (
+                Err(Outcome::Cancelled) => return Err(Cancelled),
+                Err(Outcome::Failed(resolver_error)) => (
                     symbol_table::file_local_resolver(root_ast, project.root_id()),
                     vec![AnalysisDegradation::FileLocalModuleResolver {
                         reason: resolver_error.to_string(),

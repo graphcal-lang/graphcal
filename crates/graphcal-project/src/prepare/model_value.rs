@@ -104,7 +104,7 @@ impl PreparedProject {
         scale: Option<SiScale>,
     ) -> Result<ValueCodec, ValueCodecError> {
         let axis = |index: &IndexTypeRef| {
-            IndexAxis::resolve(self.tir(), index).ok_or_else(|| ValueCodecError::MissingAxis {
+            IndexAxis::resolve(self.tir(), index).map_err(|_| ValueCodecError::MissingAxis {
                 index: index.clone(),
             })
         };

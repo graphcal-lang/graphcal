@@ -1069,7 +1069,7 @@ fn axis_entries(def: &IndexDef) -> Vec<ViewIndexEntry> {
     let coordinates = def.coordinate_data().and_then(|data| {
         NonEmpty::try_from_vec(keys.clone())
             .ok()
-            .map(|keys| coordinate_entry_display_names(data, &keys))
+            .map(|keys| coordinate_entry_display_names(data, keys))
     });
     keys.iter()
         .map(|key: &IndexEntryKey| ViewIndexEntry {

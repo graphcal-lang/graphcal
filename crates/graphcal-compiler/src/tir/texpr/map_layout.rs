@@ -216,7 +216,7 @@ mod tests {
     use super::{AxisCells, MapLayout, MapLayoutError, Placement};
 
     fn fin(size: u64) -> IndexAxis {
-        IndexAxis::finite(FiniteIndex::try_from_u64(size).unwrap()).unwrap()
+        IndexAxis::finite(FiniteIndex::try_from_u64(size).unwrap())
     }
 
     fn at(size: u64, position: u64) -> MapEntryKey {
