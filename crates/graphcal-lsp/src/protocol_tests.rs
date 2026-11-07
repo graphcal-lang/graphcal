@@ -897,6 +897,75 @@ async fn inlay_hints_requested_right_after_an_edit_answer_the_edited_text() {
     drain.abort();
 }
 
+/// LSP-3 (#2253): slow feature work runs off tower-lsp's serving task, so a
+/// fast request is answered meanwhile, and `$/cancelRequest` answers the slow
+/// request at once instead of after its work.
+#[tokio::test]
+async fn slow_feature_work_neither_blocks_requests_nor_ignores_cancellation() {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+    use tower_lsp::jsonrpc::ErrorCode;
+
+    const WAIT: Duration = Duration::from_secs(30);
+
+    let (mut service, mut socket) = service();
+    initialize(&mut service, json!({})).await;
+    let uri = Url::parse("untitled:slow.gcl").unwrap();
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&uri, 1, SOURCE),
+    )
+    .await;
+    let _ = timeout(WAIT, socket.next())
+        .await
+        .expect("publish diagnostics timeout");
+    let drain = tokio::spawn(async move { while socket.next().await.is_some() {} });
+    let probe = Arc::clone(&service.inner().blocking_feature_probe);
+
+    let slow = service.ready().await.expect("service ready").call(
+        Request::build(crate::server::BlockingFeatureRequest::METHOD)
+            .params(json!({ "uri": uri }))
+            .id(2)
+            .finish(),
+    );
+    let slow = tokio::spawn(slow);
+    timeout(WAIT, probe.started.notified())
+        .await
+        .expect("the slow feature work starts");
+
+    let hover = timeout(
+        WAIT,
+        request(
+            &mut service,
+            "textDocument/hover",
+            position_params(&uri, 1, 6),
+        ),
+    )
+    .await
+    .expect("a fast request is answered while slow feature work runs");
+    assert!(!hover.is_null(), "hover answers the analyzed document");
+
+    notify(&mut service, "$/cancelRequest", json!({ "id": 2 })).await;
+    let cancelled = timeout(WAIT, slow)
+        .await
+        .expect("the cancelled request is answered while its work still runs")
+        .expect("request task")
+        .expect("service call")
+        .expect("request response");
+    let (_, body) = cancelled.into_parts();
+    assert_eq!(
+        body.expect_err("cancelled request").code,
+        ErrorCode::RequestCancelled
+    );
+    // Only now is the work released: the answer did not wait for it.
+    probe.released.store(true, Ordering::SeqCst);
+    timeout(WAIT, probe.finished.notified())
+        .await
+        .expect("the released work finishes");
+    drain.abort();
+}
+
 #[tokio::test]
 #[ignore = "manual latency/resource baseline; run with --release --ignored --nocapture"]
 async fn protocol_latency_baseline() {
