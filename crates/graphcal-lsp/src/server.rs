@@ -407,9 +407,7 @@ impl Backend {
         let Some((analysis, _)) = self.cached_analysis(uri, is_current_analysis).await else {
             return Ok(None);
         };
-        feature_response(
-            run_feature(move |_| f(CurrentAnalysis(analysis))).await,
-        )
+        feature_response(run_feature(move |_| f(CurrentAnalysis(analysis))).await)
     }
 
     /// Apply a coordinate-free candidate feature when dependencies are still
@@ -424,9 +422,7 @@ impl Backend {
         else {
             return Ok(None);
         };
-        feature_response(
-            run_feature(move |_| f(SemanticAnalysis(analysis), &current_source)).await,
-        )
+        feature_response(run_feature(move |_| f(SemanticAnalysis(analysis), &current_source)).await)
     }
 
     /// Record the latest editor text for `uri`, synchronously with the
@@ -434,7 +430,7 @@ impl Backend {
     async fn record_latest_text(
         &self,
         uri: &Url,
-        text: &str,
+        text: Arc<String>,
         version: Option<i32>,
     ) -> std::result::Result<RecordedDocument, RevisionExhausted> {
         use std::collections::hash_map::Entry;
@@ -443,7 +439,7 @@ impl Backend {
             Entry::Occupied(mut entry) => {
                 let snapshot = entry.get_mut();
                 snapshot.revision = revision;
-                snapshot.text = Arc::new(text.to_string());
+                snapshot.text = text;
                 if let Some(version) = version {
                     snapshot.version = version;
                 }
@@ -454,7 +450,7 @@ impl Backend {
                 entry.insert(OpenDocumentSnapshot {
                     identity: identity.clone(),
                     revision,
-                    text: Arc::new(text.to_string()),
+                    text,
                     version: version.unwrap_or_default(),
                 });
                 identity
@@ -478,7 +474,7 @@ impl Backend {
         }
         for (uri, text, revision) in pending {
             let generation = self.bump_generation(&uri).await;
-            self.spawn_debounced_analysis(uri, text.as_ref().clone(), revision, generation);
+            self.spawn_debounced_analysis(uri, text, revision, generation);
         }
     }
 
@@ -493,13 +489,15 @@ impl Backend {
         self.schedule_open_roots(&importers).await;
     }
 
-    /// Record and schedule one client-reported external filesystem change.
-    async fn handle_filesystem_change(&self, uri: Url) {
+    /// Record one client-reported external filesystem change and return the
+    /// open roots it affects. Scheduling is left to the caller, so a batch of
+    /// changes schedules each affected root once.
+    async fn record_filesystem_change(&self, uri: &Url) -> HashSet<DocumentIdentity> {
         let Ok(path) = uri.to_file_path() else {
-            return;
+            return HashSet::new();
         };
         let Some(kind) = crate::filesystem_events::WatchedArtifactKind::from_path(&path) else {
-            return;
+            return HashSet::new();
         };
         let identity = file_identity(&path);
         if self
@@ -511,7 +509,7 @@ impl Backend {
         {
             // The editor snapshot is authoritative. This also coalesces the
             // watcher event commonly emitted for an LSP didSave notification.
-            return;
+            return HashSet::new();
         }
         let revision = match self.revision_clock.next() {
             Ok(revision) => revision,
@@ -519,7 +517,7 @@ impl Backend {
                 self.client
                     .log_message(MessageType::ERROR, error.to_string())
                     .await;
-                return;
+                return HashSet::new();
             }
         };
         self.filesystem_revisions
@@ -549,7 +547,7 @@ impl Backend {
                     .map(|snapshot| snapshot.identity.clone()),
             );
         }
-        self.schedule_open_roots(&affected).await;
+        affected
     }
 
     /// Latest editor text for `uri`, falling back to the analyzed snapshot.
@@ -564,13 +562,16 @@ impl Backend {
             .map(|stored| Arc::clone(&stored.analysis.source))
     }
 
-    async fn analyze_and_publish(&self, uri: Url, text: String, version: Option<i32>) {
+    async fn analyze_and_publish(&self, uri: Url, text: Arc<String>, version: Option<i32>) {
         if !Self::is_graphcal_file(&uri) {
             return;
         }
 
         self.analysis_scheduler.open_document(&uri);
-        let recorded = match self.record_latest_text(&uri, &text, version).await {
+        let recorded = match self
+            .record_latest_text(&uri, Arc::clone(&text), version)
+            .await
+        {
             Ok(recorded) => recorded,
             Err(error) => {
                 self.client
@@ -603,7 +604,7 @@ impl Backend {
     fn spawn_debounced_analysis(
         &self,
         uri: Url,
-        text: String,
+        text: Arc<String>,
         root_revision: DocumentRevision,
         generation: u64,
     ) {
@@ -659,7 +660,7 @@ struct AnalysisWorker {
 async fn analyze_store_publish(
     worker: &AnalysisWorker,
     uri: Url,
-    mut text: String,
+    mut text: Arc<String>,
     mut root_revision: DocumentRevision,
     mut generation: u64,
 ) {
@@ -671,7 +672,7 @@ async fn analyze_store_publish(
                 return;
             }
             AnalysisCompletion::Retry(snapshot) => {
-                text = snapshot.text.as_ref().clone();
+                text = snapshot.text;
                 root_revision = snapshot.revision;
                 generation = bump_generation_value(&worker.generations, &uri).await;
                 worker.scheduler.cancel_document(&uri);
@@ -689,7 +690,7 @@ async fn analyze_store_publish(
 async fn analyze_store_publish_once(
     worker: &AnalysisWorker,
     uri: Url,
-    text: String,
+    text: Arc<String>,
     root_revision: DocumentRevision,
     generation: u64,
 ) -> AnalysisCompletion {
@@ -1214,7 +1215,7 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         self.analyze_and_publish(
             params.text_document.uri,
-            params.text_document.text,
+            Arc::new(params.text_document.text),
             Some(params.text_document.version),
         )
         .await;
@@ -1228,13 +1229,14 @@ impl LanguageServer for Backend {
         if !Self::is_graphcal_file(&uri) {
             return;
         }
+        let text = Arc::new(change.text);
 
         self.analysis_scheduler.open_document(&uri);
         // Record the new text synchronously: completion/signature-help fire
         // on trigger characters milliseconds after this notification, long
         // before the debounced analysis lands.
         let recorded = match self
-            .record_latest_text(&uri, &change.text, Some(params.text_document.version))
+            .record_latest_text(&uri, Arc::clone(&text), Some(params.text_document.version))
             .await
         {
             Ok(recorded) => recorded,
@@ -1250,23 +1252,28 @@ impl LanguageServer for Backend {
         self.request_inlay_hint_refresh();
         self.schedule_transitive_importers(&recorded.identity).await;
         let generation = self.bump_generation(&uri).await;
-        self.spawn_debounced_analysis(uri, change.text, recorded.revision, generation);
+        self.spawn_debounced_analysis(uri, text, recorded.revision, generation);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         if let Some(text) = params.text {
-            self.analyze_and_publish(params.text_document.uri, text, None)
+            self.analyze_and_publish(params.text_document.uri, Arc::new(text), None)
                 .await;
         }
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        // Record every revision before scheduling anything: a burst (such as
+        // a `git checkout`) then schedules each affected root once, with one
+        // inlay-hint refresh, instead of once per event.
         let mut seen = HashSet::new();
+        let mut affected = HashSet::new();
         for change in params.changes {
             if seen.insert(change.uri.clone()) {
-                self.handle_filesystem_change(change.uri).await;
+                affected.extend(self.record_filesystem_change(&change.uri).await);
             }
         }
+        self.schedule_open_roots(&affected).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
@@ -1594,6 +1601,11 @@ pub(crate) struct BlockingFeatureProbe {
 
 #[cfg(test)]
 impl Backend {
+    /// The change generation of `uri`; it grows once per scheduled analysis.
+    pub(crate) async fn generation_for_test(&self, uri: &Url) -> u64 {
+        generation_of(&self.change_generations, uri).await
+    }
+
     async fn blocking_feature(
         &self,
         params: tower_lsp::lsp_types::TextDocumentIdentifier,
@@ -3656,7 +3668,10 @@ node momentum: Force * Time = @mass * @velocity;
             );
         }
         assert!(
-            stored.diagnostics.values().any(|diagnostics| !diagnostics.is_empty()),
+            stored
+                .diagnostics
+                .values()
+                .any(|diagnostics| !diagnostics.is_empty()),
             "diagnostics must come from the failed analysis"
         );
         assert_eq!(
