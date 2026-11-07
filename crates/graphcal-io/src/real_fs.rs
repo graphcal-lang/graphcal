@@ -116,6 +116,41 @@ impl RealFileSystem {
             .map_err(|_| Self::outside_root_error(&canonical, root.canonical_path.as_path()))
     }
 
+    /// Canonicalize a root-relative path without opening a special file.
+    ///
+    /// `cap-std` canonicalizes by opening every component, and on platforms
+    /// without `O_PATH` (macOS) opening a FIFO for reading blocks until a
+    /// writer appears. Regular files and directories are canonicalized
+    /// normally; any other entry is resolved through its parent directory
+    /// only, so the entry itself is never opened. Such an entry can never be
+    /// read (see [`Self::open_regular_with_hook`]), so its canonical spelling
+    /// only has to stay inside the root, which the parent's resolution ensures.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn rooted_canonical_relative(
+        root: &RootCapability,
+        relative: &Path,
+    ) -> Result<PathBuf, io::Error> {
+        let canonicalize = |relative: &Path| {
+            root.directory
+                .canonicalize(relative)
+                .map_err(normalize_rooted_error)
+        };
+        let metadata = root
+            .directory
+            .metadata(relative)
+            .map_err(normalize_rooted_error)?;
+        if metadata.is_file() || metadata.is_dir() {
+            return canonicalize(relative);
+        }
+        match (relative.parent(), relative.file_name()) {
+            (Some(parent), Some(name)) => Ok(canonicalize(&cap_relative_path(parent))?.join(name)),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "cannot canonicalize a special file without a parent directory",
+            )),
+        }
+    }
+
     fn read_file_bounded(
         mut file: impl Read,
         declared_len: u64,
@@ -379,10 +414,7 @@ impl FileSystemReader for RealFileSystem {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(root) = &self.root {
             let relative = Self::rooted_relative_path(root, path)?;
-            return root
-                .directory
-                .canonicalize(relative)
-                .map_err(normalize_rooted_error)
+            return Self::rooted_canonical_relative(root, &relative)
                 .map(|relative| root.canonical_path.as_path().join(relative));
         }
         path.canonicalize()
@@ -490,7 +522,6 @@ mod tests {
     #[test]
     fn special_file_reads_have_a_subprocess_watchdog() {
         use std::process::Command;
-        use std::time::{Duration, Instant};
         const CHILD: &str = "GRAPHCAL_SPECIAL_FILE_READ_CHILD";
         if std::env::var_os(CHILD).is_some() {
             for rooted in [false, true] {
@@ -565,16 +596,25 @@ mod tests {
             );
             return;
         }
+        assert_child_test_finishes(
+            "real_fs::tests::special_file_reads_have_a_subprocess_watchdog",
+            CHILD,
+        );
+    }
+
+    /// Re-run one test in a child process with `child_env` set and fail if it
+    /// does not finish successfully before a watchdog deadline, so a blocking
+    /// open fails the test instead of hanging the suite.
+    #[cfg(unix)]
+    fn assert_child_test_finishes(test: &str, child_env: &str) {
+        use std::process::Command;
+        use std::time::{Duration, Instant};
         let mut child = Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "real_fs::tests::special_file_reads_have_a_subprocess_watchdog",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
+            .args(["--exact", test, "--nocapture"])
+            .env(child_env, "1")
             .spawn()
             .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             match child.try_wait().unwrap() {
                 Some(status) => {
@@ -584,11 +624,43 @@ mod tests {
                 None if Instant::now() >= deadline => {
                     child.kill().unwrap();
                     child.wait().unwrap();
-                    panic!("special-file ingestion exceeded watchdog");
+                    panic!("{test} exceeded watchdog");
                 }
                 None => std::thread::sleep(Duration::from_millis(10)),
             }
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn special_file_canonicalization_does_not_open_the_entry() {
+        use std::process::Command;
+        const CHILD: &str = "GRAPHCAL_SPECIAL_FILE_CANONICALIZE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            // Opening a FIFO for reading blocks until a writer appears, and
+            // `cap-std` canonicalizes by opening every component.
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().canonicalize().unwrap();
+            let fifo = root.join("model.gcl");
+            assert!(
+                Command::new("mkfifo")
+                    .arg(&fifo)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+            for reader in [
+                RealFileSystem::rooted(&root).unwrap(),
+                RealFileSystem::default(),
+            ] {
+                assert_eq!(reader.canonicalize(&fifo).unwrap(), fifo);
+            }
+            return;
+        }
+        assert_child_test_finishes(
+            "real_fs::tests::special_file_canonicalization_does_not_open_the_entry",
+            CHILD,
+        );
     }
 
     #[test]

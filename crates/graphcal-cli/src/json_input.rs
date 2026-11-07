@@ -22,7 +22,7 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde::Deserialize;
-use serde::de::{MapAccess, SeqAccess, Visitor};
+use serde::de::{MapAccess, Visitor};
 use serde_json::value::RawValue;
 
 use graphcal_compiler::syntax::ast::{
@@ -106,47 +106,44 @@ fn parse_name_path(
 
 /// A structured location in the JSON input.
 ///
-/// Keeping path segments typed lets duplicate-key and number diagnostics retain
-/// object/array structure without building and later splitting a composite key.
+/// Keeping the decoded keys as a list lets duplicate-key and number diagnostics
+/// retain object structure without building and later splitting a composite key.
+/// Arrays are rejected without being descended into, so no path ever passes
+/// through one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JsonPath {
-    segments: Vec<JsonPathSegment>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum JsonPathSegment {
-    ObjectKey(String),
-    ArrayIndex(usize),
+    /// Decoded object keys from the document root.
+    keys: Vec<String>,
 }
 
 impl JsonPath {
     const fn root() -> Self {
-        Self {
-            segments: Vec::new(),
-        }
+        Self { keys: Vec::new() }
     }
 
-    fn object_key(&self, key: &str) -> Self {
-        let mut path = self.clone();
-        path.segments
-            .push(JsonPathSegment::ObjectKey(key.to_string()));
-        path
+    /// Number of object levels below the document root.
+    const fn depth(&self) -> usize {
+        self.keys.len()
     }
 
-    fn array_index(&self, index: usize) -> Self {
-        let mut path = self.clone();
-        path.segments.push(JsonPathSegment::ArrayIndex(index));
-        path
+    /// Run `visit` with object `key` appended, restoring the path afterwards.
+    ///
+    /// The traversal owns one path and pushes/pops keys instead of cloning
+    /// the whole path per level; only error construction clones it.
+    fn with_key<T>(&mut self, key: String, visit: impl FnOnce(&mut Self) -> T) -> T {
+        self.keys.push(key);
+        let result = visit(self);
+        self.keys.pop();
+        result
     }
 }
 
 impl fmt::Display for JsonPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("$")?;
-        self.segments.iter().try_for_each(|segment| match segment {
-            JsonPathSegment::ObjectKey(key) => write!(formatter, "[{key:?}]"),
-            JsonPathSegment::ArrayIndex(index) => write!(formatter, "[{index}]"),
-        })
+        self.keys
+            .iter()
+            .try_for_each(|key| write!(formatter, "[{key:?}]"))
     }
 }
 
@@ -264,62 +261,34 @@ impl<'de> Deserialize<'de> for RawObjectEntries<'de> {
     }
 }
 
-/// Temporary array entries used only to validate nested object keys/numbers.
-struct RawArrayEntries<'a>(Vec<&'a RawValue>);
-
-impl<'de> Deserialize<'de> for RawArrayEntries<'de> {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        struct RawArrayVisitor;
-
-        impl<'de> Visitor<'de> for RawArrayVisitor {
-            type Value = RawArrayEntries<'de>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a JSON array")
-            }
-
-            fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
-            where
-                A: SeqAccess<'de>,
-            {
-                let mut entries = Vec::new();
-                while let Some(value) = sequence.next_element::<&'de RawValue>()? {
-                    entries.push(value);
-                }
-                Ok(RawArrayEntries(entries))
-            }
-        }
-
-        deserializer.deserialize_seq(RawArrayVisitor)
-    }
-}
+/// Maximum object nesting accepted in a JSON parameter document.
+///
+/// The top-level object is level 1. Every legitimate shape (a parameter, a
+/// constructor's `fields`, an index's `entries`) adds one level per Graphcal
+/// value nesting, so 64 levels leave ample room while bounding the work of
+/// the raw-token traversal below (each level re-scans its own subtree) to a
+/// constant multiple of the input size.
+pub const MAX_JSON_OBJECT_DEPTH: usize = 64;
 
 fn parse_exact_json(source: &str) -> Result<ExactJsonValue, JsonInputError> {
     let raw: &RawValue = serde_json::from_str(source)?;
-    parse_exact_value(raw, &JsonPath::root())
+    parse_exact_value(raw, &mut JsonPath::root())
 }
 
-fn parse_exact_value(raw: &RawValue, path: &JsonPath) -> Result<ExactJsonValue, JsonInputError> {
+fn parse_exact_value(
+    raw: &RawValue,
+    path: &mut JsonPath,
+) -> Result<ExactJsonValue, JsonInputError> {
     let source = raw.get().trim_start();
     match source.as_bytes().first() {
         Some(b'"') => serde_json::from_str(source)
             .map(ExactJsonValue::String)
             .map_err(JsonInputError::from),
         Some(b'{') => parse_exact_object(source, path).map(ExactJsonValue::Object),
-        Some(b'[') => {
-            let entries: RawArrayEntries<'_> = serde_json::from_str(source)?;
-            entries
-                .0
-                .into_iter()
-                .enumerate()
-                .try_for_each(|(index, value)| {
-                    parse_exact_value(value, &path.array_index(index)).map(|_| ())
-                })?;
-            Ok(ExactJsonValue::Array)
-        }
+        // Arrays are never a valid parameter value, so the conversion rejects
+        // them; they are not descended into (`serde_json` already validated
+        // their syntax while capturing the enclosing raw token).
+        Some(b'[') => Ok(ExactJsonValue::Array),
         Some(b't') => Ok(ExactJsonValue::Bool(true)),
         Some(b'f') => Ok(ExactJsonValue::Bool(false)),
         Some(b'n') => Ok(ExactJsonValue::Null),
@@ -328,7 +297,16 @@ fn parse_exact_value(raw: &RawValue, path: &JsonPath) -> Result<ExactJsonValue, 
     }
 }
 
-fn parse_exact_object(source: &str, path: &JsonPath) -> Result<ExactJsonObject, JsonInputError> {
+fn parse_exact_object(
+    source: &str,
+    path: &mut JsonPath,
+) -> Result<ExactJsonObject, JsonInputError> {
+    if path.depth() >= MAX_JSON_OBJECT_DEPTH {
+        return Err(JsonInputError::NestingTooDeep {
+            path: path.clone(),
+            limit: MAX_JSON_OBJECT_DEPTH,
+        });
+    }
     let raw_entries: RawObjectEntries<'_> = serde_json::from_str(source)?;
     if let Some(key) = duplicate_key(&raw_entries.0) {
         return Err(JsonInputError::DuplicateKey {
@@ -340,8 +318,10 @@ fn parse_exact_object(source: &str, path: &JsonPath) -> Result<ExactJsonObject, 
         .0
         .into_iter()
         .map(|(key, value)| {
-            let child_path = path.object_key(&key);
-            parse_exact_value(value, &child_path).map(|value| (key, value))
+            path.with_key(key.clone(), |child_path| {
+                parse_exact_value(value, child_path)
+            })
+            .map(|value| (key, value))
         })
         .collect::<Result<_, _>>()?;
     Ok(ExactJsonObject { entries })
@@ -441,6 +421,13 @@ pub enum JsonInputError {
         /// The failed numeric invariant.
         reason: JsonNumberError,
     },
+    /// Objects are nested deeper than [`MAX_JSON_OBJECT_DEPTH`].
+    NestingTooDeep {
+        /// The object that would exceed the limit.
+        path: JsonPath,
+        /// The enforced limit.
+        limit: usize,
+    },
     /// An empty raw value escaped `serde_json`'s syntax validation.
     EmptyRawValue,
     /// An unsupported JSON type was encountered (null or array).
@@ -498,6 +485,12 @@ impl fmt::Display for JsonInputError {
                 reason,
             } => {
                 write!(f, "invalid JSON number {value:?} at {path}: {reason}")
+            }
+            Self::NestingTooDeep { path, limit } => {
+                write!(
+                    f,
+                    "JSON object at {path} is nested deeper than the limit of {limit} levels"
+                )
             }
             Self::EmptyRawValue => write!(f, "invalid JSON: empty raw value"),
             Self::UnsupportedJsonType { param, kind } => {
@@ -1095,12 +1088,54 @@ mod tests {
     }
 
     #[test]
-    fn duplicates_inside_an_unsupported_array_are_still_detected() {
+    fn arrays_are_rejected_without_descending_into_them() {
         let error = json_to_overrides(r#"{"x": [{"field": 1, "field": 2}]}"#).unwrap_err();
         assert!(matches!(
             error,
-            JsonInputError::DuplicateKey { path, key }
-                if path.to_string() == "$[\"x\"][0]" && key == "field"
+            JsonInputError::UnsupportedJsonType { param, kind: "array" } if param == "x"
+        ));
+
+        // A deep array costs one linear syntax scan, not a scan per level.
+        let depth = 100_000;
+        let deep = format!("{{\"x\": {}{}}}", "[".repeat(depth), "]".repeat(depth));
+        assert!(matches!(
+            json_to_overrides(&deep).unwrap_err(),
+            JsonInputError::UnsupportedJsonType { kind: "array", .. }
+        ));
+    }
+
+    fn nested_struct(levels: usize) -> String {
+        let open = r#"{"type": "S", "fields": {"f": "#;
+        let close = "}}";
+        format!(
+            "{{\"x\": {}1{}}}",
+            open.repeat(levels),
+            close.repeat(levels)
+        )
+    }
+
+    #[test]
+    fn object_nesting_is_bounded() {
+        // The top-level object plus two objects per struct level.
+        let accepted = (MAX_JSON_OBJECT_DEPTH - 1) / 2;
+        assert!(json_to_overrides(&nested_struct(accepted)).is_ok());
+
+        let error = json_to_overrides(&nested_struct(accepted + 1)).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                JsonInputError::NestingTooDeep { path, limit: MAX_JSON_OBJECT_DEPTH }
+                    if path.depth() == MAX_JSON_OBJECT_DEPTH
+            ),
+            "{error:?}"
+        );
+
+        // Plain nested objects are bounded too (below `serde_json`'s own
+        // recursion limit, which rejects deeper syntax as invalid JSON).
+        let deep = format!("{}1{}", "{\"a\":".repeat(100), "}".repeat(100));
+        assert!(matches!(
+            json_to_overrides(&deep).unwrap_err(),
+            JsonInputError::NestingTooDeep { .. }
         ));
     }
 
