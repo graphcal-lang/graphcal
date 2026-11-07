@@ -9,6 +9,7 @@ mod decl;
 mod error;
 mod expected;
 mod expr;
+mod generic_lookahead;
 mod nesting_limit;
 mod table;
 mod token_stream;

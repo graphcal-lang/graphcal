@@ -1458,6 +1458,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "parser", "generic_lookahead"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "generic_lookahead", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "parser", "table"]
 role = "contracts"
 

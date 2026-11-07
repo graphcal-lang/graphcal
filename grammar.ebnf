@@ -977,6 +977,12 @@ ident_expr
      "(", [ call_arg_list ], ")"                   (* function call or
                                                        constructor call *)
    | ident_path;                                   (* unresolved name path *)
+(* A `<` after an ident_path opens a generic_arg_list only when the tokens
+   up to its matching `>` form a balanced generic argument list and `(`
+   directly follows that `>`; otherwise `<` is a comparison. Directly inside
+   the angle brackets only type, index, and Nat tokens may appear (a `:`
+   rules the generic reading out), so `Flags(low: a < b, high: a > (c))`
+   holds two comparisons. *)
 
 (* The argument list of a call expression accepts positional args for
    function calls (`sqrt(x)`) or named args for constructor calls
