@@ -12,6 +12,7 @@ use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{ContextualKeyword, Token};
 use crate::syntax::type_name::FieldName;
 
+use super::generic_lookahead::generic_args_close_before;
 use super::{Expected, Found, InvalidNumberReason, ParseError, ParseErrorKind, Parser};
 
 fn skip_ws_and_line_comments(bytes: &[u8], mut pos: usize) -> usize {
@@ -854,66 +855,11 @@ impl Parser<'_> {
         }
     }
 
-    /// Scan balanced `<…>` angle brackets from the current position and check
-    /// whether the byte immediately after `>` (skipping whitespace) equals `expected`.
-    ///
-    /// Returns `false` if the next token is not `<`, the brackets are
-    /// unbalanced, or a byte that can never occur inside a generic-argument
-    /// list shows up first — in that case the `<` is a comparison operator,
-    /// so an ordinary boolean expression like `a < b && c > (d)` is not
-    /// misparsed as turbofish. Line comments are skipped so their contents
-    /// affect neither the bracket balance nor the operator bail-out.
-    fn are_generic_args_followed_by(&self, expected: u8) -> bool {
-        let Some((&Token::Lt, lt_span)) = self.lexer.peek_with_span() else {
-            return false;
-        };
-        self.angle_brackets_at_followed_by(lt_span.offset() + lt_span.len(), expected)
-    }
-
     /// After peeking `todo`, look ahead for `< … > {`: only that shape is a
     /// typed hole, so `todo` stays an ordinary identifier elsewhere (`todo < x`).
     fn is_todo_hole(&self) -> bool {
-        if self.lexer.peek_second() != Some(&Token::Lt) {
-            return false;
-        }
-        let Some((_, todo_span)) = self.lexer.peek_with_span() else {
-            return false;
-        };
-        let bytes = self.source.as_bytes();
-        let pos = skip_ws_and_line_comments(bytes, todo_span.offset() + todo_span.len());
-        bytes.get(pos) == Some(&b'<') && self.angle_brackets_at_followed_by(pos + 1, b'{')
-    }
-
-    /// Scan from `pos`, the byte after an opening `<`, to its matching `>`
-    /// and report whether the next significant byte is `expected`. Pure byte
-    /// scan; the lexer is not advanced.
-    fn angle_brackets_at_followed_by(&self, mut pos: usize, expected: u8) -> bool {
-        let bytes = self.source.as_bytes();
-        let mut depth: usize = 1;
-        while pos < bytes.len() {
-            match bytes[pos] {
-                b'<' => depth += 1,
-                b'>' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let p = skip_ws_and_line_comments(bytes, pos + 1);
-                        return p < bytes.len() && bytes[p] == expected;
-                    }
-                }
-                b'/' if bytes.get(pos + 1) == Some(&b'/') => {
-                    while pos < bytes.len() && line_ending_at(bytes, pos).is_none() {
-                        pos += 1;
-                    }
-                    continue;
-                }
-                // Sort-aware generic arguments are type or Nat expressions;
-                // none of these bytes can occur in them.
-                b'&' | b'|' | b';' | b'=' | b'{' | b'}' | b'"' | b'@' | b'!' => return false,
-                _ => {}
-            }
-            pos += 1;
-        }
-        false
+        let mut after_todo = self.lexer.upcoming().skip(1);
+        after_todo.next() == Some(Token::Lt) && generic_args_close_before(after_todo, Token::LBrace)
     }
 
     /// Look ahead to check if `(` starts tuple-key sugar: `(ident, ident, ...) =>`.
@@ -959,11 +905,11 @@ impl Parser<'_> {
         }
     }
 
-    /// Look ahead to check if `<...>` is followed by `(`.
-    /// Used to disambiguate `eye<3>()` (turbofish fn call)
-    /// from `f < x` (comparison).
+    /// After peeking `<`, look ahead for `< … > (`. Used to disambiguate
+    /// `eye<3>()` (turbofish fn call) from `f < x` (comparison).
     fn is_generic_args_followed_by_paren(&self) -> bool {
-        self.are_generic_args_followed_by(b'(')
+        let mut upcoming = self.lexer.upcoming();
+        upcoming.next() == Some(Token::Lt) && generic_args_close_before(upcoming, Token::LParen)
     }
 
     /// After peeking `(`, look ahead to decide whether the parenthesized
@@ -1682,6 +1628,24 @@ mod tests {
             "expected `||` at the top, got {:?}",
             expr.kind
         );
+    }
+
+    #[test]
+    fn comparisons_in_named_arguments_are_not_turbofish() {
+        // FE-6 (#2250): the lookahead crossed `,` and `:`, reading
+        // `a < b, high: a > (…)` as the generic call `a<b, high: a>(…)`.
+        let expr = parse_node_expr("Flags(low: a < b, high: a > (b - 0.5 m))");
+        let ExprKind::ConstructorCall { fields, .. } = &expr.kind else {
+            panic!("expected a constructor call, got {:?}", expr.kind);
+        };
+        let ops: Vec<_> = fields
+            .iter()
+            .map(|field| match &field.value.kind {
+                ExprKind::BinOp { op, .. } => *op,
+                other => panic!("expected a comparison, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(ops, [BinOp::Lt, BinOp::Gt]);
     }
 
     #[test]
