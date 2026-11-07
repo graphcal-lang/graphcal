@@ -37,16 +37,17 @@ use std::rc::Rc;
 /// earlier by TIR checking.
 ///
 /// Const constraints are also checked against their already-evaluated values.
+///
+/// `const_values` holds the constants of every DAG under their canonical
+/// identities, the DAG's own included, so bounds read it without a per-DAG copy.
 pub(super) fn resolve_domain_constraints_for_dag(
     dag: &CheckedDag,
     const_values: &RuntimeValueMap,
-    all_const_values: &RuntimeValueMap,
     consts: &ConstPool,
     ctx: &EvalSession<'_>,
 ) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, Outcome<SemanticError>> {
     let (tir, src, cancellation) = (ctx.tir, ctx.src, &ctx.cancellation);
     cancellation.checkpoint()?;
-    let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
     let mut constraints = HashMap::new();
     // Constants first, then parameters, then nodes, each in source order.
@@ -91,7 +92,7 @@ pub(super) fn resolve_domain_constraints_for_dag(
             domain_bounds,
             &DomainSubject::Declaration(name.clone()),
             target,
-            &visible_const_values,
+            const_values,
             BoundCheckingContext {
                 evaluation: &ctx.for_decl(&resolved_key).with_src(constraint_src),
                 bindings: &HashMap::new(),
@@ -404,52 +405,38 @@ pub(super) fn resolve_struct_field_constraints(
     })
 }
 
-/// Evaluated constants whose field constraints are still being resolved.
-/// This is deliberately not an executable/checked DAG artifact.
-pub(super) struct DagConstScope<'a> {
-    pub values: &'a RuntimeValueMap,
-    pub source: SourceId,
+/// The source of every DAG of one checked TIR, at the DAG's position in its
+/// registry: field-bound diagnostics point into the source of the DAG that
+/// owns the nominal type.
+pub(super) struct DagSources {
+    by_position: Vec<SourceId>,
 }
 
-/// The constant scope of every DAG of one checked TIR, at the DAG's position
-/// in its registry.
-pub(super) struct ConstScopes<'a> {
-    by_position: Vec<DagConstScope<'a>>,
-}
-
-impl<'a> ConstScopes<'a> {
-    /// The scope `scope` gives each DAG of `tir`, in position order.
-    pub(super) fn new(
-        tir: &'a CheckedTir,
-        mut scope: impl FnMut(
-            graphcal_compiler::tir::typed::dag_position::DagPosition,
-            &'a CheckedDag,
-        ) -> DagConstScope<'a>,
-    ) -> Self {
+impl DagSources {
+    /// The source `source` gives each DAG of `tir`, in position order.
+    pub(super) fn new(tir: &CheckedTir, mut source: impl FnMut(&CheckedDag) -> SourceId) -> Self {
         Self {
             by_position: tir
                 .dag_registry()
                 .positioned()
-                .map(|(position, dag)| scope(position, dag))
+                .map(|(_, dag)| source(dag))
                 .collect(),
         }
     }
 
-    /// The constant scope of the DAG at `position` of the TIR the scopes
-    /// were made for.
-    fn at(
-        &self,
-        position: graphcal_compiler::tir::typed::dag_position::DagPosition,
-    ) -> &DagConstScope<'a> {
-        &self.by_position[position.index()]
+    /// The source of the DAG at `position` of the TIR the sources were made
+    /// for.
+    fn at(&self, position: graphcal_compiler::tir::typed::dag_position::DagPosition) -> SourceId {
+        self.by_position[position.index()]
     }
 }
 
 /// What resolving the field constraints of a checked TIR reads.
 pub(super) struct FieldConstraintResolutionContext<'a> {
     pub(super) tir: &'a CheckedTir,
-    pub(super) const_scopes: &'a ConstScopes<'a>,
-    pub(super) all_const_values: &'a RuntimeValueMap,
+    pub(super) dag_sources: &'a DagSources,
+    /// The constants of every DAG under their canonical identities.
+    pub(super) const_values: &'a RuntimeValueMap,
     pub(super) consts: &'a ConstPool,
     pub(super) fallback_src: SourceId,
     pub(super) field_checks: &'a Rc<DeferredFieldChecks>,
@@ -498,9 +485,7 @@ fn resolve_application_field_constraints(
             )
         })?;
     let type_def = nominal.definition();
-    let constants = ctx.const_scopes.at(nominal.position());
-    let owner_src = constants.source;
-    let visible_const_values = visible_values_with_imports(constants.values, ctx.all_const_values);
+    let owner_src = ctx.dag_sources.at(nominal.position());
     let nat_bindings = generic_nat_bindings(
         type_def,
         &application.generic_args,
@@ -534,7 +519,7 @@ fn resolve_application_field_constraints(
             bounds,
             &display_name,
             target,
-            &visible_const_values,
+            ctx.const_values,
             BoundCheckingContext {
                 evaluation: &application_ctx.with_src(*constraint_src),
                 bindings: &nat_bindings,
@@ -608,22 +593,13 @@ fn resolve_struct_field_constraints_with_cancellation(
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, Outcome<SemanticError>> {
-    let empty = RuntimeValueMap::new();
-    let const_scopes = ConstScopes::new(tir, |_, dag| DagConstScope {
-        values: if dag.dag_id() == tir.root_dag_id() {
-            const_values
-        } else {
-            &empty
-        },
-        source: src,
-    });
-    let all_const_values = visible_values_with_imports(const_values, &empty);
+    let dag_sources = DagSources::new(tir, |_| src);
     let field_checks = Rc::new(DeferredFieldChecks::default());
     let constraints =
         resolve_struct_field_constraints_for_dags(&FieldConstraintResolutionContext {
             tir,
-            const_scopes: &const_scopes,
-            all_const_values: &all_const_values,
+            dag_sources: &dag_sources,
+            const_values,
             consts: &ConstPool::default(),
             fallback_src: src,
             field_checks: &field_checks,
@@ -763,20 +739,6 @@ fn quantity_bound_spelling(
         // Fallback: display the already-evaluated SI value.
         _ => DomainBoundSpelling::Number(si_value),
     }
-}
-
-/// Local constants shadow the constants visible from every checked DAG.
-fn visible_values_with_imports(
-    local_const_values: &RuntimeValueMap,
-    known_const_values: &RuntimeValueMap,
-) -> RuntimeValueMap {
-    let mut values = known_const_values.clone();
-    values.extend(
-        local_const_values
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone())),
-    );
-    values
 }
 
 #[cfg(test)]
