@@ -1127,6 +1127,20 @@ fn error_datetime_invalid_date() {
 }
 
 #[test]
+fn error_datetime_leap_second() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_leap_second.gcl");
+    let rendered = render_error(source, "datetime_leap_second.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_epoch_leap_second() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_epoch_leap_second.gcl");
+    let rendered = render_error(source, "datetime_epoch_leap_second.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_datetime_positional_epoch_scale() {
     let source =
         include_str!("../../../tests/fixtures/invalid/datetime_positional_epoch_scale.gcl");

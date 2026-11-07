@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+invalid datetime literal: seconds = 60 (a leap second) is not supported: a Graphcal datetime cannot represent a leap-second instant
+    Diagnostic severity: error
+Begin snippet for datetime_epoch_leap_second.gcl starting at line 1, column 1
+
+snippet line 1: // Error: `:60` is rejected in every time scale, not only in UTC.
+snippet line 2: node bad: Datetime<TAI> = epoch<TAI>("2016-12-31T23:59:60");
+    label at line 2, columns 38 to 58: does not satisfy this constructor's datetime literal contract
+diagnostic help: leap seconds are not supported in any time scale; to name the instant of a UTC leap second, write it in TAI, for example `epoch<TAI>("2017-01-01T00:00:36")` for `2016-12-31T23:59:60Z`
+diagnostic code: graphcal::D028

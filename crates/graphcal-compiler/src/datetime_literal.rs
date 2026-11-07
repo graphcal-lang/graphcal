@@ -23,6 +23,32 @@ pub enum ParseOffsetDateTimeLiteralError {
     MissingOffset,
     #[error("a named timezone annotation is not allowed when the offset determines the instant")]
     TimeZoneAnnotation,
+    #[error("{LEAP_SECOND_MESSAGE}")]
+    LeapSecond,
+}
+
+/// Why a seconds field of 60 is rejected rather than clamped to 59.
+const LEAP_SECOND_MESSAGE: &str = "seconds = 60 (a leap second) is not supported: a Graphcal datetime cannot represent a leap-second instant";
+
+/// Whether a literal that jiff accepted spells its seconds field as `60`.
+///
+/// jiff silently clamps a leap second to `:59`, so the parsed value cannot
+/// tell the two apart; the source spelling is the only witness. A literal
+/// jiff accepted has a time `HH[:]MM[:]SS…` right after its date/time
+/// designator, in either the extended or the basic format.
+fn spells_leap_second(source: &str) -> bool {
+    let Some(time) = source
+        .find(['T', 't', ' '])
+        .and_then(|designator| source.as_bytes().get(designator.saturating_add(1)..))
+    else {
+        return false;
+    };
+    let seconds = if time.get(2) == Some(&b':') {
+        time.get(6..8).filter(|_| time.get(5) == Some(&b':'))
+    } else {
+        time.get(4..6)
+    };
+    seconds == Some(b"60".as_slice())
 }
 
 fn validate_rfc3339_syntax(source: &str) -> Result<(), ParseOffsetDateTimeLiteralError> {
@@ -38,7 +64,7 @@ fn validate_rfc3339_syntax(source: &str) -> Result<(), ParseOffsetDateTimeLitera
         || !two_ascii_digits_in_range([bytes[8], bytes[9]], 1, 31)
         || !two_ascii_digits_in_range([bytes[11], bytes[12]], 0, 23)
         || !two_ascii_digits_in_range([bytes[14], bytes[15]], 0, 59)
-        || !two_ascii_digits_in_range([bytes[17], bytes[18]], 0, 60)
+        || !two_ascii_digits_in_range([bytes[17], bytes[18]], 0, 59)
     {
         return Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339);
     }
@@ -88,6 +114,8 @@ pub enum ParseCivilDateTimeLiteralError {
     MissingTime,
     #[error("a timezone annotation is not allowed in a local civil datetime literal")]
     TimeZoneAnnotation,
+    #[error("{LEAP_SECOND_MESSAGE}")]
+    LeapSecond,
 }
 
 /// Error returned when resolving local civil coordinates in an IANA timezone.
@@ -148,6 +176,9 @@ impl OffsetDateTimeLiteral {
         if pieces.time_zone_annotation().is_some() {
             return Err(ParseOffsetDateTimeLiteralError::TimeZoneAnnotation);
         }
+        if spells_leap_second(source) {
+            return Err(ParseOffsetDateTimeLiteralError::LeapSecond);
+        }
         validate_rfc3339_syntax(source)?;
         parser.parse_timestamp(source).map(Self).map_err(Into::into)
     }
@@ -183,6 +214,9 @@ impl CivilDateTimeLiteral {
         let time = pieces
             .time()
             .ok_or(ParseCivilDateTimeLiteralError::MissingTime)?;
+        if spells_leap_second(source) {
+            return Err(ParseCivilDateTimeLiteralError::LeapSecond);
+        }
         Ok(Self(pieces.date().to_datetime(time)))
     }
 
@@ -438,6 +472,52 @@ mod tests {
             Err(ParseCivilDateTimeLiteralError::MissingTime)
         ));
         assert!(CivilDateTimeLiteral::parse("2024-11-05T00:00:00").is_ok());
+    }
+
+    #[test]
+    fn leap_second_literals_are_rejected_not_clamped() {
+        for source in [
+            "2016-12-31T23:59:60Z",
+            "2016-12-31T23:59:60.5Z",
+            "2016-12-31T23:59:60+09:00",
+            "2016-12-31t23:59:60z",
+        ] {
+            assert!(
+                matches!(
+                    OffsetDateTimeLiteral::parse(source),
+                    Err(ParseOffsetDateTimeLiteralError::LeapSecond)
+                ),
+                "expected `{source}` to be rejected as a leap second"
+            );
+        }
+        for source in [
+            "2016-12-31T23:59:60",
+            "2016-12-31T23:59:60.25",
+            "20161231T235960",
+            "2016-12-31 23:59:60",
+        ] {
+            assert!(
+                matches!(
+                    CivilDateTimeLiteral::parse(source),
+                    Err(ParseCivilDateTimeLiteralError::LeapSecond)
+                ),
+                "expected `{source}` to be rejected as a leap second"
+            );
+        }
+        // Sixty minutes or hours are ordinary range errors, and `:59` and a
+        // `60` elsewhere in the literal stay valid.
+        for source in [
+            "2016-12-31T23:59:59",
+            "2016-12-31T23:59",
+            "20161231T2359",
+            "2016-12-31T23:59:59.60",
+        ] {
+            assert!(
+                CivilDateTimeLiteral::parse(source).is_ok(),
+                "expected `{source}` to be accepted"
+            );
+        }
+        assert!(OffsetDateTimeLiteral::parse("2016-12-31T23:59:59.60Z").is_ok());
     }
 
     #[test]

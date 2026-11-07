@@ -193,6 +193,18 @@ impl PartialEq for DatetimeLiteralError {
 
 impl Eq for DatetimeLiteralError {}
 
+impl DatetimeLiteralError {
+    /// Whether the literal was rejected for naming a leap second (`:60`).
+    #[must_use]
+    pub const fn is_leap_second(&self) -> bool {
+        matches!(
+            self,
+            Self::Offset(crate::datetime_literal::ParseOffsetDateTimeLiteralError::LeapSecond)
+                | Self::Civil(crate::datetime_literal::ParseCivilDateTimeLiteralError::LeapSecond)
+        )
+    }
+}
+
 impl std::fmt::Display for DatetimeLiteralError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -562,6 +574,7 @@ impl DiagnosticKind for DimensionError {
             Self::IneffectiveConversion => Some("a conversion only affects how a declaration's final value is displayed; move it to the top level of the declaration (or a selected `if`/`match` branch, constructor field, map entry, for-comprehension body, or scan/unfold init), or remove it".to_owned()),
             Self::AffineProneUnitDefinition { .. } => Some("common units of this dimension (e.g. \u{b0}C, \u{b0}F for Temperature) are affine scales with an offset; a purely multiplicative `unit` definition would display silently wrong values. Keep values in the base unit, or model the offset explicitly in your expressions".to_string()),
             Self::InvalidTimezone { tzdb_version, .. } => Some(format!("use a name present in Graphcal's bundled IANA tzdb {tzdb_version}, such as \"UTC\", \"America/New_York\", or \"Asia/Tokyo\"")),
+            Self::InvalidDatetimeLiteral { reason, .. } if reason.is_leap_second() => Some("leap seconds are not supported in any time scale; to name the instant of a UTC leap second, write it in TAI, for example `epoch<TAI>(\"2017-01-01T00:00:36\")` for `2016-12-31T23:59:60Z`".to_owned()),
             Self::InvalidDatetimeLiteral { expectation, .. } => Some(format!("{expectation}")),
             Self::EpochTimeScaleArgumentCount { .. } => Some("write a supported scale in angle brackets, for example `epoch<TT>(\"2024-11-05T12:00:00\")`".to_owned()),
             Self::InvalidEpochTimeScaleArgument | Self::UnsupportedEpochTimeScale { .. } => Some(format!(
