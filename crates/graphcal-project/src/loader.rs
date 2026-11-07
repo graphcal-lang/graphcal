@@ -12,7 +12,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
 use graphcal_compiler::syntax::ast::ModulePath;
 #[cfg(test)]
 use graphcal_io::hash_source_tree;
@@ -290,6 +290,7 @@ impl LoadedProject {
         let mut sources = SourceRegistry::new();
         let parsed = ParsedFile::parse(
             &mut sources,
+            SourceOrigin::Detached,
             name,
             Arc::new(source.to_string()),
             cancellation,
@@ -333,12 +334,12 @@ impl LoadedProject {
         // cross-file path, at file root or in a body, has no target: an
         // editor buffer analyzed without its project stays usable.
         let resolved_imports =
-            same_file_root_targets(&parsed.ast, &same_file, &dag_id, &parsed.named_source)?;
+            same_file_root_targets(&parsed.ast, &same_file, &dag_id, &parsed.registered_source)?;
         let inline_dags = lift_inline_dags(
             &parsed.ast,
             &dag_id,
             &same_file,
-            &parsed.named_source,
+            &parsed.registered_source,
             |_| Ok(None),
         )?;
         cancellation.checkpoint()?;

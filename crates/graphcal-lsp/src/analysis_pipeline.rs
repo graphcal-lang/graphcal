@@ -21,7 +21,7 @@ use graphcal_project::loader::LoadedProject;
 use graphcal_project::project_compiler::{CheckedProject, ProjectCompiler};
 
 use crate::analysis::{AnalysisResult, ResolvedImportLink};
-use crate::file_identity::file_identity;
+use crate::file_identity::{DocumentUris, file_identity};
 use crate::fn_signatures::{build_extern_fn_signatures, build_fn_signatures};
 use crate::imported_definitions::{collect_import_surfaces, collect_imported_definitions};
 use crate::value_format::format_eval_values;
@@ -82,8 +82,20 @@ pub struct AnalysisRun {
 /// during analysis so cross-file diagnostics, goto-definition targets, and
 /// hover reflect what the user actually sees instead of stale disk content.
 pub struct OpenBuffer {
-    pub path: std::path::PathBuf,
-    pub text: Arc<String>,
+    /// The URI the editor opened the buffer under.
+    uri: Url,
+    /// The file path of `uri`.
+    path: std::path::PathBuf,
+    text: Arc<String>,
+}
+
+impl OpenBuffer {
+    /// The buffer the editor opened under the file URI `uri`; `None` for a
+    /// URI that names no file, which no project can import.
+    pub fn new(uri: Url, text: Arc<String>) -> Option<Self> {
+        let path = uri.to_file_path().ok()?;
+        Some(Self { uri, path, text })
+    }
 }
 
 /// Build a `LoadedProject` from a URI and in-memory text.
@@ -296,13 +308,14 @@ pub fn run_analysis_with_cancellation(
     // back to parsing just the active buffer so hover/goto-def on the active
     // file's own symbols still answer — the imported-file error remains
     // visible, but local LSP features degrade gracefully.
+    let documents = DocumentUris::new(uri, open_buffers.iter().map(|buffer| &buffer.uri));
     let project_build = build_project(uri, text, open_buffers, cancellation);
     let mut filesystem_inputs = project_build.filesystem_inputs;
     let project = match project_build.project {
         Ok(project) => project,
         Err(Outcome::Cancelled) => return Err(Cancelled),
         Err(Outcome::Failed(error)) => {
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, &documents);
             diagnostics.entry(uri.clone()).or_default();
             // `Some` when the failure was in an *import* (the buffer itself
             // parses): the buffer's own symbols are still fully usable.
@@ -418,7 +431,7 @@ pub fn run_analysis_with_cancellation(
                 } else {
                     let evaluated = run_eval_from_checked(
                         checked,
-                        uri,
+                        &documents,
                         text,
                         &symbol_table,
                         &host_fns,
@@ -474,7 +487,7 @@ pub fn run_analysis_with_cancellation(
             cancellation.checkpoint()?;
             let imported_symbols =
                 collect_imported_definitions(uri, &project, None, &module_resolver, cancellation)?;
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, &documents);
             diagnostics.entry(uri.clone()).or_default();
 
             Ok(AnalysisRun {
@@ -521,12 +534,13 @@ pub struct EvalAnalysisOutput {
 /// same declarations in a standalone file would.
 pub fn run_eval_from_checked(
     checked: CheckedProject,
-    uri: &Url,
+    documents: &DocumentUris,
     text: &str,
     symbol_table: &SymbolTable,
     host_fns: &graphcal_eval::host_fns::HostFunctionRegistry,
     cancellation: &CancellationToken,
 ) -> std::result::Result<EvalAnalysisOutput, Cancelled> {
+    let uri = documents.root();
     let is_library = checked.is_library();
     let mut output = EvalAnalysisOutput {
         diagnostics: HashMap::from([(uri.clone(), Vec::new())]),
@@ -541,7 +555,7 @@ pub fn run_eval_from_checked(
         // values then.
         Err(Outcome::Failed(_)) if is_library => return Ok(output),
         Err(Outcome::Failed(error)) => {
-            output.add_failure(&error, uri);
+            output.add_failure(&error, documents);
             return Ok(output);
         }
     };
@@ -565,7 +579,7 @@ pub fn run_eval_from_checked(
             }
             Err(Outcome::Cancelled) => return Err(Cancelled),
             Err(Outcome::Failed(error)) => {
-                output.add_failure(&error, uri);
+                output.add_failure(&error, documents);
                 return Ok(output);
             }
         }
@@ -584,7 +598,7 @@ pub fn run_eval_from_checked(
             }
         }
         Err(Outcome::Cancelled) => return Err(Cancelled),
-        Err(Outcome::Failed(error)) => output.add_failure(&error, uri),
+        Err(Outcome::Failed(error)) => output.add_failure(&error, documents),
     }
     Ok(output)
 }
@@ -616,8 +630,8 @@ impl EvalAnalysisOutput {
     }
 
     /// Add the diagnostics of an evaluation that could not run.
-    fn add_failure(&mut self, error: &CompileError, uri: &Url) {
-        for (target, diagnostics) in compile_error_to_diagnostics_grouped(error, uri) {
+    fn add_failure(&mut self, error: &CompileError, documents: &DocumentUris) {
+        for (target, diagnostics) in compile_error_to_diagnostics_grouped(error, documents) {
             self.diagnostics
                 .entry(target)
                 .or_default()

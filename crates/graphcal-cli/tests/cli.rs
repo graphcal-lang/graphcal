@@ -462,6 +462,225 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     assert!(stdout.contains("up to date"), "stdout: {stdout}");
 }
 
+/// A minimal LSP client driving `graphcal lsp` over stdio.
+#[cfg(unix)]
+struct LspSession {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    messages: std::sync::mpsc::Receiver<serde_json::Value>,
+}
+
+#[cfg(unix)]
+impl LspSession {
+    /// Start `graphcal lsp` with `env` and complete the initialize handshake.
+    fn start(env: &[(&str, &Path)]) -> Self {
+        use std::io::{BufRead as _, Read as _};
+
+        let mut command = graphcal_bin();
+        command
+            .arg("lsp")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().expect("failed to start graphcal lsp");
+        let stdin = child.stdin.take().unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let (sender, messages) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            loop {
+                let mut length = None;
+                loop {
+                    let mut line = String::new();
+                    if stdout.read_line(&mut line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let line = line.trim_end();
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.strip_prefix("Content-Length: ") {
+                        length = Some(value.parse::<usize>().unwrap());
+                    }
+                }
+                let mut body = vec![0; length.expect("Content-Length header")];
+                if stdout.read_exact(&mut body).is_err()
+                    || sender.send(serde_json::from_slice(&body).unwrap()).is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let mut session = Self {
+            child,
+            stdin,
+            messages,
+        };
+        session.send(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "processId": null, "capabilities": {}, "workspaceFolders": null },
+        }));
+        session.next_message(|message| message["id"] == 1);
+        session.notify("initialized", &serde_json::json!({}));
+        session
+    }
+
+    fn send(&mut self, message: &serde_json::Value) {
+        let body = message.to_string();
+        write!(self.stdin, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    fn notify(&mut self, method: &str, params: &serde_json::Value) {
+        self.send(&serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+    }
+
+    fn open(&mut self, path: &Path) {
+        let uri = file_uri(path);
+        let text = std::fs::read_to_string(path).unwrap();
+        self.notify(
+            "textDocument/didOpen",
+            &serde_json::json!({
+                "textDocument": { "uri": uri, "languageId": "graphcal", "version": 1, "text": text },
+            }),
+        );
+    }
+
+    /// The next message `matches` accepts, skipping the others.
+    fn next_message(&self, matches: impl Fn(&serde_json::Value) -> bool) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let message = self
+                .messages
+                .recv_timeout(remaining)
+                .expect("timed out waiting for a language-server message");
+            if matches(&message) {
+                return message;
+            }
+        }
+    }
+
+    /// The URIs and codes of every diagnostic list published until one
+    /// non-empty list arrives.
+    fn diagnostics_until_an_error(&self) -> Vec<(String, Vec<String>)> {
+        let mut published = Vec::new();
+        loop {
+            let message =
+                self.next_message(|message| message["method"] == "textDocument/publishDiagnostics");
+            let params = &message["params"];
+            let codes = params["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|diagnostic| {
+                    diagnostic["code"]
+                        .as_str()
+                        .expect("diagnostic code")
+                        .to_owned()
+                })
+                .collect::<Vec<_>>();
+            let done = !codes.is_empty();
+            published.push((params["uri"].as_str().unwrap().to_owned(), codes));
+            if done {
+                return published;
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for LspSession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The `file:` URI of an absolute path, as an editor spells it.
+#[cfg(unix)]
+fn file_uri(path: &Path) -> String {
+    format!("file://{}", path.display())
+}
+
+/// In package mode (a manifest with `[dependencies]`) a source is displayed
+/// as `<package instance>:<path>`. The language server must publish compile
+/// errors under the URI of the file the editor opened, and an error in a
+/// dependency whose package name has an `_` (no valid URL scheme) under that
+/// dependency's file, never in the root buffer.
+#[cfg(unix)]
+#[test]
+fn lsp_publishes_package_mode_compile_errors_to_their_own_documents() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("unit-lib-repo");
+    std::fs::create_dir_all(dep_repo.join("src/unit_lib")).unwrap();
+    std::fs::write(
+        dep_repo.join("src/unit_lib/broken.gcl"),
+        "pub const node length: Length = 1.0 kg;\n",
+    )
+    .unwrap();
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "unit_lib",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.path().join("mission");
+    let bad = write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\n\
+             units = {{ package = \"unit_lib\", git = \"{}\", rev = \"{dep_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ one };\nnode two: Length = @one + 1.0;\n",
+    );
+    let uses_broken = project.join("src/mission/uses_broken.gcl");
+    std::fs::write(
+        &uses_broken,
+        "import units.broken::{ length };\nnode copy: Length = @length;\n",
+    )
+    .unwrap();
+    let cache = dir.path().join("cache");
+    let lock = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .unwrap();
+    assert!(
+        lock.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
+
+    let mut session = LspSession::start(&[("GRAPHCAL_CACHE_DIR", &cache)]);
+    session.open(&bad);
+    let published = session.diagnostics_until_an_error();
+    assert_eq!(
+        published.last().unwrap(),
+        &(file_uri(&bad), vec!["graphcal::D002".to_owned()]),
+        "{published:?}"
+    );
+
+    session.open(&uses_broken);
+    let published = session.diagnostics_until_an_error();
+    let (uri, codes) = published.last().unwrap();
+    assert_eq!(codes, &["graphcal::D002"], "{published:?}");
+    assert!(
+        uri.starts_with("file:///") && uri.ends_with("/src/unit_lib/broken.gcl"),
+        "{published:?}"
+    );
+    assert!(
+        published
+            .iter()
+            .all(|(uri, codes)| uri != &file_uri(&uses_broken) || codes.is_empty()),
+        "{published:?}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn concurrent_lock_commands_publish_one_shared_source_safely() {

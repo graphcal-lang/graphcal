@@ -1,14 +1,13 @@
 //! Top-level project compilation error.
 
 use graphcal_compiler::source_id::SourceId;
-use std::sync::Arc;
 
-use miette::{Diagnostic, NamedSource, SourceSpan};
+use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::semantic_error::{SemanticError, rendered::RenderedSemanticError};
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{RegisteredSource, SourceRegistry};
 
 use crate::binding_error::BindingError;
 use crate::load_error::LoadError;
@@ -54,7 +53,7 @@ pub enum CompileError {
         reason: String,
         /// External parameter source, such as inline JSON, stdin, or a file.
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         /// Span identifying the parameter in the external document.
         #[label("value for parameter `{name}`")]
         span: SourceSpan,
@@ -144,26 +143,26 @@ impl CompileError {
         ))
     }
 
-    /// Return the `NamedSource` embedded in this error, if any.
+    /// Return the registered source embedded in this error, if any.
     ///
     /// Forwards to the parse diagnostic's attached source or
-    /// [`RenderedSemanticError::named_source`].
-    /// When present, the returned
-    /// `NamedSource` pairs the file's name with the exact source text whose
-    /// byte offsets the error's labels index into — so diagnostic emitters
-    /// can build a line index over the right text without having to look it
-    /// up by name.
+    /// [`RenderedSemanticError::registered_source`].
+    /// When present, the returned source pairs the exact text whose byte
+    /// offsets the error's labels index into with its typed
+    /// [`SourceOrigin`](graphcal_compiler::source_registry::SourceOrigin), so
+    /// diagnostic emitters build a line index over the right text and route
+    /// the diagnostic to its file without parsing the display name.
     ///
     /// Parse, semantic, and external-binding diagnostics always carry a
     /// source; loader and binding failures that precede any source (e.g.
     /// `FileNotFound`, `CircularImport`) do not.
     #[must_use]
-    pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
+    pub const fn registered_source(&self) -> Option<&RegisteredSource> {
         match self {
-            Self::Parse(e) => Some(e.named_source()),
-            Self::Load(e) => e.named_source(),
-            Self::Binding(e) => e.named_source(),
-            Self::Eval(e) => Some(e.named_source()),
+            Self::Parse(e) => Some(e.registered_source()),
+            Self::Load(e) => e.registered_source(),
+            Self::Binding(e) => e.registered_source(),
+            Self::Eval(e) => Some(e.registered_source()),
             Self::ExternalBinding { src, .. } => Some(src),
         }
     }

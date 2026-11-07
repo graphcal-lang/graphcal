@@ -409,13 +409,13 @@ fn assert_reconciliation_error(
                     rendered.error
                 );
             };
-            let src = rendered.named_source();
+            let src = rendered.registered_source();
             assert_eq!(overridden.as_str(), expected_override);
             assert_eq!(overridden_kind.to_string(), expected_kind);
             assert_eq!(orphan_decl.as_str(), expected_orphan);
             assert!(src.name().ends_with("main.gcl"));
-            assert!(span.offset() + span.len() <= src.inner().len());
-            assert!(src.inner()[span.offset()..span.offset() + span.len()].contains("include"));
+            assert!(span.offset() + span.len() <= src.text().len());
+            assert!(src.text()[span.offset()..span.offset() + span.len()].contains("include"));
         }
         other => panic!("expected typed V005 reconciliation error, got {other:?}"),
     }

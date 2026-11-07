@@ -1,0 +1,7 @@
+// A binding that reads the instance it binds closes a cycle inside the
+// instance; it is reported at the include declaration.
+param a_long_parameter_name_for_padding: Dimensionless = 1.0;
+param another_long_parameter_for_padding: Dimensionless = 2.0;
+node some_unrelated_node: Dimensionless = @a_long_parameter_name_for_padding * 3.0;
+include review.lib(gain: @p::out) as p;
+node y: Dimensionless = @p::out;

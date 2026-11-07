@@ -32,7 +32,7 @@ impl ReportMetadata {
             .files()
             .iter()
             .map(|file| {
-                let name = VirtualProject::relative_source_name(&file.path().to_string_lossy())
+                let name = VirtualProject::relative_source_name(file.path())
                     .unwrap_or_else(|| file.path().display().to_string());
                 SourceDigest {
                     name,

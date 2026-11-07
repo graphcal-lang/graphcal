@@ -1,0 +1,5 @@
+// Padding comment line one so that byte offsets differ.
+// Padding comment line two so that byte offsets differ.
+// Padding comment line three so that byte offsets differ.
+param gain: Dimensionless = 1.0;
+pub node out: Dimensionless = @gain;

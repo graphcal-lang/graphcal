@@ -14,9 +14,6 @@
 use crate::load_error::LoadError;
 
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use miette::NamedSource;
 
 use super::budget::io_not_found;
 use super::inline_dags::lift_inline_dags;
@@ -35,7 +32,7 @@ use graphcal_compiler::desugar::desugared_ast::File;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::import_cycle::ImportCycle;
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{RegisteredSource, SourceRegistry};
 use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
@@ -165,7 +162,7 @@ impl<K: SourceKey> Builder<'_, K> {
     fn build_parsed(&mut self, file: &K, parsed: ParsedSource<K>) -> Result<DagId, Stop> {
         self.loading.push(file.clone());
 
-        let named_source = parsed.named_source();
+        let named_source = parsed.registered_source();
         let location = parsed.location();
         let module_path = location.module_path.clone();
         let dag_id = DagId::from_relative_path(location.package.clone(), &location.relative_path)
@@ -228,7 +225,7 @@ impl<K: SourceKey> Builder<'_, K> {
         file: &K,
         parsed: &'p ParsedSource<K>,
     ) -> Result<HashMap<ModulePathKey, (ImportOwner, &'p ResolvedFile<K>)>, Stop> {
-        let src = parsed.named_source();
+        let src = parsed.registered_source();
         let mut imports = HashMap::new();
         for dependency in parsed.loading_dependencies() {
             let DependencySite::FileRoot(kind) = dependency.site else {
@@ -282,7 +279,7 @@ impl<K: SourceKey> Builder<'_, K> {
                 Some(ModuleResolution::OutsideRoot) => {
                     return Err(CompileError::Load(outside_root(
                         dependency.path,
-                        parsed.named_source().clone(),
+                        parsed.registered_source().clone(),
                     ))
                     .into());
                 }
@@ -301,7 +298,7 @@ impl<K: SourceKey> Builder<'_, K> {
         parsed: &ParsedSource<K>,
         path: &ModulePath,
     ) -> Result<ModuleTarget, CompileError> {
-        let src = parsed.named_source();
+        let src = parsed.registered_source();
         let resolved = match parsed.resolution(path) {
             Some(ModuleResolution::Resolved(resolved)) => resolved,
             Some(ModuleResolution::OutsideRoot) => {
@@ -337,7 +334,7 @@ impl<K: SourceKey> Builder<'_, K> {
 
 pub(super) fn file_root_self_import_error(
     path: &ModulePath,
-    src: &NamedSource<Arc<String>>,
+    src: &RegisteredSource,
 ) -> CompileError {
     CompileError::Load(LoadError::FileRootSelfImport {
         path: path.key(),
@@ -358,7 +355,7 @@ pub(super) fn same_file_root_targets(
     ast: &File,
     same_file: &SameFileScope,
     file: &DagId,
-    src: &NamedSource<Arc<String>>,
+    src: &RegisteredSource,
 ) -> Result<HashMap<ModulePathKey, ModuleTarget>, CompileError> {
     let mut targets = HashMap::new();
     for (path, kind) in ast.declarations.iter().filter_map(file_root_dependency) {

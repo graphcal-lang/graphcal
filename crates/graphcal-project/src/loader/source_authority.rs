@@ -14,7 +14,7 @@ use std::sync::Arc;
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::dag_id::DagPackageId;
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
 use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_io::{FileSystemReadError, FileSystemReader};
@@ -185,7 +185,13 @@ fn read_source_file(
                 )),
             })
         })?;
-    ParsedFile::parse(sources, name, Arc::new(source), cancellation)
+    ParsedFile::parse(
+        sources,
+        SourceOrigin::File(path.to_path_buf()),
+        name,
+        Arc::new(source),
+        cancellation,
+    )
 }
 
 fn is_not_found(error: &FileSystemReadError) -> bool {

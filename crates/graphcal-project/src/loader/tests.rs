@@ -533,7 +533,7 @@ fn from_source_keeps_absolute_diagnostic_label_out_of_semantic_identity() {
     assert_eq!(
         project
             .sources()
-            .named_source(root_file.source_id())
+            .source(root_file.source_id())
             .unwrap()
             .name(),
         "/virtual/project/main.gcl"
@@ -982,6 +982,32 @@ fn dependency_enabled_loader_uses_overlay_for_root_file() {
 
     let project = load_project(&fixture.root_file, None, &overlay).unwrap();
     assert_eq!(project.root_file().source.as_str(), overlay_source);
+}
+
+#[test]
+fn dependency_enabled_loader_registers_every_file_by_its_path() {
+    use graphcal_compiler::source_registry::SourceOrigin;
+
+    let fixture = locked_package_fixture(
+        "import units_v1.lib::{ one };\nnode two: Dimensionless = @one;",
+        "pub const node one: Dimensionless = 1.0;",
+    );
+    let project = load_project(&fixture.root_file, None, &RealFileSystem::default()).unwrap();
+    let dependency_file = fixture.dependency_root.join("src/units/lib.gcl");
+    let mut paths = Vec::new();
+    for file in project.files().iter() {
+        let source = project.sources().source(file.source_id()).unwrap();
+        // The display name carries the package instance; the origin is the
+        // file itself.
+        assert!(source.name().starts_with("pkg-"), "{}", source.name());
+        assert_eq!(
+            source.origin(),
+            &SourceOrigin::File(file.path().to_path_buf())
+        );
+        paths.push(file.path().to_path_buf());
+    }
+    assert!(paths.contains(&fixture.root_file.canonicalize().unwrap()));
+    assert!(paths.contains(&dependency_file.canonicalize().unwrap()));
 }
 
 #[test]

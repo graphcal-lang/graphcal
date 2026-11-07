@@ -1,9 +1,8 @@
 //! Failures binding values to the entry DAG's parameters from outside the
 //! program (CLI `--param`, JSON parameter documents, model rows).
 
-use std::sync::Arc;
-
-use miette::{Diagnostic, NamedSource, SourceSpan};
+use graphcal_compiler::source_registry::RegisteredSource;
+use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::declaration_category::DeclCategory;
@@ -76,7 +75,7 @@ pub enum BindingError {
     RequiredParamNotProvided {
         name: DeclName,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("declared here without a default value")]
         span: SourceSpan,
     },
@@ -87,7 +86,7 @@ pub enum BindingError {
         name: DeclName,
         reason: BindingLiteralError,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("invalid value")]
         span: SourceSpan,
     },
@@ -101,7 +100,7 @@ pub enum BindingError {
         name: DeclName,
         reason: ClosedExpressionError,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("not a closed value")]
         span: SourceSpan,
     },
@@ -113,7 +112,7 @@ pub enum BindingError {
         actual: BindingValueKind,
         expected: TypeSpelling,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("expects `{expected}`")]
         span: SourceSpan,
     },
@@ -123,7 +122,7 @@ pub enum BindingError {
     NonFiniteQuantity {
         name: DeclName,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("bound to a non-finite quantity")]
         span: SourceSpan,
     },
@@ -133,7 +132,7 @@ pub enum BindingError {
     BoundMoreThanOnce {
         name: DeclName,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("bound more than once")]
         span: SourceSpan,
     },
@@ -145,7 +144,7 @@ pub enum BindingError {
         /// The violated bound, at the indexed entry it is found in.
         violation: DomainViolationDetail,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("value for `{name}` is out of its declared domain")]
         span: SourceSpan,
     },
@@ -155,7 +154,7 @@ pub enum BindingError {
     KeyIndexNotNamed {
         name: DeclName,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("this key's index is not a named index")]
         span: SourceSpan,
     },
@@ -167,7 +166,7 @@ pub enum BindingError {
         variant: IndexVariantName,
         index: IndexTypeRef,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("expects a category of `{index}`")]
         span: SourceSpan,
     },
@@ -176,7 +175,7 @@ pub enum BindingError {
 impl BindingError {
     /// The named source a located binding diagnostic points into.
     #[must_use]
-    pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
+    pub const fn registered_source(&self) -> Option<&RegisteredSource> {
         match self {
             Self::NotAParam { .. } | Self::UnknownParam { .. } => None,
             Self::RequiredParamNotProvided { src, .. }
@@ -194,12 +193,14 @@ impl BindingError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
     fn binding_failures_keep_their_codes() {
         let name = DeclName::expect_valid("mass");
-        let src = NamedSource::new("main.gcl", Arc::new("param mass: Mass;".to_owned()));
+        let src = RegisteredSource::detached("main.gcl", Arc::new("param mass: Mass;".to_owned()));
         for (error, code, located) in [
             (
                 BindingError::NotAParam {
@@ -228,7 +229,7 @@ mod tests {
                 error.code().map(|code| code.to_string()).as_deref(),
                 Some(code)
             );
-            assert_eq!(error.named_source().is_some(), located);
+            assert_eq!(error.registered_source().is_some(), located);
         }
     }
 }
