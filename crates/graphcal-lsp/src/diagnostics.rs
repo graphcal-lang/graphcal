@@ -714,8 +714,10 @@ mod tests {
     fn package_mode_errors_route_by_source_origin_not_display_name() {
         use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
 
-        let root = std::path::PathBuf::from("/graphcal-test/project/src/my_app/main.gcl");
-        let dependency = std::path::PathBuf::from("/graphcal-test/cache/unit_lib/lib.gcl");
+        // `Url::from_file_path` needs a platform-absolute path (a drive on Windows).
+        let base = std::env::temp_dir().join("graphcal-test");
+        let root = base.join("project/src/my_app/main.gcl");
+        let dependency = base.join("cache/unit_lib/lib.gcl");
         let mut sources = SourceRegistry::new();
         // Package mode displays a file as `<package instance>:<path>`; with an
         // `_` in the package name that is not even a valid URL.
