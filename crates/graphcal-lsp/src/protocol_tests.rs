@@ -547,6 +547,7 @@ async fn assert_imported_factor_features(
 }
 
 /// The codes of a published diagnostic list.
+#[cfg(unix)]
 fn diagnostic_codes(diagnostics: &Value) -> Vec<String> {
     diagnostics
         .as_array()
