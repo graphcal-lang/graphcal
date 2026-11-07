@@ -4612,6 +4612,49 @@ fn long_nat_chains_survive_formatting_lowering_and_drop() {
 }
 
 #[test]
+fn long_constant_chains_survive_lowering_evaluation_and_drop() {
+    // Unit scales and coordinate bounds are lowered and evaluated by the
+    // constant sublanguage; a long left-nested chain used to overflow the
+    // stack there (and in the derived drop glue). Run it in a subprocess so
+    // a regression aborts only the child.
+    const TERM_COUNT: usize = 30_000;
+
+    let dir = tempfile::tempdir().unwrap();
+    let int_sum = vec!["1"; TERM_COUNT].join(" + ");
+    let real_sum = vec!["1.0"; TERM_COUNT].join(" + ");
+    let unit_scale = write_temp_file(
+        dir.path(),
+        "unit_scale.gcl",
+        &format!("unit u: Length = ({int_sum}) m;\nnode x: Length = 1.0 u;\n"),
+    );
+    let real_scale = write_temp_file(
+        dir.path(),
+        "real_scale.gcl",
+        &format!("unit u: Length = ({real_sum}) m;\nnode x: Length = 1.0 u;\n"),
+    );
+    let coordinate = write_temp_file(
+        dir.path(),
+        "coordinate.gcl",
+        &format!(
+            "index T = linspace(0.0 s, ({real_sum}) * 1.0 s, points: 3);\nnode x: Dimensionless = 1.0;\n"
+        ),
+    );
+
+    for path in [&unit_scale, &real_scale, &coordinate] {
+        let output = graphcal_bin()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .expect("failed to run graphcal check");
+        assert!(
+            output.status.success(),
+            "{} must check without aborting: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn format_check_recursive_directory() {
     // --check on a directory should recursively find .gcl files
     let output = graphcal_bin()

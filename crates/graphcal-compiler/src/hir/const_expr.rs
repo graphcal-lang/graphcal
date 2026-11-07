@@ -138,10 +138,32 @@ pub enum ConstIntKind {
 }
 
 /// A checked `Int`-valued constant expression.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ConstInt {
     kind: ConstIntKind,
     span: Span,
+}
+
+// Manual impls instead of derives: derived clone and drop glue recurse once
+// per tree level without a stack-growth guard, so a long left-nested
+// constant chain (`1 + 1 + …`) would overflow the stack. Each level runs
+// under `with_stack_growth`.
+impl Clone for ConstInt {
+    fn clone(&self) -> Self {
+        crate::stack::with_stack_growth(|| Self {
+            kind: self.kind.clone(),
+            span: self.span,
+        })
+    }
+}
+
+impl Drop for ConstInt {
+    fn drop(&mut self) {
+        // Move the recursive kind out under a leaf placeholder so only the
+        // placeholder is dropped after this impl returns.
+        let kind = std::mem::replace(&mut self.kind, ConstIntKind::Literal(0));
+        crate::stack::with_stack_growth(|| drop(kind));
+    }
 }
 
 /// One real-quantity-valued constant node.
@@ -187,10 +209,27 @@ pub enum ConstRealKind<P: ConstPosition> {
 }
 
 /// A checked real-quantity-valued constant expression for position `P`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ConstReal<P: ConstPosition> {
     kind: ConstRealKind<P>,
     span: Span,
+}
+
+// Manual impls for the same reason as [`ConstInt`]'s.
+impl<P: ConstPosition> Clone for ConstReal<P> {
+    fn clone(&self) -> Self {
+        crate::stack::with_stack_growth(|| Self {
+            kind: self.kind.clone(),
+            span: self.span,
+        })
+    }
+}
+
+impl<P: ConstPosition> Drop for ConstReal<P> {
+    fn drop(&mut self) {
+        let kind = std::mem::replace(&mut self.kind, ConstRealKind::Number(FiniteQuantity::ZERO));
+        crate::stack::with_stack_growth(|| drop(kind));
+    }
 }
 
 /// Why a constant expression could not be lowered or evaluated.
@@ -338,6 +377,12 @@ impl ConstInt {
     ///
     /// Returns [`ConstExprError::Int`] when an operation has no `Int` result.
     pub fn evaluate(&self) -> Result<i64, ConstExprError> {
+        crate::stack::with_stack_growth(|| self.evaluate_level())
+    }
+
+    /// One level of [`Self::evaluate`]; operands recurse through the guarded
+    /// entry point.
+    fn evaluate_level(&self) -> Result<i64, ConstExprError> {
         let result = match &self.kind {
             ConstIntKind::Literal(value) => Ok(*value),
             ConstIntKind::Neg(operand) => int_arith::negate(operand.evaluate()?),
@@ -401,6 +446,12 @@ impl<P: ConstPosition> ConstReal<P> {
     /// an exact power has no real value, or an `Int` has no exact binary64
     /// value.
     pub fn evaluate(&self) -> Result<FiniteQuantity, ConstExprError> {
+        crate::stack::with_stack_growth(|| self.evaluate_level())
+    }
+
+    /// One level of [`Self::evaluate`]; operands recurse through the guarded
+    /// entry point.
+    fn evaluate_level(&self) -> Result<FiniteQuantity, ConstExprError> {
         let arithmetic = |error| ConstExprError::Arithmetic {
             error,
             span: self.span,
@@ -525,7 +576,9 @@ impl CoordinateExpr {
         fn literal_unit(expr: &ConstReal<CoordinatePosition>) -> CoordinateDisplayUnit {
             match &expr.kind {
                 ConstRealKind::Quantity { unit, .. } => unit.display_unit(),
-                ConstRealKind::Neg(operand) => literal_unit(operand),
+                ConstRealKind::Neg(operand) => {
+                    crate::stack::with_stack_growth(|| literal_unit(operand))
+                }
                 ConstRealKind::Number(_)
                 | ConstRealKind::Builtin(_)
                 | ConstRealKind::FromInt { .. }

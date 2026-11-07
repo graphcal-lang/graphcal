@@ -1307,7 +1307,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         exprs: [&ast::Expr; N],
     ) -> Result<HashMap<UnitRef, UnitInfo>, SemanticError> {
         fn unit_exprs<'e>(expr: &'e ast::Expr, found: &mut Vec<&'e UnitExpr>) {
-            match &expr.kind {
+            crate::stack::with_stack_growth(|| match &expr.kind {
                 ast::ExprKind::QuantityLiteral { unit, .. } => found.push(unit),
                 ast::ExprKind::UnaryOp { operand, .. } => unit_exprs(operand, found),
                 ast::ExprKind::BinOp { lhs, rhs, .. } => {
@@ -1315,7 +1315,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     unit_exprs(rhs, found);
                 }
                 _ => {}
-            }
+            });
         }
 
         let mut found = Vec::new();

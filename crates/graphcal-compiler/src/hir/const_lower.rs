@@ -292,6 +292,12 @@ struct Lowering<'a, 'r, P> {
 impl<P: PositionErrors> Lowering<'_, '_, P> {
     /// Lower and type `expr`, reporting the first error in source order.
     fn lower(&self, expr: &ast::Expr) -> Result<Typed<P>, ConstLowerError> {
+        crate::stack::with_stack_growth(|| self.lower_level(expr))
+    }
+
+    /// One level of [`Self::lower`]; operands recurse through the guarded
+    /// entry point.
+    fn lower_level(&self, expr: &ast::Expr) -> Result<Typed<P>, ConstLowerError> {
         let span = expr.span;
         let real = |kind| Typed::Real(ConstReal::new(kind, span), Dimension::dimensionless());
         Ok(match &expr.kind {
