@@ -238,7 +238,7 @@ impl ParameterBindingBuilder<'_> {
             return Err(self.project.binding_kind_error(port, BindingValueKind::Key));
         };
         // A checked `Key<I>` port type names an index the checked program defines.
-        let Some(axis) = IndexAxis::resolve(self.project.tir(), index) else {
+        let Ok(axis) = IndexAxis::resolve(self.project.tir(), index) else {
             return Err(CompileError::semantic(
                 SemanticError::internal_error(
                     format!(

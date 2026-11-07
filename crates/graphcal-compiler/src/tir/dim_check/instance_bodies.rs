@@ -1,6 +1,8 @@
 //! Check each semantic instance's own bodies and specialize the rest of its
 //! checked trees from its template's, without re-inferring the template.
 
+use std::collections::HashMap;
+
 use crate::cancellation::CancellationToken;
 use crate::diagnostic_anchor::DiagnosticAnchor;
 use crate::outcome::Outcome;
@@ -253,6 +255,7 @@ pub(super) fn instance_bodies<'t>(
     graph: &InstanceGraph,
     canonical: &CanonicalFacts<CanonicalChecked>,
     instances: &InstanceFacts<InstanceOf<'t>>,
+    axes: &crate::tir::texpr::AxisCache,
     src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<InstanceFacts<InstanceChecked>, Outcome<SemanticError>> {
@@ -264,9 +267,10 @@ pub(super) fn instance_bodies<'t>(
         tir,
         bodies: &published,
     };
-    // Every instance of one template rebinding the same ports specializes
-    // the same port-generic trees: infer them once per template and port set.
-    let mut port_generic = PortGenericCache::new();
+    let mut shared = SharedFacts {
+        port_generic: HashMap::new(),
+        axes,
+    };
     instances.try_map_ref(|instance| {
         let (template, template_bodies) = template_of(tir, canonical, instance.origin);
         instance_body(
@@ -274,22 +278,28 @@ pub(super) fn instance_bodies<'t>(
             instance,
             template,
             template_bodies,
-            &mut port_generic,
+            &mut shared,
             src,
             cancellation,
         )
     })
 }
 
-/// The port-generic trees of each template, by the defaulted dimension ports
-/// rebound (in port order).
-type PortGenericCache = std::collections::HashMap<
-    (
-        crate::tir::typed::dag_position::DagPosition,
-        Vec<crate::resolved_name::ResolvedDimName>,
-    ),
-    super::template_closure::PortGenericTrees,
->;
+/// What every instance body is built from, built once for all of them.
+struct SharedFacts<'a> {
+    /// Every instance of one template rebinding the same ports specializes
+    /// the same port-generic trees: they are inferred once per template and
+    /// rebound ports (in port order).
+    port_generic: HashMap<
+        (
+            crate::tir::typed::dag_position::DagPosition,
+            Vec<crate::resolved_name::ResolvedDimName>,
+        ),
+        super::template_closure::PortGenericTrees,
+    >,
+    /// The project's concrete axes.
+    axes: &'a crate::tir::texpr::AxisCache,
+}
 
 /// Check one semantic instance's own defaults and specialize the rest of its
 /// checked trees from its template's, with the template plot channel shapes
@@ -304,7 +314,7 @@ fn instance_body(
     }: &InstanceOf<'_>,
     template: &crate::tir::typed::model::DagTIR,
     template_bodies: &CheckedBodies,
-    port_generic_cache: &mut PortGenericCache,
+    shared: &mut SharedFacts<'_>,
     src: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<InstanceChecked, Outcome<SemanticError>> {
@@ -321,7 +331,10 @@ fn instance_body(
     let (port_generic, port_generic_plot_channels) = if ports.is_empty() {
         (&no_port_generic, None)
     } else {
-        let generic = match port_generic_cache.entry((origin.template_position(), ports)) {
+        let generic = match shared
+            .port_generic
+            .entry((origin.template_position(), ports))
+        {
             std::collections::hash_map::Entry::Occupied(cached) => cached.into_mut(),
             std::collections::hash_map::Entry::Vacant(vacant) => {
                 let generic = super::template_closure::port_generic_trees(
@@ -365,9 +378,12 @@ fn instance_body(
         dag,
         checking,
         independent,
-        template_bodies,
-        port_generic,
+        super::body_specialization::TemplateTrees {
+            checked: template_bodies,
+            port_generic,
+        },
         substitution,
+        shared.axes,
         src,
     )?;
     Ok(InstanceChecked {

@@ -268,9 +268,12 @@ fn typed(
             .record_value(node, CheckedType::Int, &no_facts(&matches))
             .unwrap();
     }
-    CheckedBodies::discharge(claim_roots(roots, pending).unwrap(), nominal_uses, &|_| {
-        Ok(None)
-    })
+    CheckedBodies::discharge(
+        claim_roots(roots, pending).unwrap(),
+        nominal_uses,
+        &|_| Ok(None),
+        &AxisCache::default(),
+    )
     .unwrap()
 }
 
@@ -436,6 +439,7 @@ fn executable_lookup_distinguishes_missing_deferred_and_contextual_roots() {
         },
         HashMap::new(),
         &known(3),
+        &AxisCache::default(),
     )
     .unwrap();
     assert!(bodies.executable_value(&ready_id).is_ok());
@@ -456,6 +460,7 @@ fn executable_lookup_distinguishes_missing_deferred_and_contextual_roots() {
         },
         HashMap::new(),
         &|_| Ok(None),
+        &AxisCache::default(),
     )
     .unwrap();
     assert_eq!(
@@ -470,7 +475,10 @@ fn type_maps_keep_structure_and_rewrite_every_carried_type() {
     let tree = key_node(&mut ids, fin(3), 1);
     let definition = known(3);
     let concrete = tree
-        .map_types(&mut checked_bodies::ToConcrete::new(&definition))
+        .map_types(&mut checked_bodies::ToConcrete::new(
+            &definition,
+            &AxisCache::default(),
+        ))
         .unwrap();
     assert_eq!(concrete.ty().to_symbolic(), *tree.ty());
     assert_eq!(concrete.id(), tree.id());
@@ -545,4 +553,15 @@ fn discharge_rejects_axes_a_node_cannot_be_given() {
         CheckedBody::discharge(TBody::Value(Box::new(waiting)), &cardinality_then_waiting),
         Ok(CheckedBody::Deferred(_))
     ));
+}
+
+#[test]
+fn one_axis_cache_builds_each_axis_once() {
+    // Every DAG and instance used to build its own copy of each axis.
+    let definition = known(1_000_000);
+    let axes = AxisCache::default();
+    let index = fin(1_000_000).to_concrete().unwrap();
+    let first = axes.axis(&index, &definition).unwrap();
+    let second = axes.axis(&index, &definition).unwrap();
+    assert!(first.shares_storage_with(&second));
 }

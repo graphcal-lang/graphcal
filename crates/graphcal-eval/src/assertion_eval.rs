@@ -415,7 +415,7 @@ fn collect_failing_paths(
     let index_name = indexed.index();
     let mut paths = Vec::new();
     for (variant, value) in indexed.iter() {
-        let key = (index_name.clone(), variant.clone());
+        let key = (index_name.clone(), variant.into_owned());
         match value {
             Verdicts::Single(true) => {}
             Verdicts::Single(false) => {

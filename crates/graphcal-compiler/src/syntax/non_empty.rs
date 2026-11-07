@@ -402,6 +402,12 @@ impl<T: Eq + std::hash::Hash> NonEmptyUnique<T> {
 }
 
 impl<T> NonEmptyUnique<T> {
+    /// Borrow the distinct items as a non-empty sequence.
+    #[must_use]
+    pub const fn as_non_empty(&self) -> &NonEmpty<T> {
+        &self.items
+    }
+
     /// Borrow the distinct items in order.
     #[must_use]
     pub fn as_slice(&self) -> &[T] {

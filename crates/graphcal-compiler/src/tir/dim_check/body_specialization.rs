@@ -254,6 +254,15 @@ pub(super) struct DerivedTrees {
     pub(super) calls: CallTargets,
 }
 
+/// The trees an instance takes from its template.
+pub(super) struct TemplateTrees<'a> {
+    /// The template's own checked trees.
+    pub(super) checked: &'a CheckedBodies,
+    /// The template's trees in the view where the ports the instance
+    /// rebinds are rigid.
+    pub(super) port_generic: &'a DerivedTrees,
+}
+
 /// The checked trees of one semantic instance: each root inferred
 /// independently by the instance (a rebound parameter default) keeps its own
 /// tree; every other root is its template's tree (or, when the instance binds
@@ -269,9 +278,12 @@ pub(super) fn specialize_instance_bodies(
     dag: &DagTIR,
     tir: &dyn TirRead,
     mut independent: DerivedTrees,
-    template: &CheckedBodies,
-    port_generic: &DerivedTrees,
+    TemplateTrees {
+        checked: template,
+        port_generic,
+    }: TemplateTrees<'_>,
     substitution: &CompleteSubstitution<'_>,
+    axes: &crate::tir::texpr::AxisCache,
     src: SourceId,
 ) -> Result<CheckedBodies, SemanticError> {
     let mut specializer = Specializer {
@@ -316,9 +328,12 @@ pub(super) fn specialize_instance_bodies(
         }
         roots.push((id.clone(), body));
     }
-    CheckedBodies::discharge(ClaimedRoots { roots, calls }, nominal_uses, &|index| {
-        concrete_index_kind(tir, index)
-    })
+    CheckedBodies::discharge(
+        ClaimedRoots { roots, calls },
+        nominal_uses,
+        &|index| concrete_index_kind(tir, index),
+        axes,
+    )
     .map_err(|error| internal(src, error.to_string(), DiagnosticAnchor::WholeFile))
 }
 

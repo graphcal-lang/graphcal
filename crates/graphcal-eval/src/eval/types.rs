@@ -1154,7 +1154,7 @@ mod tests {
         assert_eq!(value.display_label(&render()), None);
 
         let finite = graphcal_compiler::semantic::index_def::FiniteIndex::try_from_u64(3).unwrap();
-        let key = KeyValue::at(IndexAxis::finite(finite).unwrap(), 2).unwrap();
+        let key = KeyValue::at(IndexAxis::finite(finite), 2).unwrap();
         assert_eq!(KeyRendering::of(&key), KeyRendering::Position(2));
         assert_eq!(
             Value::Key(key)
