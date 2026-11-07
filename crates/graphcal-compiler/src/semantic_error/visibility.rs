@@ -128,6 +128,17 @@ pub struct ReboundTypeDependency {
     pub port: NameAtom,
 }
 
+/// How an include exposes its instance's values to the importer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IncludeForm {
+    /// `include path(...)::{ ... }`: only the selected items, and selected
+    /// types are specialized for the include's bindings.
+    Selective,
+    /// `include path(...) as alias`: every public value output, and no
+    /// template type is specialized.
+    Module,
+}
+
 /// The `type` items a selective include is missing, as the help lists them.
 fn type_selection_list(types: &NonEmpty<ReboundTypeDependency>) -> String {
     types
@@ -239,22 +250,28 @@ pub enum VisibilityError {
         port_kind: crate::static_interface::StaticInputKind,
         port_name: NameAtom,
     },
-    /// A selective include rebinds a Static port, but a selected item exposes
+    /// An include rebinds a Static port, but an exposed value or type reaches
     /// a template type whose definition depends on that port, and the include
     /// does not select the type.
     ///
-    /// Only a selected type is specialized for the include's bindings. An
-    /// unselected one would keep the template's definition in the importer
-    /// while the instance's values follow the rebound port.
+    /// Only a type selected by a selective include is specialized for the
+    /// include's bindings. Any other would keep the template's definition in
+    /// the importer while the instance's values follow the rebound port.
     #[error(
-        "selected `{item}` exposes type `{}`, which depends on rebound {} `{}`, but the include does not select it",
+        "{} `{item}` exposes type `{}`, which depends on rebound {} `{}`, but {}",
+        match form { IncludeForm::Selective => "selected", IncludeForm::Module => "included output" },
         types.first().nominal,
         types.first().port_kind,
-        types.first().port
+        types.first().port,
+        match form {
+            IncludeForm::Selective => "the include does not select it",
+            IncludeForm::Module => "a module-form include cannot specialize it",
+        }
     )]
     IncludeMustSelectReboundType {
         item: NameAtom,
         types: NonEmpty<ReboundTypeDependency>,
+        form: IncludeForm,
     },
 }
 
@@ -308,7 +325,8 @@ impl DiagnosticKind for VisibilityError {
             Self::IncludeMustReconcileOverride { orphan_decl, overridden, .. } => Some(format!("add a binding for `{orphan_decl}` to this include, or keep `{overridden}` bound to its default")),
             Self::GenericsLeakage { leaked_name, .. } => Some(format!("make `{leaked_name}` `pub` at the importing file, or drop the per-item `pub` marker on this include / import")),
             Self::TemplateBodyDependsOnStaticDefault { port_name, .. } => Some(format!("pass the required value through a `param`, or make `{port_name}` non-bindable when its concrete definition is part of the template contract")),
-            Self::IncludeMustSelectReboundType { types, .. } => Some(format!("add {} to the selection; a selected type is specialized for this include's bindings", type_selection_list(types))),
+            Self::IncludeMustSelectReboundType { types, form: IncludeForm::Selective, .. } => Some(format!("add {} to the selection; a selected type is specialized for this include's bindings", type_selection_list(types))),
+            Self::IncludeMustSelectReboundType { item, types, form: IncludeForm::Module } => Some(format!("a module-form include does not specialize template types; include the template selectively instead and select {} with the values you need, e.g. `::{{ {}, {item} }}`", type_selection_list(types), types.iter().map(|dependency| format!("type {}", dependency.nominal)).collect::<Vec<_>>().join(", "))),
         }
     }
 

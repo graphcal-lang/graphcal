@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::semantic_error::visibility::VisibilityError;
+use graphcal_compiler::semantic_error::visibility::{IncludeForm, VisibilityError};
 use graphcal_compiler::semantic_error::{SemanticError, SemanticErrorKind};
 use graphcal_compiler::static_interface::StaticInputKind;
 use graphcal_eval::eval::EvalResult;
@@ -60,6 +60,21 @@ fn si_value(result: &EvalResult, name: &str) -> f64 {
         .get()
 }
 
+/// The include form of a V008.
+fn rebound_type_form(error: &SemanticError) -> IncludeForm {
+    match error {
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Visibility(VisibilityError::IncludeMustSelectReboundType {
+                    form,
+                    ..
+                }),
+            ..
+        }) => *form,
+        other => panic!("expected V008, got {other:?}"),
+    }
+}
+
 /// The selected item, and each missing type with its port, of a V008.
 fn missing_rebound_types(
     error: &SemanticError,
@@ -70,6 +85,7 @@ fn missing_rebound_types(
                 SemanticErrorKind::Visibility(VisibilityError::IncludeMustSelectReboundType {
                     item,
                     types,
+                    ..
                 }),
             ..
         }) => (
@@ -313,4 +329,84 @@ fn two_projections_of_one_template_type_are_distinct_types() {
         ),
         "a value of one projection must not check as the other: {error:?}"
     );
+}
+
+const NESTED_PROJECTION_LIBRARY: &str = "pub(bind) index I = { a, b };\n\
+     pub type T { T(x: Length[I]) }\n";
+
+const NESTED_PROJECTION_MIDDLE: &str = "pub(bind) index K = { p, q };\n\
+     include p.lib(index I: K)::{ pub type T, pub T };\n\
+     param v: Length[K];\n\
+     pub node out: T = T(x: @v);\n";
+
+/// A type the template projects through its own include, binding that
+/// include's port to the template's port, depends on the outer include's
+/// rebinding of that port too. It used to escape V008, so `@out.x` checked
+/// as `Length[K]` while holding the entries of `J`.
+#[test]
+fn type_projected_by_a_nested_include_follows_its_bindings() {
+    let (_dir, root) = write_project(&[
+        ("lib.gcl", NESTED_PROJECTION_LIBRARY),
+        ("mid.gcl", NESTED_PROJECTION_MIDDLE),
+        (
+            "main.gcl",
+            "import p.mid::{ index K as MK };\n\
+             pub index J = { c, d, e };\n\
+             include p.mid(index K: J, v: { J#c: 1.0 m, J#d: 2.0 m, J#e: 3.0 m })::{ out };\n\
+             node y: Length[MK] = @out.x;\n\
+             node n: Int = count(@y);\n",
+        ),
+    ]);
+    assert_eq!(
+        missing_rebound_types(&semantic_error(&root)),
+        (
+            "out".to_owned(),
+            vec![("T".to_owned(), StaticInputKind::Index, "K".to_owned())]
+        )
+    );
+}
+
+/// A module-form include exposes every public value output and specializes
+/// no template type, so the importer could read `@l::out` under the
+/// template's `T` (here through an import of it).
+#[test]
+fn module_form_include_exposing_a_rebound_type_is_rejected() {
+    let (_dir, root) = write_project(&[
+        ("lib.gcl", INDEXED_LIBRARY),
+        (
+            "main.gcl",
+            "import p.lib::{ type T as LT, index I as LI };\n\
+             pub index J = { c, d, e };\n\
+             include p.lib(index I: J, v: { J#c: 1.0 m, J#d: 2.0 m, J#e: 3.0 m }) as l;\n\
+             node o: LT = @l::out;\n\
+             node y: Length[LI] = @o.x;\n",
+        ),
+    ]);
+    let error = semantic_error(&root);
+    assert_eq!(rebound_type_form(&error), IncludeForm::Module);
+    assert_eq!(
+        missing_rebound_types(&error),
+        (
+            "out".to_owned(),
+            vec![("T".to_owned(), StaticInputKind::Index, "I".to_owned())]
+        )
+    );
+
+    // Outputs whose types the rebinding substitutes directly stay usable.
+    let (_dir, root) = write_project(&[
+        (
+            "lib.gcl",
+            "pub(bind) index I = { a, b };\n\
+             param v: Length[I];\n\
+             pub node out: Length[I] = @v;\n",
+        ),
+        (
+            "main.gcl",
+            "pub index J = { c, d, e };\n\
+             include p.lib(index I: J, v: { J#c: 1.0 m, J#d: 2.0 m, J#e: 3.0 m }) as l;\n\
+             node total: Length = sum(@l::out);\n",
+        ),
+    ]);
+    let result = eval(&root);
+    assert!((si_value(&result, "total") - 6.0).abs() < 1e-12);
 }

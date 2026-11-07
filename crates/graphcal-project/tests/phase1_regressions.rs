@@ -550,13 +550,15 @@ param wrapper: Wrapper = @seed;
 param extracted: Dimensionless = @wrapper.value.x;
 pub node out: Dimensionless = @extracted;
 ";
+    // Selective, so that no exposed value has the unspecialized `Wrapper`
+    // (which a module-form include would report as V008 first).
     let main = r"
 type Other { Other(x: Dimensionless) }
 import reconcile.library::{ type Wrapper, Wrapper, Record };
 include reconcile.library(
     type Record: Other,
     seed: Wrapper(value: Record(x: 1.0)),
-) as instance;
+)::{ out };
 ";
 
     assert_type_override_requires_reconciliation(library, main, "extracted");

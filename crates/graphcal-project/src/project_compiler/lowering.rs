@@ -1192,9 +1192,9 @@ fn elaborate_include_instances(
                 owner: &dep_resolution_owner,
                 declarations: body_decls_for_aliases,
                 resolver: module_resolver,
+                values: dep_unfrozen,
             },
             instance,
-            &selective_alias_declarations,
             importer_src,
             instance.include_span,
         )?;

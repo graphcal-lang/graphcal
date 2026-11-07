@@ -626,29 +626,39 @@ pub fn unspecialized_rebound_types<'a, Item: Clone>(
             .iter()
             .filter_map(|declaration| Some((static_declaration(declaration)?.0, declaration)))
             .collect(),
+        includes: template
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.kind {
+                DeclKind::Include(include) => Some(include),
+                _ => None,
+            })
+            .collect(),
         dependencies: HashMap::new(),
     };
     let mut reached = HashSet::new();
     let mut found = Vec::new();
     for (item, exposed) in surface {
-        let mut pending = std::collections::VecDeque::from(match exposed {
-            IncludeSurfaceItem::Value(type_expr) => {
-                type_expr_static_references(type_expr, template.scope)
+        let mut pending = std::collections::VecDeque::from(
+            match exposed {
+                IncludeSurfaceItem::Value(type_expr) => {
+                    type_expr_static_references(type_expr, template.scope)
+                }
+                IncludeSurfaceItem::Static(declaration) => {
+                    declaration_static_references(declaration, template.scope)
+                }
             }
-            IncludeSurfaceItem::Static(declaration) => {
-                declaration_static_references(declaration, template.scope)
-            }
-        });
-        while let Some(reference) = pending.pop_front() {
-            let Some(key) = closure.local_key(&reference) else {
+            .into_iter()
+            .map(|reference| reference.target)
+            .collect::<Vec<_>>(),
+        );
+        while let Some(target) = pending.pop_front() {
+            if !closure.is_local(&target) || !reached.insert(target.clone()) {
                 continue;
-            };
-            if !reached.insert(key.clone()) {
-                continue;
             }
-            if let ResolvedStaticName::Type(nominal) = reference.target()
+            if let ResolvedStaticName::Type(nominal) = &target
                 && !selected.contains(nominal)
-                && let Some(port) = closure.port_dependency(&key)
+                && let Some(port) = closure.port_dependency(&target)
             {
                 found.push(UnspecializedReboundType {
                     nominal: nominal.clone(),
@@ -656,12 +666,7 @@ pub fn unspecialized_rebound_types<'a, Item: Clone>(
                     item: item.clone(),
                 });
             }
-            if let Some(declaration) = closure.declarations.get(&key) {
-                pending.extend(declaration_static_references(
-                    &declaration.kind,
-                    template.scope,
-                ));
-            }
+            pending.extend(closure.definition_references(&target));
         }
     }
     found
@@ -672,10 +677,12 @@ struct ReboundClosure<'a> {
     scope: StaticScope<'a>,
     rebound: &'a StaticSubstitution,
     declarations: HashMap<StaticDeclarationKey, &'a Declaration>,
-    /// The first rebound port each visited declaration depends on. A
-    /// declaration still being visited reads as independent, which only
-    /// matters for a definition cycle, and those are rejected on their own.
-    dependencies: HashMap<StaticDeclarationKey, Option<ResolvedStaticName>>,
+    /// The template's own includes, for the types they project.
+    includes: Vec<&'a crate::desugar::desugared_ast::IncludeDecl>,
+    /// The first rebound port each visited Static symbol depends on. A
+    /// symbol still being visited reads as independent, which only matters
+    /// for a definition cycle, and those are rejected on their own.
+    dependencies: HashMap<ResolvedStaticName, Option<ResolvedStaticName>>,
 }
 
 impl ReboundClosure<'_> {
@@ -687,33 +694,78 @@ impl ReboundClosure<'_> {
         }
     }
 
-    /// The template declaration a reference names, unless it names another
-    /// module or a rebound port.
-    fn local_key(&self, reference: &StaticReference) -> Option<StaticDeclarationKey> {
-        (reference.target().owner() == self.scope.owner() && !self.is_rebound(reference.target()))
-            .then(|| StaticDeclarationKey::new(reference.kind(), reference.target().atom().clone()))
+    /// Whether `target` is a template Static symbol whose definition the
+    /// include can leave unspecialized: a template declaration other than a
+    /// rebound port, or a type one of the template's own includes projects
+    /// (owned by that include's instance).
+    fn is_local(&self, target: &ResolvedStaticName) -> bool {
+        let owner = target.owner();
+        (owner == self.scope.owner() && !self.is_rebound(target))
+            || (matches!(target, ResolvedStaticName::Type(_))
+                && owner.is_instance_child_of(self.scope.owner()))
     }
 
-    fn port_dependency(&mut self, key: &StaticDeclarationKey) -> Option<ResolvedStaticName> {
-        if let Some(dependency) = self.dependencies.get(key) {
+    /// The Static symbols the definition of the local symbol `target`
+    /// names.
+    ///
+    /// A type projected by one of the template's includes is defined by its
+    /// own template, specialized through that include's Static bindings, so
+    /// it depends on every binding target. This is conservative: the type
+    /// may not mention every port the include binds.
+    fn definition_references(&self, target: &ResolvedStaticName) -> Vec<ResolvedStaticName> {
+        if target.owner() == self.scope.owner() {
+            let key = StaticDeclarationKey::new(static_input_kind(target), target.atom().clone());
+            // A declaration with no Static interface (an invalid required
+            // declaration, reported by V002) defines nothing here.
+            let Some(declaration) = self.declarations.get(&key) else {
+                return Vec::new();
+            };
+            return declaration_static_references(&declaration.kind, self.scope)
+                .into_iter()
+                .map(|reference| reference.target)
+                .collect();
+        }
+        let crate::dag_id::DagSegment::Instance(scope) = target.owner().leaf() else {
+            return Vec::new();
+        };
+        self.includes
+            .iter()
+            .filter(|include| &include.instance_scope() == scope)
+            .flat_map(|include| &include.param_bindings)
+            .filter(|binding| {
+                binding.category != crate::syntax::ast::InputBindingCategory::Unmarked
+            })
+            .filter_map(|binding| match &binding.value.kind {
+                crate::syntax::ast::ExprKind::UnresolvedRef(
+                    crate::syntax::ast::UnresolvedRef::Path(path),
+                ) => self
+                    .scope
+                    .resolver
+                    .resolve_static_path(self.scope.owner, &path.to_name_path())
+                    .ok(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn port_dependency(&mut self, target: &ResolvedStaticName) -> Option<ResolvedStaticName> {
+        if let Some(dependency) = self.dependencies.get(target) {
             return dependency.clone();
         }
-        self.dependencies.insert(key.clone(), None);
-        // A template symbol with no source declaration (a type the template's
-        // own include projects) has no definition here to depend on a port.
-        let declaration = self.declarations.get(key)?;
-        let references = declaration_static_references(&declaration.kind, self.scope);
-        let dependency = references.iter().find_map(|reference| {
-            if reference.target().owner() != self.scope.owner() {
-                None
-            } else if self.is_rebound(reference.target()) {
-                Some(reference.target().clone())
-            } else {
-                let key = self.local_key(reference)?;
-                self.port_dependency(&key)
-            }
-        });
-        self.dependencies.insert(key.clone(), dependency.clone());
+        self.dependencies.insert(target.clone(), None);
+        let dependency = self
+            .definition_references(target)
+            .into_iter()
+            .find_map(|reference| {
+                if reference.owner() == self.scope.owner() && self.is_rebound(&reference) {
+                    Some(reference)
+                } else if self.is_local(&reference) {
+                    self.port_dependency(&reference)
+                } else {
+                    None
+                }
+            });
+        self.dependencies.insert(target.clone(), dependency.clone());
         dependency
     }
 }
