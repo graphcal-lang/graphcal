@@ -13,6 +13,7 @@ use std::collections::HashSet;
 
 use crate::dag_id::DagId;
 use crate::dependency_graph::Cycle;
+use crate::outcome::Outcome;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::graph::CycleMember;
 use crate::semantic_error::graph::GraphError;
@@ -41,16 +42,20 @@ impl Schedules {
     /// # Errors
     ///
     /// Returns [`GraphError::CyclicDependency`](GraphError::CyclicDependency) for the first cycle found,
-    /// at the declaration that closes it.
+    /// at the declaration that closes it, or [`Outcome::Cancelled`] once
+    /// `cancellation` is cancelled (observed once per callable, whose
+    /// schedule spans its whole instance closure).
     pub(super) fn build(
         tir: &UncheckedTir,
         instances: &InstanceGraph,
         src: SourceId,
-    ) -> Result<Self, SemanticError> {
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<Self, Outcome<SemanticError>> {
         let constants = ConstSchedule::build(tir.dags.local_positioned())
             .map_err(|cycle| constant_cycle(&cycle, src))?;
         let unit_scale_reads = crate::tir::typed::dynamic_unit_scale_reads(tir);
         let callables = tir.dags.map_local(|position, dag| {
+            cancellation.checkpoint()?;
             RuntimeSchedule::build(
                 position,
                 |position| tir.dags.at(position),
@@ -75,6 +80,7 @@ impl Schedules {
                     GraphError::RejectedRecurrence { name, reason },
                 ),
             })
+            .map_err(Outcome::Failed)
         })?;
         Ok(Self {
             constants,

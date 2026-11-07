@@ -651,7 +651,7 @@ impl crate::tir::typed::InstantiatedTir {
             instances: graph,
         } = self;
         cancellation.checkpoint()?;
-        let schedules = schedules::Schedules::build(&tir, &graph, src)?;
+        let schedules = schedules::Schedules::build(&tir, &graph, src, cancellation)?;
         detect_cross_dag_cycles(&tir, src)?;
 
         // Canonical bodies are checked once. Instance trees are specialized

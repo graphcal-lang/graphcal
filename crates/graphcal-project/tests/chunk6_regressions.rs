@@ -125,8 +125,7 @@ dag recurse {
     .unwrap();
 
     let project = load_project(&root, None, &RealFileSystem::default()).unwrap();
-    let error = project
-        .build_module_resolver()
+    let error = module_resolver(&project)
         .expect_err("recursive includes must not produce a module resolver");
     assert!(
         error.to_string().contains("recursive") || error.to_string().contains("cycle"),
@@ -146,7 +145,7 @@ dag second { include first() as next; }
     .unwrap();
 
     assert!(matches!(
-        project.build_module_resolver(),
+        module_resolver(&project),
         Err(
             graphcal_compiler::resolve::error::ModuleResolveError::RecursiveIncludeExpansion { .. }
         )
@@ -169,9 +168,7 @@ fn module_resolver_builds_deep_acyclic_include_chains_iteratively() {
     let project =
         graphcal_project::loader::LoadedProject::from_source(&source, "main.gcl").unwrap();
 
-    project
-        .build_module_resolver()
-        .expect("deep acyclic include expansion should be stack-safe");
+    module_resolver(&project).expect("deep acyclic include expansion should be stack-safe");
 }
 
 #[test]
@@ -441,4 +438,20 @@ node result: Dimensionless = @helper()::out;
             case.role
         );
     }
+}
+
+/// Build `project`'s module resolver without a cancellation source.
+#[expect(
+    clippy::result_large_err,
+    reason = "the resolver error is the value under test"
+)]
+fn module_resolver(
+    project: &graphcal_project::loader::LoadedProject,
+) -> Result<
+    graphcal_compiler::resolve::ModuleResolver,
+    graphcal_compiler::resolve::error::ModuleResolveError,
+> {
+    graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        project.build_module_resolver(cancellation)
+    })
 }

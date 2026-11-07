@@ -550,11 +550,11 @@ fn specialize_instance_semantics(
 
 fn clone_checked_instance(
     template_position: super::dag_position::DagPosition,
-    template: &DagTIR,
     edge: &HirInstanceRecord,
     parent: &InstanceFrame,
     runtime_units: impl IntoIterator<Item = UnitName>,
     tir: &UncheckedTir,
+    type_defs: &super::ResolvedTypeDefs,
     src: SourceId,
 ) -> Result<DagTIR, SemanticError> {
     // An instance rebinding a defaulted dimension port is built from the
@@ -565,19 +565,16 @@ fn clone_checked_instance(
         .bound_defaulted_dimension_ports(&edge.instance.specialization().substitution);
     let rigid_tir;
     let template = if ports.is_empty() {
-        template
+        tir.dags.at(template_position)
     } else {
         rigid_tir = super::rigid_dimension_view(tir, template_position, &ports, src)?;
         rigid_tir.dags.at(template_position)
     };
     let mut instance = template.clone();
     initialize_instance_identity(&mut instance, template, edge, parent, runtime_units);
-    for (_, dag) in tir.dags.iter() {
-        instance
-            .semantic
-            .type_defs
-            .extend_from(&dag.semantic.type_defs);
-    }
+    // A substitution can bind a port to a type of any module, so an instance
+    // sees every definition: the shared project-wide table, not a copy.
+    instance.semantic.type_defs = type_defs.clone();
     specialize_instance_declarations(&mut instance, edge, src)?;
     rebase_dynamic_unit_scales(&mut instance);
     Ok(instance)
@@ -757,6 +754,7 @@ fn instantiate_semantic_edge(
     graph: &mut InstanceGraph,
     parent: DagPosition,
     edge: &HirInstanceRecord,
+    type_defs: &super::ResolvedTypeDefs,
     src: SourceId,
 ) -> Result<DagPosition, SemanticError> {
     let owner = edge.instance.id().owner();
@@ -773,7 +771,7 @@ fn instantiate_semantic_edge(
             )
         })?;
     let template_position = template_body.0;
-    let template = tir.dags.at(template_position).clone();
+    let template = tir.dags.at(template_position);
     let substitution =
         CompleteSubstitution::try_new(edge.instance.substitution(), tir.project_type_store())
             .map_err(|error| error.into_graphcal(src))?;
@@ -810,11 +808,11 @@ fn instantiate_semantic_edge(
     let parent_frame = tir.dags.at(parent).frame();
     let mut instance = clone_checked_instance(
         template_position,
-        &template,
         edge,
         parent_frame,
         runtime_unit_names,
         tir,
+        type_defs,
         src,
     )?;
     specialize_instance_semantics(&mut instance, edge, &substitution, src)?;
@@ -844,11 +842,26 @@ fn instantiate_semantic_edge(
 /// Every DAG's edges are followed once: first those of every DAG of the
 /// program in visiting order, then, round by round, those of the instances
 /// the previous round materialized, in identity order.
+///
+/// Nested includes can materialize exponentially many instances, so the
+/// work observes `cancellation` once per edge; each edge costs the size of
+/// its template, independent of how many DAGs exist.
+///
+/// # Errors
+///
+/// Returns a [`SemanticError`] when an instance cannot be specialized, or
+/// [`Outcome::Cancelled`](crate::outcome::Outcome::Cancelled) once
+/// `cancellation` is cancelled.
 pub fn instantiate_semantic_edges(
     tir: &mut UncheckedTir,
     src: SourceId,
-) -> Result<InstanceGraph, SemanticError> {
+    cancellation: &crate::cancellation::CancellationToken,
+) -> Result<InstanceGraph, crate::outcome::Outcome<SemanticError>> {
     let mut graph = InstanceGraph::new(&tir.dags);
+    // Every instance is a copy of a DAG present now, so the definitions of
+    // the DAGs present now are every definition an instance can see.
+    let type_defs =
+        super::ResolvedTypeDefs::union(tir.dags.iter().map(|(_, dag)| &dag.semantic.type_defs));
     let mut holders = tir.dags.iter_positions().collect::<Vec<_>>();
     while !holders.is_empty() {
         let edges = holders
@@ -864,13 +877,15 @@ pub fn instantiate_semantic_edges(
             .collect::<Vec<_>>();
         let mut materialized = Vec::new();
         for (holder, edge) in edges {
+            cancellation.checkpoint()?;
             // An instance an imported store or an earlier edge already holds
             // is reused.
             if let Some(instance) = tir.dags.position(edge.instance.id().owner()) {
                 graph.record_edge(holder, instance);
                 continue;
             }
-            let instance = instantiate_semantic_edge(tir, &mut graph, holder, &edge, src)?;
+            let instance =
+                instantiate_semantic_edge(tir, &mut graph, holder, &edge, &type_defs, src)?;
             materialized.push(instance);
             graph.record_edge(holder, instance);
         }

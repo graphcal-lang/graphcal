@@ -171,9 +171,10 @@ fn run_desugared(args: &FileArgs) -> Result<DumpStatus, DumpError> {
 fn run_modules(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let project = load_project(&args.file, args.root.as_deref(), &fs)?;
-    let resolver = project
-        .build_module_resolver()
-        .map_err(|source| DumpError::ModuleIndex { source })?;
+    let resolver = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        project.build_module_resolver(cancellation)
+    })
+    .map_err(|source| DumpError::ModuleIndex { source })?;
     write_debug(&(project, resolver))?;
     Ok(DumpStatus::Success)
 }

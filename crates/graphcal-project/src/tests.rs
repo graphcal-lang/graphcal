@@ -3269,6 +3269,152 @@ fn cancellation_is_observed_at_every_pipeline_checkpoint() {
     }
 }
 
+/// A file whose every DAG includes the previous one twice, so the root's
+/// include of `d{depth}` materializes `2^(depth + 1) - 2` instances.
+fn exponential_include_source(stem: &str, depth: usize) -> String {
+    let levels = (1..=depth)
+        .enumerate()
+        .fold(String::new(), |mut levels, (previous, level)| {
+            std::fmt::Write::write_fmt(
+                &mut levels,
+                format_args!(
+                    "pub dag d{level} {{\n\
+                     import {stem}::{{d{previous}}};\n\
+                     include d{previous}(x: 1.0) as a;\n\
+                     include d{previous}(x: 2.0) as b;\n\
+                     param x: Dimensionless = 1.0;\n\
+                     pub node y: Dimensionless = @a::y + @b::y;\n\
+                     }}\n"
+                ),
+            )
+            .expect("writing to a String cannot fail");
+            levels
+        });
+    format!(
+        "pub dag d0 {{\n\
+         param x: Dimensionless = 1.0;\n\
+         pub node y: Dimensionless = @x;\n\
+         }}\n\
+         {levels}\
+         include d{depth}() as top;\n\
+         node r: Dimensionless = @top::y;\n"
+    )
+}
+
+/// Run `check` of `project` on a worker thread, cancel it shortly after it
+/// starts (after lowering when `cancel_after_lowering`), and return the
+/// outcome, which must arrive promptly.
+fn cancel_exponential_check(
+    project: crate::loader::LoadedProject,
+    cancel_after_lowering: bool,
+) -> Result<(), Outcome<CompileError>> {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    let source = graphcal_compiler::cancellation::CancellationSource::new();
+    let cancellation = source.token();
+    let (lowered_sender, lowered) = mpsc::channel();
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let compiler = ProjectCompiler::new(&project).cancellation(&cancellation);
+        let result = if cancel_after_lowering {
+            compiler.lower().and_then(|hir| {
+                lowered_sender.send(()).unwrap();
+                hir.check_with_host_metadata(
+                    &graphcal_eval::host_fns::HostFunctionMetadata::default(),
+                )
+            })
+        } else {
+            lowered_sender.send(()).unwrap();
+            compiler.check()
+        };
+        sender.send(result.map(|_| ())).unwrap();
+    });
+
+    lowered
+        .recv_timeout(Duration::from_secs(60))
+        .expect("lowering a modest include tree should finish");
+    // Let the check reach the exponential work before cancelling.
+    thread::sleep(Duration::from_millis(200));
+    source.cancel();
+    // One unit of work between checkpoints takes milliseconds; the work
+    // between the cancellation and the next checkpoint must not scale with
+    // the number of instances.
+    receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("a cancelled check must stop expanding instances promptly")
+}
+
+#[test]
+fn cancellation_stops_exponential_include_expansion() {
+    // 2^41 instances: the resolver can never finish expanding them, so the
+    // check returns only if the expansion observes the token.
+    let project = crate::loader::LoadedProject::from_source(
+        &exponential_include_source("exponential", 40),
+        "exponential.gcl",
+    )
+    .unwrap();
+    let result = cancel_exponential_check(project, false);
+    assert!(
+        matches!(result, Err(Outcome::Cancelled)),
+        "unexpected outcome: {result:?}"
+    );
+}
+
+#[test]
+fn cancellation_stops_exponential_instantiation() {
+    // 16382 instances lower quickly but take far longer than the deadline
+    // to instantiate, so the check returns in time only if instantiation
+    // observes the token.
+    let project = crate::loader::LoadedProject::from_source(
+        &exponential_include_source("exponential", 13),
+        "exponential.gcl",
+    )
+    .unwrap();
+    let result = cancel_exponential_check(project, true);
+    assert!(
+        matches!(result, Err(Outcome::Cancelled)),
+        "unexpected outcome: {result:?}"
+    );
+}
+
+#[test]
+fn instances_share_one_type_definition_table() {
+    // Each instance used to copy the type definitions of every DAG present,
+    // so materializing N instances cost O(N * #DAGs).
+    let source = "pub type Pair { Pair(left: Dimensionless, right: Dimensionless) }\n\
+                  pub dag leaf {\n\
+                  import shared::{type Pair, Pair};\n\
+                  param x: Dimensionless = 1.0;\n\
+                  pub node pair: Pair = Pair(left: @x, right: @x);\n\
+                  }\n\
+                  pub dag middle {\n\
+                  import shared::{leaf};\n\
+                  include leaf(x: 1.0) as a;\n\
+                  include leaf(x: 2.0) as b;\n\
+                  pub node y: Dimensionless = 1.0;\n\
+                  }\n\
+                  include middle() as first;\n\
+                  include middle() as second;\n\
+                  node r: Dimensionless = @first::y + @second::y;\n";
+    let tir = compile_to_tir(source, "shared.gcl").unwrap();
+    let instances = tir
+        .local_dags()
+        .filter(|(id, _)| id.leaf().is_instance())
+        .map(|(_, dag)| &dag.body_for_test().semantic().type_defs)
+        .collect::<Vec<_>>();
+    assert!(
+        instances.len() >= 6,
+        "two middles, each with two leaves: {}",
+        instances.len()
+    );
+    assert!(
+        instances
+            .iter()
+            .all(|type_defs| type_defs.shares_table_with(instances[0])),
+        "every instance must share the project-wide type-definition table"
+    );
+}
+
 #[test]
 fn cancellation_stops_an_in_flight_evaluation() {
     use std::{
@@ -5715,7 +5861,9 @@ fn project_selective_includes_still_reject_duplicate_local_names() {
     );
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
 
-    match project.build_module_resolver() {
+    match graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        project.build_module_resolver(cancellation)
+    }) {
         Err(graphcal_compiler::resolve::error::ModuleResolveError::DuplicateImportName {
             namespace,
             name,

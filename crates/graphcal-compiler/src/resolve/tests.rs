@@ -1254,7 +1254,12 @@ fn source_modules_keep_the_handles_they_took_when_added() {
         .add_module(lib_id.clone(), &lib.declarations)
         .unwrap();
     let targets = |_: &DagId, _: &ModulePath| Some(lib_id.clone());
-    let resolver = tables.scopes(&targets).unwrap().freeze().unwrap();
+    let cancellation = crate::cancellation::CancellationToken::unbounded();
+    let resolver = tables
+        .scopes(&targets, &cancellation)
+        .unwrap()
+        .freeze(&cancellation)
+        .unwrap();
     assert_eq!(resolver.module(main_handle).owner(), &main_id);
     assert_eq!(resolver.module(lib_handle).owner(), &lib_id);
     assert_eq!(resolver.module_handle(&lib_id), Some(lib_handle));
@@ -1853,11 +1858,7 @@ fn lenient_registration_keeps_every_recordable_declaration() {
         lenient.add_module_lenient(main_id.clone(), &main.declarations),
         Err(ModuleResolveError::DuplicateModule { .. })
     ));
-    let resolver = lenient
-        .scopes(&super::builder::NoModuleTargets)
-        .unwrap()
-        .freeze()
-        .unwrap();
+    let resolver = lenient.freeze_without_edges().unwrap();
     for name in ["a", "b"] {
         let symbol = resolver.declaration(&main_id, &decl(name)).unwrap();
         assert_eq!(symbol.resolved().owner(), &main_id);

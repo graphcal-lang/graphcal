@@ -291,14 +291,16 @@ impl TirDraft {
     ///
     /// # Errors
     ///
-    /// Returns a [`SemanticError`] when an instance cannot be specialized.
+    /// Returns a [`SemanticError`] when an instance cannot be specialized,
+    /// or [`Outcome::Cancelled`] once `cancellation` is cancelled.
     pub fn instantiate(
         self,
         overrides: &CheckedOverrideDependencies,
         src: SourceId,
-    ) -> Result<InstantiatedTir, SemanticError> {
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<InstantiatedTir, Outcome<SemanticError>> {
         let mut tir = self.finish();
-        let instances = specialization::instantiate_semantic_edges(&mut tir, src)?;
+        let instances = specialization::instantiate_semantic_edges(&mut tir, src, cancellation)?;
         augment_runtime_deps_for_dynamic_units(&mut tir);
         overrides.reconcile(&mut tir);
         Ok(InstantiatedTir { tir, instances })

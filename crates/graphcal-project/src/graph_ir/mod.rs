@@ -740,6 +740,7 @@ mod tests {
         .instantiate(
             &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
             src,
+            &cancellation,
         )
         .unwrap()
         .check(src, &cancellation)

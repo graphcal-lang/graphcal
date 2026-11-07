@@ -61,6 +61,7 @@ pub(crate) fn checked_tir_from_source(
         .instantiate(
             &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
             src,
+            cancellation,
         )
         .unwrap()
         .check(src, cancellation)

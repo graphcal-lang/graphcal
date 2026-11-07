@@ -11,7 +11,7 @@ use graphcal_compiler::desugar::desugared_ast::{
 };
 use graphcal_compiler::hir;
 use graphcal_compiler::resolve::ModuleResolver;
-use graphcal_compiler::resolve::builder::{NoModuleTargets, ScopeBuilder, SymbolTables};
+use graphcal_compiler::resolve::builder::SymbolTables;
 use graphcal_compiler::resolve::error::ModuleResolveError;
 use graphcal_compiler::resolve::symbols::SymbolRef;
 use graphcal_compiler::resolve::tables::NamespaceTables;
@@ -93,11 +93,7 @@ pub fn file_local_resolver(
 
     let mut tables = SymbolTables::default();
     add_modules(&mut tables, root, &ast.declarations);
-    tables
-        .scopes(&NoModuleTargets)
-        .ok()
-        .and_then(|scopes| ScopeBuilder::freeze(scopes).ok())
-        .unwrap_or_default()
+    tables.freeze_without_edges().unwrap_or_default()
 }
 
 /// Collects expression references and lexical-local definitions from

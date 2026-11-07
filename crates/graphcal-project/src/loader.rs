@@ -389,16 +389,23 @@ impl LoadedProject {
     ///
     /// Returns [`ModuleResolveError`](graphcal_compiler::resolve::error::ModuleResolveError)
     /// for duplicate or ambiguous modules, duplicate symbols, recursive
-    /// include expansion, or invalid resolved import surfaces.
+    /// include expansion, or invalid resolved import surfaces, or
+    /// [`Outcome::Cancelled`](graphcal_compiler::outcome::Outcome::Cancelled)
+    /// once `cancellation` is cancelled.
     pub fn build_module_resolver(
         &self,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<
         graphcal_compiler::resolve::ModuleResolver,
-        graphcal_compiler::resolve::error::ModuleResolveError,
+        graphcal_compiler::outcome::Outcome<graphcal_compiler::resolve::error::ModuleResolveError>,
     > {
-        loaded_module_resolver::LoadedModuleResolver::build(self)
+        loaded_module_resolver::LoadedModuleResolver::build(self, cancellation)
             .map(loaded_module_resolver::LoadedModuleResolver::into_resolver)
-            .map_err(|loaded_module_resolver::ModuleResolverBuildError { error, .. }| error)
+            .map_err(|outcome| {
+                outcome.map_failed(
+                    |loaded_module_resolver::ModuleResolverBuildError { error, .. }| error,
+                )
+            })
     }
 }
 
