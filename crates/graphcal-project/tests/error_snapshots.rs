@@ -510,6 +510,13 @@ fn error_unit_over_required_dimension_port() {
 }
 
 #[test]
+fn error_base_unit_with_body() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_with_body.gcl");
+    let rendered = render_error(source, "base_unit_with_body.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_base_unit_affine_temperature() {
     let source = include_str!("../../../tests/fixtures/invalid/base_unit_affine_temperature.gcl");
     let rendered = render_error(source, "base_unit_affine_temperature.gcl");

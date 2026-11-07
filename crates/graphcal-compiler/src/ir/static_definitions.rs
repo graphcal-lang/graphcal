@@ -987,10 +987,10 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 },
             ));
         }
-        if !unit.constness.is_const() {
+        if !unit.constness().is_const() {
             self.reject_default_dependent_runtime_unit(owner, unit, src)?;
         }
-        let Some(def) = &unit.definition else {
+        let Some(def) = unit.definition() else {
             let base = dim.base_dimension_id().cloned();
             let registered = base.as_ref().map(|base| {
                 self.base_dimensions
@@ -1039,7 +1039,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             ));
         }
         let scale_source = classify_unit_scale(&def.scale_expr);
-        if unit.constness.is_const() {
+        if unit.constness().is_const() {
             if let UnitScaleSource::Dynamic { first_graph_ref } = &scale_source {
                 return Err(SemanticError::located(
                     src,
@@ -1117,7 +1117,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 let scale = scale_expr
                     .checked_mul(base_scale)
                     .map_err(|err| scale_error(UnitScaleSite::Definition, err, src, def.span))?;
-                match unit.constness {
+                match unit.constness() {
                     UnitConstness::Const => UnitScale::Const(scale),
                     UnitConstness::Dynamic => UnitScale::Runtime(scale),
                 }
@@ -1168,8 +1168,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         crate::tir::template_closure::validate(check).map_err(|violation| {
             SemanticError::located(
                 src,
-                unit.definition
-                    .as_ref()
+                unit.definition()
                     .map_or(unit.dim_type.span, |definition| definition.unit_expr.span),
                 crate::semantic_error::visibility::VisibilityError::TemplateBodyDependsOnStaticDefault {
                     body_kind: crate::declaration_kind::DeclarationKind::Unit,

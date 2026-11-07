@@ -1,5 +1,6 @@
 use crate::syntax::ast::{
-    BaseDimDecl, BindableVisibility, DeclKind, Declaration, DimDecl, UnitConstness, Visibility,
+    BaseDimDecl, BindableVisibility, DeclKind, Declaration, DimDecl, UnitBody, UnitConstness,
+    UnitDecl, Visibility,
 };
 use crate::syntax::dimension::{DimName, UnitName};
 use crate::syntax::span::Spanned;
@@ -69,12 +70,7 @@ impl Parser<'_> {
         visibility: Visibility,
     ) -> Result<Declaration, ParseError> {
         let (_, start_span) = self.expect(Token::Unit)?;
-        self.parse_unit_decl_inner(
-            start_span,
-            visibility,
-            UnitConstness::Dynamic,
-            /*require_definition=*/ true,
-        )
+        self.parse_unit_decl_inner(start_span, visibility, UnitConstness::Dynamic)
     }
 
     /// Parse `const unit Name: Dim = scale unit_expr;`.
@@ -84,71 +80,85 @@ impl Parser<'_> {
         visibility: Visibility,
     ) -> Result<Declaration, ParseError> {
         self.expect(Token::Unit)?;
-        self.parse_unit_decl_inner(
-            const_span,
-            visibility,
-            UnitConstness::Const,
-            /*require_definition=*/ true,
-        )
+        self.parse_unit_decl_inner(const_span, visibility, UnitConstness::Const)
     }
 
     /// Parse `base unit Name: Dim;` — a base unit in its dimension.
+    ///
+    /// A base unit has no body: `base unit Name: Dim = …;` is rejected at the
+    /// `=` rather than read as a `const unit`.
     pub(super) fn parse_base_unit_decl(
         &mut self,
         base_span: crate::syntax::span::Span,
         visibility: Visibility,
     ) -> Result<Declaration, ParseError> {
         self.expect(Token::Unit)?;
-        self.parse_unit_decl_inner(
-            base_span,
-            visibility,
-            UnitConstness::Const,
-            /*require_definition=*/ false,
-        )
+        let name: Spanned<UnitName> = self.parse_any_ident()?.classify();
+        self.expect(Token::Colon)?;
+        let dim_type = self.parse_dim_expr()?;
+        let semi_span = match self.lexer.next_token() {
+            Some((Token::Semicolon, span)) => span,
+            Some((token, span)) => {
+                return Err(Self::unexpected(Expected::BaseUnitEnd, token, span));
+            }
+            None => return Err(self.unexpected_eof(Expected::BaseUnitEnd)),
+        };
+        Ok(Self::unit_declaration(
+            base_span.merge(semi_span),
+            UnitDecl {
+                visibility,
+                name,
+                dim_type,
+                body: UnitBody::Base,
+            },
+        ))
     }
 
+    /// Parse the rest of a `unit` / `const unit` declaration, whose scale
+    /// body is mandatory.
     fn parse_unit_decl_inner(
         &mut self,
         start_span: crate::syntax::span::Span,
         visibility: Visibility,
         constness: UnitConstness,
-        require_definition: bool,
     ) -> Result<Declaration, ParseError> {
         let name: Spanned<UnitName> = self.parse_any_ident()?.classify();
         self.expect(Token::Colon)?;
         let dim_type = self.parse_dim_expr()?;
 
-        let definition = match self.lexer.peek() {
-            Some(Token::Eq) => {
-                self.lexer.next_token();
-                Some(self.parse_unit_def()?)
-            }
-            _ => None,
-        };
-
-        if require_definition && definition.is_none() {
+        if self.lexer.peek() != Some(&Token::Eq) {
             // Non-base units need a scale body; use `base unit` for a canonical unit.
-            let err_span = name.span;
             return Err(Self::unexpected(
                 Expected::UnitDefinition,
                 Token::Semicolon,
-                err_span,
+                name.span,
             ));
         }
+        self.lexer.next_token();
+        let definition = self.parse_unit_def()?;
+        let body = match constness {
+            UnitConstness::Const => UnitBody::Const(definition),
+            UnitConstness::Dynamic => UnitBody::Dynamic(definition),
+        };
 
         let (_, semi_span) = self.expect(Token::Semicolon)?;
-        let span = start_span.merge(semi_span);
-        Ok(Declaration {
-            doc: None,
-            attributes: vec![],
-            kind: DeclKind::Unit(crate::syntax::ast::UnitDecl {
+        Ok(Self::unit_declaration(
+            start_span.merge(semi_span),
+            UnitDecl {
                 visibility,
-                constness,
                 name,
                 dim_type,
-                definition,
-            }),
+                body,
+            },
+        ))
+    }
+
+    const fn unit_declaration(span: crate::syntax::span::Span, unit: UnitDecl) -> Declaration {
+        Declaration {
+            doc: None,
+            attributes: vec![],
+            kind: DeclKind::Unit(unit),
             span,
-        })
+        }
     }
 }

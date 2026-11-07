@@ -518,7 +518,7 @@ impl ModuleSymbols {
                 |symbols| &mut symbols.units,
                 &u.name,
                 u.visibility.into(),
-                u.constness,
+                u.constness(),
             ),
             ast::DeclKind::Type(t) => self.declare_type(t),
             ast::DeclKind::Index(i) => self.declare_index(i),
