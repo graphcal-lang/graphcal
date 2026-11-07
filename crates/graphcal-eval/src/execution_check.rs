@@ -24,7 +24,7 @@ mod const_eval;
 mod domain_resolve;
 
 use domain_resolve::{
-    ConstScopes, DagConstScope, FieldConstraintResolutionContext, check_deferred_field_constraints,
+    DagSources, FieldConstraintResolutionContext, check_deferred_field_constraints,
     resolve_domain_constraints_for_dag, resolve_struct_field_constraints_for_dags,
 };
 
@@ -88,29 +88,22 @@ pub fn seal_checked_program(
         .map(|&position| {
             cancellation.checkpoint()?;
             let dag = tir.dag_registry().at(position);
-            resolve_domain_constraints_for_dag(
-                dag,
-                evaluated.pool_at(position),
-                &all_const_values,
-                consts,
-                &session,
-            )
-            .map(|constraints| (dag.dag_id().clone(), constraints))
+            resolve_domain_constraints_for_dag(dag, &all_const_values, consts, &session)
+                .map(|constraints| (dag.dag_id().clone(), constraints))
         })
         .collect::<Result<HashMap<_, _>, Outcome<SemanticError>>>()?;
 
     // Field-bound evaluation only needs provisional constant scopes, not fake
     // executable artifacts with missing constraints.
-    let const_scopes = ConstScopes::new(tir, |position, dag| DagConstScope {
-        values: evaluated.pool_at(position),
-        source: evaluated.inherited().source(dag.dag_id()).unwrap_or(src),
+    let dag_sources = DagSources::new(tir, |dag| {
+        evaluated.inherited().source(dag.dag_id()).unwrap_or(src)
     });
     cancellation.checkpoint()?;
     let struct_field_constraints =
         resolve_struct_field_constraints_for_dags(&FieldConstraintResolutionContext {
             tir,
-            const_scopes: &const_scopes,
-            all_const_values: &all_const_values,
+            dag_sources: &dag_sources,
+            const_values: &all_const_values,
             consts,
             fallback_src: src,
             field_checks: &field_checks,
