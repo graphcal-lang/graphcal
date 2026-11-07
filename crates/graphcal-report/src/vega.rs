@@ -371,7 +371,14 @@ fn build_encoding(spec: &PlotSpec, label_layout: XLabelLayout) -> JsonValue {
                     ch_spec.insert("axis".to_string(), json!({ "labelAngle": 0 }));
                 }
             }
-            PlotFieldValue::Numbers(_) | PlotFieldValue::Datetimes(_) => {}
+            PlotFieldValue::Datetimes(_) => {
+                // Datetime data are UTC instants; a `time` scale would show
+                // them in the viewer's local timezone instead.
+                if channel_has_scale(*channel) {
+                    ch_spec.insert("scale".to_string(), json!({ "type": "utc" }));
+                }
+            }
+            PlotFieldValue::Numbers(_) => {}
         }
 
         // Without a title, Vega-Lite would title the axis or legend with the
@@ -628,6 +635,39 @@ plot p = {
         let row = &figures[0].spec["data"]["values"][0];
         assert_eq!(row["x"], json!(9_007_199_254_740_992.0));
         assert_eq!(row["y"], json!("2026-01-01T00:00:00.000000001Z"));
+    }
+
+    #[test]
+    fn datetime_channels_name_utc_and_render_on_a_utc_scale() {
+        // A GPST instant is plotted as its UTC instant; the axis says so and
+        // the scale does not shift it into the viewer's timezone (#2246).
+        let result = graphcal_project::prepare::compile_and_eval(
+            r#"
+node instant: Datetime<GPST> = epoch<GPST>("2025-06-01T12:00:00");
+plot p = {
+    mark: point,
+    encode: {
+        x: @instant,
+        y: 1.0,
+        tooltip: @instant,
+    },
+};
+"#,
+        )
+        .unwrap();
+        let figures = build_figures(&result.plots, &result.figures, &result.layers).unwrap();
+        let spec = &figures[0].spec;
+        assert_eq!(
+            spec["data"]["values"][0]["x"],
+            json!("2025-06-01T11:59:42Z")
+        );
+        assert_eq!(spec["encoding"]["x"]["title"], json!("Datetime (UTC)"));
+        assert_eq!(spec["encoding"]["x"]["scale"], json!({ "type": "utc" }));
+        assert_eq!(
+            spec["encoding"]["tooltip"]["title"],
+            json!("Datetime (UTC)")
+        );
+        assert!(spec["encoding"]["tooltip"].get("scale").is_none());
     }
 
     /// The Vega-Lite specs of every figure `source` renders, by figure name.
