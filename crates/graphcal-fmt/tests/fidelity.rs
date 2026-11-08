@@ -125,3 +125,25 @@ fn comment_inside_index_brackets_stays_inside() {
                   node x: Dimensionless = @v[ // which\n I#A] + 1.0;\n";
     assert_eq!(format_stable(source), source);
 }
+
+// ---------------------------------------------------------------------------
+// FE-8: a bare built-in type former keeps its spelling.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bare_complex_and_key_keep_their_spelling() {
+    for source in [
+        "node z: Complex = 1.0;\n",
+        "param k: Key;\n",
+        "param z: Complex<Length>;\n",
+        "index I = { A };\nparam k: Key<I>;\n",
+    ] {
+        assert_eq!(format_stable(source), source);
+    }
+}
+
+#[test]
+fn bare_complex_fixture_formats() {
+    let source = include_str!("../../../tests/fixtures/invalid/complex_requires_dimension_arg.gcl");
+    assert!(format_stable(source).contains(": Complex "));
+}

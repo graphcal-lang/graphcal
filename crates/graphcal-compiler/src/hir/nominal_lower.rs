@@ -319,6 +319,7 @@ fn find_non_earlier_type_reference(
         TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => generic_args
             .iter()
+            .flatten()
             .find_map(|arg| find_non_earlier_generic_reference(arg, current_index, positions)),
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().find_map(|type_arg| {
             find_non_earlier_type_reference(type_arg, current_index, positions)

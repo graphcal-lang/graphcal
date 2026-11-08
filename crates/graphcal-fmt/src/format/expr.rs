@@ -15,6 +15,7 @@ use graphcal_compiler::syntax::fin_position::FinPosition;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::local_name::LocalName;
 use graphcal_compiler::syntax::names::NamePath;
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 
@@ -1426,33 +1427,13 @@ fn format_element_type_expr_inline(
                 .append(RcDoc::text(">"))
         }
         TypeExprKind::ComplexApplication { generic_args } => {
-            let arg_docs: Vec<RcDoc<'static>> = generic_args
-                .iter()
-                .map(|arg| format_generic_arg_inline(fmt, arg))
-                .collect();
-            RcDoc::text("Complex")
-                .append(RcDoc::text("<"))
-                .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
-                .append(RcDoc::text(">"))
+            format_builtin_type_former(fmt, "Complex", generic_args.as_ref())
         }
         TypeExprKind::IndexLabel { index, label } => {
             RcDoc::text(format!("{}#{}", index.display_path(), label.value))
         }
         TypeExprKind::KeyApplication { generic_args } => {
-            // Bare `Key` (a parse-level arity error) keeps its spelling so the
-            // formatter never fabricates an empty `<>` argument list.
-            let mut doc = RcDoc::text("Key");
-            if !generic_args.is_empty() {
-                let arg_docs: Vec<RcDoc<'static>> = generic_args
-                    .iter()
-                    .map(|arg| format_generic_arg_inline(fmt, arg))
-                    .collect();
-                doc = doc
-                    .append(RcDoc::text("<"))
-                    .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
-                    .append(RcDoc::text(">"));
-            }
-            doc
+            format_builtin_type_former(fmt, "Key", generic_args.as_ref())
         }
     };
 
@@ -1461,6 +1442,27 @@ fn format_element_type_expr_inline(
     } else {
         base.append(format_domain_constraints(fmt, &te.constraints))
     }
+}
+
+/// A built-in type former such as `Complex<D>` or `Key<I>`. A bare former
+/// (a parse-level arity error left to HIR) keeps its spelling, so the
+/// formatter never fabricates an empty `<>` argument list.
+fn format_builtin_type_former(
+    fmt: &mut Formatter<'_>,
+    name: &'static str,
+    generic_args: Option<&NonEmpty<GenericArg>>,
+) -> RcDoc<'static> {
+    let Some(generic_args) = generic_args else {
+        return RcDoc::text(name);
+    };
+    let arg_docs: Vec<RcDoc<'static>> = generic_args
+        .iter()
+        .map(|arg| format_generic_arg_inline(fmt, arg))
+        .collect();
+    RcDoc::text(name)
+        .append(RcDoc::text("<"))
+        .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+        .append(RcDoc::text(">"))
 }
 
 /// Format one unresolved generic argument at either a type or call site.
