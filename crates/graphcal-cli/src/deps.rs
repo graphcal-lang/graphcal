@@ -255,7 +255,23 @@ impl PackageIngestionBudget {
         )
     }
 
-    fn account_source_tree(&mut self, root: &Path, hash: &SourceTreeHash) -> Result<(), DepsError> {
+    /// Limits for rereading part of a tree this budget already charged. The
+    /// reread is bounded by what the charged tree consumed rather than by the
+    /// remaining budget, which already excludes that tree, and it is not
+    /// charged again.
+    const fn recheck_limits(&self, charged: ChargedSourceTree) -> SourceTreeHashLimits {
+        SourceTreeHashLimits::new(
+            self.policy.source_tree_file(),
+            charged.bytes,
+            charged.entries,
+        )
+    }
+
+    fn account_source_tree(
+        &mut self,
+        root: &Path,
+        hash: &SourceTreeHash,
+    ) -> Result<ChargedSourceTree, DepsError> {
         let entries =
             self.entries
                 .checked_add(hash.entries())
@@ -273,8 +289,20 @@ impl PackageIngestionBudget {
         }
         self.account_bytes(root, hash.bytes())?;
         self.entries = entries;
-        Ok(())
+        Ok(ChargedSourceTree {
+            entries: hash.entries(),
+            bytes: hash.bytes(),
+        })
     }
+}
+
+/// Resources one source tree consumed, as charged to a
+/// [`PackageIngestionBudget`]. Only [`PackageIngestionBudget::account_source_tree`]
+/// creates it, so it always describes a tree that was actually charged.
+#[derive(Debug, Clone, Copy)]
+struct ChargedSourceTree {
+    entries: u64,
+    bytes: u64,
 }
 
 /// Result of a successful `graphcal deps lock` run.
@@ -1187,8 +1215,11 @@ fn verify_mismatched_pin(
             actual: fetched.sha256,
         }),
         PinCoverage::LegacyUnrecorded => {
-            let source_dir_only =
-                hash_source_dir_only(checkout, &fetched.manifest.source_dir, budget)?;
+            let source_dir_only = hash_source_dir_only(
+                checkout,
+                &fetched.manifest.source_dir,
+                budget.recheck_limits(fetched.charged),
+            )?;
             if source_dir_only == pin.sha256 {
                 Ok(())
             } else {
@@ -1340,6 +1371,7 @@ struct MaterializedGit {
 struct InspectedPackage {
     sha256: Sha256Digest,
     manifest: PackageManifest,
+    charged: ChargedSourceTree,
 }
 
 impl InspectedPackage {
@@ -1356,8 +1388,12 @@ fn inspect_materialized_package(
     budget: &mut PackageIngestionBudget,
 ) -> Result<InspectedPackage, DepsError> {
     let manifest = read_manifest(root, budget)?;
-    let sha256 = hash_source_tree(root, &manifest.source_dir, budget)?;
-    Ok(InspectedPackage { sha256, manifest })
+    let (sha256, charged) = hash_source_tree(root, &manifest.source_dir, budget)?;
+    Ok(InspectedPackage {
+        sha256,
+        manifest,
+        charged,
+    })
 }
 
 fn read_manifest(
@@ -1411,7 +1447,7 @@ fn hash_source_tree(
     root: &Path,
     source_dir: &PackageSourceDirectory,
     budget: &mut PackageIngestionBudget,
-) -> Result<Sha256Digest, DepsError> {
+) -> Result<(Sha256Digest, ChargedSourceTree), DepsError> {
     let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
         path: root.to_path_buf(),
         source,
@@ -1432,31 +1468,25 @@ fn hash_source_tree(
         other => DepsError::PackageSnapshot(other),
     })?
     .hash();
-    budget.account_source_tree(root, &hash)?;
-    Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)
+    let charged = budget.account_source_tree(root, &hash)?;
+    let sha256 = Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)?;
+    Ok((sha256, charged))
 }
 
 /// Digest of `graphcal.toml` and the source directory alone: the coverage of
-/// tree hashes written before Graphcal 0.0.1-alpha.31. It rereads files the
-/// current hash already accounted for, so it is bounded by the remaining
-/// limits but not charged to the budget again.
+/// tree hashes written before Graphcal 0.0.1-alpha.31. It rereads a subset of
+/// a tree already charged, under [`PackageIngestionBudget::recheck_limits`].
 fn hash_source_dir_only(
     root: &Path,
     source_dir: &PackageSourceDirectory,
-    budget: &PackageIngestionBudget,
+    limits: SourceTreeHashLimits,
 ) -> Result<Sha256Digest, DepsError> {
     let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
         path: root.to_path_buf(),
         source,
     })?;
     let hash = graphcal_compiler::outcome::without_cancellation(|cancellation| {
-        graphcal_io::capture_source_tree(
-            &fs,
-            root,
-            &source_dir.to_path_buf(),
-            budget.source_tree_limits(),
-            cancellation,
-        )
+        graphcal_io::capture_source_tree(&fs, root, &source_dir.to_path_buf(), limits, cancellation)
     })?
     .hash();
     Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)
@@ -1941,7 +1971,7 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
         let legacy = hash_source_dir_only(
             fixture.path(),
             &current.manifest.source_dir,
-            &PackageIngestionBudget::default(),
+            PackageIngestionBudget::default().recheck_limits(current.charged),
         )
         .unwrap();
         assert_ne!(legacy, current.sha256, "the fixture must exercise coverage");
@@ -1972,6 +2002,49 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
             })
             .unwrap();
         assert_eq!(materialized.sha256, current.sha256);
+    }
+
+    /// The legacy re-hash rereads files the budget already charged, so it must
+    /// not be limited by what remains after charging them.
+    #[test]
+    fn legacy_pin_recheck_fits_a_budget_the_fetched_tree_exhausted() {
+        let fixture = tempfile::tempdir().unwrap();
+        write_package_with_outside_plugin(fixture.path(), "node x: Dimensionless = 1.0;\n");
+        let probe = inspect_for_test(fixture.path());
+        let legacy = hash_source_dir_only(
+            fixture.path(),
+            &probe.manifest.source_dir,
+            PackageIngestionBudget::default().recheck_limits(probe.charged),
+        )
+        .unwrap();
+        let manifest_bytes = std::fs::metadata(fixture.path().join("graphcal.toml"))
+            .unwrap()
+            .len();
+        // Exactly enough for the manifest read plus the full tree: nothing
+        // remains once the fetched package is inspected.
+        let budget = test_budget(
+            1024,
+            1024,
+            1024,
+            1024,
+            1 + probe.charged.entries,
+            manifest_bytes + probe.charged.bytes,
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let mut cache =
+            PackageCache::new(root, BTreeMap::from([(source.clone(), legacy_pin(legacy))]));
+        let mut budget = budget;
+
+        let materialized = cache
+            .materialize_with(&source, &mut budget, |path| {
+                write_package_with_outside_plugin(path, "node x: Dimensionless = 1.0;\n");
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(materialized.sha256, probe.sha256);
+        assert_eq!(budget.remaining_bytes(), 0);
     }
 
     #[test]
