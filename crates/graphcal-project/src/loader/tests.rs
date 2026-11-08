@@ -1786,3 +1786,67 @@ fn cancellation_during_any_package_read_is_never_reported_as_a_diagnostic() {
         );
     }
 }
+
+/// PRJ-6: a loose script under a manifest is not covered by the package's
+/// `graphcal.lock` pins, so any wasm plugin import is a loud load error
+/// raised before the plugin bytes are read.
+#[test]
+fn wasm_plugin_in_loose_script_under_manifest_is_rejected() {
+    for script in ["loose.gcl", "scripts/loose.gcl", "src/loose.gcl"] {
+        assert_loose_script_plugin_rejected(script);
+    }
+}
+
+fn assert_loose_script_plugin_rejected(script: &str) {
+    let source = "import plugin \"plugins/p.wasm\" as p {\nfn value() -> Dimensionless;\n}\nnode x: Dimensionless = p::value();";
+    let directory = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+        ("src/mission/main.gcl", "node y: Dimensionless = 1.0;"),
+        (script, source),
+        ("plugins/p.wasm", "not wasm"),
+    ]);
+    let error = load_project(&directory.path().join(script), None, &fs())
+        .expect_err("a loose script under a manifest cannot import wasm plugins");
+    match error {
+        CompileError::Load(LoadError::WasmPluginOutsidePackageNamespace {
+            ref plugin,
+            span,
+            ..
+        }) => {
+            assert_eq!(plugin.as_str(), "plugins/p.wasm");
+            let literal = "\"plugins/p.wasm\"";
+            assert_eq!(span.offset(), source.find(literal).unwrap());
+            assert_eq!(span.len(), literal.len());
+        }
+        other => panic!("expected M038, got {other:?}"),
+    }
+}
+
+/// PRJ-6: ad-hoc files with no manifest above keep loading plugins unpinned,
+/// and package members are still subject to the lockfile pins.
+#[test]
+fn wasm_plugin_trust_regimes_for_ad_hoc_and_package_files() {
+    let source = "import plugin \"p.wasm\" as p {\nfn value() -> Dimensionless;\n}";
+    let ad_hoc = setup_temp_dir(&[("main.gcl", source), ("p.wasm", "bytes")]);
+    let project = load_project(&ad_hoc.path().join("main.gcl"), None, &fs()).unwrap();
+    assert!(
+        project.plugins().values().all(Result::is_ok),
+        "ad-hoc files load plugins unpinned: {:?}",
+        project.plugins()
+    );
+
+    let package = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+        ("src/mission/main.gcl", source),
+        ("p.wasm", "bytes"),
+    ]);
+    let project = load_project(&package.path().join("src/mission/main.gcl"), None, &fs()).unwrap();
+    assert!(
+        project
+            .plugins()
+            .values()
+            .all(|entry| matches!(entry, Err(PluginFileError::NotPinned))),
+        "package files need lockfile pins: {:?}",
+        project.plugins()
+    );
+}

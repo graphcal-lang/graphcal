@@ -80,6 +80,34 @@ fn wasm_plugin_paths(
         .filter(|path| path.source_kind() == PluginSourceKind::WasmModule)
 }
 
+/// Reject every wasm plugin import of a loose script under a manifest.
+///
+/// Plugin trust rests on `graphcal.lock`, which pins only the package's own
+/// sources. A file that has a `graphcal.toml` above it but lives outside the
+/// package namespace is not covered by those pins, so it cannot load plugin
+/// binaries at all (it would otherwise run them unreviewed).
+fn reject_wasm_plugins_outside_package_namespace(
+    files: &DependencyOrdered<LoadedFile<module_path::ModuleTarget>>,
+    sources: &SourceRegistry,
+) -> Result<(), CompileError> {
+    use graphcal_compiler::syntax::plugin::PluginSourceKind;
+
+    files
+        .iter()
+        .find_map(|file| {
+            file.ast
+                .plugin_imports()
+                .into_iter()
+                .find(|plugin| plugin.path.value.source_kind() == PluginSourceKind::WasmModule)
+                .map(|plugin| LoadError::WasmPluginOutsidePackageNamespace {
+                    plugin: plugin.path.value.clone(),
+                    src: sources.renderable(file.source_id),
+                    span: plugin.path.span.into(),
+                })
+        })
+        .map_or(Ok(()), |error| Err(error.into()))
+}
+
 fn validate_plugin_call_policy(
     files: &DependencyOrdered<LoadedFile<module_path::ModuleTarget>>,
     policy: &PluginCallPolicy,
@@ -589,8 +617,10 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     // outside the namespace is treated as a virtual package — cross-file
     // imports from it will be rejected. This collapses the two modes into a
     // single rule: to import across files, you must live in a real package.
-    let manifest =
+    let root_package =
         load_manifest_for_root(&project_root, &root_canonical, fs, budget, cancellation)?;
+    let outside_package_namespace = matches!(root_package, RootPackage::OutsideNamespace);
+    let manifest = root_package.into_manifest();
     if let Some(package_manifest) = manifest.as_ref()
         && !package_manifest.dependencies.is_empty()
     {
@@ -626,6 +656,9 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     cancellation.checkpoint()?;
     let (files, sources) = build_loaded_files(snapshot)?;
     cancellation.checkpoint()?;
+    if outside_package_namespace {
+        reject_wasm_plugins_outside_package_namespace(&files, &sources)?;
+    }
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
     let mut plugins = read_wasm_plugins(
@@ -1260,14 +1293,36 @@ fn resolve_project_root<F: FileSystemReader>(
     )
 }
 
+/// How the root file relates to the manifest at the project root.
+#[derive(Debug)]
+enum RootPackage {
+    /// The root file lives inside the manifest's package namespace.
+    Member(PackageManifest),
+    /// A manifest exists, but the root file sits outside its package
+    /// namespace: a loose script that loads as a virtual package and is not
+    /// covered by the package's `graphcal.lock` pins.
+    OutsideNamespace,
+    /// No manifest at the project root: an ad-hoc virtual-package file.
+    NoManifest,
+}
+
+impl RootPackage {
+    fn into_manifest(self) -> Option<PackageManifest> {
+        match self {
+            Self::Member(manifest) => Some(manifest),
+            Self::OutsideNamespace | Self::NoManifest => None,
+        }
+    }
+}
+
 /// Load the manifest at `project_root` and decide whether the root file is
 /// part of the real package.
 ///
-/// Returns `Some(manifest)` only when a manifest is present AND the root file
-/// lives inside the package namespace (either `<source_dir>/<pkg>.gcl` or
-/// under `<source_dir>/<pkg>/`). Returns `None` for the virtual-package
-/// scenarios: no manifest, or the root file sits next to a manifest but
-/// outside the namespace (treated as a standalone script).
+/// The root file is a [`RootPackage::Member`] only when a manifest is present
+/// AND the root file lives inside the package namespace (either
+/// `<source_dir>/<pkg>.gcl` or under `<source_dir>/<pkg>/`). Otherwise it is a
+/// virtual package: a loose script under the manifest, or an ad-hoc file with
+/// no manifest at all.
 ///
 /// # Errors
 ///
@@ -1279,10 +1334,10 @@ fn load_manifest_for_root<F: FileSystemReader>(
     fs: &F,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Option<PackageManifest>, Outcome<CompileError>> {
+) -> Result<RootPackage, Outcome<CompileError>> {
     let manifest_path = project_root.join("graphcal.toml");
     if !fs.exists(&manifest_path) {
-        return Ok(None);
+        return Ok(RootPackage::NoManifest);
     }
     let manifest_content = budget
         .read_text(fs, &manifest_path, LoaderArtifact::Manifest, cancellation)
@@ -1300,9 +1355,9 @@ fn load_manifest_for_root<F: FileSystemReader>(
     if root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
         let source_dir = parsed.source_dir.join_to(project_root);
         verify_root_module_file(fs, &source_dir, root_canonical, cancellation)?;
-        Ok(Some(parsed))
+        Ok(RootPackage::Member(parsed))
     } else {
-        Ok(None)
+        Ok(RootPackage::OutsideNamespace)
     }
 }
 

@@ -390,6 +390,10 @@ Package handling:
 - **Ad-hoc files** (no `graphcal.toml` anywhere above) load plugins
   unpinned — there is no lock regime to audit against, and the sandbox
   plus resource bounds still apply.
+- **Loose scripts** (a `graphcal.toml` above, but outside the package
+  namespace `<source_dir>/<package>/`) cannot import Wasm plugins at all:
+  `graphcal.lock` does not cover them, so their plugin imports fail with
+  M038. Move the file into the package namespace directory to use plugins.
 - **Dependency packages** may declare Wasm plugins and need no separate
   `[[plugin]]` entries. Their locked tree hash includes the manifest, source
   directory, and every Wasm artifact imported by those sources, including

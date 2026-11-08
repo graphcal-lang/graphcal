@@ -224,7 +224,7 @@ impl DiagnosticKind for PluginError {
             Self::ExternSignatureMismatch { .. } => Some("the extern declaration must structurally match the signature in the plugin's manifest (dimension-variable and parameter names may differ; the dimensional shape may not); note that plugin manifests cannot express user-defined base dimensions".to_owned()),
             Self::PluginLoadFailed { .. } => Some("plugin paths ending in `.wasm` resolve relative to the declaring package root and must name a vendored WebAssembly module with an embedded graphcal manifest".to_owned()),
             Self::PluginForbiddenImport { .. } => Some("graphcal plugins must be pure: they may import nothing except `graphcal::fail`. A module importing WASI or other host APIs is not a graphcal plugin (rebuild for a bare wasm32 target or stub the imports out)".to_owned()),
-            Self::PluginNotPinned { .. } => Some("projects with a graphcal.toml load plugin binaries only through lockfile pins; run `graphcal deps lock` to record this plugin's hash".to_owned()),
+            Self::PluginNotPinned { .. } => Some("files inside a graphcal.toml package load plugin binaries only through lockfile pins; run `graphcal deps lock` to record this plugin's hash (files outside the package namespace cannot import plugins; ad-hoc files with no graphcal.toml load them unpinned)".to_owned()),
             Self::PluginHashMismatch { .. } => Some("the lockfile is the trust boundary for plugin code — a changed binary must arrive together with a reviewed pin update; if this change is intentional, rerun `graphcal deps lock`".to_owned()),
         }
     }

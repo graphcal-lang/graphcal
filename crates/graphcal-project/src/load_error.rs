@@ -111,6 +111,21 @@ pub enum LoadError {
         span: SourceSpan,
     },
 
+    #[error("wasm plugin \"{plugin}\" imported from a file outside the package namespace")]
+    #[diagnostic(
+        code(graphcal::M038),
+        help(
+            "this file has a `graphcal.toml` above it but lives outside the package namespace (`<source_dir>/<package>.gcl` or under `<source_dir>/<package>/`), so `graphcal.lock` cannot pin its plugins. Move the file into the package namespace directory, then run `graphcal deps lock` to pin the plugin."
+        )
+    )]
+    WasmPluginOutsidePackageNamespace {
+        plugin: graphcal_compiler::syntax::plugin::PluginPath,
+        #[source_code]
+        src: RegisteredSource,
+        #[label("plugin binaries load only from files covered by graphcal.lock pins")]
+        span: SourceSpan,
+    },
+
     #[error("a file-root `import` cannot target its own file `{path}`")]
     #[diagnostic(
         code(graphcal::M033),
@@ -232,6 +247,7 @@ impl LoadError {
             | Self::PackageNameMismatch { src, .. }
             | Self::StdlibNotImplemented { src, .. }
             | Self::CrossFileImportInVirtualPackage { src, .. }
+            | Self::WasmPluginOutsidePackageNamespace { src, .. }
             | Self::FileRootSelfImport { src, .. }
             | Self::PackageFileStemInDagBody { src, .. }
             | Self::UnknownDependency { src, .. } => Some(src),
