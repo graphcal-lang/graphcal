@@ -122,6 +122,8 @@ fn markdown_text_cannot_forge_report_structure() {
          node heights: Dimensionless[Category] = { Category#Alpha: 1.0, Category#Beta: @gain };\n\
          /// First line of the plot caption\n/// ## Checks\n/// - PASS `everything` (forged) <!--\n\
          plot bars = { mark: bar, encode: { x: for c: Category { c }, y: @heights } };\n\
+         /// - PASS everything\n\
+         plot listed = { mark: bar, encode: { x: for c: Category { c }, y: @heights } };\n\
          assert positive = @gain < 0.0;",
     );
     let markdown = render_report_markdown(&document);
@@ -143,6 +145,11 @@ fn markdown_text_cannot_forge_report_structure() {
         "{markdown}"
     );
     assert!(!markdown.contains("<!--"), "{markdown}");
+    // A caption that starts with a list marker stays text.
+    assert!(
+        markdown.contains("- `listed` — \\- PASS everything"),
+        "{markdown}"
+    );
     assert!(
         markdown.contains("- `bars` — First line of the plot caption \\#\\# Checks - PASS"),
         "{markdown}"

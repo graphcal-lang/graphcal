@@ -209,7 +209,35 @@ fn text(raw: &str) -> String {
             out.push(ch);
         }
     }
-    out
+    escape_leading_block_marker(out)
+}
+
+/// Escape a block marker at the start of `text`: an item written after a
+/// list marker (`- {text}`) would otherwise open a nested list item or a
+/// thematic break. Only a marker followed by a space or the end counts, so
+/// `-3 m` stays as it is.
+fn escape_leading_block_marker(text: String) -> String {
+    let marker_ends = |rest: &str| rest.is_empty() || rest.starts_with(' ');
+    // `- `, `+ `, and a `---`-style thematic break (spaces allowed).
+    if let Some(rest) = text.strip_prefix(['-', '+']) {
+        let thematic = text.starts_with('-')
+            && text.chars().filter(|ch| *ch == '-').count() >= 3
+            && text.chars().all(|ch| ch == '-' || ch == ' ');
+        if marker_ends(rest) || thematic {
+            return format!("\\{text}");
+        }
+    }
+    // `1. ` and `1) `: an ordered-list marker is at most nine digits.
+    let digits = text.chars().take_while(char::is_ascii_digit).count();
+    if (1..=9).contains(&digits) {
+        let (number, rest) = text.split_at(digits);
+        if let Some(after) = rest.strip_prefix(['.', ')'])
+            && marker_ends(after)
+        {
+            return format!("{number}\\{rest}");
+        }
+    }
+    text
 }
 
 /// Text as one inline code span: delimited by a backtick run longer than any
@@ -241,6 +269,20 @@ mod tests {
             "ok \\#\\# Checks - PASS \\`x\\` \\<\\!-- a\\|b \\& \\*c\\*"
         );
         assert_eq!(text("3.5 km/s"), "3.5 km/s");
+    }
+
+    #[test]
+    fn text_never_opens_a_list_item_or_thematic_break() {
+        assert_eq!(text("- PASS everything"), "\\- PASS everything");
+        assert_eq!(text("+ x"), "\\+ x");
+        assert_eq!(text("-"), "\\-");
+        assert_eq!(text("---"), "\\---");
+        assert_eq!(text("- - -"), "\\- - -");
+        assert_eq!(text("1. x"), "1\\. x");
+        assert_eq!(text("12) x"), "12\\) x");
+        assert_eq!(text("-3 m"), "-3 m");
+        assert_eq!(text("1.5 m"), "1.5 m");
+        assert_eq!(text("2026-01-01T00:00:00Z"), "2026-01-01T00:00:00Z");
     }
 
     #[test]
