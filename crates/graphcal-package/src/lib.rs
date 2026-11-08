@@ -398,7 +398,7 @@ impl GitUrl {
     fn new(value: impl Into<String>) -> Result<Self, GitUrlError> {
         let value = value.into();
         let invalid = |reason| GitUrlError {
-            value: value.clone(),
+            value: redact_userinfo(&value),
             reason,
         };
         if value.is_empty() {
@@ -479,6 +479,35 @@ impl fmt::Display for GitRepositoryPath {
         }
         Ok(())
     }
+}
+
+/// Spelling of a rejected URL that is safe to print.
+///
+/// Rejected URLs end up in terminal output, CI logs, and editor diagnostics,
+/// so any userinfo that may carry a secret is replaced before the error is
+/// built: all userinfo of a non-SSH URL (an HTTPS user name is commonly a
+/// token), and SSH userinfo that contains a `:` password. A plain SSH user
+/// such as `git` is kept because it helps identify the URL.
+fn redact_userinfo(value: &str) -> String {
+    const REDACTED: &str = "<redacted>";
+    let (scheme, rest) = match value.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, value),
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let Some(at) = rest[..authority_end].rfind('@') else {
+        return value.to_string();
+    };
+    let userinfo = &rest[..at];
+    let ssh_like = scheme.is_none_or(|scheme| scheme.eq_ignore_ascii_case("ssh"));
+    if ssh_like && !userinfo.contains(':') {
+        return value.to_string();
+    }
+    let host_and_path = &rest[at..];
+    scheme.map_or_else(
+        || format!("{REDACTED}{host_and_path}"),
+        |scheme| format!("{scheme}://{REDACTED}{host_and_path}"),
+    )
 }
 
 fn parse_standard_git_url(value: &str) -> Result<GitUrlKind, GitUrlErrorReason> {
@@ -3489,6 +3518,45 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
     fn manifest_rejects_scp_like_credential_url() {
         let err = GitUrl::new("user:token@example.com/acme/orbital.git").unwrap_err();
         assert_eq!(err.reason, GitUrlErrorReason::Credentials);
+    }
+
+    #[test]
+    fn rejected_git_urls_never_echo_credentials() {
+        for (input, rendered) in [
+            (
+                "https://probe-user:FAKE-TOKEN-1234@graphcal-test.invalid/acme/units.git",
+                "https://<redacted>@graphcal-test.invalid/acme/units.git",
+            ),
+            (
+                "https://FAKE-TOKEN-1234@host/acme/units.git",
+                "https://<redacted>@host/acme/units.git",
+            ),
+            (
+                "SSH://git:FAKE-TOKEN-1234@host/acme/units.git",
+                "SSH://<redacted>@host/acme/units.git",
+            ),
+            (
+                "user:FAKE-TOKEN-1234@example.com/acme/orbital.git",
+                "<redacted>@example.com/acme/orbital.git",
+            ),
+            (
+                "ftp://u:FAKE-TOKEN-1234@host/repo",
+                "ftp://<redacted>@host/repo",
+            ),
+        ] {
+            let error = GitUrl::new(input).unwrap_err();
+            let message = error.to_string();
+            assert!(!message.contains("FAKE-TOKEN-1234"), "{message}");
+            assert!(message.contains(&format!("`{rendered}`")), "{message}");
+        }
+        // A plain SSH user is not a secret and stays visible.
+        let error = GitUrl::new("ssh://git@host/-oProxyCommand=x").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`ssh://git@host/-oProxyCommand=x`"),
+            "{error}"
+        );
     }
 
     #[test]
