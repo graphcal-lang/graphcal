@@ -53,9 +53,9 @@ use source_authority::{
 use source_snapshot::{ModuleRoot, PackageFileKey, ParsedFile, ResolveFailure};
 
 use graphcal_package::{
-    GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError,
-    PackageSource, STDLIB_VERSION, Sha256Digest, ValidatedPackageGraph,
-    parse_lockfile_str_with_limits, parse_manifest_str,
+    LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError, PackageSource,
+    STDLIB_VERSION, Sha256Digest, ValidatedPackageGraph, parse_lockfile_str_with_limits,
+    parse_manifest_str,
 };
 
 #[cfg(test)]
@@ -924,9 +924,24 @@ impl ModuleSourceAuthority for PackageLoadContext<'_> {
         selector: PackageSelector<'_>,
         from: &PackageFileKey,
     ) -> Result<SelectedPackage<PackageInstanceId>, ResolveFailure> {
+        let unknown = || {
+            self.graph.package(&from.package).map_or_else(
+                || {
+                    ResolveFailure::PackageAuthority(PackageAuthorityError::MissingPackage(
+                        from.package.clone(),
+                    ))
+                },
+                |package| ResolveFailure::UnknownDependency {
+                    package: package.name.clone(),
+                },
+            )
+        };
+        // A segment that is not a valid package name names no package.
+        let selector = graphcal_package::ModulePackageSelector::new(selector.name().as_str())
+            .map_err(|_| unknown())?;
         let resolved = self
             .graph
-            .resolve_package_selector(&from.package, selector.name().as_str())
+            .resolve_package_selector(&from.package, &selector)
             .map_err(|error| match error {
                 // The importing file's package instance came from this graph.
                 PackageResolveError::UnknownCurrentPackage { package } => {
@@ -958,14 +973,9 @@ fn source_root_candidate(
     match &package.source {
         PackageSource::Root => project_root.to_path_buf(),
         PackageSource::Git {
-            url,
-            commit,
+            source,
             tree_hashes,
-            ..
-        } => cache_root.git_checkout(
-            &GitSourceId::new(url.clone(), commit.clone()),
-            &tree_hashes.sha256,
-        ),
+        } => cache_root.git_checkout(source, &tree_hashes.sha256),
     }
 }
 

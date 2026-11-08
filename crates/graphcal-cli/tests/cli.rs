@@ -376,10 +376,7 @@ fn deps_lock_writes_deterministic_git_lockfile() {
         lock.contains("units_v1 = \"pkg-units-"),
         "dependency edge missing:\n{lock}"
     );
-    assert!(
-        lock.contains(&format!("requested_rev = \"{dep_rev}\"")),
-        "requested_rev missing:\n{lock}"
-    );
+    assert!(!lock.contains("requested_rev"), "lock:\n{lock}");
     assert!(
         lock.contains(&format!("commit = \"{dep_rev}\"")),
         "commit missing:\n{lock}"
@@ -431,14 +428,9 @@ fn deps_lock_writes_deterministic_git_lockfile() {
         .iter()
         .find_map(|package| match &package.source {
             graphcal_package::PackageSource::Git {
-                url,
-                commit,
+                source,
                 tree_hashes,
-                ..
-            } => Some((
-                graphcal_package::GitSourceId::new(url.clone(), commit.clone()),
-                tree_hashes.sha256,
-            )),
+            } => Some((source.clone(), tree_hashes.sha256)),
             graphcal_package::PackageSource::Root => None,
         })
         .unwrap();
@@ -7842,7 +7834,7 @@ fn offline_dependency_reports_preserve_transitive_plugins_and_versions() {
 #[cfg(unix)]
 #[test]
 fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() {
-    use graphcal_package::{GitSourceId, PackageSource};
+    use graphcal_package::PackageSource;
     let binary = scale_plugin_wasm;
     let dir = tempfile::tempdir().unwrap();
     let repository = dir.path().join("kernels");
@@ -7886,14 +7878,9 @@ fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() 
         .iter()
         .filter_map(|package| match &package.source {
             PackageSource::Git {
-                url,
-                commit,
+                source,
                 tree_hashes,
-                ..
-            } => Some((
-                GitSourceId::new(url.clone(), commit.clone()),
-                tree_hashes.sha256,
-            )),
+            } => Some((source.clone(), tree_hashes.sha256)),
             PackageSource::Root => None,
         })
         .collect();

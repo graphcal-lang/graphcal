@@ -40,6 +40,14 @@ pub struct PackageName(String);
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DependencyName(String);
 
+/// First segment of a module path, validated as a package-namespace name.
+///
+/// It names either the importing package itself (its real
+/// [`PackageName`]) or one of its direct [`DependencyName`] aliases; both use
+/// the same lower-snake-case spelling rule.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ModulePackageSelector(String);
+
 /// Opaque identifier for one locked package instance.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PackageInstanceId(String);
@@ -148,6 +156,32 @@ macro_rules! impl_string_newtype {
 impl_string_newtype!(PackageName);
 impl_string_newtype!(DependencyName);
 impl_string_newtype!(PackageInstanceId);
+impl_string_newtype!(ModulePackageSelector);
+
+impl ModulePackageSelector {
+    /// Validate a module path's first segment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModulePackageSelectorError`] unless `value` is
+    /// `lower_snake_case`, the only spelling a package or dependency name can
+    /// have.
+    pub fn new(value: impl Into<String>) -> Result<Self, ModulePackageSelectorError> {
+        let value = value.into();
+        if is_valid_name(&value) {
+            Ok(Self(value))
+        } else {
+            Err(ModulePackageSelectorError { value })
+        }
+    }
+}
+
+/// A module path's first segment cannot name any package.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("`{value}` cannot name a package: package and dependency names are lower_snake_case")]
+pub struct ModulePackageSelectorError {
+    value: String,
+}
 impl_string_newtype!(GitCommitHash);
 
 impl PackageSourceDirectory {
@@ -954,7 +988,7 @@ pub struct DependencySpec {
     /// match the dependency alias.
     package: Option<PackageName>,
     /// Exact-rev Git source.
-    pub git: GitDependency,
+    pub git: GitSourceId,
 }
 
 impl DependencySpec {
@@ -965,15 +999,6 @@ impl DependencySpec {
             .clone()
             .unwrap_or_else(|| PackageName(alias.as_str().to_string()))
     }
-}
-
-/// Exact-rev Git dependency source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitDependency {
-    /// Repository URL.
-    pub url: GitUrl,
-    /// Required immutable revision.
-    pub rev: GitCommitHash,
 }
 
 /// Manifest parse or validation error.
@@ -1346,7 +1371,7 @@ fn parse_dependency_spec(dependency: &str, item: &Value) -> Result<DependencySpe
 
     Ok(DependencySpec {
         package,
-        git: GitDependency { url: git, rev },
+        git: GitSourceId::new(git, rev),
     })
 }
 
@@ -1761,23 +1786,19 @@ impl Lockfile {
         let mut pins = BTreeMap::<GitSourceId, (SourceTreeHashes, &PackageInstanceId)>::new();
         for package in &self.packages {
             let PackageSource::Git {
-                url,
-                commit,
+                source,
                 tree_hashes,
-                ..
             } = &package.source
             else {
                 continue;
             };
-            let source = GitSourceId::new(url.clone(), commit.clone());
-            match pins.get(&source) {
+            match pins.get(source) {
                 Some((expected, first)) if expected != tree_hashes => {
                     return Err(LockValidationError::ConflictingGitSourceDigest(Box::new(
                         GitSourceDigestConflict {
                             first: (*first).clone(),
                             second: package.id.clone(),
-                            url: url.clone(),
-                            commit: commit.clone(),
+                            git_source: source.clone(),
                             first_digest: expected.sha256,
                             second_digest: tree_hashes.sha256,
                         },
@@ -1785,7 +1806,7 @@ impl Lockfile {
                 }
                 Some(_) => {}
                 None => {
-                    pins.insert(source, (*tree_hashes, &package.id));
+                    pins.insert(source.clone(), (*tree_hashes, &package.id));
                 }
             }
         }
@@ -1853,15 +1874,12 @@ impl Lockfile {
                     push_kv_string(&mut out, "path", ".");
                 }
                 PackageSource::Git {
-                    url,
-                    requested_rev,
-                    commit,
+                    source,
                     tree_hashes,
                 } => {
                     push_kv_string(&mut out, "type", "git");
-                    push_kv_string(&mut out, "url", &url.to_string());
-                    push_kv_string(&mut out, "requested_rev", requested_rev.as_str());
-                    push_kv_string(&mut out, "commit", commit.as_str());
+                    push_kv_string(&mut out, "url", &source.url().to_string());
+                    push_kv_string(&mut out, "commit", source.commit().as_str());
                     push_kv_inline_table(
                         &mut out,
                         "tree_hashes",
@@ -1934,13 +1952,10 @@ pub enum PackageSource {
     Root,
     /// Git source locked to an immutable commit and normalized tree hash.
     Git {
-        /// Repository URL.
-        url: GitUrl,
-        /// Manifest-requested revision.
-        requested_rev: GitCommitHash,
-        /// Immutable fetched commit. The MVP requires this to equal
-        /// `requested_rev`.
-        commit: GitCommitHash,
+        /// Repository URL and the immutable commit the manifest requested.
+        /// Only exact commits can be requested, so the requested and the
+        /// fetched commit are one value.
+        source: GitSourceId,
         /// Normalized source tree hashes.
         tree_hashes: SourceTreeHashes,
     },
@@ -1950,10 +1965,7 @@ impl PackageSource {
     fn canonical_key(&self) -> CanonicalPackageSource {
         match self {
             Self::Root => CanonicalPackageSource::Root,
-            Self::Git { url, commit, .. } => CanonicalPackageSource::Git {
-                url: url.clone(),
-                commit: commit.clone(),
-            },
+            Self::Git { source, .. } => CanonicalPackageSource::Git(source.clone()),
         }
     }
 }
@@ -1961,7 +1973,7 @@ impl PackageSource {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum CanonicalPackageSource {
     Root,
-    Git { url: GitUrl, commit: GitCommitHash },
+    Git(GitSourceId),
 }
 
 /// Hashes for a locked Git source tree.
@@ -2251,14 +2263,7 @@ impl ValidatedLockfile<'_> {
                     });
                 }
                 match &target.source {
-                    PackageSource::Git {
-                        url,
-                        requested_rev,
-                        commit,
-                        ..
-                    } if url == &spec.git.url
-                        && requested_rev == &spec.git.rev
-                        && commit == &spec.git.rev => {}
+                    PackageSource::Git { source, .. } if source == &spec.git => {}
                     PackageSource::Git { .. } | PackageSource::Root => {
                         return Err(LockValidationError::DependencySourceMismatch {
                             package: package.id.clone(),
@@ -2318,7 +2323,7 @@ impl ValidatedPackageGraph {
     pub fn resolve_package_selector(
         &self,
         current: &PackageInstanceId,
-        selector: &str,
+        selector: &ModulePackageSelector,
     ) -> Result<SelectedPackageInstance, PackageResolveError> {
         self.graph.resolve_package_selector(current, selector)
     }
@@ -2361,14 +2366,14 @@ impl PackageGraph {
     pub fn resolve_package_selector(
         &self,
         current: &PackageInstanceId,
-        selector: &str,
+        selector: &ModulePackageSelector,
     ) -> Result<SelectedPackageInstance, PackageResolveError> {
         let current_package = self.packages.get(current).ok_or_else(|| {
             PackageResolveError::UnknownCurrentPackage {
                 package: current.clone(),
             }
         })?;
-        if selector == current_package.name.as_str() {
+        if selector.as_str() == current_package.name.as_str() {
             return Ok(SelectedPackageInstance {
                 package: current.clone(),
                 relation: PackageResolutionRelation::SelfReference,
@@ -2376,11 +2381,12 @@ impl PackageGraph {
         }
         let (name, target) = current_package
             .dependencies
-            .get_key_value(&DependencyName(selector.to_owned()))
+            // Selectors and dependency aliases share one spelling rule.
+            .get_key_value(&DependencyName(selector.as_str().to_owned()))
             .ok_or_else(|| PackageResolveError::UnknownDependency {
                 package: current.clone(),
                 package_name: current_package.name.clone(),
-                name: selector.to_owned(),
+                name: selector.clone(),
             })?;
         Ok(SelectedPackageInstance {
             package: target.clone(),
@@ -2430,8 +2436,8 @@ pub enum PackageResolveError {
         package: PackageInstanceId,
         /// Real name of `package`.
         package_name: PackageName,
-        /// Source spelling of the module path's first segment.
-        name: String,
+        /// The module path's first segment.
+        name: ModulePackageSelector,
     },
 }
 
@@ -2464,6 +2470,15 @@ pub enum LockfileParseError {
         "graphcal.lock uses lock format version {version}, but this Graphcal reads versions {LEGACY_LOCK_VERSION} through {LOCK_VERSION}; it was probably written by a newer Graphcal"
     )]
     UnsupportedLockVersion { version: u64 },
+    /// A version 1 lock recorded a fetched commit other than the requested
+    /// exact commit, which no Graphcal can produce.
+    #[error(
+        "graphcal.lock records commit `{commit}` for requested revision `{requested}`; requested and locked commits must be identical"
+    )]
+    RequestedRevisionMismatch {
+        requested: GitCommitHash,
+        commit: GitCommitHash,
+    },
     /// A tree digest names an algorithm this Graphcal cannot compute.
     #[error("unsupported source-tree hash algorithm `{algorithm}` in graphcal.lock")]
     UnsupportedTreeHashAlgorithm { algorithm: String },
@@ -2712,20 +2727,30 @@ fn parse_package_source(
             Ok(PackageSource::Root)
         }
         "git" => {
-            reject_unknown_lock_fields(
-                table,
-                "package.source",
-                &["type", "url", "requested_rev", "commit", "tree_hashes"],
-            )?;
+            let allowed: &[&str] = match schema {
+                LockSchema::V1 => &["type", "url", "requested_rev", "commit", "tree_hashes"],
+                LockSchema::V2 => &["type", "url", "commit", "tree_hashes"],
+            };
+            reject_unknown_lock_fields(table, "package.source", allowed)?;
             let url = GitUrl::new(required_string(table.get("url"), "package.source.url")?)?;
-            let requested_rev = GitCommitHash::new(required_string(
-                table.get("requested_rev"),
-                "package.source.requested_rev",
-            )?)?;
             let commit = GitCommitHash::new(required_string(
                 table.get("commit"),
                 "package.source.commit",
             )?)?;
+            if schema == LockSchema::V1 {
+                // Version 1 stored the requested revision separately, but only
+                // exact commits could ever be requested.
+                let requested = GitCommitHash::new(required_string(
+                    table.get("requested_rev"),
+                    "package.source.requested_rev",
+                )?)?;
+                if requested != commit {
+                    return Err(LockfileParseError::RequestedRevisionMismatch {
+                        requested,
+                        commit,
+                    });
+                }
+            }
             let hashes = table.get("tree_hashes").and_then(Value::as_table).ok_or(
                 LockfileParseError::MissingField {
                     field: "package.source.tree_hashes",
@@ -2733,9 +2758,7 @@ fn parse_package_source(
             )?;
             let tree_hashes = parse_tree_hashes(hashes, schema)?;
             Ok(PackageSource::Git {
-                url,
-                requested_rev,
-                commit,
+                source: GitSourceId::new(url, commit),
                 tree_hashes,
             })
         }
@@ -2802,17 +2825,17 @@ fn parse_package_dependencies(
 /// Details of contradictory hashes pinned for one canonical Git source.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error(
-    "package ids `{first}` and `{second}` pin Git source `{url}` at `{commit}` to conflicting SHA-256 digests `{first_digest}` and `{second_digest}`"
+    "package ids `{first}` and `{second}` pin Git source `{}` at `{}` to conflicting SHA-256 digests `{first_digest}` and `{second_digest}`",
+    git_source.url(),
+    git_source.commit()
 )]
 pub struct GitSourceDigestConflict {
     /// First package instance using the source.
     pub first: PackageInstanceId,
     /// Second package instance using the source.
     pub second: PackageInstanceId,
-    /// Canonical remote repository URL.
-    pub url: GitUrl,
-    /// Immutable Git commit.
-    pub commit: GitCommitHash,
+    /// The immutable Git source pinned twice.
+    pub git_source: GitSourceId,
     /// Digest pinned by the first package.
     pub first_digest: Sha256Digest,
     /// Contradictory digest pinned by the second package.
@@ -2919,6 +2942,10 @@ mod tests {
         DependencyName::new(name).unwrap()
     }
 
+    fn selector(value: &str) -> ModulePackageSelector {
+        ModulePackageSelector::new(value).unwrap()
+    }
+
     fn id(value: &str) -> PackageInstanceId {
         PackageInstanceId::new(value).unwrap()
     }
@@ -2945,9 +2972,7 @@ mod tests {
 
     fn git_source_with_digest(url_text: &str, rev_char: char, digest_char: char) -> PackageSource {
         PackageSource::Git {
-            url: url(url_text),
-            requested_rev: hash(rev_char),
-            commit: hash(rev_char),
+            source: GitSourceId::new(url(url_text), hash(rev_char)),
             tree_hashes: SourceTreeHashes {
                 algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
                 sha256: digest(digest_char),
@@ -3035,10 +3060,7 @@ mod tests {
         ]);
         let dependency_spec = DependencySpec {
             package: None,
-            git: GitDependency {
-                url: url("https://github.com/acme/units.git"),
-                rev: hash('1'),
-            },
+            git: GitSourceId::new(url("https://github.com/acme/units.git"), hash('1')),
         };
         let manifests = BTreeMap::from([
             (
@@ -3085,10 +3107,7 @@ mod tests {
                 dep("bridge"),
                 DependencySpec {
                     package: None,
-                    git: GitDependency {
-                        url: url("https://github.com/acme/bridge.git"),
-                        rev: hash('b'),
-                    },
+                    git: GitSourceId::new(url("https://github.com/acme/bridge.git"), hash('b')),
                 },
             );
         missing_edge_manifests.insert(
@@ -3122,7 +3141,7 @@ units_v1 = { package = "units", git = "https://github.com/acme/units.git", rev =
         assert_eq!(manifest.name, pkg("mission"));
         let spec = manifest.dependencies.get(&dep("units_v1")).unwrap();
         assert_eq!(spec.expected_package_name(&dep("units_v1")), pkg("units"));
-        assert_eq!(spec.git.rev, hash('1'));
+        assert_eq!(spec.git.commit(), &hash('1'));
     }
 
     #[test]
@@ -3872,10 +3891,10 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         .unwrap();
 
         let orbital_units = graph
-            .resolve_package_selector(&id("pkg-orbital"), "units")
+            .resolve_package_selector(&id("pkg-orbital"), &selector("units"))
             .unwrap();
         let thermal_units = graph
-            .resolve_package_selector(&id("pkg-thermal"), "units")
+            .resolve_package_selector(&id("pkg-thermal"), &selector("units"))
             .unwrap();
 
         assert_eq!(orbital_units.package, id("pkg-units-v1"));
@@ -3903,7 +3922,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         .unwrap();
 
         let selected = graph
-            .resolve_package_selector(&id("pkg-mission"), "mission")
+            .resolve_package_selector(&id("pkg-mission"), &selector("mission"))
             .unwrap();
         assert_eq!(selected.package, id("pkg-mission"));
         assert_eq!(
@@ -3911,13 +3930,10 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             &PackageResolutionRelation::SelfReference
         );
         assert!(matches!(
-            graph.resolve_package_selector(&id("pkg-absent"), "mission"),
+            graph.resolve_package_selector(&id("pkg-absent"), &selector("mission")),
             Err(PackageResolveError::UnknownCurrentPackage { .. })
         ));
-        assert!(matches!(
-            graph.resolve_package_selector(&id("pkg-mission"), "Not-A-Name"),
-            Err(PackageResolveError::UnknownDependency { .. })
-        ));
+        assert!(ModulePackageSelector::new("Not-A-Name").is_err());
     }
 
     #[test]
@@ -3945,7 +3961,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         .unwrap();
 
         let err = graph
-            .resolve_package_selector(&id("pkg-mission"), "units")
+            .resolve_package_selector(&id("pkg-mission"), &selector("units"))
             .unwrap_err();
 
         assert!(matches!(err, PackageResolveError::UnknownDependency { .. }));
@@ -4050,9 +4066,14 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     #[test]
     fn version_one_locks_keep_their_pins_under_the_implied_algorithm() {
         let current = units_lock().to_deterministic_toml();
+        let commit = "1".repeat(40);
         let legacy = current
             .replace("lock_version = 2", "lock_version = 1")
-            .replace("algorithm = \"graphcal-source-tree-v1\", ", "");
+            .replace("algorithm = \"graphcal-source-tree-v1\", ", "")
+            .replace(
+                &format!("commit = \"{commit}\""),
+                &format!("requested_rev = \"{commit}\"\ncommit = \"{commit}\""),
+            );
         let parsed = parse_lockfile_str(&legacy).unwrap();
         assert_eq!(parsed, units_lock());
         // Re-serializing upgrades the schema without changing any pin.
@@ -4061,6 +4082,35 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         assert!(matches!(
             parse_lockfile_str(&legacy.replace("{ sha256", "{ algorithm = \"graphcal-source-tree-v1\", sha256")),
             Err(LockfileParseError::UnknownField { field, .. }) if field == "algorithm"
+        ));
+    }
+
+    #[test]
+    fn version_one_locks_must_lock_exactly_the_requested_commit() {
+        let commit = "1".repeat(40);
+        let legacy = units_lock()
+            .to_deterministic_toml()
+            .replace("lock_version = 2", "lock_version = 1")
+            .replace("algorithm = \"graphcal-source-tree-v1\", ", "")
+            .replace(
+                &format!("commit = \"{commit}\""),
+                &format!(
+                    "requested_rev = \"{}\"\ncommit = \"{commit}\"",
+                    "2".repeat(40)
+                ),
+            );
+        assert!(matches!(
+            parse_lockfile_str(&legacy),
+            Err(LockfileParseError::RequestedRevisionMismatch { .. })
+        ));
+        // The current schema has a single commit field.
+        let current = units_lock().to_deterministic_toml().replace(
+            &format!("commit = \"{commit}\""),
+            &format!("requested_rev = \"{commit}\"\ncommit = \"{commit}\""),
+        );
+        assert!(matches!(
+            parse_lockfile_str(&current),
+            Err(LockfileParseError::UnknownField { field, .. }) if field == "requested_rev"
         ));
     }
 
@@ -4473,10 +4523,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             dep("units_alias"),
             DependencySpec {
                 package: Some(pkg("units")),
-                git: GitDependency {
-                    url: url("https://github.com/acme/units.git"),
-                    rev: hash('1'),
-                },
+                git: GitSourceId::new(url("https://github.com/acme/units.git"), hash('1')),
             },
         );
         let manifests = BTreeMap::from([

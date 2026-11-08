@@ -665,8 +665,7 @@ impl LockResolver {
         state: &mut ResolveState,
         budget: &mut PackageIngestionBudget,
     ) -> Result<ResolvedDependency, DepsError> {
-        let source_id = GitSourceId::new(spec.git.url.clone(), spec.git.rev.clone());
-        let materialized = self.package_cache.materialize(&source_id, budget)?;
+        let materialized = self.package_cache.materialize(&spec.git, budget)?;
         let manifest = materialized.manifest;
         let expected = spec.expected_package_name(alias);
         if manifest.name != expected {
@@ -677,11 +676,9 @@ impl LockResolver {
                 actual: manifest.name,
             });
         }
-        let id = git_package_id(&manifest.name, &spec.git.url, &spec.git.rev)?;
+        let id = git_package_id(&manifest.name, &spec.git)?;
         let source = PackageSource::Git {
-            url: spec.git.url.clone(),
-            requested_rev: spec.git.rev.clone(),
-            commit: spec.git.rev.clone(),
+            source: spec.git.clone(),
             tree_hashes: SourceTreeHashes {
                 algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
                 sha256: materialized.sha256,
@@ -1272,9 +1269,9 @@ fn root_package_id(name: &PackageName) -> Result<PackageInstanceId, DepsError> {
 
 fn git_package_id(
     name: &PackageName,
-    url: &GitUrl,
-    rev: &GitCommitHash,
+    source: &GitSourceId,
 ) -> Result<PackageInstanceId, DepsError> {
+    let (url, rev) = (source.url(), source.commit());
     let mut key_hash = Sha256::new();
     key_hash.update(name.as_str().as_bytes());
     key_hash.update([0]);
@@ -1521,7 +1518,7 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
         )
         .unwrap();
         let dependency = manifest.dependencies.into_values().next().unwrap();
-        GitSourceId::new(dependency.git.url, dependency.git.rev)
+        dependency.git
     }
 
     fn write_cached_package(root: &Path, source: &str) {
