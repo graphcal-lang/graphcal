@@ -500,15 +500,23 @@ impl SourceTreeSnapshot {
     /// # Errors
     /// Rejects an invalid root or conflicting virtual paths.
     pub fn mount(&self, root: &Path) -> Result<crate::InMemoryFileSystem, SourceTreeHashError> {
-        let mut fs = crate::InMemoryFileSystem::new();
-        for (relative, bytes) in self.files() {
-            let path = root.join(relative);
-            let absolute = crate::VirtualAbsolutePath::new(&path)
-                .map_err(|_| SourceTreeHashError::UnsupportedEntry { path: path.clone() })?;
-            fs.add_binary_file(absolute, bytes.to_vec())
-                .map_err(|_| SourceTreeHashError::UnsupportedEntry { path })?;
-        }
-        Ok(fs)
+        let files = self
+            .files()
+            .map(|(relative, bytes)| {
+                let path = root.join(relative);
+                crate::VirtualAbsolutePath::new(&path)
+                    .map(|absolute| (absolute, bytes.to_vec()))
+                    .map_err(|_| SourceTreeHashError::UnsupportedEntry { path })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        crate::InMemoryFileSystem::from_binary_files(files).map_err(|error| match error {
+            crate::InMemoryFileSystemError::FileAncestor { path, .. }
+            | crate::InMemoryFileSystemError::DirectoryAlreadyExists { path } => {
+                SourceTreeHashError::UnsupportedEntry {
+                    path: path.into_path_buf(),
+                }
+            }
+        })
     }
 }
 

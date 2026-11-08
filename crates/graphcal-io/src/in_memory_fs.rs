@@ -1,8 +1,9 @@
 //! In-memory filesystem for tests and WASM environments.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::io;
+use std::ops::Bound;
 use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
@@ -60,9 +61,13 @@ pub enum InMemoryFileSystemError {
 /// Every key is a normalized [`VirtualAbsolutePath`], and each path has exactly
 /// one internal content variant. Inserting a new content kind at an existing path
 /// replaces the complete previous entry.
+///
+/// Keys are kept in an ordered map. [`Path`] orders component-wise, so the
+/// descendants of a path form one contiguous key range directly after it:
+/// directory queries are range lookups rather than scans of every file.
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryFileSystem {
-    files: HashMap<VirtualAbsolutePath, FileContent>,
+    files: BTreeMap<VirtualAbsolutePath, FileContent>,
 }
 
 impl InMemoryFileSystem {
@@ -70,6 +75,40 @@ impl InMemoryFileSystem {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Build a filesystem from binary files in one pass.
+    ///
+    /// A later file at the same path replaces an earlier one, as with
+    /// [`Self::add_binary_file`]. The topology is validated once after
+    /// sorting, so building `n` files costs `O(n log n)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InMemoryFileSystemError::FileAncestor`] if one file is an
+    /// ancestor of another.
+    pub fn from_binary_files(
+        files: impl IntoIterator<Item = (VirtualAbsolutePath, Vec<u8>)>,
+    ) -> Result<Self, InMemoryFileSystemError> {
+        let files: BTreeMap<_, _> = files
+            .into_iter()
+            .map(|(path, bytes)| (path, FileContent::Bytes(bytes)))
+            .collect();
+        // A file's descendants directly follow it in key order, so any
+        // file-below-file conflict shows up between neighbouring keys.
+        let mut keys = files.keys();
+        if let Some(mut previous) = keys.next() {
+            for key in keys {
+                if key.as_path().starts_with(previous.as_path()) {
+                    return Err(InMemoryFileSystemError::FileAncestor {
+                        path: key.clone(),
+                        ancestor: previous.clone(),
+                    });
+                }
+                previous = key;
+            }
+        }
+        Ok(Self { files })
     }
 
     /// Insert or replace a UTF-8 file at a validated path.
@@ -108,11 +147,12 @@ impl InMemoryFileSystem {
         if self.is_dir(&path) {
             return Err(InMemoryFileSystemError::DirectoryAlreadyExists { path });
         }
-        if let Some(ancestor) = self
-            .files
-            .keys()
-            .find(|existing| *existing != &path && path.as_path().starts_with(existing.as_path()))
-            .cloned()
+        if let Some(ancestor) = path
+            .as_path()
+            .ancestors()
+            .skip(1)
+            .filter_map(|ancestor| VirtualAbsolutePath::new(ancestor).ok())
+            .find(|ancestor| self.contains(ancestor))
         {
             return Err(InMemoryFileSystemError::FileAncestor { path, ancestor });
         }
@@ -130,10 +170,19 @@ impl InMemoryFileSystem {
         self.files.contains_key(path)
     }
 
-    fn is_dir(&self, path: &VirtualAbsolutePath) -> bool {
+    /// Files strictly below `path`, in key order.
+    fn descendants<'a>(
+        &'a self,
+        path: &'a VirtualAbsolutePath,
+    ) -> impl Iterator<Item = &'a VirtualAbsolutePath> {
         self.files
-            .keys()
-            .any(|key| key != path && key.as_path().starts_with(path.as_path()))
+            .range((Bound::Excluded(path), Bound::Unbounded))
+            .map(|(key, _)| key)
+            .take_while(move |key| key.as_path().starts_with(path.as_path()))
+    }
+
+    fn is_dir(&self, path: &VirtualAbsolutePath) -> bool {
+        self.descendants(path).next().is_some()
     }
 
     fn existing_path(&self, path: &Path) -> Result<VirtualAbsolutePath, io::Error> {
@@ -152,7 +201,7 @@ impl InMemoryFileSystem {
         cancellation: &CancellationToken,
     ) -> Result<Vec<OsString>, Outcome<FileSystemReadError>> {
         let mut names = BTreeSet::new();
-        for key in self.files.keys() {
+        for key in self.descendants(path) {
             cancellation.checkpoint()?;
             let Ok(relative) = key.as_path().strip_prefix(path.as_path()) else {
                 continue;
@@ -475,6 +524,94 @@ mod tests {
             )
             .unwrap(),
             vec![OsString::from("other.gcl"), OsString::from("sub")]
+        );
+    }
+
+    #[test]
+    fn bulk_construction_matches_incremental_insertion() {
+        let files = [
+            ("/project/src/pkg/b.gcl", b"b".to_vec()),
+            ("/project/src/pkg.gcl", b"root".to_vec()),
+            ("/project/src/pkg/a/deep.gcl", b"deep".to_vec()),
+            ("/project/src/pkg-extra.gcl", b"sibling".to_vec()),
+        ];
+        let bulk = InMemoryFileSystem::from_binary_files(
+            files
+                .iter()
+                .map(|(file, bytes)| (path(*file), bytes.clone())),
+        )
+        .unwrap();
+        let mut incremental = InMemoryFileSystem::new();
+        for (file, bytes) in &files {
+            incremental
+                .add_binary_file(path(*file), bytes.clone())
+                .unwrap();
+        }
+        for fs in [&bulk, &incremental] {
+            assert_eq!(
+                fs.read_directory_bounded(
+                    Path::new("/project/src"),
+                    EntryLimit::new(10),
+                    &CancellationToken::unbounded(),
+                )
+                .unwrap(),
+                ["pkg", "pkg-extra.gcl", "pkg.gcl"].map(OsString::from)
+            );
+            assert_eq!(
+                fs.entry_kind(Path::new("/project/src/pkg/a")).unwrap(),
+                FileSystemEntryKind::Directory
+            );
+            assert!(!fs.exists(Path::new("/project/src/pk")));
+            assert!(fs.is_file(Path::new("/project/src/pkg-extra.gcl")));
+        }
+    }
+
+    #[test]
+    fn bulk_construction_rejects_a_file_below_a_file() {
+        assert!(matches!(
+            InMemoryFileSystem::from_binary_files([
+                (path("/project/a.gcl/child"), Vec::new()),
+                (path("/project/a.gcl"), Vec::new()),
+                (path("/project/b.gcl"), Vec::new()),
+            ]),
+            Err(InMemoryFileSystemError::FileAncestor { path: file, ancestor })
+                if file.as_path() == Path::new("/project/a.gcl/child")
+                    && ancestor.as_path() == Path::new("/project/a.gcl")
+        ));
+    }
+
+    /// CLI-8: building and querying the filesystem must not scan every file
+    /// per operation. A quadratic implementation grows 16x from `n` to `4n`
+    /// files; the generous bound only rejects that, not timing noise.
+    #[test]
+    fn construction_and_queries_scale_near_linearly() {
+        fn build_and_query(files: usize) -> std::time::Duration {
+            let paths: Vec<_> = (0..files)
+                .map(|index| path(format!("/dep/src/pkg/d{}/f{index}.gcl", index % 64)))
+                .collect();
+            (0..5)
+                .map(|_| {
+                    let start = std::time::Instant::now();
+                    let mut fs = InMemoryFileSystem::new();
+                    for file in &paths {
+                        fs.add_binary_file(file.clone(), Vec::new()).unwrap();
+                        assert!(fs.is_file(file.as_path()));
+                    }
+                    let bulk = InMemoryFileSystem::from_binary_files(
+                        paths.iter().map(|file| (file.clone(), Vec::new())),
+                    )
+                    .unwrap();
+                    assert!(bulk.exists(Path::new("/dep/src/pkg/d0")));
+                    start.elapsed()
+                })
+                .min()
+                .unwrap()
+        }
+        let small = build_and_query(2_000);
+        let large = build_and_query(8_000);
+        assert!(
+            large < small * 10 + std::time::Duration::from_millis(50),
+            "4x the files took {large:?} versus {small:?}"
         );
     }
 
