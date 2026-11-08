@@ -9,21 +9,20 @@ use graphcal_compiler::semantic_error::graph::GraphError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphcal_compiler::ir::resolve::ImportedValueNames;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::PluginDigest;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::plugin::{PluginError, PluginLoadFailure};
 use graphcal_compiler::source_id::SourceId;
 
-use super::{checking, imports, lowering};
+use super::{checking, lowering};
 use crate::compile_error::PipelineError;
 
 use super::checked_project::CheckedProject;
 use super::checked_project::CompiledFile;
 use super::hir_project::HirProject;
 use super::lowering::ProjectSemanticContext;
-use super::model::{HirFile, ImportContext, ModuleArtifact, ModuleArtifactStore};
+use super::model::{HirFile, ModuleArtifact, ModuleArtifactStore};
 use super::template::ModuleTemplateStore;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::dependency_graph::Cycle;
@@ -69,23 +68,7 @@ fn lower_single_file_to_hir(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HirFile, Outcome<PipelineError>> {
     cancellation.checkpoint()?;
-    let mut ctx = ImportContext {
-        imported_names: ImportedValueNames::default(),
-        imported_bindings: HashMap::new(),
-        imported_source_order: Vec::new(),
-        module_map: HashMap::new(),
-        include_instances: Vec::new(),
-    };
-
-    imports::process_file_body_declarations(
-        semantic.project,
-        loaded_file,
-        semantic.modules,
-        &mut ctx,
-        cancellation,
-    )?;
-
-    lowering::lower_file_to_hir(semantic, loaded_file, ctx, cancellation)
+    lowering::lower_file_to_hir(semantic, loaded_file, cancellation)
 }
 
 /// Store one pure compile-time module artifact for downstream imports, and

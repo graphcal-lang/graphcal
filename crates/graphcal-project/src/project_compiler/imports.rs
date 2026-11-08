@@ -120,11 +120,6 @@ fn static_input_is_bindable(
         .is_some_and(|input| input.role().is_bindable())
 }
 
-pub(super) struct InlineDagIncludeTarget<'a> {
-    pub(super) module: crate::loader::loaded_file::LoadedModule<'a>,
-    pub(super) dag_name: &'a DeclName,
-}
-
 /// Populate one file body's pure imports and concrete include requests.
 ///
 /// Both top-level file compilation and recursive file-DAG instantiation use
@@ -164,10 +159,11 @@ pub(super) fn process_file_body_declarations<'a>(
 
     for (declaration, include, target) in loaded_file.includes_with_targets() {
         cancellation.checkpoint()?;
-        if !matches!(project.target_module(target), LoadedModule::FileRoot(_)) {
+        let dependency = project.target_module(target);
+        if !matches!(dependency, LoadedModule::FileRoot(_)) {
             continue;
         }
-        process_file_include(project, target, include, declaration, &including, ctx)?;
+        process_include(project, dependency, include, declaration, &including, ctx)?;
     }
 
     // A project load resolves or rejects every file-root include, including
@@ -198,10 +194,11 @@ pub(super) fn process_file_body_declarations<'a>(
 
     for (declaration, include, target) in loaded_file.includes_with_targets() {
         cancellation.checkpoint()?;
+        let dependency = project.target_module(target);
         let LoadedModule::InlineDag {
             file: target_loaded,
             dag: target_dag,
-        } = project.target_module(target)
+        } = dependency
         else {
             continue;
         };
@@ -218,16 +215,7 @@ pub(super) fn process_file_body_declarations<'a>(
             ))
             .into());
         }
-        process_inline_dag_include(
-            &InlineDagIncludeTarget {
-                module: target_dag.module(target_loaded),
-                dag_name: &target_dag.declaration(target_loaded).name.value,
-            },
-            include,
-            declaration,
-            &including,
-            ctx,
-        )?;
+        process_include(project, dependency, include, declaration, &including, ctx)?;
     }
     Ok(())
 }
@@ -852,15 +840,20 @@ fn validate_required_param_bindings(
     )))
 }
 
-/// Process every file-root DAG include, deferring its concrete instance for
-/// post-lowering IR merging.
+/// Process one include of a file-root or inline-DAG template, deferring its
+/// concrete instance for post-lowering IR merging.
+///
+/// Per Concept 9, inline DAGs are strictly isolated: every name a DAG uses
+/// must come from its own declarations or its own `import` statements. There
+/// is no parent-scope inheritance, so file-root, same-file inline, and
+/// cross-file inline templates are handled identically here.
 #[expect(
     clippy::too_many_lines,
     reason = "binding validation and scope registration form a single cohesive pipeline over one include context"
 )]
-pub(super) fn process_file_include<'a>(
+pub(super) fn process_include<'a>(
     project: &'a crate::loader::loaded_project::LoadedProject,
-    target: &crate::loader::module_path::ResolvedModuleTarget,
+    dependency: LoadedModule<'a>,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
     including: &IncludingModule<'_>,
@@ -871,9 +864,14 @@ pub(super) fn process_file_include<'a>(
         source: file_src,
         scope: importer_scope,
     } = *including;
-    let dependency = project.target_module(target);
     let import_dag_id = dependency.dag_id();
     let dep = dependency.interface();
+    let dep_path_display = match dependency {
+        LoadedModule::FileRoot(_) => DagReference::Path(include_decl.path.clone()),
+        LoadedModule::InlineDag { file, dag } => {
+            DagReference::InlineDag(dag.declaration(file).name.value.clone())
+        }
+    };
 
     // A module-form include introduces a source-visible alias and therefore
     // participates in duplicate-alias checks. A selective include introduces
@@ -905,7 +903,6 @@ pub(super) fn process_file_include<'a>(
     // binding lands in one of params/types/dims/indexes, or is rejected as
     // an unknown / non-bindable name. Caller-specific cross-checks (importer
     // scope for index bindings) layer on top of the shared classification.
-    let dep_path_display = DagReference::Path(include_decl.path.clone());
     let ClassifiedBindings {
         params: bindings,
         indexes: index_bindings,
@@ -1014,12 +1011,11 @@ pub(super) fn process_file_include<'a>(
             }
             Some(selective)
         }
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { alias } => {
-            let module_alias = include_decl.module_form_alias(alias.as_ref());
+        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => {
             // Register all dep names under the prefix for scope checking.
             let import_span = include_decl.path.span();
             for output in dep.value_outputs() {
-                let scoped = ScopedName::in_scope(module_alias.clone(), output.name().clone());
+                let scoped = ScopedName::in_scope(instance_scope.clone(), output.name().clone());
                 if output.is_const() {
                     ctx.imported_names.const_names.push((scoped, import_span));
                 } else {
@@ -1064,224 +1060,6 @@ pub(super) fn process_file_include<'a>(
         template: dependency,
         instance_scope,
         debug_scope: derive_module_name_from_import_path(&include_decl.path),
-        bindings,
-        static_bindings,
-        selective_names,
-        unit_projection_aliases,
-        runtime_unit_names: dep.runtime_units().clone(),
-        assertion_aliases,
-        surface_outputs,
-        requested_plots,
-        include_span: decl.span,
-        import_item_attributes,
-        pub_reexport_items,
-        selected_types,
-    });
-    Ok(())
-}
-
-/// Process an inline DAG include (`include dag_name(...) { ... }`).
-///
-/// Creates a virtual File from the DAG body, validates bindings against it,
-/// and defers for IR merging.
-///
-/// Per Concept 9, inline DAGs are strictly isolated: every name a DAG uses
-/// must come from its own declarations or its own `import` statements. There
-/// is no parent-scope inheritance — same-file and cross-file inline DAGs are
-/// handled identically.
-#[expect(
-    clippy::too_many_lines,
-    reason = "binding validation, scope registration, and instance request setup form one pipeline"
-)]
-pub(super) fn process_inline_dag_include<'a>(
-    target: &InlineDagIncludeTarget<'a>,
-    include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
-    decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
-    including: &IncludingModule<'_>,
-    ctx: &mut ImportContext<'a>,
-) -> Result<(), PipelineError> {
-    use graphcal_compiler::desugar::desugared_ast::ImportKind;
-
-    let IncludingModule {
-        interface: importer,
-        source: file_src,
-        scope: importer_scope,
-    } = *including;
-
-    let dep = target.module.interface();
-    let dag_name = target.dag_name;
-    let dag_reference = DagReference::InlineDag(dag_name.clone());
-    let dag_id = target.module.dag_id();
-
-    // As for file-root includes, only the module form introduces an alias.
-    // Selective inline-DAG includes receive an opaque private merge scope.
-    let instance_scope = include_decl.instance_scope();
-    if let ScopeSegment::Named(prefix) = &instance_scope {
-        if let Some(first) = ctx.module_map.get(prefix) {
-            return Err(PipelineError::Semantic(SemanticError::located(
-                file_src,
-                include_decl.path.span(),
-                ModuleError::DuplicateModuleName {
-                    name: prefix.clone(),
-                    first: first.span(),
-                },
-            )));
-        }
-        ctx.module_map.insert(
-            prefix.clone(),
-            ProjectModuleBinding {
-                target: dag_id.clone(),
-                span: include_decl.path.span(),
-                role: graphcal_compiler::resolve::scope::ModuleAliasRole::IncludedInstance,
-            },
-        );
-    }
-
-    // Classify bindings against the DAG body's declarations. Typed index
-    // compatibility is deferred to the same registry-backed path as file DAGs.
-    let ClassifiedBindings {
-        params: bindings,
-        indexes: index_bindings,
-        index_spans: index_binding_spans,
-        types: type_bindings,
-        dims: dim_bindings,
-    } = classify_param_bindings(&include_decl.param_bindings, dep, file_src, &dag_reference)?;
-    validate_concrete_static_binding_targets(
-        importer,
-        dep,
-        &type_bindings,
-        &dim_bindings,
-        &index_bindings,
-        file_src,
-        include_decl.path.span(),
-    )?;
-
-    // Register imported names in the importer's scope.
-    let mut import_item_attributes: HashMap<
-        DeclName,
-        Vec<graphcal_compiler::desugar::desugared_ast::Attribute>,
-    > = HashMap::new();
-    let mut requested_plots: HashMap<DeclName, graphcal_compiler::ir::model::RequestedPlot> =
-        HashMap::new();
-    let mut assertion_aliases = HashMap::new();
-    let mut unit_projection_aliases = Vec::new();
-    let selective_names = match &include_decl.kind {
-        ImportKind::Selective(names) => {
-            validate_include_producers(names, file_src)?;
-            let mut selective = Vec::new();
-            for import_item in names {
-                let orig_name = &import_item.name.name;
-                let original = DeclName::classify(orig_name.atom().clone());
-                let local = DeclName::classify(import_item.local_name_atom().clone());
-
-                ensure_include_item_selectable(
-                    dep,
-                    orig_name.atom(),
-                    import_item.namespace,
-                    &dag_reference,
-                    file_src,
-                    import_item.name.span,
-                )?;
-
-                let is_term_namespace = import_item.namespace
-                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
-                record_unit_projection(import_item, &mut unit_projection_aliases);
-                let is_plot =
-                    is_term_namespace && dep.declares(orig_name.atom(), IntroducedKind::Plot);
-                let is_assert =
-                    is_term_namespace && dep.declares(orig_name.atom(), IntroducedKind::Assert);
-                let visibility =
-                    validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
-                if is_plot {
-                    requested_plots.insert(
-                        original,
-                        graphcal_compiler::ir::model::RequestedPlot {
-                            alias: local.clone(),
-                            visibility,
-                        },
-                    );
-                    ctx.imported_names
-                        .plot_names
-                        .push((ScopedName::local(local), import_item.local_span()));
-                    continue;
-                }
-
-                if !import_item.attributes.is_empty() {
-                    import_item_attributes.insert(original.clone(), import_item.attributes.clone());
-                }
-                if is_assert {
-                    ctx.imported_names
-                        .assert_names
-                        .push((local.clone(), import_item.local_span()));
-                    assertion_aliases.insert(original.clone(), local.clone());
-                }
-
-                // Register the local name in scope.
-                let is_const = dep.declares(orig_name.atom(), IntroducedKind::ConstNode);
-                let is_runtime = declares_runtime_value(dep, orig_name.atom());
-                let scoped = ScopedName::local(local.clone());
-                let span = import_item.local_span();
-                if is_const {
-                    ctx.imported_names.const_names.push((scoped, span));
-                } else if is_runtime {
-                    ctx.imported_names.param_names.push((scoped, span));
-                } else {
-                    // Type-system declarations — handled via registry merge.
-                }
-
-                selective.push(ImportAlias { original, local });
-            }
-            Some(selective)
-        }
-        ImportKind::Module { .. } => {
-            // Register all DAG body names under the prefix.
-            let import_span = include_decl.path.span();
-            for output in dep.value_outputs() {
-                let scoped = ScopedName::in_scope(instance_scope.clone(), output.name().clone());
-                if output.is_const() {
-                    ctx.imported_names.const_names.push((scoped, import_span));
-                } else {
-                    ctx.imported_names.param_names.push((scoped, import_span));
-                }
-            }
-            None
-        }
-    };
-    let surface_outputs = include_surface_outputs(dep, &instance_scope, selective_names.as_deref());
-
-    let covered_static_bindings = CoveredStaticBindings::check(
-        dep,
-        index_bindings,
-        index_binding_spans,
-        type_bindings,
-        dim_bindings,
-        file_src,
-        include_decl.path.span(),
-    )?;
-    validate_required_param_bindings(dep, &bindings, &dag_reference, file_src, decl.span)?;
-    let static_bindings = covered_static_bindings.resolve(
-        &IncludeSite {
-            template: dag_id,
-            importer: importer_scope,
-            src: file_src,
-        },
-        decl.span,
-    )?;
-
-    let pub_reexport_items: HashSet<NameAtom> = match &include_decl.kind {
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
-            .iter()
-            .filter(|it| it.visibility.is_public())
-            .map(|it| it.name.name.atom().clone())
-            .collect(),
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
-    };
-    let selected_types = selected_type_items(&include_decl.kind);
-
-    ctx.include_instances.push(IncludeInstanceRequest {
-        template: target.module,
-        instance_scope,
-        debug_scope: ModuleAliasName::expect_valid(dag_name.as_str()),
         bindings,
         static_bindings,
         selective_names,

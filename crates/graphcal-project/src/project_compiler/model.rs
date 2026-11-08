@@ -172,3 +172,16 @@ pub(super) struct ImportContext<'a> {
     pub(super) module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
     pub(super) include_instances: Vec<IncludeInstanceRequest<'a>>,
 }
+
+impl ImportContext<'_> {
+    /// The state of a body before any of its imports is processed.
+    pub(super) fn empty() -> Self {
+        Self {
+            imported_names: ImportedValueNames::default(),
+            imported_bindings: HashMap::new(),
+            imported_source_order: Vec::new(),
+            module_map: HashMap::new(),
+            include_instances: Vec::new(),
+        }
+    }
+}
