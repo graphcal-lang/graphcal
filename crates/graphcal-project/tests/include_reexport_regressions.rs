@@ -339,3 +339,43 @@ fn reexport_leakage_check_follows_the_selected_namespace() {
     ]);
     assert_eq!(code(&eval_error(&main)).as_deref(), Some("graphcal::V006"));
 }
+
+const BOUNDED_LIB: &str = "\
+const node LO: Length = 5.0 m;
+param x: Length = 10.0 m;
+pub node y: Length(min: @LO) = @x;
+";
+
+/// The domain bound of a selected value keeps the template's `@LO`, whatever
+/// the importer itself declares under that name (RES-2).
+#[test]
+fn selected_value_bound_resolves_in_the_template() {
+    for importer_lo in [
+        "const node LO: Length = 100.0 m;\n",
+        "param LO: Length = 100.0 m;\n",
+        "const node LO: Mass = 1.0 kg;\n",
+    ] {
+        let (_dir, main) = package(&[
+            ("lib.gcl", BOUNDED_LIB),
+            (
+                "main.gcl",
+                &format!("{importer_lo}include p.lib(x: 7.0 m)::{{ y }};\nnode z: Length = @y;\n"),
+            ),
+        ]);
+        let result = eval(&main);
+        assert_eq!(si_value(&result, "z"), 7.0, "{importer_lo}");
+    }
+
+    // The template's own bound still applies.
+    let (_dir, main) = package(&[
+        ("lib.gcl", BOUNDED_LIB),
+        ("main.gcl", "include p.lib(x: 1.0 m)::{ y };\n"),
+    ]);
+    let result = eval(&main);
+    let y = result
+        .entries
+        .iter()
+        .find(|entry| entry.name.to_string() == "y")
+        .expect("y is an output");
+    assert!(y.outcome.is_err(), "{:?}", y.outcome);
+}
