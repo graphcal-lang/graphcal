@@ -7,21 +7,27 @@ use tower_lsp::lsp_types::{DocumentSymbol, Location, SymbolInformation, SymbolKi
 use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
 use crate::symbol_table::{SymbolCategory, SymbolKey};
+use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// Build document symbols from an analysis result.
+///
+/// Members of an inline `dag` nest under the DAG's declaration (by their
+/// owner), constructors under their type, and named index variants under
+/// their index.
 #[expect(
     deprecated,
     reason = "DocumentSymbol::deprecated field is deprecated but required by the type"
 )]
 pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> {
-    let mut symbols = Vec::new();
     let lines = LineIndex::new(&analysis.source);
+    let table = &analysis.symbol_table;
 
     // Pre-group variants by their parent name so `collect_children` is O(variants)
     // per call rather than re-scanning all definitions (O(N*M) in total).
     let variants_by_parent = build_variants_index(analysis);
 
-    for (key, def) in &analysis.symbol_table.definitions {
+    let mut outline: HashMap<&SymbolKey, DocumentSymbol> = HashMap::new();
+    for (key, def) in &table.definitions {
         // Skip builtins, locals, and variants (variants are shown as children).
         // Also skip definitions with zero-length spans (synthetic/builtins).
         if def.decl_span.is_empty() {
@@ -48,31 +54,82 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
             | SymbolCategory::BuiltinConst => continue,
         };
 
-        let range = lines.span_to_range(def.decl_span);
-        let selection_range = lines.span_to_range(def.name_span);
-
         // Collect children (variants for indexes and tagged unions).
         let children = match key {
             SymbolKey::Index(parent) => collect_children(&lines, &variants_by_parent, parent),
             _ => Vec::new(),
         };
 
-        symbols.push(DocumentSymbol {
-            name: def.label(key).into_owned(),
-            detail: def.type_description.clone(),
-            kind,
-            tags: None,
-            deprecated: None,
-            range,
-            selection_range,
-            children: if children.is_empty() {
-                None
-            } else {
-                Some(children)
+        outline.insert(
+            key,
+            DocumentSymbol {
+                name: def.label(key).into_owned(),
+                detail: def.type_description.clone(),
+                kind,
+                tags: None,
+                deprecated: None,
+                range: lines.span_to_range(def.decl_span),
+                selection_range: lines.span_to_range(def.name_span),
+                children: (!children.is_empty()).then_some(children),
             },
-        });
+        );
     }
 
+    let mut members: HashMap<Option<SymbolKey>, Vec<&SymbolKey>> = HashMap::new();
+    for key in outline.keys() {
+        let parent = outline_parent(analysis, key).filter(|parent| outline.contains_key(parent));
+        members.entry(parent).or_default().push(key);
+    }
+    nest(None, &mut outline, &members)
+}
+
+/// The outline entry `key` nests under: its type for a constructor, the
+/// declaring `dag` for a member of an inline DAG, nothing at the top level.
+fn outline_parent(analysis: &AnalysisResult, key: &SymbolKey) -> Option<SymbolKey> {
+    match key {
+        SymbolKey::Constructor(constructor) => {
+            let span = analysis.symbol_table.definitions.get(key)?.decl_span;
+            analysis
+                .symbol_table
+                .definitions
+                .iter()
+                .find(|(candidate, definition)| {
+                    matches!(candidate, SymbolKey::StructType(nominal) if nominal.owner() == constructor.owner())
+                        && definition.decl_span.offset() <= span.offset()
+                        && span.offset() + span.len()
+                            <= definition.decl_span.offset() + definition.decl_span.len()
+                })
+                .map(|(candidate, _)| candidate.clone())
+        }
+        _ => key
+            .owner()
+            .and_then(ResolvedDeclName::naming_inline_dag)
+            .map(SymbolKey::Declaration),
+    }
+}
+
+/// The sorted outline entries under `parent`, each with its own members.
+fn nest<'key>(
+    parent: Option<&SymbolKey>,
+    outline: &mut HashMap<&'key SymbolKey, DocumentSymbol>,
+    members: &HashMap<Option<SymbolKey>, Vec<&'key SymbolKey>>,
+) -> Vec<DocumentSymbol> {
+    let mut symbols: Vec<DocumentSymbol> = members
+        .get(&parent.cloned())
+        .into_iter()
+        .flatten()
+        .filter_map(|key| {
+            let mut symbol = outline.remove(*key)?;
+            let nested = nest(Some(*key), outline, members);
+            if !nested.is_empty() {
+                let mut children = symbol.children.take().unwrap_or_default();
+                children.extend(nested);
+                children.sort_by_key(|s| (s.range.start.line, s.range.start.character));
+                symbol.children = Some(children);
+            }
+            Some(symbol)
+        })
+        .collect();
     // Sort by range start for consistent ordering.
     symbols.sort_by_key(|s| (s.range.start.line, s.range.start.character));
     symbols
@@ -253,5 +310,46 @@ node total: Dimensionless = sum(@values);
             ]
         );
         assert!(flat.iter().all(|symbol| symbol.location.uri == uri));
+    }
+
+    fn outline(symbols: &[DocumentSymbol]) -> Vec<String> {
+        symbols
+            .iter()
+            .map(|symbol| {
+                symbol.children.as_ref().map_or_else(
+                    || symbol.name.clone(),
+                    |children| format!("{}({})", symbol.name, outline(children).join(" ")),
+                )
+            })
+            .collect()
+    }
+
+    /// LSP-18: inline-DAG members nest under their DAG (recursively) and
+    /// constructors under their type, not at the top level.
+    #[test]
+    fn nests_dag_members_and_constructors() {
+        let source = "\
+type Status { Idle, Active }
+dag stage {
+    param inner: Dimensionless;
+    dag deep {
+        node leaf: Dimensionless = 1.0;
+    }
+    node doubled: Dimensionless = @inner * 2.0;
+}
+node top: Dimensionless = 1.0;
+";
+        let uri = tower_lsp::lsp_types::Url::parse("untitled:nested-symbols.gcl").unwrap();
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+
+        assert_eq!(
+            outline(&build_document_symbols(&analysis)),
+            [
+                "Status(Idle Active)",
+                "stage(inner deep(leaf) doubled)",
+                "top"
+            ]
+        );
     }
 }
