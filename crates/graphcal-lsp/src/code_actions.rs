@@ -11,10 +11,12 @@
 
 use std::collections::HashMap;
 
+use graphcal_compiler::syntax::lexer::Lexer;
+use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::token::Token;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
-    Diagnostic, Position, Range, TextEdit, Url, WorkspaceEdit,
+    Diagnostic, Range, TextEdit, Url, WorkspaceEdit,
 };
 
 use crate::analysis::AnalysisResult;
@@ -160,20 +162,11 @@ fn make_exact_power_action(
     })
 }
 
-/// Line (0-based) of the declaration named `name`, resolved through the
-/// symbol table rather than by grepping source lines (which also matched
-/// declaration-shaped text inside comments and string literals).
-fn declaration_line(analysis: &AnalysisResult, name: &str) -> Option<u32> {
-    let def = analysis.symbol_table.unique_definition_named(name)?;
-    if def.name_span.is_empty() {
-        return None;
-    }
-    let lines = LineIndex::new(&analysis.source);
-    Some(lines.span_to_range(def.name_span).start.line)
-}
-
 /// V002/V003/V006: find the private item's declaration via the symbol table
-/// and insert the added visibility before its keyword.
+/// and give it the added visibility.
+///
+/// The edit is placed by the declaration's own span, after its attributes,
+/// never by its line: a line can hold several declarations.
 fn make_add_visibility_action(
     diag: &Diagnostic,
     analysis: &AnalysisResult,
@@ -182,14 +175,15 @@ fn make_add_visibility_action(
     item: &str,
     visibility: AddedVisibility,
 ) -> Option<CodeActionOrCommand> {
-    let decl_line = declaration_line(analysis, item)?;
-    let insert_pos = find_keyword_position(source, decl_line)?;
+    let definition = analysis.symbol_table.unique_definition_named(item)?;
+    let (target, new_text) = match declaration_head(source, definition.decl_span)? {
+        // `pub index I;` becomes `pub(bind) index I;`.
+        DeclarationHead::Visibility(prefix) => (prefix, visibility.marker().to_string()),
+        DeclarationHead::Keyword(offset) => (Span::new(offset, 0), visibility.prefix().to_string()),
+    };
     let edit = TextEdit {
-        range: Range {
-            start: insert_pos,
-            end: insert_pos,
-        },
-        new_text: visibility.prefix().to_string(),
+        range: LineIndex::new(source).span_to_range(target),
+        new_text,
     };
     let mut changes = HashMap::new();
     changes.insert(uri.clone(), vec![edit]);
@@ -206,42 +200,48 @@ fn make_add_visibility_action(
     }))
 }
 
-/// Find the position of the declaration keyword on a given line.
-///
-/// Skips leading whitespace and returns the position at which a declaration
-/// keyword ([`Token::DECLARATION_KEYWORDS`], each of which may be preceded by
-/// `pub`) starts.
-fn find_keyword_position(source: &str, line: u32) -> Option<Position> {
-    let line_start = line_start_offset(source, line)?;
-    let line_str = source.get(line_start..)?.lines().next().unwrap_or("");
-
-    let trimmed = line_str.trim_start();
-    let indent = line_str.len() - trimmed.len();
-    let _keyword = Token::DECLARATION_KEYWORDS
-        .iter()
-        .find(|keyword| keyword_matches(trimmed, &keyword.to_string()))?;
-
-    Some(LineIndex::new(source).position(line_start + indent))
+/// What a declaration starts with once its attributes are skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeclarationHead {
+    /// An existing `pub` or `pub(…)` prefix, spanning the whole prefix.
+    Visibility(Span),
+    /// The byte offset of the declaration keyword (`node`, `const`, `dim`, …).
+    Keyword(usize),
 }
 
-fn keyword_matches(trimmed: &str, keyword: &str) -> bool {
-    let Some(rest) = trimmed.strip_prefix(keyword) else {
-        return false;
-    };
-    rest.chars()
-        .next()
-        .is_none_or(|ch| ch.is_whitespace() || ch == '(')
-}
-
-fn line_start_offset(source: &str, line: u32) -> Option<usize> {
-    let mut offset = 0usize;
-    for (idx, segment) in source.split_inclusive('\n').enumerate() {
-        if idx == line as usize {
-            return Some(offset);
+/// Lex the declaration at `decl_span` (which starts at its first attribute)
+/// past every `#[…]` attribute.
+fn declaration_head(source: &str, decl_span: Span) -> Option<DeclarationHead> {
+    let text = source.get(decl_span.offset()..decl_span.offset() + decl_span.len())?;
+    let mut lexer = Lexer::new(text);
+    let mut depth = 0usize;
+    let absolute = |span: Span| Span::new(decl_span.offset() + span.offset(), span.len());
+    while let Some((token, span)) = lexer.next_token() {
+        match (depth, token) {
+            (0, Token::Hash) => depth = 1,
+            (1, Token::LBracket) => depth = 2,
+            (2.., Token::LBracket) => depth += 1,
+            (2.., Token::RBracket) => depth -= 1,
+            (2.., _) => {}
+            (0, Token::Pub) => {
+                let start = absolute(span);
+                return Some(DeclarationHead::Visibility(
+                    match (lexer.next_token(), lexer.next_token(), lexer.next_token()) {
+                        (Some((Token::LParen, _)), Some(_), Some((Token::RParen, close))) => {
+                            start.merge(absolute(close))
+                        }
+                        _ => start,
+                    },
+                ));
+            }
+            (0, _) => return Some(DeclarationHead::Keyword(absolute(span).offset())),
+            _ => return None,
         }
-        offset += segment.len();
+        if depth == 1 && token == Token::RBracket {
+            depth = 0;
+        }
     }
-    (line as usize == source.lines().count()).then_some(offset)
+    None
 }
 
 #[cfg(test)]
@@ -252,6 +252,8 @@ mod tests {
     use tower_lsp::lsp_types::{
         CodeActionContext, PartialResultParams, TextDocumentIdentifier, WorkDoneProgressParams,
     };
+
+    use tower_lsp::lsp_types::Position;
 
     use super::*;
     use crate::fn_signatures::build_fn_signatures;
@@ -287,17 +289,85 @@ mod tests {
         }
     }
 
-    #[test]
-    fn find_keyword_position_uses_utf16_columns() {
-        let source = "\u{3000}param x: Dimensionless = 1.0;";
-        let pos = find_keyword_position(source, 0).unwrap();
-        assert_eq!(pos.line, 0);
-        assert_eq!(pos.character, 1);
+    fn head(source: &str) -> Option<DeclarationHead> {
+        declaration_head(source, Span::new(0, source.len()))
     }
 
     #[test]
-    fn find_keyword_position_rejects_prefix_only_keyword_match() {
-        assert!(find_keyword_position("nodeish x", 0).is_none());
+    fn declaration_head_skips_attributes_and_finds_visibility() {
+        assert_eq!(head("index Phase;"), Some(DeclarationHead::Keyword(0)));
+        let source = "#[expected_fail(Mode#Boost)] #[doc] const node x: Int = 1;";
+        assert_eq!(
+            head(source),
+            Some(DeclarationHead::Keyword(source.find("const").unwrap()))
+        );
+        assert_eq!(
+            head("pub index Phase;"),
+            Some(DeclarationHead::Visibility(Span::new(0, 3)))
+        );
+        assert_eq!(
+            head("#[a] pub(bind) index Phase;"),
+            Some(DeclarationHead::Visibility(Span::new(5, 9)))
+        );
+        assert_eq!(head("#[unterminated"), None);
+    }
+
+    /// The edits of the first quick fix offered for `source`'s diagnostics
+    /// with `code`, applied to `source`.
+    fn apply_first_quick_fix(source: &str, code: &str) -> String {
+        let uri = Url::parse("untitled:fix.gcl").unwrap();
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
+        let diagnostics: Vec<_> = analysis.diagnostics[&uri]
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code
+                    == Some(tower_lsp::lsp_types::NumberOrString::String(
+                        code.to_string(),
+                    ))
+            })
+            .cloned()
+            .collect();
+        assert!(!diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+        let actions =
+            code_actions(&make_params(&uri, diagnostics), &analysis, source).expect("a quick fix");
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected CodeAction");
+        };
+        let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
+        crate::test_edits::apply_text_edits(source, edits)
+    }
+
+    /// LSP-7: the fix edits the named declaration, not the first declaration
+    /// on its line, and the fixed program compiles.
+    #[test]
+    fn add_visibility_edits_the_named_declaration_by_span() {
+        for (source, code, fixed) in [
+            (
+                "node a: Dimensionless = 1.0; dim Foo = Length;\npub node x: Foo = 1.0 m;\n",
+                "graphcal::V003",
+                "node a: Dimensionless = 1.0; pub dim Foo = Length;\npub node x: Foo = 1.0 m;\n",
+            ),
+            (
+                "node a: Dimensionless = 1.0; index Phase;\n",
+                "graphcal::V002",
+                "node a: Dimensionless = 1.0; pub(bind) index Phase;\n",
+            ),
+            (
+                "pub index Phase;\n",
+                "graphcal::V002",
+                "pub(bind) index Phase;\n",
+            ),
+        ] {
+            let updated = apply_first_quick_fix(source, code);
+            assert_eq!(updated, fixed);
+            let uri = Url::parse("untitled:fix.gcl").unwrap();
+            let checked = crate::analysis_pipeline::run_analysis_for_test(&uri, &updated);
+            assert!(
+                checked.has_no_diagnostics(),
+                "{updated}: {:?}",
+                checked.diagnostics
+            );
+        }
     }
 
     fn make_diag(code: &str, message: &str, range: Range, data: Option<&RepairData>) -> Diagnostic {

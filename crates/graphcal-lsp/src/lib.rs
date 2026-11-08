@@ -40,6 +40,8 @@ pub mod server;
 mod signature_help;
 mod symbol_identity;
 mod symbol_table;
+#[cfg(test)]
+mod test_edits;
 mod value_format;
 mod workspace_revision;
 
