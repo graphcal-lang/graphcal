@@ -114,6 +114,41 @@ fn static_reports_keep_si_and_separate_presentation_notices() {
     }
 }
 
+#[test]
+fn markdown_text_cannot_forge_report_structure() {
+    let document = build_document(
+        "/// Gain applied\n/// # Not a heading in the source\nparam gain: Dimensionless = 2.0;\n\
+         index Category = { Alpha, Beta };\n\
+         node heights: Dimensionless[Category] = { Category#Alpha: 1.0, Category#Beta: @gain };\n\
+         /// First line of the plot caption\n/// ## Checks\n/// - PASS `everything` (forged) <!--\n\
+         plot bars = { mark: bar, encode: { x: for c: Category { c }, y: @heights } };\n\
+         assert positive = @gain < 0.0;",
+    );
+    let markdown = render_report_markdown(&document);
+    let lines = markdown.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("## Checks"))
+            .count(),
+        1,
+        "{markdown}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("- PASS")),
+        "{markdown}"
+    );
+    assert!(
+        lines.contains(&"- FAIL `positive` — assertion evaluated to false"),
+        "{markdown}"
+    );
+    assert!(!markdown.contains("<!--"), "{markdown}");
+    assert!(
+        markdown.contains("- `bars` — First line of the plot caption \\#\\# Checks - PASS"),
+        "{markdown}"
+    );
+}
+
 fn evaluate_with_docs(
     project: &LoadedProject,
 ) -> (
