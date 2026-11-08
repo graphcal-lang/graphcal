@@ -890,7 +890,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         if idx > 0 {
             out.push('\n');
         }
-        if let Some(comments) = fmt.drain_comments_before(slot.header_span().offset()) {
+        if let Some(comments) = fmt.drain_comments_before_declaration(slot.header_span().offset()) {
             out.push_str(&render_doc_to_string(&comments));
         }
         // Do not let the next slot's leading-comment drain relocate a comment
@@ -1107,7 +1107,7 @@ pub(super) fn format_decl_sequence(
         let emit_end = emit_start + decl.span.len();
 
         // Emit leading comments before this declaration
-        let leading = fmt.drain_comments_before(emit_start);
+        let leading = fmt.drain_comments_before_declaration(emit_start);
         let has_leading_comments = leading.is_some();
 
         if i > 0 {

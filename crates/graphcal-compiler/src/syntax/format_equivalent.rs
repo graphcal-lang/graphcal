@@ -4,8 +4,9 @@
 //! only *formatting* — never the program. [`FormatEquivalent`] is the single
 //! relation that defines what "same program" means at the syntax level: it
 //! compares two [`File<Raw>`](crate::syntax::ast::File) trees while ignoring
-//! source spans (and the parser-attached `///` doc block of a declaration,
-//! which the formatter preserves through comments instead).
+//! source spans. The parser-attached `///` doc block of a declaration is
+//! compared by its text, so a formatter that changes which declaration a doc
+//! documents is caught like any other change.
 //!
 //! # Why a dedicated trait instead of `PartialEq`
 //!

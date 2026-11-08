@@ -48,7 +48,7 @@ pub mod resolved_name;
 pub mod semantic;
 pub mod semantic_error;
 pub mod source_id;
-pub(crate) mod source_line;
+pub mod source_line;
 pub mod source_registry;
 pub mod sparse_monomial;
 pub mod stack;

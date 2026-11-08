@@ -91,8 +91,8 @@ pub struct MultiDeclSlot {
     /// The slot's entry in the slot tuple `(…)`.
     pub axis: MultiSlotAxis,
     /// The `///` block immediately preceding this slot's header.
-    /// Like `Declaration::doc`, this is re-derived from preserved comments.
-    #[fe(skip)]
+    /// Like `Declaration::doc`, this is re-derived from preserved comments
+    /// and compared by text in format equivalence.
     pub doc: Option<DocComment>,
     /// Span from visibility prefix (or kind keyword) through end of the type annotation.
     #[fe(skip)]

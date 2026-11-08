@@ -13,7 +13,7 @@ pub enum LineEnding {
 }
 
 impl LineEnding {
-    pub const fn len(self) -> usize {
+    pub(crate) const fn len(self) -> usize {
         match self {
             Self::Lf | Self::Cr => 1,
             Self::CrLf => 2,
@@ -24,7 +24,7 @@ impl LineEnding {
 /// Recognize a line ending beginning at `offset`.
 ///
 /// CRLF is returned as one line ending rather than separate CR and LF endings.
-pub fn line_ending_at(bytes: &[u8], offset: usize) -> Option<LineEnding> {
+pub(crate) fn line_ending_at(bytes: &[u8], offset: usize) -> Option<LineEnding> {
     match bytes.get(offset).copied() {
         Some(b'\n') => Some(LineEnding::Lf),
         Some(b'\r') if bytes.get(offset + 1) == Some(&b'\n') => Some(LineEnding::CrLf),
@@ -34,6 +34,7 @@ pub fn line_ending_at(bytes: &[u8], offset: usize) -> Option<LineEnding> {
 }
 
 /// Iterate over physical line endings as `(byte_offset, kind)` pairs.
+#[must_use = "the iterator is lazy"]
 pub fn line_endings(source: &str) -> impl Iterator<Item = (usize, LineEnding)> + '_ {
     let bytes = source.as_bytes();
     let mut offset = 0;
