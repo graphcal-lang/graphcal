@@ -9,7 +9,8 @@ hosts, chosen at start in `src/main.ts`:
   (`src/start.ts`: a pasted GitHub file URL or `owner/repo/path.gcl`).
 - `VsCodeHost`: the VS Code webview, fed by the extension
   (`vite.webview.config.ts` builds that bundle).
-- `GitHubHost`: the published viewer at `https://graphcal.org/view/`, when the
+- `GitHubHost`: the published viewer (`https://view.graphcal.org/`, and for now
+  still `https://graphcal.org/view/`), when the
   address names a file: `#owner/repo@ref/path/to/file.gcl` (`@ref` optional;
   a slashed branch is percent-encoded).
 
@@ -171,6 +172,18 @@ dependencies or plugins, files over 256 KiB, and projects over 1 MiB.
 
 - `just view-serve`: copy the playground's Wasm engine, then serve with vp.
 - `just view-build`: lint, types, tests, production build (`web/view/dist`).
-- `just docs-build` assembles `web/view/dist` into `site/view/`; GitHub Pages
-  CI uses this recipe, so the viewer deploys with the documentation.
+  `VIEW_BASE` picks the base path: `/view/` (the default) or `/`.
+- The viewer is moving to its own origin, `https://view.graphcal.org/`, so
+  that no other page (the documentation, the playground) shares the origin the
+  browser extension answers. It is served as Cloudflare Workers static assets:
+  the release workflow's `build-view` job builds `web/view/dist` with
+  `VIEW_BASE=/`, and `deploy-view` runs `wrangler deploy` with
+  `web/view-deploy/wrangler.jsonc`. The HTTP headers, CSP included, are in
+  `web/view/public/_headers`; they apply only to assets, so the Worker must
+  stay without a script.
+- Until that origin is live, `just docs-build` still assembles the `/view/`
+  build into `site/view/`, and GitHub Pages serves it at `graphcal.org/view/`
+  with the same CSP as a meta tag (taken from `_headers`, without
+  `frame-ancestors`, which a meta CSP cannot carry). The page will then become
+  a redirect to the new origin.
 - `just site-serve` previews the whole site, with `/view/#…`, at localhost:4173.

@@ -363,6 +363,9 @@ jobs:
           vp -C web/playground install --frozen-lockfile
           vp -C web/view install --frozen-lockfile
       - name: Lint, test and build the view
+        env:
+          # Served at the root of view.graphcal.org (graphcal.org keeps /view/).
+          VIEW_BASE: /
         run: just view-build
       - name: Upload the built view
         uses: actions/upload-artifact@v7.0.2
