@@ -2325,6 +2325,16 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["eval_expr", "product_sum"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "product_sum", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["eval_expr", "kernel_checkpoint"]
 role = "interpreter"
 

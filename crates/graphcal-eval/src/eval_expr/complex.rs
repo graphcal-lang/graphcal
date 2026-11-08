@@ -1,11 +1,13 @@
 //! Pure complex arithmetic and built-in kernels.
 
 use graphcal_compiler::complex_value::ComplexValue;
-use graphcal_compiler::finite_value::FiniteQuantity;
+use graphcal_compiler::finite_value::{FiniteArithmeticError, FiniteQuantity};
 use graphcal_compiler::tir::texpr::operators::{ArithOp, ComplexPart, ScaleOp};
 use num_rational::BigRational;
 use num_traits::{ToPrimitive, Zero};
 use thiserror::Error;
+
+use super::product_sum::{Product, product_sum};
 
 #[derive(Debug, Clone, PartialEq, Error)]
 pub(super) enum ComplexEvalError {
@@ -15,6 +17,8 @@ pub(super) enum ComplexEvalError {
     NegativeMagnitude { value: f64 },
     #[error("{operation} produced a non-finite complex component")]
     NonFinite { operation: &'static str },
+    #[error("{operation} underflowed a nonzero complex component to zero")]
+    Underflow { operation: &'static str },
     #[error("{operation} produced a non-finite (NaN or infinite) quantity")]
     NonFiniteQuantity { operation: &'static str },
 }
@@ -75,12 +79,37 @@ pub(super) fn arith(
             lhs.im() - rhs.im(),
             "complex subtraction",
         ),
-        ArithOp::Mul => finite_complex(
-            lhs.im().mul_add(-rhs.im(), lhs.re() * rhs.re()),
-            lhs.im().mul_add(rhs.re(), lhs.re() * rhs.im()),
-            "complex multiplication",
-        ),
+        ArithOp::Mul => multiply(lhs, rhs),
         ArithOp::Div => divide(lhs, rhs),
+    }
+}
+
+/// `(a + bi)(c + di) = (ac - bd) + (ad + bc)i`, each component computed
+/// exactly and rounded once, so a product that overflows before the
+/// cancellation does not reject a representable result.
+fn multiply(lhs: ComplexValue, rhs: ComplexValue) -> Result<ComplexValue, ComplexEvalError> {
+    let operation = "complex multiplication";
+    let (a, b) = (lhs.real_part(), lhs.imaginary_part());
+    let (c, d) = (rhs.real_part(), rhs.imaginary_part());
+    let component = |first, second| {
+        product_sum(first, second).map_err(|error| complex_arithmetic_error(error, operation))
+    };
+    let re = component(Product::new(a, c), Product::new(b, d).negated())?;
+    let im = component(Product::new(a, d), Product::new(b, c))?;
+    Ok(ComplexValue::from_parts(re, im))
+}
+
+/// The complex error of a failed checked component computation.
+const fn complex_arithmetic_error(
+    error: FiniteArithmeticError,
+    operation: &'static str,
+) -> ComplexEvalError {
+    match error {
+        FiniteArithmeticError::Underflow => ComplexEvalError::Underflow { operation },
+        FiniteArithmeticError::DivisionByZero => ComplexEvalError::DivisionByZero,
+        FiniteArithmeticError::Infinite | FiniteArithmeticError::NotANumber => {
+            ComplexEvalError::NonFinite { operation }
+        }
     }
 }
 
@@ -237,6 +266,30 @@ mod tests {
         let quotient = arith(ArithOp::Div, product, rhs).unwrap();
         assert!((quotient.re() - 3.0).abs() < 1e-12);
         assert!((quotient.im() - 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn multiplication_does_not_overflow_before_the_cancellation() {
+        let square = arith(ArithOp::Mul, c(1.4e154, 6.0e153), c(1.4e154, 6.0e153)).unwrap();
+        assert!((square.re() / 1.6e308 - 1.0).abs() < 1.0e-15);
+        assert!((square.im() / 1.68e308 - 1.0).abs() < 1.0e-15);
+        assert!(matches!(
+            arith(ArithOp::Mul, c(f64::MAX, 0.0), c(2.0, 0.0)),
+            Err(ComplexEvalError::NonFinite { .. })
+        ));
+    }
+
+    #[test]
+    fn multiplication_reports_a_nonzero_component_lost_to_zero() {
+        assert!(matches!(
+            arith(ArithOp::Mul, c(1.0e-200, 0.0), c(1.0e-200, 0.0)),
+            Err(ComplexEvalError::Underflow { .. })
+        ));
+        // A component that is exactly zero is not an underflow.
+        assert_eq!(
+            arith(ArithOp::Mul, c(1.0e-200, 0.0), c(1.0, 0.0)).unwrap(),
+            c(1.0e-200, 0.0)
+        );
     }
 
     #[test]

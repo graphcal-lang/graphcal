@@ -67,7 +67,10 @@ node inverse_square: Dimensionless = 1.0e160 ^ -2;
     assert!(!result.has_errors(), "{result:?}");
     assert_eq!(find_value(&result, "subnormal"), 2.0_f64.powf(-1070.0));
     assert_eq!(find_value(&result, "tiny"), 10.0_f64.powf(-310.0));
-    assert_eq!(find_value(&result, "inverse_square"), 1.0e160_f64.powf(-2.0));
+    assert_eq!(
+        find_value(&result, "inverse_square"),
+        1.0e160_f64.powf(-2.0)
+    );
 }
 
 #[test]
@@ -102,4 +105,25 @@ node zero: Int = @nothing ^ 5000000000;
         "huge",
         "integer arithmetic overflow",
     );
+}
+
+#[test]
+fn complex_square_and_cross_do_not_overflow_before_the_cancellation() {
+    let result = compile_and_eval(
+        r"
+node w: Complex<Dimensionless> = complex(1.4e154, 6e153);
+node z: Complex<Dimensionless> = @w * @w;
+node z_re: Dimensionless = re(@z);
+node z_im: Dimensionless = im(@z);
+node a: Dimensionless[Fin(3)] = table[Fin(3)] { 0.0; 1.4e154; 6e153; };
+node b: Dimensionless[Fin(3)] = table[Fin(3)] { 0.0; 6e153; 1.4e154; };
+node c: Dimensionless[Fin(3)] = cross(@a, @b);
+node c_x: Dimensionless = @c[0];
+",
+    )
+    .unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert!((find_value(&result, "z_re") / 1.6e308 - 1.0).abs() < 1.0e-15);
+    assert!((find_value(&result, "z_im") / 1.68e308 - 1.0).abs() < 1.0e-15);
+    assert!((find_value(&result, "c_x") / 1.6e308 - 1.0).abs() < 1.0e-15);
 }

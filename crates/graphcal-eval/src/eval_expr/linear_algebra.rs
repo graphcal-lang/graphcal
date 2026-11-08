@@ -30,6 +30,7 @@ use super::kernel_checkpoint::KernelCheckpoint;
 use super::linear_algebra_error::LinearAlgebraError;
 use super::linear_algebra_lu::{LinearSystem, LuFailure, SquareMatrix};
 use super::numeric::{self, QuantityValidationError};
+use super::product_sum::{Product, product_sum};
 use crate::invariant::{Failure, Invariant};
 
 /// A rank-two operand whose rows and columns enumerate the same axis.
@@ -64,7 +65,7 @@ pub(super) struct Vector {
 #[derive(Debug)]
 struct Vector3 {
     axis: IndexAxis,
-    values: [f64; 3],
+    values: [FiniteQuantity; 3],
 }
 
 /// A rank-two operand: `rows.len() * columns.len()` values, row-major.
@@ -114,11 +115,18 @@ impl Vector3 {
         let Some((axes, values)) = dense_quantities(&value) else {
             return Err(value);
         };
-        match (axes.as_slice(), <[f64; 3]>::try_from(values.as_slice())) {
-            ([only], Ok(values)) if shared.is_none_or(|shared| shared.matches(only)) => Ok(Self {
-                axis: only.clone(),
-                values,
-            }),
+        let finite = values
+            .iter()
+            .map(|value| FiniteQuantity::try_new(*value).ok())
+            .collect::<Option<Vec<_>>>()
+            .and_then(|values| <[FiniteQuantity; 3]>::try_from(values).ok());
+        match (axes.as_slice(), finite) {
+            ([only], Some(values)) if shared.is_none_or(|shared| shared.matches(only)) => {
+                Ok(Self {
+                    axis: only.clone(),
+                    values,
+                })
+            }
             _ => Err(value),
         }
     }
@@ -413,12 +421,17 @@ fn evaluate_cross(
     let (a, b) = (lhs.values, rhs.values);
     let control = KernelCheckpoint::new(&ctx.cancellation);
     control.boundary()?;
-    let component = |a_1: f64, b_1: f64, a_2: f64, b_2: f64| {
-        let positive = finite_product(a_1, b_1, "cross()")?;
-        let negative = finite_product(a_2, b_2, "cross()")?;
-        numeric::computed_finite_quantity(positive - negative, "cross()")
+    // Each component `a_1 * b_1 - a_2 * b_2` is computed exactly and rounded
+    // once, so a product that overflows before the cancellation does not
+    // reject a representable component.
+    let component = |a_1, b_1, a_2, b_2| {
+        product_sum(Product::new(a_1, b_1), Product::new(a_2, b_2).negated())
             .map(FiniteQuantity::get)
-            .map_err(LinearAlgebraFailure::from)
+            .map_err(|error| {
+                LinearAlgebraFailure::from(QuantityValidationError::from_arithmetic(
+                    error, "cross()",
+                ))
+            })
     };
     let values = vec![
         component(a[1], b[2], a[2], b[1])?,
