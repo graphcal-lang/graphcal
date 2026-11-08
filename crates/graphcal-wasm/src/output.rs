@@ -4,9 +4,10 @@ use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_eval::eval::{
     AssertResult, DisplayProjectionError, DisplayUnit, EvalOutputView, EvalResult, KeyRendering,
-    NodeUnavailable, OutputUnavailable, RenderContext, Value, datetime_literal, format_number,
+    NodeUnavailable, OutputUnavailable, RenderContext, Value, datetime_literal,
     quantity_display_value,
 };
+use graphcal_report::value_display::scalar_display;
 use serde::Serialize;
 
 /// One browser-output policy for both one-shot and prepared exports. Vega
@@ -285,6 +286,7 @@ impl ValueView {
                 *si_value,
                 display_unit.as_ref(),
                 value.display_label(render),
+                scalar_display(value, render)?,
             )?,
             Value::Complex {
                 si_value,
@@ -294,16 +296,17 @@ impl ValueView {
                 *si_value,
                 display_unit.as_ref(),
                 value.display_label(render),
+                scalar_display(value, render)?,
             )?,
             Value::Bool(inner) => Self::Bool {
-                display: inner.to_string(),
+                display: scalar_display(value, render)?,
                 literal: inner.to_string(),
                 value: *inner,
             },
             Value::Int(inner) => {
                 let decimal = inner.to_string();
                 Self::Int {
-                    display: decimal.clone(),
+                    display: scalar_display(value, render)?,
                     literal: decimal.clone(),
                     decimal,
                 }
@@ -316,7 +319,7 @@ impl ValueView {
                     let index = index_name.to_string();
                     let variant = variant.as_str().to_string();
                     Self::Label {
-                        display: format!("{index}#{variant}"),
+                        display: scalar_display(value, render)?,
                         literal: format!("{index}#{variant}"),
                         index,
                         variant,
@@ -325,7 +328,7 @@ impl ValueView {
                 KeyRendering::Position(position) => {
                     let decimal = position.to_string();
                     Self::Int {
-                        display: decimal.clone(),
+                        display: scalar_display(value, render)?,
                         literal: decimal.clone(),
                         decimal,
                     }
@@ -365,7 +368,7 @@ impl ValueView {
                 display_tz,
                 time_scale,
             } => Self::Datetime {
-                display: render.format_datetime(epoch, display_tz.as_ref()),
+                display: scalar_display(value, render)?,
                 literal: datetime_literal(epoch, *time_scale),
                 time_scale: time_scale.to_string(),
                 display_timezone: display_tz.as_ref().map(|tz| tz.as_str().to_string()),
@@ -377,11 +380,12 @@ impl ValueView {
         si_value: FiniteQuantity,
         display_unit: Option<&DisplayUnit>,
         unit: Option<String>,
+        display: String,
     ) -> Result<Self, DisplayProjectionError> {
         let value = quantity_display_value(si_value, display_unit)?;
         let scale = unit_scale(display_unit);
         Ok(Self::Quantity {
-            display: display_number_with_unit(value, unit.as_deref()),
+            display,
             literal: quantity_literal(exact_display_real(si_value.get(), scale), unit.as_deref()),
             value,
             si_value: si_value.get(),
@@ -394,12 +398,13 @@ impl ValueView {
         si_value: ComplexValue,
         display_unit: Option<&DisplayUnit>,
         unit: Option<String>,
+        display: String,
     ) -> Result<Self, DisplayProjectionError> {
         let real = quantity_display_value(si_value.real_part(), display_unit)?;
         let imaginary = quantity_display_value(si_value.imaginary_part(), display_unit)?;
         let scale = unit_scale(display_unit);
         Ok(Self::Complex {
-            display: display_complex_with_unit(real, imaginary, unit.as_deref()),
+            display,
             literal: complex_literal(
                 exact_display_real(si_value.re(), scale),
                 exact_display_real(si_value.im(), scale),
@@ -458,31 +463,6 @@ fn complex_literal(real: f64, imaginary: f64, unit: Option<&str>) -> String {
     let real = quantity_literal(real, unit);
     let imaginary = quantity_literal(imaginary, unit);
     format!("complex({real}, {imaginary})")
-}
-
-fn display_number_with_unit(value: f64, unit: Option<&str>) -> String {
-    let number = format_number(value);
-    match unit {
-        Some(unit) => format!("{number} {unit}"),
-        None => number,
-    }
-}
-
-fn display_complex_with_unit(real: f64, imaginary: f64, unit: Option<&str>) -> String {
-    let sign = if imaginary.is_sign_negative() {
-        "-"
-    } else {
-        "+"
-    };
-    let number = format!(
-        "{} {sign} {}i",
-        format_number(real),
-        format_number(imaginary.abs())
-    );
-    match unit {
-        Some(unit) => format!("{number} {unit}"),
-        None => number,
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -810,6 +790,47 @@ mod tests {
                 .parse_single_expr()
                 .unwrap_or_else(|error| panic!("generated literal `{literal}`: {error}"));
         }
+    }
+
+    #[test]
+    fn scalar_displays_match_the_report_and_the_cli() {
+        let result = compile_and_eval(
+            "index Axis = { A, B };\nnode distance: Length = 3.0 km;\nnode flag: Bool = true;\n\
+             node item_count: Int = 3;\nnode selected: Key<Axis> = Axis#A;\n\
+             node impedance: Complex<Length> = complex(3.0 km, 4.0 km);\n\
+             node instant: Datetime = datetime(\"2024-11-05T12:00:00Z\");",
+        )
+        .unwrap();
+        let view = EvaluationView::from(&result);
+        for declaration in &view.values {
+            let DeclarationOutcomeView::Value {
+                value:
+                    ValueView::Quantity { display, .. }
+                    | ValueView::Complex { display, .. }
+                    | ValueView::Bool { display, .. }
+                    | ValueView::Int { display, .. }
+                    | ValueView::Label { display, .. }
+                    | ValueView::Datetime { display, .. },
+                body: graphcal_report::value_display::ValueBody::Scalar(report),
+            } = &declaration.outcome
+            else {
+                panic!(
+                    "{} is no scalar: {:?}",
+                    declaration.name, declaration.outcome
+                );
+            };
+            assert_eq!(display, report, "{}", declaration.name);
+        }
+        let impedance = view
+            .values
+            .iter()
+            .find(|declaration| declaration.name == "impedance")
+            .expect("impedance");
+        assert!(matches!(
+            &impedance.outcome,
+            DeclarationOutcomeView::Value { value: ValueView::Complex { display, .. }, .. }
+                if display == "3000 + 4000i [m]"
+        ));
     }
 
     #[test]
