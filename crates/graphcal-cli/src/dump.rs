@@ -13,7 +13,7 @@ use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::syntax::ast::File;
 use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::parser::{ParseErrorKind, Parser};
-use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader};
+use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, ProjectIngestionPolicy};
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::{build_rooted_filesystem, load_project};
 use graphcal_project::prepare::{ParameterBindingRow, PreparedProject};
@@ -22,8 +22,6 @@ use graphcal_project::project_compiler::ProjectCompiler;
 use crate::overrides::{
     OverrideParseError, ParameterArgs, ParsedOverrides, parse_overrides_with_sources,
 };
-
-const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Nested `graphcal dump <STAGE>` commands.
 #[derive(Subcommand)]
@@ -100,7 +98,7 @@ pub enum DumpError {
         path.display()
     )]
     #[diagnostic(code(graphcal::dump::D002))]
-    SourceTooLarge { path: PathBuf, limit: usize },
+    SourceTooLarge { path: PathBuf, limit: ByteLimit },
     #[error("source file {} is not valid UTF-8", path.display())]
     #[diagnostic(code(graphcal::dump::D003))]
     SourceEncoding { path: PathBuf },
@@ -256,13 +254,16 @@ struct SourceUnit {
 
 fn read_source(file: &Path, root: Option<&Path>) -> Result<SourceUnit, DumpError> {
     let fs = build_rooted_filesystem(file, root)?;
+    // The loader's own per-source limit: a file `dump` accepts is one the
+    // loader would accept too.
+    let limit = ProjectIngestionPolicy::default().source_file();
     let bytes = graphcal_compiler::outcome::without_cancellation(|cancellation| {
-        fs.read_bytes_bounded(file, ByteLimit::new(MAX_SOURCE_BYTES as u64), cancellation)
+        fs.read_bytes_bounded(file, limit, cancellation)
     })
     .map_err(|error| match error {
         FileSystemReadError::ByteLimitExceeded { .. } => DumpError::SourceTooLarge {
             path: file.to_path_buf(),
-            limit: MAX_SOURCE_BYTES,
+            limit,
         },
         other => DumpError::SourceRead {
             path: file.to_path_buf(),

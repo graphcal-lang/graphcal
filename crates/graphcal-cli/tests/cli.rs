@@ -9229,6 +9229,24 @@ fn report_build_hydrated_embeds_package_dependencies() {
         .0;
     let bundle = graphcal_project::project_bundle::ProjectBundle::from_json(payload).unwrap();
     assert_eq!(bundle.dependencies.len(), 1);
+    // CLI-10: the captured metadata ships under its typed kind.
+    let metadata: Vec<_> = bundle
+        .files
+        .iter()
+        .filter_map(|artifact| match &artifact.content {
+            graphcal_project::project_bundle::ArtifactContent::Manifest(_) => {
+                Some((artifact.path.as_str(), "manifest"))
+            }
+            graphcal_project::project_bundle::ArtifactContent::Lockfile(_) => {
+                Some((artifact.path.as_str(), "lockfile"))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        metadata,
+        [("graphcal.lock", "lockfile"), ("graphcal.toml", "manifest")]
+    );
 
     // The same project builds statically: the baseline is computed natively.
     let html_path = dir.path().join("out.html");

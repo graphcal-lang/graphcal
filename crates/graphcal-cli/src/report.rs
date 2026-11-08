@@ -15,7 +15,9 @@ use thiserror::Error;
 use graphcal_eval::eval::EvalResult;
 use graphcal_io::FileSystemReader as _;
 use graphcal_project::compile_error::CompileError;
-use graphcal_project::loader::{LoadedProject, build_rooted_filesystem, discover_project_root};
+use graphcal_project::loader::{
+    LoadedProject, build_rooted_filesystem, resolve_entry_project_root,
+};
 use graphcal_project::project_bundle::{
     ArtifactContent, BundleArtifact, BundleError, ProjectBundle,
 };
@@ -136,13 +138,16 @@ pub fn run_build(
     let metadata = if args.static_only {
         Vec::new()
     } else {
-        capture_metadata(args, &fs)?
+        capture_metadata(
+            &resolve_entry_project_root(&args.file, args.root.as_deref(), &fs)?,
+            &fs,
+        )?
     };
     let snapshot = graphcal_io::OverlayFileSystem::with_overlays(
-        fs.clone(),
+        fs,
         metadata
             .iter()
-            .map(|(path, content)| (path.clone(), content.clone())),
+            .map(|captured| (captured.path.clone(), captured.content.clone())),
     )
     .map_err(|error| ReportError::HydrationUnsupported {
         reason: error.to_string(),
@@ -166,7 +171,7 @@ pub fn run_build(
     );
     let provenance = report_provenance(
         compiler_version,
-        source_digests(&project, &args.file, args.root.as_deref(), &fs),
+        source_digests(&project),
         &result,
         args,
         overrides,
@@ -190,7 +195,7 @@ pub fn run_build(
                 glue_js: engine.glue_js.as_ref(),
                 wasm: engine.wasm.as_ref(),
             },
-            &hydration_project(&project, args, &fs, &metadata)?,
+            &hydration_project(&project, args, &metadata)?,
             baseline_binding_strings(overrides),
         )?),
     };
@@ -232,25 +237,6 @@ pub fn run_build(
     }
 }
 
-/// The canonicalized project root used to name sources in provenance and
-/// hydration payloads: the explicit `--root`, else the discovered
-/// `graphcal.toml` directory, else (for a loose file) the file's parent —
-/// the same rule the loader's sandbox uses.
-fn project_root_dir(
-    entry: &Path,
-    root_override: Option<&Path>,
-    fs: &graphcal_io::RealFileSystem,
-) -> Option<PathBuf> {
-    root_override
-        .map(PathBuf::from)
-        .or_else(|| {
-            let entry = entry.canonicalize().ok()?;
-            let parent = entry.parent()?;
-            discover_project_root(parent, fs).or_else(|| Some(parent.to_path_buf()))
-        })
-        .and_then(|root| root.canonicalize().ok())
-}
-
 /// A loaded file's project-relative name; `None` when it does not live under
 /// the project root. Components join with `/` on every platform: the
 /// hydration payload feeds the browser engine's virtual filesystem, which
@@ -270,13 +256,8 @@ fn relative_source_name(path: &Path, root_dir: Option<&Path>) -> Option<String> 
 
 /// SHA-256 digests of every loaded source, named relative to the project
 /// root and sorted by name so the artifact is machine-independent.
-fn source_digests(
-    project: &LoadedProject,
-    entry: &Path,
-    root_override: Option<&Path>,
-    fs: &graphcal_io::RealFileSystem,
-) -> Vec<SourceDigest> {
-    let root_dir = project_root_dir(entry, root_override, fs);
+fn source_digests(project: &LoadedProject) -> Vec<SourceDigest> {
+    let root_dir = project.project_root();
     let dependency_roots: std::collections::BTreeMap<_, _> = project
         .package_closure()
         .into_iter()
@@ -294,10 +275,7 @@ fn source_digests(
         .map(|file| {
             let id = file.dag_id();
             let path = file.path();
-            let scope = dependency_roots
-                .get(id.package())
-                .copied()
-                .or(root_dir.as_deref());
+            let scope = dependency_roots.get(id.package()).copied().or(root_dir);
             let relative =
                 relative_source_name(path, scope).unwrap_or_else(|| path.display().to_string());
             // Rendering boundary only: identities remain typed in the bundle.
@@ -370,35 +348,78 @@ fn validate_hydration_parameter_source(
     Ok(())
 }
 
-/// Freeze manifest and lockfile bytes before native loading. Plugin/source bytes
-/// are already retained by `LoadedProject` and never reread during embedding.
-fn capture_metadata(
-    args: &BuildArgs,
-    fs: &graphcal_io::RealFileSystem,
-) -> Result<Vec<(PathBuf, String)>, ReportError> {
-    let root =
-        project_root_dir(&args.file, args.root.as_deref(), fs).ok_or(BundleError::UnsafePath)?;
-    [
-        ("graphcal.toml", 1024 * 1024),
-        ("graphcal.lock", 4 * 1024 * 1024),
-    ]
-    .into_iter()
-    .try_fold(Vec::new(), |mut files, (name, maximum)| {
-        let path = root.join(name);
-        match graphcal_compiler::outcome::without_cancellation(|cancellation| {
-            fs.read_to_string_bounded(&path, graphcal_io::ByteLimit::new(maximum), cancellation)
-        }) {
-            Ok(content) => files.push((path, content)),
-            Err(graphcal_io::FileSystemReadError::Io(error))
-                if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(ReportError::HydrationUnsupported {
-                    reason: format!("could not capture {name}: {error}"),
-                });
-            }
+/// A project metadata file the hydrated report ships beside its sources.
+#[derive(Debug, Clone, Copy)]
+enum MetadataKind {
+    Manifest,
+    Lockfile,
+}
+
+impl MetadataKind {
+    const ALL: [Self; 2] = [Self::Manifest, Self::Lockfile];
+
+    /// The file name under the project root.
+    const fn file_name(self) -> &'static str {
+        match self {
+            Self::Manifest => "graphcal.toml",
+            Self::Lockfile => "graphcal.lock",
         }
-        Ok(files)
-    })
+    }
+
+    /// The loader's size limit for this kind of file.
+    const fn limit(self, policy: graphcal_io::ProjectIngestionPolicy) -> graphcal_io::ByteLimit {
+        match self {
+            Self::Manifest => policy.manifest(),
+            Self::Lockfile => policy.lockfile(),
+        }
+    }
+
+    /// The bundle artifact category for captured `text`.
+    const fn artifact(self, text: String) -> ArtifactContent {
+        match self {
+            Self::Manifest => ArtifactContent::Manifest(text),
+            Self::Lockfile => ArtifactContent::Lockfile(text),
+        }
+    }
+}
+
+/// Metadata bytes frozen before loading, tagged with their kind.
+struct CapturedMetadata {
+    kind: MetadataKind,
+    path: PathBuf,
+    content: String,
+}
+
+/// Freeze manifest and lockfile bytes under `project_root` before native
+/// loading. Plugin/source bytes are already retained by `LoadedProject` and
+/// never reread during embedding.
+fn capture_metadata(
+    project_root: &Path,
+    fs: &graphcal_io::RealFileSystem,
+) -> Result<Vec<CapturedMetadata>, ReportError> {
+    let policy = graphcal_io::ProjectIngestionPolicy::default();
+    MetadataKind::ALL
+        .into_iter()
+        .try_fold(Vec::new(), |mut files, kind| {
+            let path = project_root.join(kind.file_name());
+            match graphcal_compiler::outcome::without_cancellation(|cancellation| {
+                fs.read_to_string_bounded(&path, kind.limit(policy), cancellation)
+            }) {
+                Ok(content) => files.push(CapturedMetadata {
+                    kind,
+                    path,
+                    content,
+                }),
+                Err(graphcal_io::FileSystemReadError::Io(error))
+                    if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(ReportError::HydrationUnsupported {
+                        reason: format!("could not capture {}: {error}", kind.file_name()),
+                    });
+                }
+            }
+            Ok(files)
+        })
 }
 
 /// Assemble the in-memory project shipped to the browser engine, rejecting
@@ -406,10 +427,9 @@ fn capture_metadata(
 fn hydration_project(
     project: &LoadedProject,
     args: &BuildArgs,
-    fs: &graphcal_io::RealFileSystem,
-    metadata: &[(PathBuf, String)],
+    metadata: &[CapturedMetadata],
 ) -> Result<ProjectBundle, ReportError> {
-    let root_dir = project_root_dir(&args.file, args.root.as_deref(), fs);
+    let root_dir = project.project_root();
 
     let dependencies = project
         .package_closure()
@@ -427,14 +447,14 @@ fn hydration_project(
         .file
         .canonicalize()
         .ok()
-        .and_then(|entry| relative_source_name(&entry, root_dir.as_deref()));
+        .and_then(|entry| relative_source_name(&entry, root_dir));
     let mut files = Vec::new();
     for file in project
         .files()
         .iter()
         .filter(|file| file.dag_id().package() == project.root_id().package())
     {
-        let Some(name) = relative_source_name(file.path(), root_dir.as_deref()) else {
+        let Some(name) = relative_source_name(file.path(), root_dir) else {
             return Err(ReportError::HydrationUnsupported {
                 reason: format!(
                     "source {} lives outside the project root and cannot ship in the artifact",
@@ -447,17 +467,11 @@ fn hydration_project(
             content: ArtifactContent::Source(file.source().to_string()),
         });
     }
-    for (path, content) in metadata {
-        let name =
-            relative_source_name(path, root_dir.as_deref()).ok_or(BundleError::UnsafePath)?;
-        let content = match name.as_str() {
-            "graphcal.toml" => ArtifactContent::Manifest(content.clone()),
-            "graphcal.lock" => ArtifactContent::Lockfile(content.clone()),
-            _ => return Err(BundleError::ArtifactKind.into()),
-        };
+    for captured in metadata {
+        let name = relative_source_name(&captured.path, root_dir).ok_or(BundleError::UnsafePath)?;
         files.push(BundleArtifact {
             path: name.try_into()?,
-            content,
+            content: captured.kind.artifact(captured.content.clone()),
         });
     }
     for (path, plugin) in project
