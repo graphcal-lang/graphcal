@@ -5761,7 +5761,7 @@ fn aliased_include_does_not_bind_the_source_module_name() {
         matches!(
             &error,
             CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }), .. })
-                if kind.to_string() == "unknown module `src.app.defaults`"
+                if kind.to_string() == "unknown module `app.defaults`"
         ),
         "unexpected alias-leak diagnostic: {error:?}"
     );

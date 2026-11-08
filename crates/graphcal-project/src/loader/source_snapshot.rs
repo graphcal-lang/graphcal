@@ -185,6 +185,22 @@ impl ModuleRoot {
         }
     }
 
+    /// The path of `file` (a canonical path in the tree rooted at
+    /// `tree_root`) that its [`DagId`](graphcal_compiler::dag_id::DagId) is
+    /// built from: relative to the source directory, so the identity mirrors
+    /// the module path the user writes and not the filesystem layout, or
+    /// relative to the tree root for a standalone file.
+    pub(super) fn identity_path(&self, file: &Path, tree_root: &Path) -> PathBuf {
+        let root = match self {
+            Self::SourceDir(dir) => dir.as_path(),
+            Self::Standalone => tree_root,
+        };
+        file.strip_prefix(root)
+            .or_else(|_| file.strip_prefix(tree_root))
+            .unwrap_or(file)
+            .to_path_buf()
+    }
+
     /// The module path that names `file` (a canonical path) in this tree:
     /// its [`ModuleFilePath`] below the source directory, or a standalone
     /// file's stem when that is an identifier.

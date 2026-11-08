@@ -7313,8 +7313,8 @@ fn graph_grouped_view_distinguishes_repeated_include_instances() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
-    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_1\\ntemplate rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate rocket.lib\\npackage rocket"));
     assert_eq!(stdout.matches("style=\"rounded,filled\"").count(), 2);
     let total = dot_statement_id_for_label(&stdout, "total_dv\\n");
     let instance_outputs = stdout
@@ -7370,9 +7370,9 @@ fn graph_max_depth_expands_only_requested_composition_levels() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("template src.graph.left\\npackage graph"));
-    assert!(stdout.contains("template src.graph.right\\npackage graph"));
-    assert!(stdout.contains("template src.graph.shared\\npackage graph"));
+    assert!(stdout.contains("template graph.left\\npackage graph"));
+    assert!(stdout.contains("template graph.right\\npackage graph"));
+    assert!(stdout.contains("template graph.shared\\npackage graph"));
     assert!(stdout.contains("1 value hidden"));
     assert!(stdout.contains("doubled\\nDimensionless"));
 }
@@ -7424,8 +7424,8 @@ fn graph_module_view_collapses_declaration_wiring() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
-    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_1\\ntemplate rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate rocket.lib\\npackage rocket"));
     assert!(stdout.contains("label=\"instantiates\""));
     assert!(!stdout.contains("mass_ratio\\nDimensionless"));
     assert!(!stdout.contains("total_dv\\nVelocity"));
@@ -7455,11 +7455,11 @@ fn graph_imported_values_render_as_external_nodes() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let external = dot_statement_id_for_label(&stdout, "src.lib.constants.g0\"");
+    let external = dot_statement_id_for_label(&stdout, "lib.constants.g0\"");
     let dependent = dot_statement_id_for_label(&stdout, "v_exhaust\\n");
     assert!(
         stdout.contains(&format!(
-            "\"{external}\" [label=\"src.lib.constants.g0\", shape=box, style=dashed];"
+            "\"{external}\" [label=\"lib.constants.g0\", shape=box, style=dashed];"
         )),
         "imported value should render as a dashed external node:\n{stdout}"
     );

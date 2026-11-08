@@ -162,11 +162,7 @@ fn fetch_file<A: ModuleSourceAuthority>(
     let location = ModuleLocation {
         module_path: tree.module_root.module_path_of(file.path()),
         package: tree.package,
-        relative_path: file
-            .path()
-            .strip_prefix(tree.root)
-            .unwrap_or_else(|_| file.path())
-            .to_path_buf(),
+        relative_path: tree.module_root.identity_path(file.path(), tree.root),
     };
     let stem = tree.module_root.stem_reference(file.path());
     ParsedSource::resolve(location, parsed, stem, |path| {

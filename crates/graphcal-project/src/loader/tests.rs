@@ -358,8 +358,8 @@ fn load_simple_import() {
     assert_eq!(project.files.len(), 2);
     assert_eq!(project.files.len(), 2);
     // helper.lib should be loaded before main (topological order)
-    let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
-    let main_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "main"]));
+    let lib_dag_id = DagId::new("helper", NonEmpty::new("helper", vec!["lib"]));
+    let main_dag_id = DagId::new("helper", NonEmpty::new("helper", vec!["main"]));
     assert_eq!(project.files.ordered().get(0).unwrap().dag_id, lib_dag_id);
     assert_eq!(project.files.ordered().get(1).unwrap().dag_id, main_dag_id);
     assert_eq!(project.root_id().package(), &DagPackageId::new("helper"));
@@ -377,7 +377,7 @@ fn loaded_project_builds_module_resolver_for_qualified_index_variant() {
         project.build_module_resolver(cancellation)
     })
     .unwrap();
-    let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
+    let lib_dag_id = DagId::new("helper", NonEmpty::new("helper", vec!["lib"]));
 
     let resolved_variant = resolver
         .resolve_index_variant_parts(
@@ -629,7 +629,7 @@ fn load_with_overlay_uses_disk_for_imports() {
     assert_eq!(root_file.source.as_str(), overlay_source);
 
     // Helper.lib file should use disk content
-    let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
+    let lib_dag_id = DagId::new("helper", NonEmpty::new("helper", vec!["lib"]));
     let lib_file = project.file(&lib_dag_id).unwrap();
     assert_eq!(lib_file.source.as_str(), "param y: Dimensionless = 2.0;");
 }
@@ -680,7 +680,7 @@ fn load_diamond_import_deduplication() {
     let project = load_project(&dir.path().join("src/graph/a.gcl"), None, &fs()).unwrap();
     assert_eq!(project.files.len(), 4);
     // d should appear first in load order
-    let d_dag_id = DagId::new("graph", NonEmpty::new("src", vec!["graph", "d"]));
+    let d_dag_id = DagId::new("graph", NonEmpty::new("graph", vec!["d"]));
     assert_eq!(project.files.ordered().get(0).unwrap().dag_id, d_dag_id);
 }
 

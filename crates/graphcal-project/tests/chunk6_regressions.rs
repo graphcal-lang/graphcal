@@ -105,7 +105,7 @@ dag inner {
     };
     assert_eq!(
         kind.to_string(),
-        "recursive DAG instantiation: src.mission.main -> inner -> src.mission.main"
+        "recursive DAG instantiation: mission.main -> inner -> mission.main"
     );
     assert_eq!((span.offset(), span.len()), (0, source.len()));
 }
