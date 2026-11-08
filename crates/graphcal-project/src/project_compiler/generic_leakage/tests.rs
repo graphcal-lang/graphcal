@@ -59,6 +59,7 @@ impl StaticBindingResolution for NothingBound {
         &self,
         port: &graphcal_compiler::syntax::type_name::StructTypeName,
         _: &graphcal_compiler::syntax::type_name::StructTypeName,
+        _: Span,
     ) -> Result<
         (
             graphcal_compiler::resolved_name::ResolvedStructTypeName,
@@ -73,6 +74,7 @@ impl StaticBindingResolution for NothingBound {
         &self,
         port: &graphcal_compiler::syntax::dimension::DimName,
         _: &graphcal_compiler::syntax::dimension::DimName,
+        _: Span,
     ) -> Result<
         (
             graphcal_compiler::resolved_name::ResolvedDimName,

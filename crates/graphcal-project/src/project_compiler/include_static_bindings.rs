@@ -62,7 +62,8 @@ impl CoveredStaticBindings {
 
     /// Resolve every binding canonically with `resolution`.
     ///
-    /// An index binding without its own site is reported at `include_span`.
+    /// An index binding without its own site, and every type and dimension
+    /// binding, is reported at `include_span`.
     ///
     /// # Errors
     ///
@@ -95,11 +96,11 @@ impl CoveredStaticBindings {
             .collect::<Result<_, PipelineError>>()?;
         let types = types
             .iter()
-            .map(|(port, target)| resolution.struct_type(port, target))
+            .map(|(port, target)| resolution.struct_type(port, target, include_span))
             .collect::<Result<_, _>>()?;
         let dimensions = dims
             .iter()
-            .map(|(port, target)| resolution.dimension(port, target))
+            .map(|(port, target)| resolution.dimension(port, target, include_span))
             .collect::<Result<_, _>>()?;
         Ok(IncludeStaticBindings {
             indexes,
@@ -125,7 +126,7 @@ pub(super) trait StaticBindingResolution {
         span: Span,
     ) -> Result<(ResolvedIndexName, InstanceIndexBindingTarget), PipelineError>;
 
-    /// The type port `port` and its target `target`.
+    /// The type port `port` and its target `target`, bound at `span`.
     ///
     /// # Errors
     ///
@@ -134,9 +135,10 @@ pub(super) trait StaticBindingResolution {
         &self,
         port: &StructTypeName,
         target: &StructTypeName,
+        span: Span,
     ) -> Result<(ResolvedStructTypeName, ResolvedStructTypeName), PipelineError>;
 
-    /// The dimension port `port` and its target `target`.
+    /// The dimension port `port` and its target `target`, bound at `span`.
     ///
     /// # Errors
     ///
@@ -145,6 +147,7 @@ pub(super) trait StaticBindingResolution {
         &self,
         port: &DimName,
         target: &DimName,
+        span: Span,
     ) -> Result<(ResolvedDimName, ResolvedDimName), PipelineError>;
 }
 

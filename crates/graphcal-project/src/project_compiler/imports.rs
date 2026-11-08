@@ -39,7 +39,7 @@ use super::model::{
     ImportAlias, ImportContext, IncludeInstanceRequest, ProjectModuleBinding, ReexportedItem,
     SelectedTypeAlias, UnitProjectionAlias,
 };
-use super::module_resolve_errors::module_resolve_compile_error;
+use super::module_resolve_errors::{module_resolve_compile_error, module_resolve_compile_error_at};
 use super::selected_include_items::{SelectedItemKind, SelectedValueKind, exported_values};
 use crate::import_surface::import_item_not_found_error;
 use graphcal_compiler::declaration_kind::DeclarationKind;
@@ -484,6 +484,7 @@ impl StaticBindingResolution for IncludeSite<'_> {
         &self,
         port: &StructTypeName,
         target: &StructTypeName,
+        span: Span,
     ) -> Result<
         (
             graphcal_compiler::resolved_name::ResolvedStructTypeName,
@@ -500,7 +501,7 @@ impl StaticBindingResolution for IncludeSite<'_> {
                 &graphcal_compiler::syntax::names::NamePath::local(target.atom().clone()),
             )
             .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            .map_err(|error| module_resolve_compile_error(error, self.src))?;
+            .map_err(|error| module_resolve_compile_error_at(error, self.src, span))?;
         Ok((identity, target))
     }
 
@@ -509,6 +510,7 @@ impl StaticBindingResolution for IncludeSite<'_> {
         &self,
         port: &DimName,
         target: &DimName,
+        span: Span,
     ) -> Result<
         (
             graphcal_compiler::resolved_name::ResolvedDimName,
@@ -527,7 +529,7 @@ impl StaticBindingResolution for IncludeSite<'_> {
             Ok(identity) => identity,
             Err(error) => graphcal_compiler::resolve::prelude::prelude_type_scope()
                 .resolve_dimension_path(&path)
-                .ok_or_else(|| module_resolve_compile_error(error, self.src))?,
+                .ok_or_else(|| module_resolve_compile_error_at(error, self.src, span))?,
         };
         Ok((identity, target))
     }

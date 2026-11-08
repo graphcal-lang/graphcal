@@ -379,3 +379,51 @@ fn selected_value_bound_resolves_in_the_template() {
         .expect("y is an output");
     assert!(y.outcome.is_err(), "{:?}", y.outcome);
 }
+
+const DIMENSION_PORT_DAG: &str = "\
+dag lib {
+    pub(bind) dim Q;
+    param v: Q;
+    pub node w: Q = @v;
+}
+";
+
+/// A dimension port bound to a prelude dimension can be selected under an
+/// alias (TYC-9).
+#[test]
+fn dimension_port_bound_to_a_prelude_dimension_is_selectable() {
+    for (dimension, value) in [("Length", "300.0 m"), ("Temperature", "300.0 K")] {
+        let (_dir, main) = package(&[(
+            "main.gcl",
+            &format!(
+                "{DIMENSION_PORT_DAG}\
+                 include lib(dim Q: {dimension}, v: {value})::{{ w, dim Q as QQ }};\n\
+                 node t5: QQ = @w;\n"
+            ),
+        )]);
+        assert_eq!(si_value(&eval(&main), "t5"), 300.0, "{dimension}");
+    }
+}
+
+/// A binding target that names no dimension is reported at the include,
+/// not across the whole file (TYC-9).
+#[test]
+fn unknown_dimension_binding_target_is_reported_at_the_include() {
+    for selection in ["w, dim Q as QQ", "w"] {
+        let include = format!("include lib(dim Q: Nope, v: 300.0 m)::{{ {selection} }};");
+        let source = format!("{DIMENSION_PORT_DAG}{include}\nnode t5: Length = @w;\n");
+        let (_dir, main) = package(&[("main.gcl", &source)]);
+        let CompileError::Eval(error) = eval_error(&main) else {
+            panic!("expected a semantic error");
+        };
+        let graphcal_compiler::semantic_error::SemanticError::Located(diagnostic) = &error.error
+        else {
+            panic!("expected a located error, got {:?}", error.error);
+        };
+        assert_eq!(
+            diagnostic.primary.offset(),
+            source.find(&include).unwrap(),
+            "{selection}"
+        );
+    }
+}
