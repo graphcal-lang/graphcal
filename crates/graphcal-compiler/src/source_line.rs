@@ -53,6 +53,29 @@ pub fn line_endings(source: &str) -> impl Iterator<Item = (usize, LineEnding)> +
     })
 }
 
+/// Split `source` at every physical line ending, excluding the endings.
+///
+/// Like `str::split('\n')` (`n` line endings yield `n + 1` pieces, the last
+/// possibly empty), but CRLF and lone CR are line endings too, so no piece
+/// keeps a stray `\r`.
+#[must_use = "the iterator is lazy"]
+pub fn split_lines(source: &str) -> impl Iterator<Item = &str> + '_ {
+    let mut start = 0;
+    line_endings(source)
+        .map(Some)
+        .chain(std::iter::once(None))
+        .map(move |line_ending| {
+            let line_start = start;
+            match line_ending {
+                Some((offset, line_ending)) => {
+                    start = offset + line_ending.len();
+                    &source[line_start..offset]
+                }
+                None => &source[line_start..],
+            }
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +91,15 @@ mod tests {
                 (6, LineEnding::Cr),
             ]
         );
+    }
+
+    #[test]
+    fn split_lines_drops_every_line_ending() {
+        assert_eq!(
+            split_lines("a\nb\r\nc\rd").collect::<Vec<_>>(),
+            ["a", "b", "c", "d"]
+        );
+        assert_eq!(split_lines("a\r\n").collect::<Vec<_>>(), ["a", ""]);
+        assert_eq!(split_lines("").collect::<Vec<_>>(), [""]);
     }
 }

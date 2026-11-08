@@ -147,3 +147,19 @@ fn bare_complex_fixture_formats() {
     let source = include_str!("../../../tests/fixtures/invalid/complex_requires_dimension_arg.gcl");
     assert!(format_stable(source).contains(": Complex "));
 }
+
+// ---------------------------------------------------------------------------
+// FE-13: a verbatim fallback does not keep the source's line endings.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn verbatim_fallback_in_crlf_file_uses_one_line_ending() {
+    let source = "node a: Dimensionless = 1.0;\r\n\
+                  node b: Dimensionless = if true {\r\n        // inside\r\n        1.0\r\n} else { 2.0 };\r\n";
+    let formatted = format_stable(source);
+    assert!(
+        !formatted.contains('\r'),
+        "mixed line endings: {formatted:?}"
+    );
+    assert_eq!(formatted, source.replace("\r\n", "\n"));
+}
