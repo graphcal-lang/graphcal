@@ -8817,6 +8817,77 @@ fn report_build_static_accepts_inline_json_and_records_repro_source() {
     );
 }
 
+/// The reproduce command of a static report, HTML-unescaped.
+fn report_repro_command(html: &str) -> String {
+    let start = html.find("<code class=\"repro\">").expect("repro command") + 19;
+    let end = start + html[start..].find("</code>").expect("closed repro command");
+    html[start..end]
+        .replace("&#x27;", "'")
+        .replace("&quot;", "\"")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+#[test]
+fn report_build_static_records_every_json_parameter_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let json = r#"{"isp":"450.0 s"}"#;
+    let json_file = write_temp_file(dir.path(), "scenario.json", json);
+    let json_file_arg = json_file.to_str().unwrap();
+    for (arguments, stdin, expected) in [
+        (
+            vec!["--params-json", json],
+            None,
+            format!("--params-json '{json}'"),
+        ),
+        (
+            vec!["--params-json-file", json_file_arg],
+            None,
+            format!("--params-json-file '{json_file_arg}'"),
+        ),
+        (
+            vec!["--params-json-file", "-"],
+            Some(json),
+            "--params-json-file -".to_string(),
+        ),
+    ] {
+        let html_path = dir.path().join("out.html");
+        let mut command = graphcal_bin();
+        command
+            .args(["report", "build", "--static"])
+            .arg(&model)
+            .args(&arguments)
+            .arg("--output")
+            .arg(&html_path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().expect("failed to run graphcal");
+        {
+            use std::io::Write as _;
+            let mut input = child.stdin.take().expect("piped stdin");
+            if let Some(stdin) = stdin {
+                input.write_all(stdin.as_bytes()).unwrap();
+            }
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{arguments:?} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let html = std::fs::read_to_string(&html_path).unwrap();
+        assert!(
+            html.contains("450 s"),
+            "{arguments:?}: JSON baseline must display"
+        );
+        let repro = report_repro_command(&html);
+        assert!(repro.ends_with(&expected), "{arguments:?}: {repro}");
+    }
+}
+
 #[test]
 fn report_build_with_failing_assertion_still_writes_page_and_exits_1() {
     let dir = tempfile::tempdir().unwrap();
