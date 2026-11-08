@@ -731,20 +731,29 @@ fn report_parameter_error(error: &OverrideParseError) -> ! {
     process::exit(2);
 }
 
-fn run_model_describe(file: &Path, root: Option<&Path>) {
-    if let Err(error) = model::describe(file, root) {
-        eprintln!("error: {error}");
-        process::exit(error.exit_code());
+/// Print a `model` subcommand failure and exit with its status class.
+/// Compile errors render with their file, line and snippet, as `check` does.
+fn report_model_error(error: model::ModelServeError) -> ! {
+    let code = error.exit_code();
+    match error {
+        model::ModelServeError::Compile(error) => {
+            eprintln!("{:?}", miette::Report::new(error));
+        }
+        other => eprintln!("error: {other}"),
     }
+    process::exit(code);
 }
 
 fn run_model_command(command: ModelCommands) {
     match command {
-        ModelCommands::Describe { file, root } => run_model_describe(&file, root.as_deref()),
+        ModelCommands::Describe { file, root } => {
+            if let Err(error) = model::describe(&file, root.as_deref()) {
+                report_model_error(error);
+            }
+        }
         ModelCommands::Unit { file, units, root } => {
             if let Err(error) = model::resolve_units(&file, &units, root.as_deref()) {
-                eprintln!("error: {error}");
-                process::exit(error.exit_code());
+                report_model_error(error);
             }
         }
         ModelCommands::Serve {
@@ -806,14 +815,7 @@ fn run_model_serve(
     root: Option<&Path>,
 ) {
     if let Err(error) = model::serve(file, selection, fingerprint, mode, root) {
-        let code = error.exit_code();
-        match error {
-            model::ModelServeError::Compile(error) => {
-                eprintln!("{:?}", miette::Report::new(error));
-            }
-            other => eprintln!("error: {other}"),
-        }
-        process::exit(code);
+        report_model_error(error);
     }
 }
 

@@ -8114,6 +8114,31 @@ fn describe_batch_model(model: &std::path::Path) -> graphcal_model_protocol::Des
     serde_json::from_slice(&output.stdout).expect("describe prints a describe document")
 }
 
+/// CLI-14: `model describe` and `model unit` render compile errors with
+/// their file, line and snippet, as `check` does.
+#[test]
+fn model_describe_and_unit_render_compile_errors_with_location() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "broken.gcl",
+        "param load: Length = 1.0 m;\nnode y: Length = @missing;\n",
+    );
+    for arguments in [vec!["describe"], vec!["unit", "m"]] {
+        let mut command = graphcal_bin();
+        command.arg("model").arg(arguments[0]).arg(&model);
+        command.args(&arguments[1..]);
+        let output = command.output().expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("broken.gcl:2:") && stderr.contains("@missing"),
+            "`model {}` must render the error location and snippet: {stderr}",
+            arguments[0]
+        );
+    }
+}
+
 #[test]
 fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
     let dir = tempfile::tempdir().unwrap();
