@@ -150,3 +150,16 @@ fn import_spelled_in_another_case_never_loads_the_file() {
         "{code:?}"
     );
 }
+
+/// A non-`.gcl` entry is rejected under the name it is loaded by, even when
+/// it is a symlink to a `.gcl` file.
+#[cfg(unix)]
+#[test]
+fn non_gcl_symlink_to_a_gcl_entry_is_an_invalid_source_path() {
+    let directory = package(&[("src/pkg/main.gcl", "node x: Dimensionless = 1.0;")]);
+    std::os::unix::fs::symlink("main.gcl", directory.path().join("src/pkg/notes.txt")).unwrap();
+    assert_eq!(
+        load_error_code(&directory, "src/pkg/notes.txt").as_deref(),
+        Some("graphcal::M023")
+    );
+}

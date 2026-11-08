@@ -563,6 +563,18 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, Outcome<CompileError>> {
     cancellation.checkpoint()?;
+    // A source file is a `.gcl` file under the name it is loaded by, not
+    // only after symlink resolution: `notes.txt -> main.gcl` is not one.
+    if root_path
+        .extension()
+        .is_none_or(|extension| extension != "gcl")
+    {
+        return Err(CompileError::Load(LoadError::InvalidSourcePath {
+            path: root_path.to_path_buf(),
+            reason: "source path must end with `.gcl`".to_string(),
+        })
+        .into());
+    }
     let root_canonical = fs
         .canonicalize(root_path)
         .map_err(|_| io_not_found(root_path))?;
