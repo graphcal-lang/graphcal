@@ -14,10 +14,12 @@ use graphcal_compiler::{cancellation::CancellationToken, outcome::Outcome};
 use sha2::{Digest, Sha256};
 
 #[cfg(not(target_arch = "wasm32"))]
+use crate::OutsideRootError;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::VirtualAbsolutePath;
 use crate::{
     BoundedFileHash, ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError,
-    FileSystemReader, OutsideRootError,
+    FileSystemReader,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -480,6 +482,7 @@ impl FileSystemReader for RealFileSystem {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     fn io_kind(outcome: Outcome<FileSystemReadError>) -> Option<io::ErrorKind> {
         match outcome {
             Outcome::Failed(error) => error.io_kind(),
