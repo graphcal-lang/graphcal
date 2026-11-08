@@ -1,11 +1,9 @@
 //! Browser-specific report metadata and rendering adapter.
 
-use std::collections::BTreeMap;
-
 use graphcal_eval::eval::EvalResult;
 use graphcal_project::loader::LoadedProject;
 use graphcal_report::report_html::render_host_report_html;
-use graphcal_report::report_ir::{ReportInputs, SourceDigest, build_report, collect_doc_captions};
+use graphcal_report::report_ir::{DocCaptions, ReportInputs, SourceDigest, build_report};
 use graphcal_report::report_provenance::{ReproInvocation, build_provenance};
 use sha2::{Digest, Sha256};
 
@@ -14,18 +12,17 @@ use crate::project::VirtualProject;
 
 pub struct ReportMetadata {
     title: String,
-    docs: BTreeMap<String, String>,
+    docs: DocCaptions,
     sources: Vec<SourceDigest>,
     entry: String,
 }
 
 impl ReportMetadata {
-    pub(crate) fn from_loaded(project: &LoadedProject, entry: String) -> Self {
+    pub(crate) fn new(project: &LoadedProject, entry: String, docs: DocCaptions) -> Self {
         let title = std::path::Path::new(&entry).file_stem().map_or_else(
             || "report".to_string(),
             |stem| stem.to_string_lossy().into_owned(),
         );
-        let docs = collect_doc_captions(project.root_file().ast());
         let mut sources = project
             .files()
             .iter()

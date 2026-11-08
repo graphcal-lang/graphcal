@@ -114,14 +114,42 @@ fn static_reports_keep_si_and_separate_presentation_notices() {
     }
 }
 
+fn evaluate_with_docs(
+    project: &LoadedProject,
+) -> (
+    graphcal_eval::eval::EvalResult,
+    graphcal_report::report_ir::DocCaptions,
+) {
+    let prepared = graphcal_project::prepare::prepare_from_project(project).unwrap();
+    let result = prepared
+        .evaluate(&prepared.binding_builder().finish().unwrap())
+        .unwrap();
+    (result, collect_doc_captions(prepared.tir().root()))
+}
+
+#[test]
+fn captions_attach_to_their_own_declaration_across_namespaces() {
+    // A unit sharing a parameter's name must not caption the parameter.
+    let document = build_document(
+        "/// The cycle unit.\nunit cycles: Dimensionless = 1.0 rad / rad;\n\
+         param cycles: Dimensionless = 3.0;\n\
+         /// Doubled cycles.\nnode twice: Dimensionless = @cycles * 2.0;",
+    );
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let markdown = render_report_markdown(&document);
+    for rendered in [&html, &markdown] {
+        assert!(!rendered.contains("The cycle unit"), "{rendered}");
+        assert!(rendered.contains("Doubled cycles"), "{rendered}");
+    }
+}
+
 fn build_document(source: &str) -> ReportDocument {
     let project = LoadedProject::from_source(source, "deltav.gcl").unwrap();
     build_project_document(&project)
 }
 
 fn build_project_document(project: &LoadedProject) -> ReportDocument {
-    let result = compile_and_eval_from_project(project, &HashMap::new()).unwrap();
-    let docs = collect_doc_captions(project.root_file().ast());
+    let (result, docs) = evaluate_with_docs(project);
     build_report(ReportInputs {
         title: "deltav",
         result: &result,
@@ -496,8 +524,7 @@ node good: Dimensionless = 2.0;
 assert bad_is_finite = @bad < 10.0;
 ";
     let project = LoadedProject::from_source(source, "bad.gcl").unwrap();
-    let result = compile_and_eval_from_project(&project, &HashMap::new()).unwrap();
-    let docs = collect_doc_captions(project.root_file().ast());
+    let (result, docs) = evaluate_with_docs(&project);
     let document = build_report(ReportInputs {
         title: "bad",
         result: &result,

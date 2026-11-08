@@ -30,6 +30,7 @@ use crate::bindings::{
 use crate::diagnostics::{DiagnosticView, compile_error_view};
 use crate::output::EvaluationView;
 use crate::project::{ProjectValidationError, RequestErrorView, VirtualProject};
+use graphcal_report::report_ir::collect_doc_captions;
 
 /// A checked in-memory project ready for repeated evaluation.
 pub struct PreparedPlayground {
@@ -166,8 +167,6 @@ fn prepare_virtual(
         };
     }
 
-    let report =
-        crate::browser_report::ReportMetadata::from_loaded(&loaded, project.entry_display());
     let mut registry = demo_registry();
     graphcal_plugin_host::register_project_plugins(
         &graphcal_plugin_host::PluginHost::new(),
@@ -193,8 +192,12 @@ fn prepare_virtual(
         });
     match prepared {
         Ok((prepared, view)) => PrepareOutcome::Prepared(Box::new(PreparedPlayground {
+            report: crate::browser_report::ReportMetadata::new(
+                &loaded,
+                project.entry_display(),
+                collect_doc_captions(prepared.tir().root()),
+            ),
             prepared,
-            report,
             view,
         })),
         Err(error) => PrepareOutcome::CompileError {

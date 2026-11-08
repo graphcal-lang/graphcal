@@ -159,7 +159,7 @@ pub fn run_build(
     }
     let result = prepared.evaluate(&bindings.finish()?)?;
 
-    let docs = collect_doc_captions(project.root_file().ast());
+    let docs = collect_doc_captions(prepared.tir().root());
     let title = args.file.file_stem().map_or_else(
         || "report".to_string(),
         |stem| stem.to_string_lossy().into_owned(),
