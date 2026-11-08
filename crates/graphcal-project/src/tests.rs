@@ -5002,6 +5002,51 @@ fn model_sessions_carry_quantities_in_chosen_units() {
 }
 
 #[test]
+fn an_output_overflowing_in_its_chosen_unit_fails_only_its_row() {
+    use graphcal_model_protocol::{
+        FiniteF64, InputColumn, PortName, RequestBatch, RowFailure, RowOutcome, SessionSpec,
+        UnitSpelling,
+    };
+
+    let project = crate::loader::LoadedProject::from_source(
+        "param x: Dimensionless;\npub node y: Length = @x * 1.0e306 m;\n",
+        "model.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let schema = std::sync::Arc::new(
+        prepared
+            .session_schema(
+                &SessionSpec::new(
+                    vec![PortName::new("x").unwrap()],
+                    vec![PortName::new("y").unwrap()],
+                )
+                .with_unit(
+                    PortName::new("y").unwrap(),
+                    UnitSpelling::new("mm").unwrap(),
+                ),
+            )
+            .unwrap(),
+    );
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let x = |value: f64| FiniteF64::new(value).unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![x(1e-10), x(1.0)])],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    assert!(matches!(result.row(0), Some(RowOutcome::Success(_))));
+    assert!(matches!(
+        result.row(1),
+        Some(RowOutcome::Failure(RowFailure::EvaluationError { message }))
+            if message.contains("`y`") && message.contains("`mm`")
+    ));
+}
+
+#[test]
 fn model_unit_choices_must_resolve_to_fixed_scale_units_of_the_port_dimension() {
     use graphcal_model_protocol::{PortName, SessionError, UnitSpelling};
 

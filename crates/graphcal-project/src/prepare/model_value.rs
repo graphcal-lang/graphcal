@@ -187,9 +187,10 @@ fn to_si(scale: Option<SiScale>, value: FiniteF64) -> Result<f64, ValueBindError
 }
 
 fn from_si(scale: Option<SiScale>, si: f64) -> Result<FiniteF64, OutputProjectionError> {
-    FiniteF64::new(si)
-        .and_then(|si| scale.map_or(Ok(si), |scale| scale.from_si(si)))
-        .map_err(|_| OutputProjectionError::Unrepresentable)
+    let si = FiniteF64::new(si).map_err(|_| OutputProjectionError::Unrepresentable)?;
+    scale
+        .map_or(Ok(si), |scale| scale.from_si(si))
+        .map_err(|_| OutputProjectionError::Overflow)
 }
 
 impl ValueCodec {

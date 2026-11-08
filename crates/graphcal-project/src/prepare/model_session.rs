@@ -14,8 +14,8 @@ use graphcal_eval::eval_expr::j2000_seconds::seconds_since_j2000;
 use graphcal_model_protocol::{
     Bounds, Domain, FiniteF64, InputColumn, InterfaceError, InterfaceFingerprint, LabelError,
     ModelInterface, OutputDescription, ParameterDescription, ParameterError, PortName,
-    RequestBatch, ResultBatch, ResultBatchBuilder, RowFailure, RowOutcome, SessionError,
-    SessionSchema, SessionSpec, SiScale, UnitSpelling, WireType,
+    QuantityType, RequestBatch, ResultBatch, ResultBatchBuilder, RowFailure, RowOutcome,
+    SessionError, SessionSchema, SessionSpec, SiScale, UnitSpelling, WireType,
 };
 
 use super::model_value::{ValueBindError, ValueCodec, ValueCodecError};
@@ -359,7 +359,7 @@ impl PreparedProject {
                     )? {
                         ModelRowOutcome::Success(values) => RowOutcome::Success(values),
                         ModelRowOutcome::Failure(failure) => {
-                            RowOutcome::Failure(protocol_failure(&failure))
+                            RowOutcome::Failure(protocol_failure(&session.schema, &failure))
                         }
                     }
                 }
@@ -509,8 +509,24 @@ fn port_name(name: &DeclName) -> Result<PortName, LabelError> {
     PortName::new(name.as_str())
 }
 
-fn protocol_failure(failure: &ModelRowFailure) -> RowFailure {
+fn protocol_failure(schema: &SessionSchema, failure: &ModelRowFailure) -> RowFailure {
     match failure {
+        ModelRowFailure::OutputOverflow { name } => {
+            let unit = schema
+                .outputs()
+                .iter()
+                .find(|output| output.name().as_str() == name.as_str())
+                .and_then(|output| output.wire().quantity())
+                .and_then(QuantityType::unit);
+            RowFailure::EvaluationError {
+                message: unit.map_or_else(
+                    || failure.to_string(),
+                    |unit| {
+                        format!("output `{name}` has no finite value in its chosen unit `{unit}`")
+                    },
+                ),
+            }
+        }
         ModelRowFailure::Assertion { name, message } => RowFailure::AssertionFailed {
             assertion: name.to_string(),
             message: message.clone(),

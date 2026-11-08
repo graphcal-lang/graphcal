@@ -305,31 +305,35 @@ impl PreparedProject {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }
         let values = outcome.values();
-        let projected = outputs
-            .iter()
-            .enumerate()
-            .map(|(position, output)| {
-                let runtime = values.get(&output.runtime_key).ok_or_else(|| {
-                    Outcome::Failed(ModelExecutionError::MissingOutputValue {
-                        name: output.name.clone(),
-                    })
-                })?;
-                project(runtime, position, cancellation).map_err(|outcome| {
-                    outcome.map_failed(|error| match error {
-                        OutputProjectionError::Invariant(invariant) => {
-                            ModelExecutionError::Compile(
-                                self.render(invariant.into_internal_error(self.source)),
-                            )
-                        }
-                        OutputProjectionError::Unrepresentable => {
-                            ModelExecutionError::UnrepresentableOutput {
-                                name: output.name.clone(),
-                            }
-                        }
-                    })
+        let mut projected = Vec::with_capacity(outputs.len());
+        for (position, output) in outputs.iter().enumerate() {
+            let runtime = values.get(&output.runtime_key).ok_or_else(|| {
+                Outcome::Failed(ModelExecutionError::MissingOutputValue {
+                    name: output.name.clone(),
                 })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            })?;
+            match project(runtime, position, cancellation) {
+                Ok(value) => projected.push(value),
+                Err(Outcome::Cancelled) => return Err(Outcome::Cancelled),
+                Err(Outcome::Failed(OutputProjectionError::Overflow)) => {
+                    return Ok(ModelRowOutcome::Failure(ModelRowFailure::OutputOverflow {
+                        name: output.name.clone(),
+                    }));
+                }
+                Err(Outcome::Failed(OutputProjectionError::Invariant(invariant))) => {
+                    return Err(Outcome::Failed(ModelExecutionError::Compile(
+                        self.render(invariant.into_internal_error(self.source)),
+                    )));
+                }
+                Err(Outcome::Failed(OutputProjectionError::Unrepresentable)) => {
+                    return Err(Outcome::Failed(
+                        ModelExecutionError::UnrepresentableOutput {
+                            name: output.name.clone(),
+                        },
+                    ));
+                }
+            }
+        }
         // A deadline that passed during the last projection still cancels
         // the row rather than reporting it as a success.
         cancellation.checkpoint()?;
@@ -370,6 +374,9 @@ pub(super) enum OutputProjectionError {
     Invariant(graphcal_eval::invariant::Invariant),
     /// The value has no representation in the requested wire type.
     Unrepresentable,
+    /// A finite SI value has no finite value in the unit the session chose
+    /// for the output: the row's failure, like an input that overflows.
+    Overflow,
 }
 
 impl From<graphcal_eval::invariant::Invariant> for OutputProjectionError {
@@ -412,6 +419,10 @@ pub enum ModelRowFailure {
         name: graphcal_compiler::syntax::module_name::ScopedName,
         message: String,
     },
+    /// A selected output's finite value overflows in the unit the session
+    /// chose for it.
+    #[error("output `{name}` has no finite value in its chosen unit")]
+    OutputOverflow { name: DeclName },
     /// A call reached unfinished formulas of the DAG it invoked.
     #[error("unfinished formulas in invoked DAGs: {}", unfinished_calls(.0))]
     UnfinishedCalls(Vec<graphcal_eval::eval::OutputDeclName>),
