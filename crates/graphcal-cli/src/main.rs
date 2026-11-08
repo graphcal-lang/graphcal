@@ -576,13 +576,8 @@ fn run_plugin_new(name: &str, dir: Option<&Path>) {
     outln!("  graphcal plugin test {}", plan.release_artifact.display());
 }
 
-/// `graphcal plugin test`: load and validate a module (all ABI checks run
-/// before any plugin code), print its identity and signatures, and
-/// optionally call one function under the default resource limits.
-///
-/// Exit codes: 1 when the module fails validation or the called function
-/// fails or returns a value violating its declared kind; 2 for unreadable
-/// files or unusable --call arguments.
+/// Read a plugin module, refusing anything but a regular file and bounding
+/// the read by the plugin ingestion limit.
 fn read_plugin_module_bounded(module_path: &Path) -> Result<Vec<u8>, String> {
     let metadata = std::fs::symlink_metadata(module_path).map_err(|error| error.to_string())?;
     if !metadata.file_type().is_file() {
@@ -617,6 +612,13 @@ fn read_plugin_module_bounded(module_path: &Path) -> Result<Vec<u8>, String> {
     }
 }
 
+/// `graphcal plugin test`: load and validate a module (all ABI checks run
+/// before any plugin code), print its identity and signatures, and
+/// optionally call one function under the default resource limits.
+///
+/// Exit codes: 1 when the module fails validation or the called function
+/// fails or returns a value violating its declared kind; 2 for unreadable
+/// files or unusable --call arguments.
 fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
     let bytes = read_plugin_module_bounded(module_path).unwrap_or_else(|error| {
         bail_with(
@@ -828,21 +830,15 @@ fn handle_eval(
     plot_output: Option<&PlotOutput>,
     allow_incomplete: bool,
 ) {
-    // Rooted sandbox: derive the project root from the loader's rules and
-    // confine reads to it. `root` (the user's explicit --root) takes
-    // precedence; otherwise walk up from `file`'s parent looking for
-    // `graphcal.toml`, falling back to the loose file's parent directory.
-    let outcome = build_rooted_filesystem(file, root).and_then(|fs| {
-        load_project_with_plugins(file, root, &fs).and_then(|(project, host_fns)| {
-            let prepared = ProjectCompiler::new(&project)
-                .host_fns(&host_fns)
-                .prepare()?;
-            let mut bindings = prepared.binding_builder();
-            for (name, value) in &overrides.values {
-                value.bind(name, &mut bindings)?;
-            }
-            prepared.evaluate(&bindings.finish()?)
-        })
+    let outcome = load_rooted_project_with_plugins(file, root).and_then(|(project, host_fns)| {
+        let prepared = ProjectCompiler::new(&project)
+            .host_fns(&host_fns)
+            .prepare()?;
+        let mut bindings = prepared.binding_builder();
+        for (name, value) in &overrides.values {
+            value.bind(name, &mut bindings)?;
+        }
+        prepared.evaluate(&bindings.finish()?)
     });
     match outcome {
         Ok(result) => {
@@ -1010,6 +1006,19 @@ fn report_traversal_failures(failures: &TraversalFailures) {
     });
 }
 
+/// [`load_project_with_plugins`] in the sandbox of `file`'s project root.
+///
+/// The explicit `project_root` (`--root`) takes precedence; otherwise the
+/// loader walks up from `file`'s parent looking for `graphcal.toml`, falling
+/// back to the loose file's parent directory. Reads are confined to it.
+fn load_rooted_project_with_plugins(
+    file: &Path,
+    project_root: Option<&Path>,
+) -> Result<(LoadedProject, HostFunctionRegistry), CompileError> {
+    let fs = build_rooted_filesystem(file, project_root)?;
+    load_project_with_plugins(file, project_root, &fs)
+}
+
 /// Load a project and build the host function registry backing its extern
 /// (plugin) declarations: the built-in demo plugin plus every wasm plugin
 /// the project vendors, loaded through one plugin host per invocation.
@@ -1046,11 +1055,10 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
 
     let mut error_count = 0;
     for file in &targets {
-        let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
-            load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
+        let outcome =
+            load_rooted_project_with_plugins(file, project_root).and_then(|(project, host_fns)| {
                 ProjectCompiler::new(&project).host_fns(&host_fns).check()
-            })
-        });
+            });
         match outcome {
             Ok(checked) => {
                 let todos = checked.tir().reachable_unfinished().len();
@@ -1111,11 +1119,8 @@ fn run_graph(
     eprintln!(
         "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
     );
-    let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
-        load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
-            ProjectCompiler::new(&project).host_fns(&host_fns).check()
-        })
-    });
+    let outcome = load_rooted_project_with_plugins(file, project_root)
+        .and_then(|(project, host_fns)| ProjectCompiler::new(&project).host_fns(&host_fns).check());
     match outcome {
         Ok(checked) => match graphcal_project::graph_ir::project_tir(checked.tir()) {
             Ok(ir) => match format {
@@ -1170,8 +1175,7 @@ fn run_view(file: &Path, project_root: Option<&Path>, instance: Option<String>) 
         instance: ViewInstanceId::from_wire(instance),
     });
     let outcome = (|| -> Result<ViewModel, ViewFailure> {
-        let fs = build_rooted_filesystem(file, project_root)?;
-        let (project, host_fns) = load_project_with_plugins(file, project_root, &fs)?;
+        let (project, host_fns) = load_rooted_project_with_plugins(file, project_root)?;
         let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
         let projections = project_views(&project, &checked)?;
         let Some(projection) = projections.get(&target) else {

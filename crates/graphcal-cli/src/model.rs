@@ -10,7 +10,6 @@ use graphcal_model_protocol::{
 
 use crate::overrides::ParsedOverrides;
 use graphcal_project::compile_error::CompileError;
-use graphcal_project::loader::{build_rooted_filesystem, load_project};
 use graphcal_project::prepare::{
     ModelInterfaceError, ModelSessionError, ModelUnitError, PreparedProject,
 };
@@ -183,14 +182,7 @@ pub fn serve(
 }
 
 fn prepare(file: &Path, root: Option<&Path>) -> Result<PreparedProject, ModelServeError> {
-    let fs = build_rooted_filesystem(file, root)?;
-    let project = load_project(file, root, &fs)?;
-    let mut host_fns = graphcal_eval::host_fns::demo_registry();
-    graphcal_plugin_host::register_project_plugins(
-        &graphcal_plugin_host::PluginHost::new(),
-        &project,
-        &mut host_fns,
-    );
+    let (project, host_fns) = crate::load_rooted_project_with_plugins(file, root)?;
     Ok(ProjectCompiler::new(&project)
         .host_fns(&host_fns)
         .prepare()?)
