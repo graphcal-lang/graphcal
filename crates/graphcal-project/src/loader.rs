@@ -24,6 +24,7 @@ mod inline_dags;
 pub(crate) mod loaded_file;
 pub(crate) mod loaded_module_resolver;
 pub(crate) mod loaded_project;
+mod module_file;
 pub(crate) mod module_path;
 mod same_file_reference;
 mod source_authority;
@@ -49,6 +50,7 @@ pub use module_path::ResolvedModuleTarget;
 use same_file_reference::SameFileScope;
 use source_authority::{
     ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
+    verify_root_module_file,
 };
 use source_snapshot::{ModuleRoot, PackageFileKey, ParsedFile, ResolveFailure};
 
@@ -1284,6 +1286,8 @@ fn load_manifest_for_root<F: FileSystemReader>(
         .map_err(|error| loader_manifest_error(error.to_string()))?;
 
     if root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
+        let source_dir = parsed.source_dir.join_to(project_root);
+        verify_root_module_file(fs, &source_dir, root_canonical, cancellation)?;
         Ok(Some(parsed))
     } else {
         Ok(None)

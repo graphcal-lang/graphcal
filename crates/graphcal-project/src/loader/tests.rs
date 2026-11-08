@@ -1676,7 +1676,10 @@ fn project_module_resolution_is_typed_and_span_free() {
             &sources.authority(),
             import.path(),
             &scripted_path("main"),
+            &mut source_authority::DirectoryEntries::default(),
+            &CancellationToken::unbounded(),
         )
+        .unwrap()
     };
 
     assert_eq!(
@@ -1729,7 +1732,10 @@ fn project_module_resolution_is_typed_and_span_free() {
             },
             import.path(),
             &scripted_path("main"),
-        ),
+            &mut source_authority::DirectoryEntries::default(),
+            &CancellationToken::unbounded(),
+        )
+        .unwrap(),
         ModuleResolution::Failed(ResolveFailure::CrossFileImportInVirtualPackage)
     );
 }

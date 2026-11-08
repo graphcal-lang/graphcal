@@ -54,3 +54,99 @@ fn unreadable_entry_source_is_a_source_read_failure() {
         assert_eq!(code(&error).as_deref(), Some("graphcal::M039"));
     }
 }
+
+fn package(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let mut all = vec![("graphcal.toml", "[package]\nname = \"pkg\"\n")];
+    all.extend_from_slice(files);
+    tree(&all)
+}
+
+fn load_error_code(directory: &tempfile::TempDir, entry: &str) -> Option<String> {
+    let entry = directory.path().join(entry);
+    let [rooted, ambient] = readers(directory.path()).map(|reader| {
+        let error = load_project(&entry, None, &reader).expect_err("the load must fail");
+        code(&error)
+    });
+    assert_eq!(rooted, ambient, "readers disagree");
+    rooted
+}
+
+/// PRJ-14: a non-`.gcl` entry inside the package namespace is an invalid
+/// source path (M023), not X001 "compiler bug".
+#[test]
+fn non_gcl_entry_in_package_namespace_is_an_invalid_source_path() {
+    let directory = package(&[("src/pkg/notes.txt", "node x: Dimensionless = 1.0;")]);
+    assert_eq!(
+        load_error_code(&directory, "src/pkg/notes.txt").as_deref(),
+        Some("graphcal::M023")
+    );
+}
+
+/// PRJ-10: file names that an import cannot spell, or that are not
+/// `lower_snake_case`, are rejected as the multi-file docs say, whether the
+/// file is the entry or imported.
+#[test]
+fn module_files_must_have_lower_snake_case_identifier_names() {
+    for (entry, files) in [
+        (
+            "src/pkg/my-helpers.gcl",
+            vec![(
+                "src/pkg/my-helpers.gcl",
+                "pub const node k: Dimensionless = 2.0;",
+            )],
+        ),
+        (
+            "src/pkg/MyModule.gcl",
+            vec![(
+                "src/pkg/MyModule.gcl",
+                "pub const node k: Dimensionless = 1.0;",
+            )],
+        ),
+        (
+            "src/pkg/main.gcl",
+            vec![
+                (
+                    "src/pkg/main.gcl",
+                    "import pkg.MyModule::{k};\nnode a: Dimensionless = @k;",
+                ),
+                (
+                    "src/pkg/MyModule.gcl",
+                    "pub const node k: Dimensionless = 1.0;",
+                ),
+            ],
+        ),
+        (
+            "src/pkg/Sub/main.gcl",
+            vec![("src/pkg/Sub/main.gcl", "node a: Dimensionless = 1.0;")],
+        ),
+    ] {
+        let directory = package(&files);
+        assert_eq!(
+            load_error_code(&directory, entry).as_deref(),
+            Some("graphcal::M040"),
+            "{entry}"
+        );
+    }
+}
+
+/// PRJ-10 on the host filesystem: `import pkg.Lib` never loads `lib.gcl`.
+/// A case-sensitive filesystem has no `Lib.gcl` (M002); a case-insensitive
+/// one finds the file under the wrong spelling (M041).
+#[test]
+fn import_spelled_in_another_case_never_loads_the_file() {
+    let directory = package(&[
+        (
+            "src/pkg/main.gcl",
+            "import pkg.lib::{type Thing, Thing};\nimport pkg.Lib::{type Thing as Thing2};\nnode a: Thing = Thing(v: 1.0);\nnode b: Thing2 = @a;",
+        ),
+        (
+            "src/pkg/lib.gcl",
+            "pub type Thing { Thing(v: Dimensionless) }",
+        ),
+    ]);
+    let code = load_error_code(&directory, "src/pkg/main.gcl");
+    assert!(
+        matches!(code.as_deref(), Some("graphcal::M002" | "graphcal::M041")),
+        "{code:?}"
+    );
+}

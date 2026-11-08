@@ -163,9 +163,55 @@ pub enum LoadError {
     #[error("could not read source file `{}`: {reason}", path.display())]
     #[diagnostic(
         code(graphcal::M039),
-        help("Graphcal source files must be readable regular `.gcl` files within the loader's resource limits")
+        help(
+            "Graphcal source files must be readable regular `.gcl` files within the loader's resource limits"
+        )
     )]
     SourceReadFailed { path: PathBuf, reason: String },
+
+    /// A package source file whose path names no module. `reason` says which
+    /// directory name or file stem is not a module path segment.
+    #[error("invalid module file name `{}`: {reason}", path.display())]
+    #[diagnostic(
+        code(graphcal::M040),
+        help(
+            "every directory and `.gcl` file stem below the source directory is a module path segment, so it must be a lower_snake_case Graphcal identifier that is not a keyword; rename it (for example `my-helpers.gcl` to `my_helpers.gcl`)"
+        )
+    )]
+    InvalidModuleFileName { path: PathBuf, reason: String },
+
+    /// A module file reached under a spelling that differs from its directory
+    /// entry, which a case-insensitive filesystem would otherwise accept.
+    #[error("{}", spelling_mismatch_message(path, on_disk.as_deref()))]
+    #[diagnostic(
+        code(graphcal::M041),
+        help(
+            "module paths must match file and directory names exactly, including letter case, so a project loads the same way on every filesystem; correct the spelling or rename the file"
+        )
+    )]
+    ModuleFileSpellingMismatch {
+        /// The path as requested, up to the first mismatched component.
+        path: PathBuf,
+        /// The directory entry that differs only in letter case, if any.
+        on_disk: Option<String>,
+    },
+}
+
+fn spelling_mismatch_message(path: &std::path::Path, on_disk: Option<&str>) -> String {
+    on_disk.map_or_else(
+        || {
+            format!(
+                "module file `{}` matches no directory entry exactly",
+                path.display()
+            )
+        },
+        |on_disk| {
+            format!(
+                "module file `{}` is spelled `{on_disk}` on disk",
+                path.display()
+            )
+        },
+    )
 }
 
 impl LoadError {
@@ -178,7 +224,9 @@ impl LoadError {
             | Self::InvalidSourcePath { .. }
             | Self::CircularImport { .. }
             | Self::ManifestError { .. }
-            | Self::SourceReadFailed { .. } => None,
+            | Self::SourceReadFailed { .. }
+            | Self::InvalidModuleFileName { .. }
+            | Self::ModuleFileSpellingMismatch { .. } => None,
             Self::ImportFileNotFound { src, .. }
             | Self::ImportOutsideRoot { src, .. }
             | Self::PackageNameMismatch { src, .. }
@@ -225,6 +273,20 @@ mod tests {
                     reason: "cannot read non-regular file".to_owned(),
                 },
                 "graphcal::M039",
+            ),
+            (
+                LoadError::InvalidModuleFileName {
+                    path: PathBuf::from("src/pkg/MyModule.gcl"),
+                    reason: "`MyModule` is not lower_snake_case".to_owned(),
+                },
+                "graphcal::M040",
+            ),
+            (
+                LoadError::ModuleFileSpellingMismatch {
+                    path: PathBuf::from("src/pkg/Lib.gcl"),
+                    on_disk: Some("lib.gcl".to_owned()),
+                },
+                "graphcal::M041",
             ),
         ] {
             assert_eq!(

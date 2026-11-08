@@ -617,11 +617,14 @@ fn invalid_module_location_is_an_error() {
         files: std::iter::once((file, Ok(fetched))).collect(),
         sources: graphcal_compiler::source_registry::SourceRegistry::new(),
     });
+    // PRJ-14: a user-facing source-path error, not X001 "compiler bug".
     assert!(
-        error
-            .to_string()
-            .contains("invalid module path `src/main.txt`"),
-        "{error}"
+        matches!(
+            &error,
+            CompileError::Load(LoadError::InvalidSourcePath { reason, .. })
+                if reason.contains("`.gcl`")
+        ),
+        "{error:?}"
     );
 }
 
