@@ -339,10 +339,17 @@ These functions operate on rank-one `for` comprehensions or indexed values.
 | `rss(values)` | `D[I] -> D` | Root sum square, computed with scaled accumulation |
 | `count(values)` | `T[I] -> Int` | Exact number of elements |
 
-`mean` accumulates its binary64 input values exactly and rounds only the final
-quotient. Thus a large intermediate sum does not overflow a representable mean,
-and cancellation does not erase a much smaller remaining term. Input literals
-still have ordinary binary64 precision; this is not decimal arithmetic.
+`sum` and `mean` accumulate their binary64 input values exactly and round only
+the final total or quotient. Thus the result does not depend on the order of
+the index labels, a large intermediate sum does not overflow a representable
+result, and cancellation does not erase a much smaller remaining term. Input
+literals still have ordinary binary64 precision; this is not decimal
+arithmetic.
+
+`product` checks only its final result for overflow and underflow, so whether
+it succeeds does not depend on the order of the index labels. Its last bits
+can still depend on that order, by about one unit in the last place per
+element.
 
 `argmax` and `argmin` return the extremum's *location* as an
 [index key](indexes.md#index-keys) rather than its value, so the result can

@@ -142,3 +142,26 @@ node x_0: Dimensionless = @x[0];
     assert!(!result.has_errors(), "{result:?}");
     assert_eq!(find_value(&result, "x_0"), 1.0);
 }
+
+#[test]
+fn sum_and_product_do_not_depend_on_the_axis_order() {
+    let result = compile_and_eval(
+        r"
+node up: Dimensionless[Fin(3)] = table[Fin(3)] { 1e308; 1e308; -1e308; };
+node mixed: Dimensionless[Fin(3)] = table[Fin(3)] { 1e308; -1e308; 1e308; };
+node sum_up: Dimensionless = sum(@up);
+node sum_mixed: Dimensionless = sum(@mixed);
+node small_first: Dimensionless[Fin(4)] = table[Fin(4)] { 1e-200; 1e-200; 1e200; 1e200; };
+node large_first: Dimensionless[Fin(4)] = table[Fin(4)] { 1e200; 1e200; 1e-200; 1e-200; };
+node product_small_first: Dimensionless = product(@small_first);
+node product_large_first: Dimensionless = product(@large_first);
+",
+    )
+    .unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert_eq!(find_value(&result, "sum_up"), 1.0e308);
+    assert_eq!(find_value(&result, "sum_mixed"), 1.0e308);
+    for name in ["product_small_first", "product_large_first"] {
+        assert!((find_value(&result, name) - 1.0).abs() <= 4.0 * f64::EPSILON);
+    }
+}

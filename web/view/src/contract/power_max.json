@@ -1466,7 +1466,7 @@
         "kind": "quantity",
         "display": "4.266667 m^2*kg/s^3",
         "magnitude": "4.266667",
-        "si_value": 4.266666666666667,
+        "si_value": 4.266666666666666,
         "unit": "m^2*kg/s^3"
       },
       "presentation": []

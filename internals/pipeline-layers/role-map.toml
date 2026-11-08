@@ -2345,6 +2345,16 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["eval_expr", "range_safe_product"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "range_safe_product", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["eval_expr", "kernel_checkpoint"]
 role = "interpreter"
 
