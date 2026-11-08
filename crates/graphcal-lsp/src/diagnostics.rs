@@ -6,7 +6,7 @@ use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
 use graphcal_compiler::semantic_error::structure::UnknownLocal;
-use graphcal_compiler::semantic_error::visibility::VisibilityError;
+use graphcal_compiler::semantic_error::visibility::{IncludeForm, VisibilityError};
 use std::collections::HashMap;
 
 use tower_lsp::lsp_types::{
@@ -351,6 +351,22 @@ fn structured_data(error: &CompileError) -> Option<RepairData> {
         }) => Some(RepairData::AddVisibility {
             item: name.to_string(),
             visibility: AddedVisibility::Bindable,
+        }),
+        // V008: a selective include can select the missing types; a
+        // module-form include cannot specialize them at all.
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Visibility(VisibilityError::IncludeMustSelectReboundType {
+                    types,
+                    form: IncludeForm::Selective,
+                    ..
+                }),
+            ..
+        }) => Some(RepairData::SelectTypes {
+            types: types
+                .iter()
+                .map(|dependency| dependency.nominal.to_string())
+                .collect(),
         }),
         // D020: an exact replacement exists only when the decimal spelling
         // maps exactly into the dimension rational model.

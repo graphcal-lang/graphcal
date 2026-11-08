@@ -76,6 +76,9 @@ pub enum RepairData {
         item: String,
         visibility: AddedVisibility,
     },
+    /// V008: add `type T, …` for each listed type to the selection of the
+    /// selective include the diagnostic spans.
+    SelectTypes { types: Vec<String> },
     /// Import an unknown bare name from a loaded module that exports it.
     AutoImport {
         name: String,
@@ -112,6 +115,9 @@ mod tests {
             RepairData::AutoImport {
                 name: "Missing".to_string(),
                 category: AutoImportCategory::Dimension,
+            },
+            RepairData::SelectTypes {
+                types: vec!["T".to_string(), "U".to_string()],
             },
         ] {
             let diagnostic = Diagnostic {

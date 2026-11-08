@@ -5,6 +5,7 @@
 //! - V002: Add `pub(bind)` to a required `index` / `type` / `dim`.
 //! - V003: Add `pub` to a private item referenced by a public declaration.
 //! - V006: Add `pub` to a leaked symbol referenced by a re-exported declaration.
+//! - V008: Select the rebound-dependent types a selective include exposes.
 //! - Unknown names: add a category-marked selective import from a loaded module.
 //!
 //! Each repair is dispatched on the diagnostic's typed [`RepairData`].
@@ -46,6 +47,9 @@ pub fn code_actions(
                 actions.extend(make_add_visibility_action(
                     diag, analysis, source, uri, &item, visibility,
                 ));
+            }
+            Some(RepairData::SelectTypes { types }) => {
+                actions.extend(make_select_types_action(diag, source, uri, &types));
             }
             Some(RepairData::AutoImport { name, category }) => {
                 actions.extend(make_auto_import_actions(
@@ -200,6 +204,69 @@ fn make_add_visibility_action(
     }))
 }
 
+/// V008: insert `type T, ` for each missing type at the start of the
+/// selection list of the include the diagnostic spans.
+fn make_select_types_action(
+    diag: &Diagnostic,
+    source: &str,
+    uri: &Url,
+    types: &[String],
+) -> Option<CodeActionOrCommand> {
+    let start = crate::convert::position_to_byte_offset(source, diag.range.start);
+    let end = crate::convert::position_to_byte_offset(source, diag.range.end);
+    let first_item = selection_list_start(source, Span::new(start, end.checked_sub(start)?))?;
+    let selected = types
+        .iter()
+        .map(|nominal| format!("type {nominal}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let position = LineIndex::new(source).position(first_item);
+    let mut changes = HashMap::new();
+    changes.insert(
+        uri.clone(),
+        vec![TextEdit {
+            range: Range {
+                start: position,
+                end: position,
+            },
+            new_text: format!("{selected}, "),
+        }],
+    );
+    Some(CodeActionOrCommand::CodeAction(CodeAction {
+        title: format!("Select {selected}"),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }),
+        is_preferred: Some(true),
+        ..Default::default()
+    }))
+}
+
+/// The offset of the first selected item of the include at `include`:
+/// the token after the `::{` that follows the include's argument list.
+fn selection_list_start(source: &str, include: Span) -> Option<usize> {
+    let text = source.get(include.offset()..include.offset() + include.len())?;
+    let mut lexer = Lexer::new(text);
+    let mut depth = 0usize;
+    let mut previous = None;
+    while let Some((token, _)) = lexer.next_token() {
+        match (depth, &previous, &token) {
+            (_, _, Token::LParen | Token::LBracket) => depth += 1,
+            (_, _, Token::RParen | Token::RBracket) => depth = depth.checked_sub(1)?,
+            (0, Some(Token::DoubleColon), Token::LBrace) => {
+                let (_, item) = lexer.next_token()?;
+                return Some(include.offset() + item.offset());
+            }
+            _ => {}
+        }
+        previous = Some(token);
+    }
+    None
+}
+
 /// What a declaration starts with once its attributes are skipped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeclarationHead {
@@ -335,6 +402,30 @@ mod tests {
         };
         let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
         crate::test_edits::apply_text_edits(source, edits)
+    }
+
+    /// #2285: V008's fix selects the missing type, and the program compiles.
+    #[test]
+    fn v008_selects_the_missing_rebound_type() {
+        let source = "\
+index K = { p, q };
+dag lib {
+    pub(bind) index I;
+    pub type T { T(x: Length[I]) }
+    param x: Length[I];
+    pub node out: T = T(x: @x);
+}
+include lib(index I: K, x: { K#p: 1.0 m, K#q: 2.0 m })::{ out };
+";
+        let updated = apply_first_quick_fix(source, "graphcal::V008");
+        assert!(updated.contains("::{ type T, out };"), "{updated}");
+        let uri = Url::parse("untitled:fix.gcl").unwrap();
+        let checked = crate::analysis_pipeline::run_analysis_for_test(&uri, &updated);
+        assert!(
+            checked.has_no_diagnostics(),
+            "{updated}: {:?}",
+            checked.diagnostics
+        );
     }
 
     /// LSP-7: the fix edits the named declaration, not the first declaration
