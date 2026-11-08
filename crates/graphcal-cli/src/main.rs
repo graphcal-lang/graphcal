@@ -573,7 +573,7 @@ fn run_plugin_new(name: &str, dir: Option<&Path>) {
     outln!("next steps:");
     outln!("  cd {}", plan.root.display());
     outln!("  cargo build --release --target wasm32-unknown-unknown");
-    outln!("  graphcal plugin test target/wasm32-unknown-unknown/release/<name>.wasm");
+    outln!("  graphcal plugin test {}", plan.release_artifact.display());
 }
 
 /// `graphcal plugin test`: load and validate a module (all ABI checks run
