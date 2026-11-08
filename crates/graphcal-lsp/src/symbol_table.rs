@@ -279,6 +279,17 @@ impl<'a> HirRefCollector<'a> {
                     *span,
                 )
             }
+            // A removed built-in (#2246) resolves to nothing either; it only
+            // has a dedicated diagnostic.
+            hir::ExprLowerError::RemovedBuiltinFunction { function, span } => {
+                let Ok(name) = NameAtom::parse(function.as_str()) else {
+                    return;
+                };
+                (
+                    UnresolvedSymbol::Function(SourceSymbolPath::local(name)),
+                    *span,
+                )
+            }
             hir::ExprLowerError::ModuleResolve {
                 source: ModuleResolveError::UnknownName { name, .. },
                 span,
@@ -3192,6 +3203,32 @@ node total: Velocity = @dv[Maneuver#Departure];
         definition_key(&table, SymbolCategory::Node, "b");
         let offset = source.find("@a").unwrap() + 1;
         assert_eq!(reference_key(&table, offset), Some(a));
+    }
+
+    /// #2290: a call to a removed built-in is an unresolved function
+    /// reference, like a call to an unknown function, and its arguments keep
+    /// their references.
+    #[test]
+    fn removed_builtin_call_is_an_unresolved_function_reference() {
+        let source = "param t: Datetime = datetime(\"2026-01-01T00:00:00Z\");\n\
+                      node jd: Dimensionless = to_jd(@t);";
+        let table = table_for(source);
+        let reference = table
+            .find_reference_at(source.find("to_jd").unwrap())
+            .expect("a reference at the removed built-in");
+        assert!(
+            matches!(
+                &reference.target,
+                ReferenceTarget::Unresolved(UnresolvedSymbol::Function(path))
+                    if path.leaf().as_str() == "to_jd"
+            ),
+            "{reference:?}"
+        );
+        let t = definition_key(&table, SymbolCategory::Param, "t");
+        assert_eq!(
+            reference_key(&table, source.find("@t").unwrap() + 1),
+            Some(t)
+        );
     }
 
     #[test]
