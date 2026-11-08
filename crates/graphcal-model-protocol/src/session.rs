@@ -7,7 +7,6 @@ use thiserror::Error;
 
 use crate::domain::{Bounds, Domain};
 use crate::fingerprint::InterfaceFingerprint;
-use crate::finite::FiniteF64;
 use crate::interface::ModelInterface;
 use crate::label::{PortName, UnitSpelling};
 use crate::unit_scale::SiScale;
@@ -482,14 +481,23 @@ fn unit_choices<'s>(
     Ok(choices)
 }
 
-/// `domain` (in the canonical unit) in the unit of `scale`.
+/// `domain` (in the canonical unit) in the unit of `scale`, rounded inward so
+/// that every value within the converted bounds converts back into the SI
+/// bounds the model checks.
 fn converted_domain(domain: Domain, scale: Option<SiScale>) -> Option<Domain> {
     let (Domain::Quantity(bounds), Some(scale)) = (domain, scale) else {
         return Some(domain);
     };
-    let convert =
-        |bound: Option<&FiniteF64>| bound.map(|bound| scale.from_si(*bound)).transpose().ok();
-    let (min, max) = (convert(bounds.min())?, convert(bounds.max())?);
+    let min = bounds
+        .min()
+        .map(|min| scale.lower_bound_from_si(*min))
+        .transpose()
+        .ok()?;
+    let max = bounds
+        .max()
+        .map(|max| scale.upper_bound_from_si(*max))
+        .transpose()
+        .ok()?;
     Bounds::new(min, max).ok().map(Domain::Quantity)
 }
 
@@ -792,6 +800,44 @@ pub mod tests {
             sample_interface().configure(&session.spec(), kilometres),
             Ok(session)
         );
+    }
+
+    #[test]
+    fn published_domains_accept_their_own_bounds() {
+        let finite = |value| crate::finite::FiniteF64::new(value).unwrap();
+        let interface = ModelInterface::new(
+            vec![
+                crate::interface::ParameterDescription::new(
+                    name("x"),
+                    "Length",
+                    PortWire::Supported(crate::interface::tests::length()),
+                    Some(Domain::Quantity(
+                        Bounds::new(Some(finite(0.07)), Some(finite(0.35))).unwrap(),
+                    )),
+                    false,
+                )
+                .unwrap(),
+            ],
+            vec![crate::interface::OutputDescription::new(
+                name("y"),
+                "Length",
+                PortWire::Supported(crate::interface::tests::length()),
+            )],
+        )
+        .unwrap();
+        let centi = SiScale::new(0.01).unwrap();
+        let session = interface
+            .configure(
+                &spec(&["x"], &["y"]).with_unit(name("x"), unit("cm")),
+                |_: &PortName, _: &UnitSpelling| Ok(centi),
+            )
+            .unwrap();
+        let Some(Domain::Quantity(bounds)) = session.inputs()[0].domain() else {
+            panic!("x has a quantity domain");
+        };
+        let (min, max) = (*bounds.min().unwrap(), *bounds.max().unwrap());
+        assert!(centi.to_si(max).unwrap().get() <= 0.35);
+        assert!(centi.to_si(min).unwrap().get() >= 0.07);
     }
 
     #[test]

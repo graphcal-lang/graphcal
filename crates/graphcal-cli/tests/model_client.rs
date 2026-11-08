@@ -199,6 +199,50 @@ fn client_sessions_carry_quantities_in_server_resolved_units() {
     ));
 }
 
+#[test]
+fn published_domain_bounds_in_a_chosen_unit_are_accepted_back() {
+    use graphcal_model_protocol::{Domain, UnitSpelling};
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("bound.gcl");
+    std::fs::write(
+        &file,
+        "param x: Length(min: 0.07 m, max: 0.35 m);\npub node y: Length = @x * 2.0;\n",
+    )
+    .unwrap();
+    let model = Model::describe(GraphcalCommand::new(file).program(env!("CARGO_BIN_EXE_graphcal")))
+        .unwrap();
+    let x = model.input::<Quantity>("x").unwrap();
+    let y = model.output::<Quantity>("y").unwrap();
+    let mut session = model
+        .session()
+        .vary_in(&x, UnitSpelling::new("cm").unwrap())
+        .output(&y)
+        .spawn()
+        .unwrap();
+    let Some(Domain::Quantity(bounds)) = session.schema().inputs()[0].domain() else {
+        panic!("x has a quantity domain");
+    };
+    let (min, max) = (bounds.min().unwrap().get(), bounds.max().unwrap().get());
+    // 35.0 cm would be 0.35000000000000003 m, above the declared maximum.
+    assert!(max < 35.0 && max > 34.999_999);
+    let request = session
+        .batch()
+        .column(&x, [min, max])
+        .unwrap()
+        .build()
+        .unwrap();
+    let result = session.evaluate(&request).unwrap();
+    for row in 0..2 {
+        assert!(
+            matches!(result.row(row).unwrap(), RowOutcome::Success(_)),
+            "{:?}",
+            result.failure(row)
+        );
+    }
+    session.shutdown().unwrap();
+}
+
 const RICH_MODEL: &str = "pub index Phase = { Climb, Cruise };\n\
     pub type Shape {\n\
         Circle(r: Length),\n\
