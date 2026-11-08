@@ -266,6 +266,41 @@ fn published_domain_bounds_in_a_chosen_unit_are_accepted_back() {
     session.shutdown().unwrap();
 }
 
+#[test]
+fn client_sessions_pass_the_request_timeout_to_the_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = Model::describe(command(dir.path())).unwrap();
+    let load = model.input::<Quantity>("load").unwrap();
+    let mode = model.input::<Key>("mode").unwrap();
+    let failure = model.output::<Bool>("failure").unwrap();
+    let session = |timeout| {
+        model
+            .session()
+            .vary(&load)
+            .vary(&mode)
+            .output(&failure)
+            .request_timeout(timeout)
+            .spawn()
+    };
+    let mut generous = session(std::time::Duration::from_secs(600)).unwrap();
+    let request = generous
+        .batch()
+        .column(&load, [1.0])
+        .unwrap()
+        .column(&mode, [mode.variant("A").unwrap()])
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(generous.evaluate(&request).is_ok());
+    generous.shutdown().unwrap();
+
+    let error = session(std::time::Duration::ZERO).unwrap_err();
+    assert!(
+        matches!(&error, ClientError::ServerStopped { stderr, .. } if stderr.contains("--request-timeout")),
+        "{error}"
+    );
+}
+
 const RICH_MODEL: &str = "pub index Phase = { Climb, Cruise };\n\
     pub type Shape {\n\
         Circle(r: Length),\n\

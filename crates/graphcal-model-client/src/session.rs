@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
@@ -38,6 +39,7 @@ pub struct SessionBuilder<'m> {
     outputs: Vec<PortName>,
     units: Vec<(PortName, UnitSpelling)>,
     fixed: Vec<PathBuf>,
+    request_timeout: Option<Duration>,
     foreign: Option<PortName>,
 }
 
@@ -49,8 +51,18 @@ impl<'m> SessionBuilder<'m> {
             outputs: Vec::new(),
             units: Vec::new(),
             fixed: Vec::new(),
+            request_timeout: None,
             foreign: None,
         }
+    }
+
+    /// End the session when one request is still evaluating after
+    /// `timeout` (`graphcal model serve --request-timeout`); by default a
+    /// request evaluates until it finishes. The server rejects a zero
+    /// timeout when the session starts.
+    pub const fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
+        self
     }
 
     /// Fix the unvaried parameters named in the JSON document at `path` to
@@ -199,7 +211,12 @@ impl<'m> SessionBuilder<'m> {
         let mut child = self
             .model
             .command()
-            .serve(&spec, self.model.fingerprint(), self.fixed_document()?)
+            .serve(
+                &spec,
+                self.model.fingerprint(),
+                self.fixed_document()?,
+                self.request_timeout,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
