@@ -53,20 +53,25 @@ impl ModuleResolver {
     /// Instantiated includes embed the dependency DAG body, but the source-level
     /// names introduced by the include are still a cross-module boundary and
     /// must preserve public visibility.
+    ///
+    /// `instance` is the include's instance of `template`; a failed item
+    /// lookup is reported against `template`, the module the source names.
     pub(super) fn register_include(
         &mut self,
         owner: &DagId,
         path: &ModulePath,
         kind: &ImportKind,
-        target: &DagId,
+        instance: &DagId,
+        template: &DagId,
     ) -> Result<(), ModuleResolveError> {
         self.register_import_with_access(
             owner,
             path,
             ImportTail::of_include(kind),
-            target,
+            instance,
             ModuleAliasRole::IncludedInstance,
         )
+        .map_err(|error| error.reported_in_template(instance, template))
     }
 
     fn register_import_with_access(

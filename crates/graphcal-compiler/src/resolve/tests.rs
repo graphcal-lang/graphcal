@@ -685,7 +685,6 @@ fn include_selective_private_decl_is_rejected() {
     let lib = desugared_source("node hidden: Dimensionless = 1.0;");
     let main = desugared_source("include lib()::{ hidden };");
     let include = first_include_decl(&main);
-    let instance_id = main_id.instance_child(include.instance_scope());
 
     let mut modules = TestModules::default();
     modules.add(lib_id.clone(), &lib.declarations);
@@ -693,7 +692,8 @@ fn include_selective_private_decl_is_rejected() {
     modules.edge(&main_id, &include.path, &lib_id);
     let err = modules.build().unwrap_err();
 
-    // The span names the include item, so the diagnostic points at it.
+    // The span names the include item, so the diagnostic points at it, and
+    // the owner is the module the include names, not its internal instance.
     assert!(matches!(
         err,
         ModuleResolveError::PrivateImportItem {
@@ -701,7 +701,7 @@ fn include_selective_private_decl_is_rejected() {
             category: _,
             name,
             span,
-        } if owner == instance_id
+        } if owner == lib_id
             && name.as_str() == "hidden"
             && span == Span::new("include lib()::{ ".len(), "hidden".len())
     ));

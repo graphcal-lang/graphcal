@@ -597,7 +597,13 @@ impl ModuleResolver {
                 Edge::Include { include, template } => {
                     let instance = owner.instance_child(include.instance_scope());
                     self.inherit_scope(&instance, template)?;
-                    self.register_include(owner, &include.path, &include.kind, &instance)?;
+                    self.register_include(
+                        owner,
+                        &include.path,
+                        &include.kind,
+                        &instance,
+                        template,
+                    )?;
                     self.apply_include_static_projection_bindings(owner, template, include)?;
                 }
             }
