@@ -218,23 +218,19 @@ pub(super) fn collect_resolved_dag_dependencies(
             // `@const_name` in a const body is a const dependency. Non-const
             // `@` targets are rejected with a spanned diagnostic by
             // `check_hir_body_policies`.
-            let kind = ctx
-                .resolver
-                .symbol(graph_ref)
-                .map(|symbol| *symbol.kind())
-                .ok_or_else(|| {
-                    module_resolve_error(
-                        &crate::resolve::error::ModuleResolveError::UnknownName {
-                            owner: graph_ref.owner().clone(),
-                            category: crate::resolve::error::NameCategory::Table(
-                                crate::resolve::category::SymbolTable::Decl,
-                            ),
-                            name: graph_ref.atom().clone(),
-                        },
-                        src,
-                        entry.span,
-                    )
-                })?;
+            let kind = ctx.resolver.denoted_decl_kind(graph_ref).ok_or_else(|| {
+                module_resolve_error(
+                    &crate::resolve::error::ModuleResolveError::UnknownName {
+                        owner: graph_ref.owner().clone(),
+                        category: crate::resolve::error::NameCategory::Table(
+                            crate::resolve::category::SymbolTable::Decl,
+                        ),
+                        name: graph_ref.atom().clone(),
+                    },
+                    src,
+                    entry.span,
+                )
+            })?;
             if kind.is_const() {
                 const_refs.insert(graph_ref.clone());
             }

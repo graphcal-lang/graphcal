@@ -39,6 +39,7 @@ use super::model::{
     ImportAlias, ImportContext, IncludeInstanceRequest, ProjectModuleBinding, UnitProjectionAlias,
 };
 use super::module_resolve_errors::module_resolve_compile_error;
+use super::selected_include_items::{SelectedItemKind, SelectedValueKind, exported_values};
 use crate::import_surface::import_item_not_found_error;
 use graphcal_compiler::declaration_kind::DeclarationKind;
 use graphcal_compiler::desugar::desugared_ast::DeclKind;
@@ -54,31 +55,13 @@ use graphcal_compiler::ir::static_dependencies::{
 };
 use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::resolve::category::DeclSymbolKind;
-use graphcal_compiler::resolve::exports::ExportedBindingTarget;
+use graphcal_compiler::resolve::exports::{ExportedBinding, ExportedBindingTarget};
 use graphcal_compiler::static_interface::{
     StaticInputKind, StaticInterface, StaticRole, static_binding_valid,
 };
 use graphcal_compiler::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use graphcal_compiler::syntax::dimension::UnitName;
 use graphcal_compiler::syntax::names::NameAtom;
-
-/// Whether `kind` declares a graph value (`param`, `node`, or `const node`).
-const fn is_graph_value_kind(kind: IntroducedKind) -> bool {
-    match kind {
-        IntroducedKind::Param | IntroducedKind::Node | IntroducedKind::ConstNode => true,
-        IntroducedKind::Assert
-        | IntroducedKind::Plot
-        | IntroducedKind::Figure
-        | IntroducedKind::Layer
-        | IntroducedKind::Dag
-        | IntroducedKind::Constructor
-        | IntroducedKind::BaseDimension
-        | IntroducedKind::Dimension
-        | IntroducedKind::Unit
-        | IntroducedKind::Type
-        | IntroducedKind::Index => false,
-    }
-}
 
 /// The declaration kind of a Term that exists in a dependency but cannot be
 /// bound as a `param`, for precise "is actually a …" diagnostics.
@@ -101,12 +84,6 @@ fn non_param_binding_kind(interface: &ModuleInterface, name: &NameAtom) -> Optio
             | IntroducedKind::Type
             | IntroducedKind::Index => None,
         })
-}
-
-/// Whether the dependency declares `name` as a runtime value (`param` or `node`).
-fn declares_runtime_value(interface: &ModuleInterface, name: &NameAtom) -> bool {
-    interface.declares(name, IntroducedKind::Param)
-        || interface.declares(name, IntroducedKind::Node)
 }
 
 /// Whether the static input `name` of `kind` accepts a typed binding.
@@ -163,7 +140,7 @@ pub(super) fn process_file_body_declarations<'a>(
         if !matches!(dependency, LoadedModule::FileRoot(_)) {
             continue;
         }
-        process_include(project, dependency, include, declaration, &including, ctx)?;
+        process_include(dependency, include, declaration, &including, ctx)?;
     }
 
     // A project load resolves or rejects every file-root include, including
@@ -215,7 +192,7 @@ pub(super) fn process_file_body_declarations<'a>(
             ))
             .into());
         }
-        process_include(project, dependency, include, declaration, &including, ctx)?;
+        process_include(dependency, include, declaration, &including, ctx)?;
     }
     Ok(())
 }
@@ -333,37 +310,33 @@ fn reject_runtime_unit_import(
     Ok(())
 }
 
-/// Classify the values an include intentionally exposes to its consumer.
+/// The graph values a whole-instance include exposes under its prefix: the
+/// dependency's `param` input ports and exported values in source order,
+/// then the values it re-exports from its own includes.
 ///
-/// A brace include exposes exactly its selected value aliases. A whole-instance
-/// include exposes param ports and explicitly exported consts/nodes under the
-/// instance prefix. Private merged declarations remain debug-only and cannot be
-/// named by the including DAG.
-fn include_surface_outputs(
+/// Private merged declarations remain debug-only and cannot be named by the
+/// including DAG.
+fn module_value_outputs(
     interface: &ModuleInterface,
-    prefix: &ScopeSegment,
-    selective: Option<&[ImportAlias]>,
-) -> Vec<ScopedName> {
-    selective.map_or_else(
-        || {
-            interface
-                .value_outputs()
-                .iter()
-                .map(|output| ScopedName::in_scope(prefix.clone(), output.name().clone()))
-                .collect()
-        },
-        |aliases| {
-            aliases
-                .iter()
-                .filter(|alias| {
-                    interface
-                        .declared_kinds(alias.original.atom(), ImportItemNamespace::Term)
-                        .any(is_graph_value_kind)
-                })
-                .map(|alias| ScopedName::local(alias.local.clone()))
-                .collect()
-        },
-    )
+    exports: &[ExportedBinding],
+    template: &graphcal_compiler::dag_id::DagId,
+) -> Vec<(DeclName, SelectedValueKind)> {
+    let declared = interface
+        .value_outputs()
+        .iter()
+        .map(|output| {
+            let kind = if output.is_const() {
+                SelectedValueKind::Const
+            } else {
+                SelectedValueKind::Runtime
+            };
+            (output.name().clone(), kind)
+        })
+        .collect::<Vec<_>>();
+    let reexported = exported_values(exports, template)
+        .filter(|(name, _)| !declared.iter().any(|(declared, _)| declared == name))
+        .collect::<Vec<_>>();
+    declared.into_iter().chain(reexported).collect()
 }
 
 /// Validate an include/import item's attributes and return the plot visibility
@@ -420,47 +393,6 @@ fn validate_include_producers(
                 ),
             )
         })
-}
-
-fn file_exports_plot(
-    project: &crate::loader::loaded_project::LoadedProject,
-    file_dag_id: &graphcal_compiler::dag_id::DagId,
-    name: &NameAtom,
-) -> bool {
-    fn visit(
-        project: &crate::loader::loaded_project::LoadedProject,
-        file_dag_id: &graphcal_compiler::dag_id::DagId,
-        name: &NameAtom,
-        seen: &mut HashSet<(graphcal_compiler::dag_id::DagId, DeclName)>,
-    ) -> bool {
-        let Some(file) = project.files().get(file_dag_id) else {
-            return false;
-        };
-        let typed_name = DeclName::classify(name.clone());
-        if !seen.insert((file_dag_id.clone(), typed_name)) {
-            return false;
-        }
-        if file
-            .interface()
-            .explicitly_exports(name, IntroducedKind::Plot)
-        {
-            return true;
-        }
-        file.includes_with_targets().any(|(_, include, target)| {
-            let graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) =
-                &include.kind
-            else {
-                return false;
-            };
-            items.iter().any(|item| {
-                item.visibility.is_public()
-                    && item.local_name_atom() == name
-                    && visit(project, target.source_file(), item.name.name.atom(), seen)
-            })
-        })
-    }
-
-    visit(project, file_dag_id, name, &mut HashSet::new())
 }
 
 /// Classified param bindings as authored: each entry routes to one of the
@@ -852,7 +784,6 @@ fn validate_required_param_bindings(
     reason = "binding validation and scope registration form a single cohesive pipeline over one include context"
 )]
 pub(super) fn process_include<'a>(
-    project: &'a crate::loader::loaded_project::LoadedProject,
     dependency: LoadedModule<'a>,
     include_decl: &graphcal_compiler::desugar::desugared_ast::IncludeDecl,
     decl: &graphcal_compiler::desugar::desugared_ast::Declaration,
@@ -939,6 +870,11 @@ pub(super) fn process_include<'a>(
         HashMap::new();
     let mut assertion_aliases = HashMap::new();
     let mut unit_projection_aliases = Vec::new();
+    let exports = importer_scope
+        .resolver()
+        .exported_bindings(import_dag_id)
+        .map_err(|error| module_resolve_compile_error(error, file_src))?;
+    let mut surface_outputs = Vec::new();
     let selective_names = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
             validate_include_producers(names, file_src)?;
@@ -956,18 +892,28 @@ pub(super) fn process_include<'a>(
                     file_src,
                     import_item.name.span,
                 )?;
+                let selected = SelectedItemKind::classify(&exports, import_dag_id, import_item)
+                    .ok_or_else(|| {
+                        PipelineError::Semantic(SemanticError::located(
+                            file_src,
+                            import_item.name.span,
+                            ModuleError::ImportNameNotFound {
+                                name: orig_name.atom().clone(),
+                                file_path: dep_path_display.clone(),
+                            },
+                        ))
+                    })?;
 
-                let is_term_namespace = import_item.namespace
-                    == graphcal_compiler::syntax::ast::ImportItemNamespace::Term;
-                record_unit_projection(import_item, &mut unit_projection_aliases);
-                let is_plot = is_term_namespace
-                    && (dep.declares(orig_name.atom(), IntroducedKind::Plot)
-                        || file_exports_plot(project, import_dag_id, orig_name.atom()));
-                let is_assert =
-                    is_term_namespace && dep.declares(orig_name.atom(), IntroducedKind::Assert);
-                let visibility =
-                    validate_include_item_attributes(import_item, is_plot, is_assert, file_src)?;
-                if is_plot {
+                if matches!(selected, SelectedItemKind::Unit(_)) {
+                    record_unit_projection(import_item, &mut unit_projection_aliases);
+                }
+                let visibility = validate_include_item_attributes(
+                    import_item,
+                    selected == SelectedItemKind::Plot,
+                    selected == SelectedItemKind::Assertion,
+                    file_src,
+                )?;
+                if selected == SelectedItemKind::Plot {
                     // The requested plot merges into the root namespace under
                     // its local alias, evaluating against this instance (#847).
                     requested_plots.insert(
@@ -987,24 +933,28 @@ pub(super) fn process_include<'a>(
                 if !import_item.attributes.is_empty() {
                     import_item_attributes.insert(original.clone(), import_item.attributes.clone());
                 }
-                if is_assert {
-                    ctx.imported_names
-                        .assert_names
-                        .push((local.clone(), import_item.local_span()));
-                    assertion_aliases.insert(original.clone(), local.clone());
-                }
-
-                // Register the local name in scope for the resolver.
-                // Determine the category from the dep's AST.
                 let scoped = ScopedName::local(local.clone());
                 let span = import_item.local_span();
-                match (
-                    dep.declares(orig_name.atom(), IntroducedKind::ConstNode),
-                    declares_runtime_value(dep, orig_name.atom()),
-                ) {
-                    (true, _) => ctx.imported_names.const_names.push((scoped, span)),
-                    (false, true) => ctx.imported_names.param_names.push((scoped, span)),
-                    (false, false) => {}
+                match selected {
+                    SelectedItemKind::Assertion => {
+                        ctx.imported_names.assert_names.push((local.clone(), span));
+                        assertion_aliases.insert(original.clone(), local.clone());
+                    }
+                    SelectedItemKind::Value(SelectedValueKind::Const) => {
+                        surface_outputs.push(scoped.clone());
+                        ctx.imported_names.const_names.push((scoped, span));
+                    }
+                    SelectedItemKind::Value(SelectedValueKind::Runtime) => {
+                        surface_outputs.push(scoped.clone());
+                        ctx.imported_names.param_names.push((scoped, span));
+                    }
+                    SelectedItemKind::Plot
+                    | SelectedItemKind::ImportedConstant
+                    | SelectedItemKind::Composition
+                    | SelectedItemKind::Constructor
+                    | SelectedItemKind::Type
+                    | SelectedItemKind::Static
+                    | SelectedItemKind::Unit(_) => {}
                 }
 
                 selective.push(ImportAlias { original, local });
@@ -1014,18 +964,21 @@ pub(super) fn process_include<'a>(
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => {
             // Register all dep names under the prefix for scope checking.
             let import_span = include_decl.path.span();
-            for output in dep.value_outputs() {
-                let scoped = ScopedName::in_scope(instance_scope.clone(), output.name().clone());
-                if output.is_const() {
-                    ctx.imported_names.const_names.push((scoped, import_span));
-                } else {
-                    ctx.imported_names.param_names.push((scoped, import_span));
+            for (name, kind) in module_value_outputs(dep, &exports, import_dag_id) {
+                let scoped = ScopedName::in_scope(instance_scope.clone(), name);
+                surface_outputs.push(scoped.clone());
+                match kind {
+                    SelectedValueKind::Const => {
+                        ctx.imported_names.const_names.push((scoped, import_span));
+                    }
+                    SelectedValueKind::Runtime => {
+                        ctx.imported_names.param_names.push((scoped, import_span));
+                    }
                 }
             }
             None
         }
     };
-    let surface_outputs = include_surface_outputs(dep, &instance_scope, selective_names.as_deref());
 
     let covered_static_bindings = CoveredStaticBindings::check(
         dep,

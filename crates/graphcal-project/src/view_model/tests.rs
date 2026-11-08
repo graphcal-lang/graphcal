@@ -944,3 +944,23 @@ pub dag inner {
     let source = node(inner, "p").source.as_ref().unwrap();
     assert_eq!(source.cells.len(), 2, "{:?}", source.cells);
 }
+
+#[test]
+fn a_value_a_facade_reexports_is_presented_as_its_public_output() {
+    // `facade` re-exports `out` from its own include of `lib` (#2259).
+    let views = evaluated_views_of_package(
+        &[
+            ("lib.gcl", LIB),
+            (
+                "facade.gcl",
+                "include review.lib(gain: 2.0)::{ pub out };\n",
+            ),
+            ("main.gcl", "include review.facade()::{ out };\n"),
+        ],
+        "main.gcl",
+    );
+    let root = views.module();
+    assert_eq!(labels(root), ["out"]);
+    assert!(node(root, "out").is_public);
+    assert_eq!(quantity_display(root, "out"), "2");
+}

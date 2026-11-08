@@ -93,6 +93,12 @@ pub(super) fn evaluate_assertions(
 
 /// Every assertion an include site of the root's closure exposes, with the
 /// closure DAG that includes the instance, in report order.
+///
+/// An assertion an include re-exports is exposed by the include that
+/// selects it from its instance and again by each include that re-selects
+/// it from the re-exporting module. It is one assertion, reported once, by
+/// its outermost exposure: the closure lists each DAG before the DAGs it
+/// includes, and that exposure carries the include site's `#[expected_fail]`.
 fn projected_assertions<'a, 'p>(
     entry: Entry<'a, 'p>,
 ) -> impl Iterator<
@@ -104,6 +110,7 @@ fn projected_assertions<'a, 'p>(
         Scoped<'p, TypedAssertEntry>,
     ),
 > {
+    let mut reported = std::collections::HashSet::new();
     entry
         .callable()
         .closure_instances()
@@ -119,6 +126,7 @@ fn projected_assertions<'a, 'p>(
                 )
             })
         })
+        .filter(move |(_, _, _, body, _)| reported.insert(body.identity().clone()))
 }
 
 /// The name the root reports an assertion `projection` of `planned`

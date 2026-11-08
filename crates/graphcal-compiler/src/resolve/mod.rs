@@ -231,6 +231,27 @@ impl ModuleResolver {
             .map(SymbolRef::new)
     }
 
+    /// The kind of declaration a canonical identity denotes: its owner's own
+    /// declaration, else the declaration its owner selects under that name.
+    ///
+    /// A value a selective include selects is materialized in the including
+    /// module as a projection alias, which the resolver records only as the
+    /// selection; this holds for one the included module itself re-exports.
+    #[must_use]
+    pub fn denoted_decl_kind(
+        &self,
+        name: &crate::resolved_name::ResolvedDeclName,
+    ) -> Option<category::DeclSymbolKind> {
+        self.symbol(name).map(|symbol| *symbol.kind()).or_else(|| {
+            self.modules
+                .get(name.owner())?
+                .scope
+                .selected_decls
+                .get(&name.to_unowned_def_name())
+                .map(|symbol| *symbol.data())
+        })
+    }
+
     fn entry(&self, owner: &DagId) -> Result<&ModuleEntry, ModuleResolveError> {
         self.modules
             .get(owner)

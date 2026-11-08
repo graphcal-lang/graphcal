@@ -473,14 +473,14 @@ impl<'p> Scope<'p> {
             .map_or_else(|| declaration.to_string(), |name| name.to_string())
     }
 
-    /// Whether `module` declares `name` as an explicit `pub` output.
+    /// Whether `module` exposes `name` as an output: a `param` input port,
+    /// or an explicit `pub` export, including one it re-exports.
     fn is_public(&self, module: &DagId, name: &DeclName) -> bool {
         self.project.module(module).is_some_and(|module| {
             module
                 .interface()
-                .value_outputs()
-                .iter()
-                .any(|output| output.name() == name)
+                .external_surface()
+                .is_externally_nameable(name)
         })
     }
 

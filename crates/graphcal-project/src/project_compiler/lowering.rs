@@ -576,7 +576,6 @@ fn process_dag_body_include_declarations<'a>(
             continue;
         };
         imports::process_include(
-            project,
             project.target_module(target),
             include_decl,
             decl,
@@ -776,6 +775,16 @@ fn semantic_output_projections(
         .collect()
 }
 
+/// The compiler-bug diagnostic of a projection whose template target
+/// (`projection`, described for the message) the template does not have.
+fn untargeted_projection(projection: &str, src: SourceId) -> PipelineError {
+    PipelineError::Semantic(SemanticError::internal_error(
+        format!("{projection} has no semantic target"),
+        src,
+        DiagnosticAnchor::WholeFile,
+    ))
+}
+
 fn semantic_assertion_projections(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::model::UnfrozenIR,
@@ -790,7 +799,14 @@ fn semantic_assertion_projections(
             .iter()
             .map(|(source, exposed)| {
                 Ok(InstanceAssertionProjection {
-                    target: template_reference(instance, source.clone()),
+                    target: template
+                        .assertion_projection_target(source)
+                        .ok_or_else(|| {
+                            untargeted_projection(
+                                &format!("selected template assertion `{source}`"),
+                                src,
+                            )
+                        })?,
                     exposure: ProjectionExposure::Selected(exposed.clone()),
                     expected_fail: resolve_projection_expected_fail(
                         request,
@@ -831,11 +847,7 @@ fn semantic_plot_projections(
                     visibility: requested.visibility,
                 })
                 .ok_or_else(|| {
-                    PipelineError::Semantic(SemanticError::internal_error(
-                        format!("requested template plot `{source}` has no semantic target"),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    ))
+                    untargeted_projection(&format!("requested template plot `{source}`"), src)
                 })
         })
         .collect()
