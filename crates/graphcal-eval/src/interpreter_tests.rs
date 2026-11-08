@@ -2274,3 +2274,53 @@ mod execution_frames {
         let _ = <crate::eval_expr::EvalSession<'static> as ReadOnlyUnlessMutable<_>>::probe;
     };
 }
+
+/// EV-16 (#2265): a reference the checker bound but the evaluator finds
+/// unbound is an evaluator bug, reported as an internal error rather than as
+/// a runtime failure of the program.
+#[test]
+fn unbound_references_are_internal_errors() {
+    let (tir, src, sources) = crate::test_tir::checked_tir_from_source(
+        "index Phase = { Burn, Coast };\n\
+         node picked: Key<Phase>[Phase] = for p: Phase { p };",
+    )
+    .unwrap();
+    let ctx = crate::eval_expr::EvalSession::provisional_constants(
+        &tir,
+        src,
+        &sources,
+        graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    );
+    let key = tir
+        .root()
+        .body_for_test()
+        .bound_decl_identity(&graphcal_compiler::syntax::module_name::ScopedName::local(
+            graphcal_compiler::syntax::decl_name::DeclName::expect_valid("picked"),
+        ))
+        .unwrap()
+        .clone();
+    let expression = tir
+        .declaration_body(&key)
+        .unwrap()
+        .runtime_expression()
+        .unwrap();
+    let executable = expression.executable().unwrap();
+    let values = crate::eval_expr::RuntimeValueMap::new();
+    // The body of the comprehension, evaluated without its binding.
+    let graphcal_compiler::tir::typed::scoped_node::NodeKind::For { body, .. } =
+        executable.root().kind()
+    else {
+        panic!("`picked` is a for-comprehension");
+    };
+    let locals = crate::eval_expr::HirLocalValueMap::root();
+    let unbound_local =
+        crate::eval_expr::eval_subtree_for_test(body, &values, &locals, &ctx).unwrap_err();
+    assert!(
+        matches!(
+            &unbound_local,
+            graphcal_compiler::outcome::Outcome::Failed(SemanticError::Internal(internal))
+                if internal.message().contains("local variable is not bound")
+        ),
+        "{unbound_local:?}"
+    );
+}
