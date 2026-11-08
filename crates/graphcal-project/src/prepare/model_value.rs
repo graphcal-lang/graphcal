@@ -8,7 +8,9 @@
 
 use std::sync::Arc;
 
+use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::complex_value::ComplexValue as GraphcalComplex;
+use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::applied_constructor::AppliedConstructor;
 use graphcal_compiler::semantic::checked_type::{IndexTypeRef, StructTypeRef};
 use graphcal_compiler::semantic::time_scale::TimeScale;
@@ -270,52 +272,65 @@ impl ValueCodec {
     /// Returns [`OutputProjectionError::Invariant`] when `runtime` does not
     /// have this port's type, and [`OutputProjectionError::Unrepresentable`]
     /// when a number has no finite value in the port's unit.
+    ///
+    /// Projection observes `cancellation` once per value it projects, so a
+    /// large indexed output cannot outlive a request's deadline.
     pub(super) fn protocol_value(
         &self,
         runtime: &RuntimeValue,
-    ) -> Result<Value, OutputProjectionError> {
+        cancellation: &CancellationToken,
+    ) -> Result<Value, Outcome<OutputProjectionError>> {
+        cancellation.checkpoint()?;
         Ok(match self {
-            Self::Quantity(scale) => {
-                Value::Quantity(from_si(*scale, project_quantity(runtime)?.get())?)
-            }
+            Self::Quantity(scale) => Value::Quantity(from_si(
+                *scale,
+                project_quantity(runtime)
+                    .map_err(OutputProjectionError::from)?
+                    .get(),
+            )?),
             Self::Complex(scale) => {
-                let value = project_complex(runtime)?;
+                let value = project_complex(runtime).map_err(OutputProjectionError::from)?;
                 Value::Complex(ComplexValue {
                     re: from_si(*scale, value.re())?,
                     im: from_si(*scale, value.im())?,
                 })
             }
-            Self::Int => Value::Int(project_int(runtime)?),
-            Self::Bool => Value::Bool(project_bool(runtime)?),
+            Self::Int => Value::Int(project_int(runtime).map_err(OutputProjectionError::from)?),
+            Self::Bool => Value::Bool(project_bool(runtime).map_err(OutputProjectionError::from)?),
             Self::Key { key, .. } => Value::Key(
                 key.axis()
-                    .key(project_key_position(runtime)?)
+                    .key(project_key_position(runtime).map_err(OutputProjectionError::from)?)
                     .ok_or(OutputProjectionError::Unrepresentable)?
                     .to_key_value(),
             ),
             Self::Datetime(time_scale) => {
-                let seconds = seconds_since_j2000(project_datetime(runtime)?, *time_scale)
-                    .map_err(|_| OutputProjectionError::Unrepresentable)?;
+                let seconds = seconds_since_j2000(
+                    project_datetime(runtime).map_err(OutputProjectionError::from)?,
+                    *time_scale,
+                )
+                .map_err(|_| OutputProjectionError::Unrepresentable)?;
                 Value::Datetime(
                     FiniteF64::new(seconds).map_err(|_| OutputProjectionError::Unrepresentable)?,
                 )
             }
             Self::Indexed { element, .. } => Value::Indexed(
-                project_indexed_entries(runtime)?
+                project_indexed_entries(runtime)
+                    .map_err(OutputProjectionError::from)?
                     .iter()
-                    .map(|entry| element.protocol_value(entry))
+                    .map(|entry| element.protocol_value(entry, cancellation))
                     .collect::<Result<_, _>>()?,
             ),
             Self::Algebraic(constructors) => {
                 let (position, value) = project_constructor(
                     runtime,
                     constructors.iter().map(|codec| codec.applied.constructor()),
-                )?;
+                )
+                .map_err(OutputProjectionError::from)?;
                 let fields = constructors[position]
                     .fields
                     .iter()
                     .zip(value.fields())
-                    .map(|((_, codec), (_, field))| codec.protocol_value(field))
+                    .map(|((_, codec), (_, field))| codec.protocol_value(field, cancellation))
                     .collect::<Result<_, _>>()?;
                 Value::Algebraic {
                     // Both lists hold the constructors in declaration order.

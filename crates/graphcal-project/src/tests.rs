@@ -3478,6 +3478,190 @@ fn cancellation_stops_an_in_flight_evaluation() {
     );
 }
 
+/// Projecting a large indexed output observes the request's cancellation per
+/// entry, and a deadline that passes during projection cancels the row
+/// rather than returning it as a success (#2251).
+#[test]
+fn model_requests_observe_cancellation_while_projecting_outputs() {
+    use graphcal_model_protocol::{FiniteF64, InputColumn, RequestBatch};
+
+    const ENTRIES: usize = 20_000;
+    // The smallest number of successful checkpoints that lets one request of
+    // `output` over `ENTRIES` values finish.
+    let checkpoints_to_finish = |output: &str| {
+        let source = format!(
+            "param scale: Dimensionless = 1.0;\n\
+             node values: Dimensionless[Fin({ENTRIES})] = for i: Fin({ENTRIES}) {{ @scale }};\n\
+             pub node indexed: Dimensionless[Fin({ENTRIES})] = @values;\n\
+             pub node total: Int = count(@values);\n"
+        );
+        let project = crate::loader::LoadedProject::from_source(&source, "model.gcl").unwrap();
+        let prepared = prepare_from_project(&project).unwrap();
+        let schema = session_over(&prepared, &["scale"], &[output]);
+        let session = prepared
+            .model_session(std::sync::Arc::clone(&schema))
+            .unwrap();
+        let request = RequestBatch::new(
+            std::sync::Arc::clone(&schema),
+            vec![InputColumn::Quantity(vec![FiniteF64::new(2.0).unwrap()])],
+        )
+        .unwrap();
+        let finishes = |checkpoints: usize| {
+            let cancellation =
+                graphcal_compiler::cancellation::CancellationToken::cancel_after_successful_checkpoints(
+                    checkpoints,
+                );
+            match prepared.evaluate_request_with_cancellation(&session, &request, &cancellation) {
+                Ok(_) => true,
+                Err(Outcome::Cancelled) => false,
+                Err(Outcome::Failed(error)) => panic!("unexpected failure: {error}"),
+            }
+        };
+        let (mut low, mut high) = (0, 1_usize);
+        while !finishes(high) {
+            low = high;
+            high *= 2;
+        }
+        while low + 1 < high {
+            let middle = low + (high - low) / 2;
+            if finishes(middle) {
+                high = middle;
+            } else {
+                low = middle;
+            }
+        }
+        high
+    };
+    let scalar = checkpoints_to_finish("total");
+    let indexed = checkpoints_to_finish("indexed");
+    assert!(
+        indexed >= scalar + ENTRIES,
+        "projecting {ENTRIES} entries must observe cancellation per entry: \
+         scalar output needs {scalar} checkpoints, indexed output {indexed}"
+    );
+}
+
+/// Static TODO reachability is value-independent, so one prepared plan
+/// answers each query once, however many expressions and evaluations ask
+/// it (#2251).
+#[test]
+fn todo_reachability_is_computed_once_per_plan() {
+    use std::fmt::Write as _;
+
+    const CALLERS: usize = 64;
+    let mut source = String::from(
+        "dag helper { node pending: Dimensionless = todo<Dimensionless> {}; pub node out: Dimensionless = 1.0; }\n",
+    );
+    for caller in 0..CALLERS {
+        writeln!(
+            source,
+            "node caller{caller}: Dimensionless = @helper()::out + {caller}.0;"
+        )
+        .unwrap();
+    }
+    let project = crate::loader::LoadedProject::from_source(&source, "reach.gcl").unwrap();
+    let prepared = ProjectCompiler::new(&project).prepare().unwrap();
+    let row = prepared.binding_builder().finish().unwrap();
+    let (_, first) = graphcal_eval::pipeline_metrics::measure(|| prepared.evaluate(&row));
+    let (_, second) = graphcal_eval::pipeline_metrics::measure(|| prepared.evaluate(&row));
+    assert!(
+        first.unfinished_reach_analyses > 0,
+        "the program has a todo, so reachability must be analysed: {first:?}"
+    );
+    assert!(
+        first.unfinished_reach_analyses < 8,
+        "each query must be answered once, not once per caller: {first:?}"
+    );
+    assert_eq!(
+        second.unfinished_reach_analyses, 0,
+        "a later evaluation of the same plan must reuse every answer: {second:?}"
+    );
+}
+
+/// A chain of DAGs each calling the previous one twice does `2^depth` work
+/// from linear source (#2251). Evaluation has no operation budget, so the
+/// chain must stop promptly on cancellation instead.
+#[test]
+fn cancellation_stops_an_exponential_dag_call_chain() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
+    use std::{fmt::Write as _, sync::mpsc, thread, time::Duration};
+
+    const DEPTH: usize = 48;
+    // The leaf DAG, reached only through every level of the chain, reports
+    // each evaluation through a test host function.
+    let mut source = String::from(
+        "import plugin \"graphcal:chain-test\" as test {\n    fn leaf(x: Dimensionless) -> Dimensionless;\n}\n\
+         dag d0 { pub node out: Dimensionless = test::leaf(1.0); }\n",
+    );
+    for level in 1..=DEPTH {
+        let previous = level - 1;
+        writeln!(
+            source,
+            "dag d{level} {{ pub node out: Dimensionless = @d{previous}()::out + @d{previous}()::out; }}"
+        )
+        .unwrap();
+    }
+    writeln!(source, "node result: Dimensionless = @d{DEPTH}()::out;").unwrap();
+    let project = crate::loader::LoadedProject::from_source(&source, "calls.gcl").unwrap();
+    let leaves = Arc::new(AtomicUsize::new(0));
+    let observed_leaves = Arc::clone(&leaves);
+    let mut host_fns = graphcal_eval::host_fns::HostFunctionRegistry::new();
+    host_fns.register_for_test(
+        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:chain-test"),
+        graphcal_compiler::syntax::function_name::FnName::expect_valid("leaf"),
+        move |arguments| {
+            observed_leaves.fetch_add(1, Ordering::SeqCst);
+            Ok(graphcal_eval::host_fns::HostFnValue::from_argument(
+                &arguments[0],
+            ))
+        },
+    );
+    let cancellation_source = graphcal_compiler::cancellation::CancellationSource::new();
+    let cancellation = cancellation_source.token();
+    let (sender, receiver) = mpsc::channel();
+
+    thread::spawn(move || {
+        // Compile without the token so that cancellation can only stop the
+        // evaluation itself.
+        let prepared = ProjectCompiler::new(&project)
+            .host_fns(&host_fns)
+            .prepare()
+            .unwrap();
+        let row = prepared.binding_builder().finish().unwrap();
+        sender
+            .send(prepared.evaluate_with_cancellation(&row, &cancellation))
+            .unwrap();
+    });
+
+    // Cancel only once evaluation has descended through the whole chain:
+    // the leaf has been evaluated inside `DEPTH` nested calls.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while leaves.load(Ordering::SeqCst) == 0 {
+        assert!(
+            Instant::now() < deadline,
+            "evaluation never reached the leaf"
+        );
+        thread::sleep(Duration::from_millis(1));
+    }
+    cancellation_source.cancel();
+
+    let result = receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("a cancelled call chain should stop promptly");
+    let error = result.expect_err("the call chain should be cancelled");
+    assert!(
+        matches!(error, Outcome::Cancelled),
+        "unexpected outcome: {error:?}"
+    );
+    let evaluated = leaves.load(Ordering::SeqCst);
+    assert!(
+        u64::try_from(evaluated).unwrap() < 1_u64 << DEPTH,
+        "the chain stopped inside its 2^{DEPTH} leaf evaluations, after {evaluated}"
+    );
+}
+
 #[test]
 #[expect(
     clippy::suboptimal_flops,

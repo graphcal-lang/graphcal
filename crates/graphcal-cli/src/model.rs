@@ -45,6 +45,22 @@ pub fn parse_unit_choice(argument: &str) -> Result<UnitChoiceArgument, String> {
     })
 }
 
+/// Parse a `--request-timeout SECONDS` argument: a positive, finite number
+/// of seconds.
+pub fn parse_request_timeout(argument: &str) -> Result<std::time::Duration, String> {
+    let seconds = argument
+        .trim()
+        .parse::<f64>()
+        .map_err(|error| format!("expected a number of seconds, got `{argument}`: {error}"))?;
+    if seconds.is_nan() || seconds <= 0.0 {
+        return Err(format!(
+            "the request timeout must be positive, got `{argument}`"
+        ));
+    }
+    std::time::Duration::try_from_secs_f64(seconds)
+        .map_err(|error| format!("invalid request timeout `{argument}`: {error}"))
+}
+
 /// Parse a `model unit` argument; the unit itself is resolved against the
 /// model later.
 pub fn parse_unit_spelling(argument: &str) -> Result<UnitSpelling, String> {
@@ -101,6 +117,7 @@ pub fn serve(
     file: &Path,
     selection: &SessionSelection<'_>,
     fingerprint: &FingerprintCheck,
+    deadline: graphcal_model_server::RequestDeadline,
     root: Option<&Path>,
 ) -> Result<(), ModelServeError> {
     let names = |names: &[String]| {
@@ -140,7 +157,8 @@ pub fn serve(
         value.bind(name, &mut fixed)?;
     }
     let session = prepared.model_session_with(Arc::new(schema), fixed.into_fixed())?;
-    graphcal_model_server::serve_stdio(&prepared, &session).map_err(ModelServeError::Serve)
+    graphcal_model_server::serve_stdio(&prepared, &session, deadline)
+        .map_err(ModelServeError::Serve)
 }
 
 fn prepare(file: &Path, root: Option<&Path>) -> Result<PreparedProject, ModelServeError> {

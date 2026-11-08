@@ -3,7 +3,7 @@
 //! Explicit call arguments cut off parameter defaults. No expression is executed
 //! and no hypothetical runtime value is introduced during this analysis.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::HashSet;
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
@@ -17,11 +17,7 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::scoped_node::{NodeKind, ScopedNode};
 
 use crate::execution_plan::{ComputedBody, ExecPlan, PlannedBody};
-
-type BoundParameters = BTreeSet<ResolvedDeclName>;
-/// A call output and the parameters its call binds explicitly.
-pub type Query = (ResolvedDeclName, BoundParameters);
-type Origins = BTreeSet<ResolvedDeclName>;
+use crate::unfinished_reach::{BoundParameters, Origins, Query, UnfinishedReachMemo};
 
 /// The inline calls an expression's availability depends on.
 ///
@@ -62,14 +58,14 @@ pub fn collect(
     source: SourceId,
     cancellation: &CancellationToken,
 ) -> Result<Vec<(ResolvedDeclName, RuntimeUnavailable)>, Outcome<SemanticError>> {
-    if !plan.has_unfinished_definitions() {
+    let Some(memo) = plan.unfinished_reach() else {
         return Ok(Vec::new());
-    }
+    };
     let mut analysis = Analysis {
         plan,
         source,
         cancellation,
-        memo: HashMap::new(),
+        memo,
         active: HashSet::new(),
     };
     expression
@@ -109,7 +105,8 @@ struct Analysis<'a> {
     plan: &'a ExecPlan<'a>,
     source: SourceId,
     cancellation: &'a CancellationToken,
-    memo: HashMap<Query, Origins>,
+    /// The plan's completed answers; an interrupted query stores nothing.
+    memo: &'a UnfinishedReachMemo,
     active: HashSet<Query>,
 }
 
@@ -137,13 +134,15 @@ impl Analysis<'_> {
         }
         let query = (name.clone(), bound.clone());
         if let Some(origins) = self.memo.get(&query) {
-            return Ok(origins.clone());
+            return Ok(origins);
         }
         if !self.active.insert(query.clone()) {
             return Err(self
                 .internal_error(format!("cyclic checked call dependency at `{name}`"))
                 .into());
         }
+        #[cfg(any(test, feature = "test-internals"))]
+        crate::pipeline_metrics::record(crate::pipeline_metrics::Event::UnfinishedReachAnalysis);
         let plan = self.plan;
         let declaration = plan.declaration(name).ok_or_else(|| {
             self.internal_error(format!(
@@ -175,7 +174,7 @@ impl Analysis<'_> {
             }
         }
         self.active.remove(&query);
-        self.memo.insert(query, origins.clone());
+        self.memo.record(query, origins.clone());
         Ok(origins)
     }
 }

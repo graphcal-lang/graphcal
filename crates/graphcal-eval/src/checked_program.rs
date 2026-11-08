@@ -245,17 +245,6 @@ impl EvaluatedTir {
         &self.consts
     }
 
-    /// The evaluated constants of the DAG at `position` of the TIR.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `position` is a position of another registry with more
-    /// DAGs.
-    #[must_use]
-    pub(crate) fn pool_at(&self, position: DagPosition) -> &Arc<RuntimeValueMap> {
-        self.pools.at(position)
-    }
-
     /// Facts of the checked modules this TIR includes.
     #[must_use]
     pub(crate) const fn inherited(&self) -> &ExecutionFacts {

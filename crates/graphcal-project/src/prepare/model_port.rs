@@ -1,5 +1,6 @@
 //! Transport-independent model ports and per-row model evaluation.
 
+use graphcal_compiler::outcome::Outcome;
 use graphcal_eval::eval::runtime::{FailureOrigin, RootFailure, RootOutcome};
 
 use super::{
@@ -252,19 +253,28 @@ impl PreparedProject {
         if model.plan_id != self.plan_id {
             return Err(ModelExecutionError::PlanMismatch);
         }
-        self.evaluate_row(row, &model.outputs, |runtime, position| {
-            let output = &model.outputs[position];
-            graphcal_eval::eval::public_projection::project(
-                graphcal_eval::runtime_presentation::PresentedRef::plain(runtime),
-                &output.declared_type,
+        graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            self.evaluate_row(
+                row,
+                &model.outputs,
+                |runtime, position, _| {
+                    let output = &model.outputs[position];
+                    graphcal_eval::eval::public_projection::project(
+                        graphcal_eval::runtime_presentation::PresentedRef::plain(runtime),
+                        &output.declared_type,
+                    )
+                    .map(|(value, _)| value)
+                    .map_err(|invariant| OutputProjectionError::Invariant(invariant).into())
+                },
+                cancellation,
             )
-            .map(|(value, _)| value)
-            .map_err(OutputProjectionError::Invariant)
         })
     }
 
     /// Evaluate one row, projecting the value of each of `outputs` with
-    /// `project`, which receives the output's position in `outputs`.
+    /// `project`, which receives the output's position in `outputs` and the
+    /// row's `cancellation`. Cancellation requested before every output is
+    /// projected cancels the row.
     pub(super) fn evaluate_row<T>(
         &self,
         row: &ParameterBindingRow,
@@ -272,51 +282,58 @@ impl PreparedProject {
         project: impl Fn(
             &graphcal_eval::eval_expr::RuntimeValue,
             usize,
-        ) -> Result<T, OutputProjectionError>,
-    ) -> Result<ModelRowOutcome<T>, ModelExecutionError> {
+            &graphcal_compiler::cancellation::CancellationToken,
+        ) -> Result<T, Outcome<OutputProjectionError>>,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<ModelRowOutcome<T>, Outcome<ModelExecutionError>> {
         self.validate_row_identity(row)
-            .map_err(ModelExecutionError::from)?;
+            .map_err(|error| Outcome::Failed(ModelExecutionError::from(error)))?;
 
-        let outcome = graphcal_compiler::outcome::without_cancellation(|cancellation| {
-            RootOutcome::evaluate(
-                self.plan(),
-                &row.bindings,
-                self.source,
-                &self.sources,
-                &self.host_fns,
-                &self.output_assembly.display_names,
-                cancellation,
-            )
-        })
-        .map_err(|error| self.render(error))?;
+        let outcome = RootOutcome::evaluate(
+            self.plan(),
+            &row.bindings,
+            self.source,
+            &self.sources,
+            &self.host_fns,
+            &self.output_assembly.display_names,
+            cancellation,
+        )
+        .map_err(|outcome| outcome.map_failed(|error| self.render(error).into()))?;
         if let Some(failure) =
             outcome.first_failure(self.plan(), &self.output_assembly.display_names)
         {
             return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
         }
         let values = outcome.values();
-        outputs
+        let projected = outputs
             .iter()
             .enumerate()
             .map(|(position, output)| {
                 let runtime = values.get(&output.runtime_key).ok_or_else(|| {
-                    ModelExecutionError::MissingOutputValue {
+                    Outcome::Failed(ModelExecutionError::MissingOutputValue {
                         name: output.name.clone(),
-                    }
+                    })
                 })?;
-                project(runtime, position).map_err(|error| match error {
-                    OutputProjectionError::Invariant(invariant) => ModelExecutionError::Compile(
-                        self.render(invariant.into_internal_error(self.source)),
-                    ),
-                    OutputProjectionError::Unrepresentable => {
-                        ModelExecutionError::UnrepresentableOutput {
-                            name: output.name.clone(),
+                project(runtime, position, cancellation).map_err(|outcome| {
+                    outcome.map_failed(|error| match error {
+                        OutputProjectionError::Invariant(invariant) => {
+                            ModelExecutionError::Compile(
+                                self.render(invariant.into_internal_error(self.source)),
+                            )
                         }
-                    }
+                        OutputProjectionError::Unrepresentable => {
+                            ModelExecutionError::UnrepresentableOutput {
+                                name: output.name.clone(),
+                            }
+                        }
+                    })
                 })
             })
-            .collect::<Result<Vec<_>, _>>()
-            .map(ModelRowOutcome::Success)
+            .collect::<Result<Vec<_>, _>>()?;
+        // A deadline that passed during the last projection still cancels
+        // the row rather than reporting it as a success.
+        cancellation.checkpoint()?;
+        Ok(ModelRowOutcome::Success(projected))
     }
 
     /// The diagnostic a model row reports for the first failure of its
@@ -358,6 +375,12 @@ pub(super) enum OutputProjectionError {
 impl From<graphcal_eval::invariant::Invariant> for OutputProjectionError {
     fn from(invariant: graphcal_eval::invariant::Invariant) -> Self {
         Self::Invariant(invariant)
+    }
+}
+
+impl From<OutputProjectionError> for Outcome<OutputProjectionError> {
+    fn from(error: OutputProjectionError) -> Self {
+        Self::Failed(error)
     }
 }
 

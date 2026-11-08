@@ -13,7 +13,7 @@ use graphcal_compiler::outcome::Outcome;
 
 use graphcal_compiler::cancellation::Cancelled;
 
-use super::work_budget::KernelCheckpoint;
+use super::kernel_checkpoint::KernelCheckpoint;
 use crate::invariant::{Failure, Invariant};
 
 #[derive(Debug, Error)]

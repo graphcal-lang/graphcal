@@ -6,6 +6,11 @@ path = ["static_incompleteness"]
 role = "interpreter"
 
 [[module]]
+package = "eval"
+path = ["unfinished_reach"]
+role = "contracts"
+
+[[module]]
 package = "compiler"
 path = ["node_unavailable"]
 role = "contracts"
@@ -2295,22 +2300,37 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "numeric", "mean_tests"]
-role = "interpreter"
-
-[[module]]
-package = "eval"
 path = ["eval_expr", "unit_scale"]
 role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "work_budget"]
+path = ["eval_expr", "coordinate_search"]
 role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "work_budget", "tests"]
+path = ["eval_expr", "coordinate_search", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "exact_binary_sum"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "exact_binary_sum", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "kernel_checkpoint"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "kernel_checkpoint", "tests"]
 role = "interpreter"
 
 [[module]]

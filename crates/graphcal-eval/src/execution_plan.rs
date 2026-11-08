@@ -40,6 +40,7 @@ use thiserror::Error;
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::constant_pools::ConstantReference;
 use crate::domain_constraint::ResolvedDomainConstraint;
+use crate::unfinished_reach::UnfinishedReachMemo;
 
 /// An index into one [`IndexVec`], whose items are pushed in the order of
 /// their indices.
@@ -997,7 +998,9 @@ impl<'a, 'p> Entry<'a, 'p> {
 /// A compiled execution plan ready for runtime evaluation.
 pub struct ExecPlan<'p> {
     program: &'p CheckedProgram,
-    has_unfinished_definitions: bool,
+    /// The reachability answers of the program's unfinished declarations;
+    /// `None` when every declaration is finished.
+    unfinished_reach: Option<UnfinishedReachMemo>,
     declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     /// The callable of each DAG of the program, by registry position.
     callables: IndexVec<DagPosition, CallablePlan<'p>>,
@@ -1044,7 +1047,7 @@ impl<'p> ExecPlan<'p> {
             .is_some();
         Ok(Self {
             program,
-            has_unfinished_definitions,
+            unfinished_reach: has_unfinished_definitions.then(UnfinishedReachMemo::default),
             declarations,
             callables,
             calls,
@@ -1065,7 +1068,13 @@ impl<'p> ExecPlan<'p> {
 
     /// Whether any declaration of the program is unfinished.
     pub(crate) const fn has_unfinished_definitions(&self) -> bool {
-        self.has_unfinished_definitions
+        self.unfinished_reach.is_some()
+    }
+
+    /// The reachability answers shared by every evaluation of this plan;
+    /// `None` when every declaration is finished.
+    pub(crate) const fn unfinished_reach(&self) -> Option<&UnfinishedReachMemo> {
+        self.unfinished_reach.as_ref()
     }
 
     /// The root DAG's callable.
@@ -1156,7 +1165,7 @@ impl std::fmt::Debug for ExecPlan<'_> {
             .field("program", self.program)
             .field(
                 "has_unfinished_definitions",
-                &self.has_unfinished_definitions,
+                &self.has_unfinished_definitions(),
             )
             .field("declarations", &declarations)
             .field("callables", &self.callables.items)

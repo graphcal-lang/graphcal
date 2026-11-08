@@ -13,6 +13,7 @@ categories.workspace = true
 [dependencies]
 arrow-ipc = { workspace = true }
 arrow-schema = { workspace = true }
+graphcal-compiler = { workspace = true }
 graphcal-model-protocol = { workspace = true, features = ["arrow"] }
 graphcal-project = { workspace = true }
 thiserror = { workspace = true }
