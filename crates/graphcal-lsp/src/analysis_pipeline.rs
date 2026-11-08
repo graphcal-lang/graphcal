@@ -72,6 +72,25 @@ pub enum ViewModelDemand {
     Project,
 }
 
+/// Whether an analysis evaluates a checked, runnable document.
+///
+/// Editor analyses evaluate to show values and runtime diagnostics. A check of
+/// a candidate edit only needs the compiler's verdict and the symbol index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvaluationDemand {
+    /// Evaluate a runnable document after it checks.
+    Evaluate,
+    /// Stop after checking.
+    Skip,
+}
+
+/// What one analysis pass produces beyond the checked symbol index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnalysisDemand {
+    pub view: ViewModelDemand,
+    pub evaluation: EvaluationDemand,
+}
+
 /// Transient output of one analysis pass.
 pub struct AnalysisRun {
     pub analysis: AnalysisResult,
@@ -81,6 +100,7 @@ pub struct AnalysisRun {
 /// Snapshot of another open editor buffer, overlaid onto the filesystem
 /// during analysis so cross-file diagnostics, goto-definition targets, and
 /// hover reflect what the user actually sees instead of stale disk content.
+#[derive(Clone)]
 pub struct OpenBuffer {
     /// The URI the editor opened the buffer under.
     uri: Url,
@@ -95,6 +115,11 @@ impl OpenBuffer {
     pub fn new(uri: Url, text: Arc<String>) -> Option<Self> {
         let path = uri.to_file_path().ok()?;
         Some(Self { uri, path, text })
+    }
+
+    /// The URI the editor opened the buffer under.
+    pub const fn uri(&self) -> &Url {
+        &self.uri
     }
 }
 
@@ -269,7 +294,10 @@ pub(crate) fn run_analysis_run(
         open_buffers,
         plugin_host,
         &input_snapshot,
-        ViewModelDemand::Project,
+        AnalysisDemand {
+            view: ViewModelDemand::Project,
+            evaluation: EvaluationDemand::Evaluate,
+        },
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .expect("an unbounded analysis cannot be cancelled")
@@ -299,9 +327,10 @@ pub fn run_analysis_with_cancellation(
     open_buffers: &[OpenBuffer],
     plugin_host: &graphcal_plugin_host::PluginHost,
     input_snapshot: &AnalysisInputSnapshot,
-    view: ViewModelDemand,
+    demand: AnalysisDemand,
     cancellation: &CancellationToken,
 ) -> std::result::Result<AnalysisRun, Cancelled> {
+    let AnalysisDemand { view, evaluation } = demand;
     cancellation.checkpoint()?;
     // Stage 1: Build project (parse + load imports).
     // If this fails, no AST is available for the multi-file pipeline. Fall
@@ -425,25 +454,26 @@ pub fn run_analysis_with_cancellation(
                 }
             };
             cancellation.checkpoint()?;
-            let (mut diagnostics, eval_values) =
-                if checked.is_library() && tir.default_runnable_dags().next().is_none() {
-                    (HashMap::new(), HashMap::new())
-                } else {
-                    let evaluated = run_eval_from_checked(
-                        checked,
-                        &documents,
-                        text,
-                        &symbol_table,
-                        &host_fns,
-                        cancellation,
-                    )?;
-                    if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
-                        // A value its display unit cannot show is shown in SI, and
-                        // its node says why.
-                        projection.attach_evaluation(result);
-                    }
-                    (evaluated.diagnostics, evaluated.values)
-                };
+            let (mut diagnostics, eval_values) = if evaluation == EvaluationDemand::Skip
+                || (checked.is_library() && tir.default_runnable_dags().next().is_none())
+            {
+                (HashMap::new(), HashMap::new())
+            } else {
+                let evaluated = run_eval_from_checked(
+                    checked,
+                    &documents,
+                    text,
+                    &symbol_table,
+                    &host_fns,
+                    cancellation,
+                )?;
+                if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
+                    // A value its display unit cannot show is shown in SI, and
+                    // its node says why.
+                    projection.attach_evaluation(result);
+                }
+                (evaluated.diagnostics, evaluated.values)
+            };
             cancellation.checkpoint()?;
             diagnostics.entry(uri.clone()).or_default().extend(todos);
             let view = view.map(graphcal_project::view_model::ViewProjections::into_models);
@@ -775,7 +805,10 @@ mod view_tests {
             &[],
             test_plugin_host(),
             &input_snapshot,
-            ViewModelDemand::Skip,
+            AnalysisDemand {
+                view: ViewModelDemand::Skip,
+                evaluation: EvaluationDemand::Evaluate,
+            },
             &CancellationToken::unbounded(),
         )
         .unwrap();

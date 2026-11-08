@@ -33,6 +33,7 @@ mod project_symbols;
 mod protocol_tests;
 mod references;
 mod rename;
+mod rename_check;
 mod resolve;
 pub mod server;
 mod signature_help;

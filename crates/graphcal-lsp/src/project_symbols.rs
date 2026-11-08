@@ -107,6 +107,20 @@ pub struct ProjectOccurrence {
     pub span: Span,
 }
 
+/// What one reference occurrence resolves to, located by its definition site
+/// rather than by its identity, so two snapshots of edited sources can be
+/// compared even where an identity embeds source positions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ResolutionSite {
+    /// The name occurrence of the source definition.
+    Definition(ProjectOccurrence),
+    /// An identity without a navigable definition in the snapshot (a
+    /// built-in, for instance).
+    Identity(SymbolKey),
+    /// The occurrence has no unique target.
+    Unresolved,
+}
+
 /// A definition occurrence with the metadata needed by editor features.
 #[derive(Debug)]
 pub struct ProjectDefinition<'a> {
@@ -231,6 +245,30 @@ impl ProjectSymbolIndex {
         occurrences
     }
 
+    /// Every reference occurrence of the snapshot with what it resolves to.
+    pub fn resolutions(&self) -> impl Iterator<Item = (ProjectOccurrence, ResolutionSite)> + '_ {
+        self.documents.values().flat_map(move |document| {
+            document.table.references().iter().map(move |reference| {
+                let site = document.resolve_reference(reference).map_or(
+                    ResolutionSite::Unresolved,
+                    |target| {
+                        self.definition(&target)
+                            .map_or(ResolutionSite::Identity(target), |definition| {
+                                ResolutionSite::Definition(definition.occurrence)
+                            })
+                    },
+                );
+                (
+                    ProjectOccurrence {
+                        uri: document.uri.clone(),
+                        span: reference.span,
+                    },
+                    site,
+                )
+            })
+        })
+    }
+
     /// Source ranges that must change when the canonical target's leaf changes.
     ///
     /// An imported alias still resolves to the target, but its authored leaf is
@@ -285,64 +323,6 @@ impl ProjectSymbolIndex {
                 document.resolve_reference(reference).is_none()
                     && document.may_unresolved_reference_target(unresolved, target)
             })
-        })
-    }
-
-    /// Whether changing a canonical leaf would introduce a declaration or
-    /// direct-import collision in any affected source scope.
-    #[must_use]
-    pub fn collides_with(
-        &self,
-        target: &SymbolKey,
-        renamed_target: &SymbolKey,
-        new_name: &str,
-    ) -> bool {
-        if self.documents.values().any(|document| {
-            document
-                .table
-                .definitions
-                .get(renamed_target)
-                .is_some_and(|definition| !definition.is_builtin())
-        }) {
-            return true;
-        }
-
-        self.documents.values().any(|document| {
-            let direct_binding = document.imported_bindings.iter().any(|binding| {
-                binding.target() == target
-                    && binding.spelling().is_local()
-                    && binding.spelling().leaf().as_str() == target.leaf_name()
-            });
-            let locally_defined = document.table.definitions.contains_key(target)
-                && target.owner() == Some(document.table.owner());
-            let definition_collision =
-                document
-                    .table
-                    .definitions
-                    .iter()
-                    .any(|(candidate, definition)| {
-                        !definition.is_builtin()
-                            && candidate.owner() == Some(document.table.owner())
-                            && candidate.leaf_name() == new_name
-                            && candidate.same_namespace(target)
-                    });
-            let imported_collision = document.imported_bindings.iter().any(|binding| {
-                binding.target() != target
-                    && binding.spelling().is_local()
-                    && binding.spelling().leaf().as_str() == new_name
-                    && binding.target().same_namespace(target)
-            });
-            let top_level_namespace = matches!(
-                target,
-                SymbolKey::Declaration(_)
-                    | SymbolKey::Dimension(_)
-                    | SymbolKey::Unit(_)
-                    | SymbolKey::StructType(_)
-                    | SymbolKey::Constructor(_)
-                    | SymbolKey::Index(_)
-            );
-            (direct_binding && (definition_collision || imported_collision))
-                || (locally_defined && top_level_namespace && imported_collision)
         })
     }
 
