@@ -1111,9 +1111,12 @@ fn verify_locked_source(
         .account_source_tree(root, actual.entries(), actual.bytes())
         .map_err(loader_manifest_error)?;
     // The loader computes only the version-1 tree hash; a new algorithm must
-    // decide here how its digests are verified.
+    // decide here how its digests are verified. A legacy pin is held to the
+    // full version-1 coverage: anything else fails loudly and `deps lock`,
+    // which can verify the older coverage, re-pins it.
     let expected = match tree_hashes.algorithm {
-        graphcal_package::SourceTreeHashAlgorithm::GraphcalSourceTreeV1 => tree_hashes.sha256,
+        graphcal_package::SourceTreeHashAlgorithm::GraphcalSourceTreeV1
+        | graphcal_package::SourceTreeHashAlgorithm::LegacyUnrecordedCoverage => tree_hashes.sha256,
     };
     if actual.sha256() == expected.to_string() {
         Ok(snapshot)

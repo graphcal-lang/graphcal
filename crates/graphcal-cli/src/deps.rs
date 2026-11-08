@@ -552,12 +552,12 @@ enum PriorLock {
     Missing,
     Present {
         content: String,
-        trusted_sources: BTreeMap<GitSourceId, Sha256Digest>,
+        trusted_sources: BTreeMap<GitSourceId, TrustedPin>,
     },
 }
 
 impl PriorLock {
-    fn trusted_sources(&self) -> BTreeMap<GitSourceId, Sha256Digest> {
+    fn trusted_sources(&self) -> BTreeMap<GitSourceId, TrustedPin> {
         match self {
             Self::Missing => BTreeMap::new(),
             Self::Present {
@@ -604,22 +604,55 @@ fn read_prior_lock(
 fn trusted_sources_from_lock(
     content: &str,
     max_packages: u64,
-) -> Result<BTreeMap<GitSourceId, Sha256Digest>, PriorLockError> {
+) -> Result<BTreeMap<GitSourceId, TrustedPin>, PriorLockError> {
     let max_packages = usize::try_from(max_packages).unwrap_or(usize::MAX);
     let lockfile = parse_lockfile_str_with_limits(content, LockfileParseLimits::new(max_packages))?;
     Ok(lockfile
         .git_source_pins()?
         .into_iter()
-        .map(|(source, hashes)| (source, comparable_v1_digest(hashes)))
+        .map(|(source, hashes)| (source, TrustedPin::from_lock(hashes)))
         .collect())
 }
 
-/// The digest `deps lock` can recompute for a pin. Lock generation computes
-/// only [`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`]; a new algorithm must
-/// decide here how its older pins are verified.
-const fn comparable_v1_digest(hashes: SourceTreeHashes) -> Sha256Digest {
-    match hashes.algorithm {
-        SourceTreeHashAlgorithm::GraphcalSourceTreeV1 => hashes.sha256,
+/// A previous lock's pin for one immutable Git source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TrustedPin {
+    sha256: Sha256Digest,
+    coverage: PinCoverage,
+}
+
+/// Which files a pin's digest is known to cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PinCoverage {
+    /// Exactly what `deps lock` hashes now
+    /// ([`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`]).
+    Current,
+    /// A lock format 1 pin: either the current coverage or the older one that
+    /// omitted Wasm artifacts imported from outside the source directory.
+    LegacyUnrecorded,
+}
+
+impl TrustedPin {
+    /// Lock generation computes only
+    /// [`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`]; a new algorithm must
+    /// decide here how its older pins are verified.
+    const fn from_lock(hashes: SourceTreeHashes) -> Self {
+        let coverage = match hashes.algorithm {
+            SourceTreeHashAlgorithm::GraphcalSourceTreeV1 => PinCoverage::Current,
+            SourceTreeHashAlgorithm::LegacyUnrecordedCoverage => PinCoverage::LegacyUnrecorded,
+        };
+        Self {
+            sha256: hashes.sha256,
+            coverage,
+        }
+    }
+
+    #[cfg(test)]
+    const fn current(sha256: Sha256Digest) -> Self {
+        Self {
+            sha256,
+            coverage: PinCoverage::Current,
+        }
     }
 }
 
@@ -1036,14 +1069,14 @@ struct ResolvedDependency {
 
 struct PackageCache {
     root: PackageCacheRoot,
-    trusted_sources: BTreeMap<GitSourceId, Sha256Digest>,
+    trusted_sources: BTreeMap<GitSourceId, TrustedPin>,
     session: BTreeMap<GitSourceId, MaterializedGit>,
 }
 
 impl PackageCache {
     const fn new(
         root: PackageCacheRoot,
-        trusted_sources: BTreeMap<GitSourceId, Sha256Digest>,
+        trusted_sources: BTreeMap<GitSourceId, TrustedPin>,
     ) -> Self {
         Self {
             root,
@@ -1073,7 +1106,8 @@ impl PackageCache {
         }
 
         let _writer_lock = CacheWriterLock::acquire(&self.root, source)?;
-        let expected = self.trusted_sources.get(source).copied();
+        let pin = self.trusted_sources.get(source).copied();
+        let expected = pin.map(|pin| pin.sha256);
         let trusted_checkout = match expected {
             Some(expected) => {
                 let path = self.root.git_checkout(source, &expected);
@@ -1104,15 +1138,10 @@ impl PackageCache {
             })?;
         fetch(temporary.path())?;
         let fetched = inspect_materialized_package(temporary.path(), budget)?;
-        if let Some(expected) = expected
-            && fetched.sha256 != expected
+        if let Some(pin) = pin
+            && fetched.sha256 != pin.sha256
         {
-            return Err(DepsError::CacheIntegrity {
-                url: source.url().to_string(),
-                commit: source.commit().as_str().to_string(),
-                expected,
-                actual: fetched.sha256,
-            });
+            verify_mismatched_pin(source, pin, &fetched, temporary.path(), budget)?;
         }
 
         let path = self.root.git_checkout(source, &fetched.sha256);
@@ -1130,6 +1159,47 @@ impl PackageCache {
         };
         self.session.insert(source.clone(), materialized.clone());
         Ok(materialized)
+    }
+}
+
+/// Decide whether a fetched tree whose current digest differs from its pin
+/// still matches it.
+///
+/// A current pin must match exactly. A lock format 1 pin may have been written
+/// by Graphcal 0.0.1-alpha.30 or earlier, which hashed only `graphcal.toml`
+/// and the source directory; it is accepted when that older coverage of the
+/// fetched tree reproduces it. The files it covered are then unchanged, and
+/// the new lock pins the full current coverage. Matching neither coverage is
+/// reported as unverifiable rather than as changed contents, because a
+/// coverage difference cannot be told apart from a change.
+fn verify_mismatched_pin(
+    source: &GitSourceId,
+    pin: TrustedPin,
+    fetched: &InspectedPackage,
+    checkout: &Path,
+    budget: &PackageIngestionBudget,
+) -> Result<(), DepsError> {
+    match pin.coverage {
+        PinCoverage::Current => Err(DepsError::CacheIntegrity {
+            url: source.url().to_string(),
+            commit: source.commit().as_str().to_string(),
+            expected: pin.sha256,
+            actual: fetched.sha256,
+        }),
+        PinCoverage::LegacyUnrecorded => {
+            let source_dir_only =
+                hash_source_dir_only(checkout, &fetched.manifest.source_dir, budget)?;
+            if source_dir_only == pin.sha256 {
+                Ok(())
+            } else {
+                Err(DepsError::LegacyPinUnverifiable {
+                    url: source.url().to_string(),
+                    commit: source.commit().as_str().to_string(),
+                    expected: pin.sha256,
+                    actual: fetched.sha256,
+                })
+            }
+        }
     }
 }
 
@@ -1366,6 +1436,32 @@ fn hash_source_tree(
     Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)
 }
 
+/// Digest of `graphcal.toml` and the source directory alone: the coverage of
+/// tree hashes written before Graphcal 0.0.1-alpha.31. It rereads files the
+/// current hash already accounted for, so it is bounded by the remaining
+/// limits but not charged to the budget again.
+fn hash_source_dir_only(
+    root: &Path,
+    source_dir: &PackageSourceDirectory,
+    budget: &PackageIngestionBudget,
+) -> Result<Sha256Digest, DepsError> {
+    let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let hash = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        graphcal_io::capture_source_tree(
+            &fs,
+            root,
+            &source_dir.to_path_buf(),
+            budget.source_tree_limits(),
+            cancellation,
+        )
+    })?
+    .hash();
+    Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)
+}
+
 fn hex_string(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -1461,6 +1557,17 @@ pub enum DepsError {
         "Git dependency `{url}` at immutable commit `{commit}` has source-tree digest `{actual}`, but the existing graphcal.lock pins `{expected}`; the dependency's contents changed since it was locked. Investigate the change before trusting it; to accept it, delete graphcal.lock and rerun `graphcal deps lock`"
     )]
     CacheIntegrity {
+        url: String,
+        commit: String,
+        expected: Sha256Digest,
+        actual: Sha256Digest,
+    },
+    /// A lock format 1 pin matches neither coverage it may have been computed
+    /// with, so whether the dependency changed cannot be determined.
+    #[error(
+        "Git dependency `{url}` at immutable commit `{commit}` has source-tree digest `{actual}`, but the existing graphcal.lock (lock format 1) pins `{expected}`. Format 1 pins do not record which files they cover (Graphcal 0.0.1-alpha.30 and earlier hashed only graphcal.toml and the source directory), and this pin matches neither coverage, so Graphcal cannot tell whether the dependency changed. Review the dependency at this commit; if you trust it, delete graphcal.lock and rerun `graphcal deps lock` to pin it again"
+    )]
+    LegacyPinUnverifiable {
         url: String,
         commit: String,
         expected: Sha256Digest,
@@ -1697,8 +1804,10 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
         let source = test_git_source();
         let (_checkout, inspected) =
             install_cached_package(&root, &source, "node x: Dimensionless = 1.0;\n");
-        let mut cache =
-            PackageCache::new(root, BTreeMap::from([(source.clone(), inspected.sha256)]));
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), TrustedPin::current(inspected.sha256))]),
+        );
         let fetches = Cell::new(0_u8);
 
         let materialized = cache
@@ -1750,7 +1859,10 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
         let old_source = "node old: Dimensionless = 1.0;\n";
         let (checkout, _inspected) = install_cached_package(&root, &source, old_source);
         let contradictory = Sha256Digest::new("f".repeat(64)).unwrap();
-        let mut cache = PackageCache::new(root, BTreeMap::from([(source.clone(), contradictory)]));
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), TrustedPin::current(contradictory))]),
+        );
 
         let error = cache
             .materialize_with(&source, &mut PackageIngestionBudget::default(), |_path| {
@@ -1774,8 +1886,10 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
             install_cached_package(&root, &source, "node old: Dimensionless = 1.0;\n");
         let corrupted = "node corrupt: Dimensionless = 99.0;\n";
         std::fs::write(checkout.join("src/units.gcl"), corrupted).unwrap();
-        let mut cache =
-            PackageCache::new(root, BTreeMap::from([(source.clone(), inspected.sha256)]));
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), TrustedPin::current(inspected.sha256))]),
+        );
 
         let error = cache
             .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
@@ -1796,6 +1910,94 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
             std::fs::read_to_string(checkout.join("src/units.gcl")).unwrap(),
             corrupted
         );
+    }
+
+    /// A package importing a Wasm artifact from outside its source directory,
+    /// whose current and pre-alpha.31 tree hashes therefore differ.
+    fn write_package_with_outside_plugin(root: &Path, source: &str) {
+        write_cached_package(
+            root,
+            &format!(
+                "import plugin \"plugins/k.wasm\" as k {{ fn f(x: Dimensionless) -> Dimensionless; }}\n{source}"
+            ),
+        );
+        std::fs::create_dir_all(root.join("plugins")).unwrap();
+        std::fs::write(root.join("plugins/k.wasm"), b"kernel bytes").unwrap();
+    }
+
+    fn legacy_pin(sha256: Sha256Digest) -> TrustedPin {
+        TrustedPin {
+            sha256,
+            coverage: PinCoverage::LegacyUnrecorded,
+        }
+    }
+
+    #[test]
+    fn legacy_pins_written_without_plugin_coverage_still_verify() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        write_package_with_outside_plugin(fixture.path(), "node x: Dimensionless = 1.0;\n");
+        let current = inspect_for_test(fixture.path());
+        let legacy = hash_source_dir_only(
+            fixture.path(),
+            &current.manifest.source_dir,
+            &PackageIngestionBudget::default(),
+        )
+        .unwrap();
+        assert_ne!(legacy, current.sha256, "the fixture must exercise coverage");
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let mut cache =
+            PackageCache::new(root, BTreeMap::from([(source.clone(), legacy_pin(legacy))]));
+
+        let materialized = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
+                write_package_with_outside_plugin(path, "node x: Dimensionless = 1.0;\n");
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(materialized.sha256, current.sha256);
+
+        // A legacy pin with the current coverage verifies too.
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), legacy_pin(current.sha256))]),
+        );
+        let materialized = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
+                write_package_with_outside_plugin(path, "node x: Dimensionless = 1.0;\n");
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(materialized.sha256, current.sha256);
+    }
+
+    #[test]
+    fn legacy_pins_matching_neither_coverage_are_unverifiable_not_changed() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        write_package_with_outside_plugin(fixture.path(), "node old: Dimensionless = 1.0;\n");
+        let old = inspect_for_test(fixture.path());
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), legacy_pin(old.sha256))]),
+        );
+
+        let error = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
+                write_package_with_outside_plugin(path, "node new: Dimensionless = 2.0;\n");
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(
+            matches!(&error, DepsError::LegacyPinUnverifiable { expected, .. } if *expected == old.sha256),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("delete graphcal.lock and rerun"));
     }
 
     #[test]

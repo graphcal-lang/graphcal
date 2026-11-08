@@ -16,9 +16,9 @@ use url::{Host, Url};
 /// Lockfile schema version written by this Graphcal.
 ///
 /// Version 2 records the source-tree hash algorithm next to every tree digest.
-/// Version 1 locks are still read: their digests were produced by
-/// [`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`], so parsing upgrades them
-/// to the current in-memory model without losing their pins.
+/// Version 1 locks are still read. Their digests do not record which files
+/// they cover, so parsing marks them
+/// [`SourceTreeHashAlgorithm::LegacyUnrecordedCoverage`] instead of guessing.
 pub const LOCK_VERSION: u64 = 2;
 
 /// Oldest lockfile schema version this Graphcal can read.
@@ -2000,6 +2000,13 @@ pub enum SourceTreeHashAlgorithm {
     /// artifact, hashed as SHA-256 over `path NUL length NUL bytes NUL` records
     /// in portable-path order.
     GraphcalSourceTreeV1,
+    /// A lock format 1 digest, which recorded no algorithm. Graphcal
+    /// 0.0.1-alpha.31 and later produced [`Self::GraphcalSourceTreeV1`]
+    /// digests; earlier versions used the same framing but covered only
+    /// `graphcal.toml` and the source directory, omitting Wasm artifacts
+    /// imported from outside it. Which of the two a pin is cannot be told from
+    /// the lock alone, so verifiers must accept either coverage explicitly.
+    LegacyUnrecordedCoverage,
 }
 
 impl SourceTreeHashAlgorithm {
@@ -2008,12 +2015,14 @@ impl SourceTreeHashAlgorithm {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::GraphcalSourceTreeV1 => "graphcal-source-tree-v1",
+            Self::LegacyUnrecordedCoverage => "legacy-unrecorded-coverage",
         }
     }
 
     fn parse(value: &str) -> Option<Self> {
         match value {
             "graphcal-source-tree-v1" => Some(Self::GraphcalSourceTreeV1),
+            "legacy-unrecorded-coverage" => Some(Self::LegacyUnrecordedCoverage),
             _ => None,
         }
     }
@@ -2621,8 +2630,8 @@ pub fn parse_lockfile_str_with_limits(
 /// from an unknown schema is rejected rather than guessed at.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LockSchema {
-    /// Tree digests carry no algorithm; they were all
-    /// [`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`].
+    /// Tree digests carry no algorithm; see
+    /// [`SourceTreeHashAlgorithm::LegacyUnrecordedCoverage`].
     V1,
     /// Tree digests name their algorithm.
     V2,
@@ -2780,7 +2789,7 @@ fn parse_tree_hashes(
     let algorithm = match schema {
         LockSchema::V1 => {
             reject_unknown_lock_fields(hashes, TABLE, &["sha256"])?;
-            SourceTreeHashAlgorithm::GraphcalSourceTreeV1
+            SourceTreeHashAlgorithm::LegacyUnrecordedCoverage
         }
         LockSchema::V2 => {
             reject_unknown_lock_fields(hashes, TABLE, &["algorithm", "sha256"])?;
@@ -4080,7 +4089,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     }
 
     #[test]
-    fn version_one_locks_keep_their_pins_under_the_implied_algorithm() {
+    fn version_one_locks_keep_their_pins_with_unrecorded_coverage() {
         let current = units_lock().to_deterministic_toml();
         let commit = "1".repeat(40);
         let legacy = current
@@ -4091,9 +4100,16 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 &format!("requested_rev = \"{commit}\"\ncommit = \"{commit}\""),
             );
         let parsed = parse_lockfile_str(&legacy).unwrap();
-        assert_eq!(parsed, units_lock());
-        // Re-serializing upgrades the schema without changing any pin.
-        assert_eq!(parsed.to_deterministic_toml(), current);
+        let mut expected = units_lock();
+        let PackageSource::Git { tree_hashes, .. } = &mut expected.packages[1].source else {
+            panic!("fixture dependency is a Git package");
+        };
+        tree_hashes.algorithm = SourceTreeHashAlgorithm::LegacyUnrecordedCoverage;
+        assert_eq!(parsed, expected);
+        // Re-serializing upgrades the schema but keeps the pin's ambiguity.
+        let upgraded = parsed.to_deterministic_toml();
+        assert!(upgraded.contains("algorithm = \"legacy-unrecorded-coverage\""));
+        assert_eq!(parse_lockfile_str(&upgraded).unwrap(), expected);
         // A version 1 lock never named an algorithm.
         assert!(matches!(
             parse_lockfile_str(&legacy.replace("{ sha256", "{ algorithm = \"graphcal-source-tree-v1\", sha256")),
