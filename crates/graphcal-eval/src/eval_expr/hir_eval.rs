@@ -1399,7 +1399,12 @@ fn check_inline_dag_asserts(
             body.map(|entry| &*entry.body),
             ef,
             &mut |expr| eval_root(&context.executable(expr)?, dag_values, &context),
-        )?;
+        )
+        .map_err(|aborted| {
+            aborted.into_outcome(|invariant| {
+                context.internal_error(invariant.to_string(), body.get().span)
+            })
+        })?;
         match result {
             crate::eval::types::AssertResult::Pass => {}
             crate::eval::types::AssertResult::Fail { message } => {

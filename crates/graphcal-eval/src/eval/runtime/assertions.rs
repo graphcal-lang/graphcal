@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::ir::instance::InstanceAssertionProjection;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -54,6 +53,11 @@ pub(super) fn evaluate_assertions(
                 None => {
                     evaluate_assert_with_expected_fail(body, unit.expected_fail(), &mut |expr| {
                         eval_root(&entry_ctx.executable(expr)?, values, &entry_ctx)
+                    })
+                    .map_err(|aborted| {
+                        aborted.into_outcome(|invariant| {
+                            entry_ctx.internal_error(invariant.to_string(), span)
+                        })
                     })?
                 }
             };
@@ -79,6 +83,11 @@ pub(super) fn evaluate_assertions(
             Some(result) => result,
             None => evaluate_assert_with_expected_fail(body, expected, &mut |expr| {
                 eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx)
+            })
+            .map_err(|aborted| {
+                aborted.into_outcome(|invariant| {
+                    assertion_ctx.internal_error(invariant.to_string(), entry.get().span)
+                })
             })?,
         };
         assertions.push(EvalAssertion {
@@ -215,7 +224,7 @@ fn assert_dependency_failure(
     errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
     names: &RootNames<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<Option<AssertResult<ResolvedDeclName>>, Cancelled> {
+) -> Result<Option<AssertResult<ResolvedDeclName>>, Outcome<SemanticError>> {
     let body_exprs = match body.operands() {
         AssertionOperands::Condition(expr) => vec![expr],
         AssertionOperands::Tolerance {
@@ -227,7 +236,9 @@ fn assert_dependency_failure(
     Ok(
         match ctx.unavailable_dependencies(body_exprs.iter().copied()) {
             Ok(Some(reason)) if reason.is_incomplete() => Some(AssertResult::Blocked { reason }),
-            Err(Outcome::Cancelled) => return Err(Cancelled),
+            Err(error @ (Outcome::Cancelled | Outcome::Failed(SemanticError::Internal(_)))) => {
+                return Err(error);
+            }
             Err(Outcome::Failed(error)) => Some(AssertResult::Error {
                 message: error.to_string(),
             }),

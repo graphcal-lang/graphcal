@@ -15,6 +15,7 @@ use crate::runtime_value::{IndexedValue, RuntimeValue};
 use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKey};
 use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::hir::expr::{AssertBody, Expr};
+use graphcal_compiler::internal_error::InternalError;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 use graphcal_compiler::semantic_error::SemanticError;
@@ -124,15 +125,55 @@ impl Measured {
     }
 }
 
-/// The result of an assertion whose evaluation ran to completion; a cancelled
-/// assertion has no result.
-type Evaluated = Result<AssertResult, Cancelled>;
+/// Why an assertion has no result: its evaluation was cancelled, or Graphcal
+/// has a bug. A bug is never an assertion error of the program: it aborts the
+/// run as an internal error.
+#[derive(Debug)]
+pub enum Aborted {
+    /// Evaluation was cancelled.
+    Cancelled,
+    /// Evaluating an operand reported an internal error.
+    Internal(InternalError),
+    /// An operand's value contradicts its checked type.
+    Invariant(Invariant),
+}
 
-/// The result reporting a failed operand evaluation, or the cancellation that
-/// interrupted it.
+impl Aborted {
+    /// The run-aborting outcome: cancellation, or the internal error, with a
+    /// violated invariant reported by `internal`.
+    pub fn into_outcome(
+        self,
+        internal: impl FnOnce(Invariant) -> SemanticError,
+    ) -> Outcome<SemanticError> {
+        match self {
+            Self::Cancelled => Outcome::Cancelled,
+            Self::Internal(error) => Outcome::Failed(SemanticError::Internal(error)),
+            Self::Invariant(invariant) => Outcome::Failed(internal(invariant)),
+        }
+    }
+}
+
+impl From<Cancelled> for Aborted {
+    fn from(Cancelled: Cancelled) -> Self {
+        Self::Cancelled
+    }
+}
+
+impl From<Invariant> for Aborted {
+    fn from(invariant: Invariant) -> Self {
+        Self::Invariant(invariant)
+    }
+}
+
+/// The result of an assertion whose evaluation ran to completion.
+type Evaluated = Result<AssertResult, Aborted>;
+
+/// The result reporting a failed operand evaluation: blocked on an
+/// incomplete input, an assertion error of the program, or an abort.
 fn evaluation_error(error: Outcome<SemanticError>) -> Evaluated {
     match error {
-        Outcome::Cancelled => Err(Cancelled),
+        Outcome::Cancelled => Err(Aborted::Cancelled),
+        Outcome::Failed(SemanticError::Internal(error)) => Err(Aborted::Internal(error)),
         Outcome::Failed(SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
             ..
@@ -140,13 +181,6 @@ fn evaluation_error(error: Outcome<SemanticError>) -> Evaluated {
         Outcome::Failed(error) => Ok(AssertResult::Error {
             message: error.to_string(),
         }),
-    }
-}
-
-/// The result reporting a violated invariant.
-fn invariant_result(invariant: &Invariant) -> AssertResult {
-    AssertResult::Error {
-        message: invariant.to_string(),
     }
 }
 
@@ -160,7 +194,9 @@ fn invariant_result(invariant: &Invariant) -> AssertResult {
 ///
 /// # Errors
 ///
-/// Returns [`Cancelled`] when an operand evaluation was cancelled.
+/// Returns [`Aborted`] when an operand evaluation was cancelled or Graphcal
+/// has a bug: an operand evaluation reported an internal error, or an
+/// operand's value contradicts its checked type.
 pub fn evaluate_assert_with_expected_fail<'t>(
     body: Scoped<'t, AssertBody>,
     ef: Option<&ExpectedFail>,
@@ -190,10 +226,7 @@ pub fn evaluate_assert_with_expected_fail<'t>(
             // indexed assertion.
             let verdicts = match body {
                 AssertionOperands::Condition(body_expr) => match evaluate_expression(body_expr) {
-                    Ok(value) => match Verdicts::try_indexed_from_value(value) {
-                        Ok(verdicts) => verdicts,
-                        Err(invariant) => return Ok(invariant_result(&invariant)),
-                    },
+                    Ok(value) => Verdicts::try_indexed_from_value(value)?,
                     Err(error) => return evaluation_error(error),
                 },
                 AssertionOperands::Tolerance {
@@ -448,7 +481,7 @@ fn evaluate_assert_body<'t>(
                     message: "assertion evaluated to false".to_string(),
                 }),
                 Ok(Ok(Verdicts::Indexed(indexed))) => Ok(check_indexed_assert(&indexed)),
-                Ok(Err(invariant)) => Ok(invariant_result(&invariant)),
+                Ok(Err(invariant)) => Err(invariant.into()),
                 Err(error) => evaluation_error(error),
             }
         }
@@ -491,8 +524,8 @@ fn evaluate_tolerance_assert<'t>(
 /// Evaluate the three operand expressions of a tolerance assertion.
 ///
 /// Returns the operands read as (indexed) quantities and aligned on
-/// `actual`'s axes, or the `AssertResult::Error` to report; the outer error
-/// is cancellation.
+/// `actual`'s axes, or the `AssertResult` an operand evaluation reports; the
+/// outer error aborts the assertion.
 fn eval_tolerance_operands<'t, G>(
     actual: Scoped<'t, Expr>,
     expected: Scoped<'t, Expr>,
@@ -501,13 +534,11 @@ fn eval_tolerance_operands<'t, G>(
         Scoped<'t, Expr>,
     ) -> Result<RuntimeValue, Outcome<SemanticError>>,
     shape: impl FnOnce(Gauges) -> Result<G, Misaligned>,
-) -> Result<Result<G, AssertResult>, Cancelled> {
-    let mut operand =
-        |expr: Scoped<'t, Expr>, role: &str| match evaluate_expression(expr) {
-            Ok(value) => Ok(Measured::try_from_value(value, role)
-                .map_err(|invariant| invariant_result(&invariant))),
-            Err(error) => evaluation_error(error).map(Err),
-        };
+) -> Result<Result<G, AssertResult>, Aborted> {
+    let mut operand = |expr: Scoped<'t, Expr>, role: &str| match evaluate_expression(expr) {
+        Ok(value) => Ok(Ok(Measured::try_from_value(value, role)?)),
+        Err(error) => evaluation_error(error).map(Err),
+    };
     let actual = match operand(actual, "actual")? {
         Ok(actual) => actual,
         Err(result) => return Ok(Err(result)),
@@ -523,9 +554,9 @@ fn eval_tolerance_operands<'t, G>(
     // Checking proved `expected` and `tolerance` each unindexed or indexed by
     // a prefix of `actual`'s axes; operands that do not align contradict
     // their checked types.
-    Ok(align(actual, &expected, &tolerance)
+    Ok(Ok(align(actual, &expected, &tolerance)
         .and_then(shape)
-        .map_err(|misaligned| invariant_result(&Invariant::violated(misaligned))))
+        .map_err(Invariant::violated)?))
 }
 
 /// The three operands of a tolerance assertion at one key of `actual`.
