@@ -173,25 +173,8 @@ pub(super) fn process_file_body_declarations<'a>(
     for (declaration, include, target) in loaded_file.includes_with_targets() {
         cancellation.checkpoint()?;
         let dependency = project.target_module(target);
-        let LoadedModule::InlineDag {
-            file: target_loaded,
-            dag: target_dag,
-        } = dependency
-        else {
+        if !matches!(dependency, LoadedModule::InlineDag { .. }) {
             continue;
-        };
-        if !target_dag.declaration(target_loaded).visibility.is_public()
-            && target.source_file() != file_dag_id
-        {
-            return Err(PipelineError::Semantic(SemanticError::located(
-                file_src,
-                include.path.leaf().span,
-                VisibilityError::ImportPrivateItem {
-                    name: include.path.leaf().name.atom().clone(),
-                    file_path: DagReference::Path(include.path.clone()),
-                },
-            ))
-            .into());
         }
         process_include(dependency, include, declaration, &including, ctx)?;
     }
@@ -803,6 +786,20 @@ pub(super) fn process_include<'a>(
     let dep_path_display = match dependency {
         LoadedModule::FileRoot(_) => DagReference::Path(include_decl.path.clone()),
         LoadedModule::InlineDag { file, dag } => {
+            // A private `dag` is includable only from its own file, whether
+            // a file root or a DAG body writes the include.
+            if !dag.declaration(file).visibility.is_public()
+                && file.dag_id() != &importer_scope.owner().file_root()
+            {
+                return Err(PipelineError::Semantic(SemanticError::located(
+                    file_src,
+                    include_decl.path.leaf().span,
+                    VisibilityError::ImportPrivateItem {
+                        name: include_decl.path.leaf().name.atom().clone(),
+                        file_path: DagReference::Path(include_decl.path.clone()),
+                    },
+                )));
+            }
             DagReference::InlineDag(dag.declaration(file).name.value.clone())
         }
     };

@@ -479,3 +479,33 @@ fn nominal_value_of_an_include_needs_no_local_mention_of_its_type() {
     ]);
     assert_eq!(si_value(&eval(&main), "z"), 3.0);
 }
+
+/// Another file's private inline DAG is rejected whether a file root or a
+/// DAG body includes it.
+#[test]
+fn private_inline_dag_of_another_file_is_not_includable() {
+    let other = "dag hidden {\n    pub node x: Dimensionless = 1.0;\n}\n";
+    for main in [
+        "include p.other.hidden()::{ x };\n",
+        "pub dag wrapper {\n    include p.other.hidden()::{ x };\n    pub node y: Dimensionless = @x;\n}\ninclude wrapper()::{ y };\n",
+    ] {
+        let (_dir, root) = package(&[("other.gcl", other), ("main.gcl", main)]);
+        let error = eval_error(&root);
+        assert!(
+            matches!(
+                &error,
+                CompileError::Eval(error) if matches!(
+                    &error.error,
+                    graphcal_compiler::semantic_error::SemanticError::Located(diagnostic)
+                        if matches!(
+                            diagnostic.kind,
+                            graphcal_compiler::semantic_error::SemanticErrorKind::Visibility(
+                                graphcal_compiler::semantic_error::visibility::VisibilityError::ImportPrivateItem { .. }
+                            )
+                        )
+                )
+            ),
+            "{main}: {error:?}"
+        );
+    }
+}
