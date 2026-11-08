@@ -888,3 +888,59 @@ pub node out: Dimensionless = @q::x;
         Some("src/review/outer.gcl")
     );
 }
+
+#[test]
+fn an_inline_dag_instance_edits_the_cells_of_its_own_body() {
+    // PRJ-5: the cells of an instance of an inline DAG were taken from a
+    // same-named declaration of the file root, so editing one rewrote it.
+    let lib = "\
+pub index I = { A, B };
+param p: Dimensionless[I] = table[I] { A: 1.0; B: 2.0; };
+pub node s: Dimensionless = sum(@p);
+pub dag inner {
+    import review.lib::{index I};
+    param p: Dimensionless[I] = table[I] { A: 10.0; B: 20.0; };
+    pub node q: Dimensionless = sum(@p);
+}
+";
+    let main = "include review.lib.inner()::{ q };\n";
+    let views = evaluated_views_of_package(&[("lib.gcl", lib), ("main.gcl", main)], "main.gcl");
+    let inner = instance_view(&views, views.module(), "q");
+    let source = node(inner, "p").source.as_ref().unwrap();
+    assert_eq!(source.file.as_deref(), Some("src/review/lib.gcl"));
+    let cells: Vec<_> = source
+        .cells
+        .iter()
+        .map(|cell| {
+            let line = lib.lines().nth(cell.range.start.line as usize).unwrap();
+            let text =
+                &line[cell.range.start.character as usize..cell.range.end.character as usize];
+            (cell.keys.clone(), cell.range.start.line, text.to_string())
+        })
+        .collect();
+    assert_eq!(
+        cells,
+        [
+            (vec!["A".to_string()], 5, "10.0".to_string()),
+            (vec!["B".to_string()], 5, "20.0".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn an_inline_dag_instance_without_a_same_named_root_declaration_has_cells() {
+    // PRJ-5: without a file-root `p`, the instance's table had no cells.
+    let lib = "\
+pub index I = { A, B };
+pub dag inner {
+    import review.lib::{index I};
+    param p: Dimensionless[I] = table[I] { A: 10.0; B: 20.0; };
+    pub node q: Dimensionless = sum(@p);
+}
+";
+    let main = "include review.lib.inner()::{ q };\n";
+    let views = evaluated_views_of_package(&[("lib.gcl", lib), ("main.gcl", main)], "main.gcl");
+    let inner = instance_view(&views, views.module(), "q");
+    let source = node(inner, "p").source.as_ref().unwrap();
+    assert_eq!(source.cells.len(), 2, "{:?}", source.cells);
+}

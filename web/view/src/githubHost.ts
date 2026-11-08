@@ -188,6 +188,8 @@ async function readBase(
 interface Loaded {
   /** The address the project was read at. */
   route: Route;
+  /** The ref GitHub resolved the address to (the default branch, when it names none). */
+  ref: string;
   /** Repository directory of the project root, to turn a project file into an address. */
   root: string;
   /** The sources as read from GitHub, to return to on reset. */
@@ -246,7 +248,6 @@ export class GitHubHost implements Host {
       const info = await github.repo(route.owner, route.repo);
       const ref = headRef(route.at) ?? info.defaultBranch;
       if (!fresh()) return;
-      this.setState({ ...this.state, ref });
       // Both refs are resolved to commits first; everything after is read by hash.
       const base = baseRef(route.at);
       const baseCommit =
@@ -254,13 +255,17 @@ export class GitHubHost implements Host {
       const head = await github.commit(route.owner, route.repo, ref);
       const tree = await github.tree(route.owner, route.repo, head);
       if (!fresh()) return;
+      const { plan, files } = await readProject(tree, route.path, fileReader(github, route, head));
+      // Published together, and only by the load that is still current: a
+      // load that fails or is overtaken leaves the project, its files, its
+      // comparison and the ref they were read at as they were.
+      if (!fresh()) return;
       this.files = tree.entries.map((e) => e.path);
       this.compare = null;
-      const { plan, files } = await readProject(tree, route.path, fileReader(github, route, head));
-      if (!fresh()) return;
       this.sources = new Sources(files, ++this.revision);
       this.loaded = {
         route,
+        ref,
         root: plan.root,
         pristine: new Map(files),
         pristineRevision: this.revision,
@@ -269,6 +274,7 @@ export class GitHubHost implements Host {
       this.models.replace([], this.revision);
       this.modules = [];
       this.edited = false;
+      this.setState({ ...this.state, ref });
       this.note("evaluating…", "busy");
       // The entry first, so the sheet appears; the other files follow for Open / Pin.
       const entry = await this.projectEntry(plan.entry, { kind: "module" });
@@ -418,9 +424,8 @@ export class GitHubHost implements Host {
     const changes = changedFiles(loaded.pristine, sources.texts(), (file) =>
       join(loaded.root, file),
     );
-    const { owner, repo, at } = loaded.route;
-    const ref = this.state.ref ?? headRef(at) ?? "default branch";
-    return patchOf(changes, `graphcal what-if: ${owner}/${repo} @ ${ref}`);
+    const { route, ref } = loaded;
+    return patchOf(changes, `graphcal what-if: ${route.owner}/${route.repo} @ ${ref}`);
   }
 
   pathOf(module: string): string | null {

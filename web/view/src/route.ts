@@ -62,13 +62,23 @@ function isRepoName(name: string): boolean {
   return REPO.test(name) && name !== "." && name !== "..";
 }
 
-/** `text` percent-decoded; null when it is not valid percent-encoding. */
+/**
+ * A control character (C0, DEL or C1). No ref git accepts has one, and in a
+ * path or a ref one could break the lines of what the address is copied into
+ * (the patch "Copy changes" writes).
+ */
+// oxlint-disable-next-line no-control-regex -- matching control characters is the point.
+const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+
+/** `text` percent-decoded; null when it is not valid percent-encoding or decodes to a control character. */
 function decode(text: string): string | null {
+  let decoded: string;
   try {
-    return decodeURIComponent(text);
+    decoded = decodeURIComponent(text);
   } catch {
     return null;
   }
+  return CONTROL.test(decoded) ? null : decoded;
 }
 
 /** The decoded repository path, or null when a segment is empty, `.`, `..` or not decodable. */

@@ -49,7 +49,9 @@ playground-check:
 playground-test: playground-assets
     cd web/playground && vp test
 
-# The view shares the playground's Wasm engine; the published page loads it from its own /view/pkg/.
+# The view shares the playground's Wasm engine; the published page loads it from its own pkg/
+# under its base path: /view/ on graphcal.org (the default), / on view.graphcal.org (VIEW_BASE=/,
+# set by the release workflow's build-view job).
 view-assets: playground-assets
     rm -rf web/view/public/pkg
     mkdir -p web/view/public

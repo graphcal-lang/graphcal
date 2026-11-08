@@ -31,6 +31,7 @@ use graphcal_eval::presentation_evidence::PresentationPathPart;
 use thiserror::Error;
 
 use crate::graph_ir::{GraphClusterKind, GraphIr, GraphProjectionError, project_tir};
+use crate::loader::loaded_file::LoadedModule;
 use crate::loader::{LoadedFile, LoadedProject};
 use crate::project_compiler::CheckedProject;
 
@@ -283,9 +284,8 @@ fn project_subject(
     let module_name = scope.module_name(&presented);
     let cells_from = scope
         .project
-        .files()
-        .get(&presented.file_root())
-        .map(|file| file.ast().declarations.as_slice());
+        .module(&presented)
+        .map(LoadedModule::declarations);
     let mut builder = NodeBuilder {
         shared_definitions: shared_definitions(tir, &locals),
         scope,
@@ -738,8 +738,9 @@ struct NodeBuilder<'a> {
     /// root, or an instance's template.
     presented: &'a DagId,
     module_name: &'a str,
-    /// The declarations of the presented module's file, whose table cells
-    /// the subject's own nodes edit.
+    /// The declarations of the presented module (the file root, or an
+    /// instance's inline DAG body), whose table cells the subject's own
+    /// nodes edit.
     cells_from: Option<&'a [Declaration]>,
     /// The include edge of an instance subject, whose arguments define its
     /// bound params.
