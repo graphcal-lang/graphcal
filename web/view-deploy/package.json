@@ -1,0 +1,19 @@
+{
+  "name": "view-deploy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Deploys the built view (web/view/dist) to view.graphcal.org as Cloudflare Workers static assets.",
+  "scripts": {
+    "deploy": "wrangler deploy"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.16.1",
+      "onFail": "download"
+    }
+  },
+  "devDependencies": {
+    "wrangler": "4.158.0"
+  }
+}
