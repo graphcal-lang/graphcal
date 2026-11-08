@@ -6,18 +6,20 @@
 //! - V003: Add `pub` to a private item referenced by a public declaration.
 //! - V006: Add `pub` to a leaked symbol referenced by a re-exported declaration.
 //! - Unknown names: add a category-marked selective import from a loaded module.
+//!
+//! Each repair is dispatched on the diagnostic's typed [`RepairData`].
 
 use std::collections::HashMap;
 
 use graphcal_compiler::syntax::token::Token;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
-    Diagnostic, NumberOrString, Position, Range, TextEdit, Url, WorkspaceEdit,
+    Diagnostic, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
 use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
-use crate::diagnostics::AutoImportDiagnosticData;
+use crate::repair_data::{AddedVisibility, AutoImportCategory, RepairData};
 
 /// Produce code actions for the given diagnostics.
 pub fn code_actions(
@@ -32,42 +34,24 @@ pub fn code_actions(
     let source = current_source;
     let mut actions = Vec::new();
 
+    let uri = &params.text_document.uri;
     for diag in &params.context.diagnostics {
-        let code = match &diag.code {
-            Some(NumberOrString::String(s)) => s.as_str(),
-            _ => continue,
-        };
-
-        match code {
-            "graphcal::D020" => {
-                if let Some(action) = make_exact_power_action(diag, &params.text_document.uri) {
-                    actions.push(CodeActionOrCommand::CodeAction(action));
-                }
+        match RepairData::of(diag) {
+            Some(RepairData::ExactExponent { replacement }) => {
+                actions.push(make_exact_power_action(diag, uri, replacement));
             }
-            "graphcal::V002" => {
-                if let Some(action) =
-                    make_add_pub_bind_action_v002(diag, source, &params.text_document.uri)
-                {
-                    actions.push(CodeActionOrCommand::CodeAction(action));
-                }
+            Some(RepairData::AddVisibility { item, visibility }) => {
+                actions.extend(make_add_visibility_action(
+                    diag, analysis, source, uri, &item, visibility,
+                ));
             }
-            // V003 and V006 share a fix shape: add `pub` to the private
-            // item named in the diagnostic's structured data.
-            "graphcal::V003" | "graphcal::V006" => {
-                if let Some(action) =
-                    make_add_pub_action(diag, analysis, current_source, &params.text_document.uri)
-                {
-                    actions.push(CodeActionOrCommand::CodeAction(action));
-                }
+            Some(RepairData::AutoImport { name, category }) => {
+                actions.extend(make_auto_import_actions(
+                    diag, analysis, uri, &name, category,
+                ));
             }
-            _ => {}
+            None => {}
         }
-
-        actions.extend(
-            make_auto_import_actions(diag, analysis, &params.text_document.uri)
-                .into_iter()
-                .map(CodeActionOrCommand::CodeAction),
-        );
     }
 
     if actions.is_empty() {
@@ -100,15 +84,10 @@ fn make_auto_import_actions(
     diag: &Diagnostic,
     analysis: &AnalysisResult,
     uri: &Url,
-) -> Vec<CodeAction> {
-    let Some(data) = diag
-        .data
-        .clone()
-        .and_then(|data| serde_json::from_value::<AutoImportDiagnosticData>(data).ok())
-    else {
-        return Vec::new();
-    };
-    let namespace = data.auto_import_category.namespace();
+    name: &str,
+    category: AutoImportCategory,
+) -> Vec<CodeActionOrCommand> {
+    let namespace = category.namespace();
 
     let mut candidates = analysis
         .import_surfaces
@@ -116,10 +95,7 @@ fn make_auto_import_actions(
         .flat_map(|(path, items)| {
             items
                 .iter()
-                .filter(|item| {
-                    item.name.as_str() == data.auto_import_name
-                        && item.kind.namespace() == namespace
-                })
+                .filter(|item| item.name.as_str() == name && item.kind.namespace() == namespace)
                 .map(move |item| (path, item))
         })
         .collect::<Vec<_>>();
@@ -141,7 +117,7 @@ fn make_auto_import_actions(
             };
             let mut changes = HashMap::new();
             changes.insert(uri.clone(), vec![edit]);
-            CodeAction {
+            CodeActionOrCommand::CodeAction(CodeAction {
                 title: format!("Import `{import_item}` from `{path}`"),
                 kind: Some(CodeActionKind::QUICKFIX),
                 diagnostics: Some(vec![diag.clone()]),
@@ -151,40 +127,28 @@ fn make_auto_import_actions(
                 }),
                 is_preferred: Some(false),
                 ..Default::default()
-            }
+            })
         })
         .collect()
 }
 
-/// The referenced private name a V003/V006 diagnostic carries in its
-/// structured `data` payload (attached in `diagnostics.rs`). The name is
-/// typed end to end — no re-parsing of the rendered message.
-fn referenced_name_from_data(diag: &Diagnostic) -> Option<String> {
-    diag.data
-        .as_ref()?
-        .get("referencedName")?
-        .as_str()
-        .map(str::to_string)
-}
-
 /// Build the D020 exact-syntax replacement. The compiler supplies the
-/// replacement as structured data only after proving decimal equivalence; the
-/// LSP never derives a rational from rendered text or binary64.
-fn make_exact_power_action(diag: &Diagnostic, uri: &Url) -> Option<CodeAction> {
-    let replacement = diag
-        .data
-        .as_ref()?
-        .get("replacement")?
-        .as_str()?
-        .to_string();
+/// replacement only after proving decimal equivalence; the LSP never derives
+/// a rational from rendered text or binary64.
+fn make_exact_power_action(
+    diag: &Diagnostic,
+    uri: &Url,
+    replacement: String,
+) -> CodeActionOrCommand {
+    let title = format!("Use exact exponent `{replacement}`");
     let edit = TextEdit {
         range: diag.range,
-        new_text: replacement.clone(),
+        new_text: replacement,
     };
     let mut changes = HashMap::new();
     changes.insert(uri.clone(), vec![edit]);
-    Some(CodeAction {
-        title: format!("Use exact exponent `{replacement}`"),
+    CodeActionOrCommand::CodeAction(CodeAction {
+        title,
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
         edit: Some(WorkspaceEdit {
@@ -208,48 +172,29 @@ fn declaration_line(analysis: &AnalysisResult, name: &str) -> Option<u32> {
     Some(lines.span_to_range(def.name_span).start.line)
 }
 
-/// For V003/V006: read the private name from the diagnostic data, find its
-/// declaration via the symbol table, and insert `pub ` before the keyword.
-fn make_add_pub_action(
-    diag: &Diagnostic,
-    analysis: &AnalysisResult,
-    current_source: &str,
-    uri: &Url,
-) -> Option<CodeAction> {
-    let ref_name = referenced_name_from_data(diag)?;
-    let decl_line = declaration_line(analysis, &ref_name)?;
-    make_add_visibility_action(
-        diag,
-        current_source,
-        uri,
-        decl_line,
-        "pub ",
-        format!("Add `pub` to `{ref_name}`"),
-    )
-}
-
-/// Build a quick-fix code action that inserts `prefix` (e.g. `"pub "` or
-/// `"pub(bind) "`) before the declaration keyword on `decl_line`.
+/// V002/V003/V006: find the private item's declaration via the symbol table
+/// and insert the added visibility before its keyword.
 fn make_add_visibility_action(
     diag: &Diagnostic,
+    analysis: &AnalysisResult,
     source: &str,
     uri: &Url,
-    decl_line: u32,
-    prefix: &str,
-    title: String,
-) -> Option<CodeAction> {
+    item: &str,
+    visibility: AddedVisibility,
+) -> Option<CodeActionOrCommand> {
+    let decl_line = declaration_line(analysis, item)?;
     let insert_pos = find_keyword_position(source, decl_line)?;
     let edit = TextEdit {
         range: Range {
             start: insert_pos,
             end: insert_pos,
         },
-        new_text: prefix.to_string(),
+        new_text: visibility.prefix().to_string(),
     };
     let mut changes = HashMap::new();
     changes.insert(uri.clone(), vec![edit]);
-    Some(CodeAction {
-        title,
+    Some(CodeActionOrCommand::CodeAction(CodeAction {
+        title: format!("Add `{}` to `{item}`", visibility.marker()),
         kind: Some(CodeActionKind::QUICKFIX),
         diagnostics: Some(vec![diag.clone()]),
         edit: Some(WorkspaceEdit {
@@ -258,22 +203,7 @@ fn make_add_visibility_action(
         }),
         is_preferred: Some(true),
         ..Default::default()
-    })
-}
-
-/// For V002: insert `pub(bind) ` before the declaration keyword on the line
-/// containing the diagnostic. V002 fires on required `index` / `type` / `dim`
-/// declarations — the bindable interface of the library — so the fix always
-/// lifts them all the way to `pub(bind)`.
-fn make_add_pub_bind_action_v002(diag: &Diagnostic, source: &str, uri: &Url) -> Option<CodeAction> {
-    make_add_visibility_action(
-        diag,
-        source,
-        uri,
-        diag.range.start.line,
-        "pub(bind) ",
-        "Add `pub(bind)` to this declaration".to_string(),
-    )
+    }))
 }
 
 /// Find the position of the declaration keyword on a given line.
@@ -370,20 +300,31 @@ mod tests {
         assert!(find_keyword_position("nodeish x", 0).is_none());
     }
 
-    fn make_diag(
-        code: &str,
-        message: &str,
-        range: Range,
-        data: Option<serde_json::Value>,
-    ) -> Diagnostic {
+    fn make_diag(code: &str, message: &str, range: Range, data: Option<&RepairData>) -> Diagnostic {
         Diagnostic {
             range,
             severity: Some(tower_lsp::lsp_types::DiagnosticSeverity::ERROR),
-            code: Some(NumberOrString::String(code.to_string())),
+            code: Some(tower_lsp::lsp_types::NumberOrString::String(
+                code.to_string(),
+            )),
             source: Some("graphcal".to_string()),
             message: message.to_string(),
-            data,
+            data: data.and_then(RepairData::to_value),
             ..Default::default()
+        }
+    }
+
+    fn public(item: &str) -> RepairData {
+        RepairData::AddVisibility {
+            item: item.to_string(),
+            visibility: AddedVisibility::Public,
+        }
+    }
+
+    fn bindable(item: &str) -> RepairData {
+        RepairData::AddVisibility {
+            item: item.to_string(),
+            visibility: AddedVisibility::Bindable,
         }
     }
 
@@ -409,7 +350,7 @@ mod tests {
             "graphcal::V002",
             "required index `Phase` must be declared `pub(bind)`",
             Range::default(),
-            None,
+            Some(&bindable("Phase")),
         );
         let mut params = make_params(&uri, vec![diag]);
         params.context.only = Some(vec![CodeActionKind::SOURCE]);
@@ -425,7 +366,7 @@ mod tests {
             "graphcal::V002",
             "required index `Phase` must be declared `pub(bind)`",
             Range::default(),
-            None,
+            Some(&bindable("Phase")),
         );
         let mut params = make_params(&uri, vec![diag]);
         params.context.only = Some(vec![CodeActionKind::QUICKFIX]);
@@ -455,7 +396,7 @@ mod tests {
                     character: 11,
                 },
             },
-            None,
+            Some(&bindable("Phase")),
         );
 
         let params = make_params(&uri, vec![diag]);
@@ -465,7 +406,7 @@ mod tests {
         let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
             panic!("expected CodeAction");
         };
-        assert_eq!(action.title, "Add `pub(bind)` to this declaration");
+        assert_eq!(action.title, "Add `pub(bind)` to `Phase`");
         assert_eq!(action.kind, Some(CodeActionKind::QUICKFIX));
         assert_eq!(action.is_preferred, Some(true));
 
@@ -500,7 +441,7 @@ mod tests {
                     character: 15,
                 },
             },
-            None,
+            Some(&bindable("Phase")),
         );
 
         let params = make_params(&uri, vec![diag]);
@@ -538,7 +479,7 @@ mod tests {
                     character: 24,
                 },
             },
-            Some(serde_json::json!({ "referencedName": "Velocity" })),
+            Some(&public("Velocity")),
         );
 
         let params = make_params(&uri, vec![diag]);
@@ -576,7 +517,7 @@ mod tests {
             "graphcal::V003",
             "`pub node` `speed` references private dim `Velocity` in its signature",
             Range::default(),
-            Some(serde_json::json!({ "referencedName": "Velocity" })),
+            Some(&public("Velocity")),
         );
 
         let params = make_params(&uri, vec![diag]);
@@ -606,7 +547,7 @@ mod tests {
                     character: 12,
                 },
             },
-            Some(serde_json::json!({ "referencedName": "Inner" })),
+            Some(&public("Inner")),
         );
 
         let params = make_params(&uri, vec![diag]);
@@ -655,10 +596,10 @@ mod tests {
             "graphcal::D004",
             "unknown dimension `Information`",
             Range::default(),
-            Some(serde_json::json!({
-                "autoImportName": "Information",
-                "autoImportCategory": "dimension"
-            })),
+            Some(&RepairData::AutoImport {
+                name: "Information".to_string(),
+                category: AutoImportCategory::Dimension,
+            }),
         );
 
         let params = make_params(&uri, vec![diag]);
@@ -713,7 +654,9 @@ mod tests {
             "graphcal::D020",
             "float syntax cannot be the exponent of a dimensioned base",
             range,
-            Some(serde_json::json!({ "replacement": "(1/4)" })),
+            Some(&RepairData::ExactExponent {
+                replacement: "(1/4)".to_string(),
+            }),
         );
         let params = make_params(&uri, vec![diag]);
         let actions = code_actions(&params, &analysis, &analysis.source).unwrap();

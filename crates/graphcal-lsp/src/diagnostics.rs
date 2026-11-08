@@ -23,49 +23,15 @@ use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::convert::LineIndex;
 use crate::file_identity::DocumentUris;
+use crate::repair_data::{AddedVisibility, AutoImportCategory, RepairData};
 use crate::symbol_identity::SymbolId;
 use crate::symbol_table::SymbolTable;
 
-/// Typed LSP payload category for an unknown-name auto-import repair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AutoImportCategory {
-    Term,
-    Type,
-    Dimension,
-    Unit,
-    Index,
-}
-
-impl AutoImportCategory {
-    pub const fn namespace(self) -> graphcal_compiler::syntax::ast::ImportItemNamespace {
-        use graphcal_compiler::syntax::ast::ImportItemNamespace;
-        match self {
-            Self::Term => ImportItemNamespace::Term,
-            Self::Type => ImportItemNamespace::Type,
-            Self::Dimension => ImportItemNamespace::Dimension,
-            Self::Unit => ImportItemNamespace::Unit,
-            Self::Index => ImportItemNamespace::Index,
-        }
+fn auto_import_data(name: impl Into<String>, category: AutoImportCategory) -> RepairData {
+    RepairData::AutoImport {
+        name: name.into(),
+        category,
     }
-}
-
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AutoImportDiagnosticData {
-    pub auto_import_name: String,
-    pub auto_import_category: AutoImportCategory,
-}
-
-fn auto_import_data(
-    name: impl Into<String>,
-    category: AutoImportCategory,
-) -> Option<serde_json::Value> {
-    serde_json::to_value(AutoImportDiagnosticData {
-        auto_import_name: name.into(),
-        auto_import_category: category,
-    })
-    .ok()
 }
 
 /// Report source markers even in libraries and unused DAG definitions.
@@ -327,7 +293,9 @@ pub fn compile_error_to_diagnostics_grouped(
     documents: &DocumentUris,
 ) -> HashMap<Url, Vec<Diagnostic>> {
     let diag: &dyn miette::Diagnostic = error;
-    let data = structured_data(error);
+    let data = structured_data(error)
+        .as_ref()
+        .and_then(RepairData::to_value);
 
     // Source-less errors carry no labels either, so an empty source is safe
     // for the LineIndex (which is unused when there are no labels).
@@ -349,7 +317,7 @@ pub fn compile_error_to_diagnostics_grouped(
 /// the rendered message and re-parsing it in `code_actions` was exactly the
 /// string-convention round trip the project bans. `Diagnostic::data` rides
 /// along with the diagnostic to the `textDocument/codeAction` request.
-fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
+fn structured_data(error: &CompileError) -> Option<RepairData> {
     use graphcal_compiler::semantic_error::SemanticError;
 
     let CompileError::Eval(e) = error else {
@@ -360,13 +328,30 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }),
             ..
-        }) => Some(serde_json::json!({ "referencedName": ref_name.as_str() })),
+        }) => Some(RepairData::AddVisibility {
+            item: ref_name.to_string(),
+            visibility: AddedVisibility::Public,
+        }),
         // V006: the leaked private item that needs `pub`.
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind:
                 SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage { leaked_name, .. }),
             ..
-        }) => Some(serde_json::json!({ "referencedName": leaked_name.as_str() })),
+        }) => Some(RepairData::AddVisibility {
+            item: leaked_name.to_string(),
+            visibility: AddedVisibility::Public,
+        }),
+        // V002: the required item that must join the bindable interface.
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable {
+                    name, ..
+                }),
+            ..
+        }) => Some(RepairData::AddVisibility {
+            item: name.to_string(),
+            visibility: AddedVisibility::Bindable,
+        }),
         // D020: an exact replacement exists only when the decimal spelling
         // maps exactly into the dimension rational model.
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
@@ -376,46 +361,52 @@ fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
                     ..
                 }),
             ..
-        }) => Some(serde_json::json!({ "replacement": replacement })),
+        }) => Some(RepairData::ExactExponent {
+            replacement: replacement.clone(),
+        }),
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }),
             ..
         }) => name
             .as_bare()
-            .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Dimension)),
+            .map(|name| auto_import_data(name.as_str(), AutoImportCategory::Dimension)),
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name, .. }),
             ..
-        }) if !name.is_qualified() => {
-            auto_import_data(name.leaf().as_str(), AutoImportCategory::Unit)
-        }
+        }) if !name.is_qualified() => Some(auto_import_data(
+            name.leaf().as_str(),
+            AutoImportCategory::Unit,
+        )),
         // Structural `Fin(N)` axes are never importable.
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }),
             ..
         }) => name
             .declared_name()
-            .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Index)),
+            .map(|name| auto_import_data(name.as_str(), AutoImportCategory::Index)),
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Struct(StructError::UnknownStructType { name, .. }),
             ..
-        }) => auto_import_data(name.to_string(), AutoImportCategory::Type),
+        }) => Some(auto_import_data(name.to_string(), AutoImportCategory::Type)),
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Struct(StructError::UnknownLocalRef { name, .. }),
             ..
         }) => match name {
-            UnknownLocal::Named(name) => auto_import_data(name.as_str(), AutoImportCategory::Term),
+            UnknownLocal::Named(name) => {
+                Some(auto_import_data(name.as_str(), AutoImportCategory::Term))
+            }
             UnknownLocal::Unbound(name) => {
-                auto_import_data(name.as_str(), AutoImportCategory::Term)
+                Some(auto_import_data(name.as_str(), AutoImportCategory::Term))
             }
             UnknownLocal::Slot(_) => None,
         },
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }),
             ..
-        }) if name.qualifier().is_empty() => {
-            auto_import_data(name.leaf().as_str(), AutoImportCategory::Term)
-        }
+        }) if name.qualifier().is_empty() => Some(auto_import_data(
+            name.leaf().as_str(),
+            AutoImportCategory::Term,
+        )),
         _ => None,
     }
 }
@@ -808,18 +799,12 @@ mod tests {
                 )
             })
             .expect("expected unknown-dimension diagnostic");
-        let auto_import: AutoImportDiagnosticData = serde_json::from_value(
-            diagnostic
-                .data
-                .clone()
-                .expect("expected bare-name auto-import payload"),
-        )
-        .unwrap();
-
-        assert_eq!(auto_import.auto_import_name, "Missing");
         assert_eq!(
-            auto_import.auto_import_category,
-            AutoImportCategory::Dimension
+            RepairData::of(diagnostic),
+            Some(RepairData::AutoImport {
+                name: "Missing".to_string(),
+                category: AutoImportCategory::Dimension,
+            })
         );
     }
 
@@ -1474,7 +1459,10 @@ param event: Datetime<TT>(
                 &diagnostic.code,
                 Some(NumberOrString::String(code)) if code == "graphcal::D020"
             ) && diagnostic.message.contains("`(1/4)`")
-                && diagnostic.data == Some(serde_json::json!({ "replacement": "(1/4)" }))
+                && RepairData::of(diagnostic)
+                    == Some(RepairData::ExactExponent {
+                        replacement: "(1/4)".to_string(),
+                    })
         }));
     }
 
@@ -1603,10 +1591,13 @@ param event: Datetime<TT>(
             code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("N002"))),
             "expected N002 error code, got {code:?}"
         );
-        let auto_import: AutoImportDiagnosticData =
-            serde_json::from_value(diags[0].data.clone().expect("auto-import payload")).unwrap();
-        assert_eq!(auto_import.auto_import_name, "nonexistent");
-        assert_eq!(auto_import.auto_import_category, AutoImportCategory::Term);
+        assert_eq!(
+            RepairData::of(&diags[0]),
+            Some(RepairData::AutoImport {
+                name: "nonexistent".to_string(),
+                category: AutoImportCategory::Term,
+            })
+        );
     }
 
     #[test]

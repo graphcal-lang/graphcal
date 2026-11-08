@@ -324,7 +324,8 @@ fn code_action_params(uri: &Url, only: &str) -> Value {
                     "end": { "line": 0, "character": 5 }
                 },
                 "message": "required index must be public",
-                "code": "graphcal::V002"
+                "code": "graphcal::V002",
+                "data": { "kind": "add_visibility", "item": "Phase", "visibility": "bindable" }
             }],
             "only": [only]
         }

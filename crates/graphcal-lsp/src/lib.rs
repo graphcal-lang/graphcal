@@ -34,6 +34,7 @@ mod protocol_tests;
 mod references;
 mod rename;
 mod rename_check;
+mod repair_data;
 mod resolve;
 pub mod server;
 mod signature_help;
