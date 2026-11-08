@@ -759,7 +759,8 @@ fn plan_recurrence<'p>(
                 .ok_or_else(|| StepIndexError::NotARecurrenceBody(declaration.key.clone()))?;
             match &axis {
                 None => axis = Some(member_body.axis().clone()),
-                Some(first) if first.len() == member_body.axis().len() => {}
+                // R4: every member steps along the group's axis, by identity.
+                Some(first) if first.matches(member_body.axis()) => {}
                 Some(_) => return Err(StepIndexError::AxisMismatch(declaration.key.clone())),
             }
             planned.push(RecurrenceMemberPlan {
