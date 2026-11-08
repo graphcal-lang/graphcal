@@ -360,22 +360,110 @@ impl RootCapability {
     /// `cap-std` reports a path that resolves outside the held root (for
     /// example through an escaping symlink) as
     /// [`io::ErrorKind::PermissionDenied`], the same kind as a real access
-    /// failure, and carries no typed marker. The ambient resolution below only
-    /// classifies that refusal; nothing is opened or read through it. An
-    /// escape becomes an [`OutsideRootError`], and every other failure keeps
-    /// its own kind, so a refused path is never mistaken for a missing one.
+    /// failure, and carries no typed marker. [`Self::escapes_root`] replays
+    /// the resolution inside the capability, so an escape becomes an
+    /// [`OutsideRootError`] and every other failure keeps its own kind: a
+    /// refused path is never mistaken for a missing one.
     fn classify_error(&self, relative: &Path, error: io::Error) -> io::Error {
-        if error.kind() != io::ErrorKind::PermissionDenied {
-            return error;
-        }
-        let requested = self.canonical_path.as_path().join(relative);
-        match requested.canonicalize() {
-            Ok(resolved) if !resolved.starts_with(self.canonical_path.as_path()) => {
-                RealFileSystem::outside_root_error(&requested, self.canonical_path.as_path())
-            }
-            _ => error,
+        if error.kind() == io::ErrorKind::PermissionDenied && self.escapes_root(relative) {
+            RealFileSystem::outside_root_error(
+                &self.canonical_path.as_path().join(relative),
+                self.canonical_path.as_path(),
+            )
+        } else {
+            error
         }
     }
+
+    /// Whether resolving `relative` leaves the root.
+    ///
+    /// The walk inspects only entries inside the root, through the held
+    /// directory: each component is examined with `symlink_metadata` and a
+    /// symlink's target is read, never followed. Leaving the root is decided
+    /// lexically the moment a `..` would climb above it or a target is
+    /// absolute outside it, so a target outside the root (on Windows possibly
+    /// a UNC share) is never resolved, opened, or contacted.
+    fn escapes_root(&self, relative: &Path) -> bool {
+        /// Bound on followed links, like the kernel's `ELOOP` limit.
+        const MAX_SYMLINK_HOPS: usize = 40;
+
+        let mut resolved: Vec<OsString> = Vec::new();
+        let mut pending = std::collections::VecDeque::new();
+        if !queue_steps(&mut pending, relative) {
+            return true;
+        }
+        let mut hops = 0_usize;
+        while let Some(step) = pending.pop_front() {
+            let name = match step {
+                ResolutionStep::Parent => {
+                    if resolved.pop().is_none() {
+                        return true;
+                    }
+                    continue;
+                }
+                ResolutionStep::Name(name) => name,
+            };
+            let candidate: PathBuf = resolved.iter().chain(std::iter::once(&name)).collect();
+            let is_symlink = self
+                .directory
+                .symlink_metadata(&candidate)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink());
+            if !is_symlink {
+                resolved.push(name);
+                continue;
+            }
+            hops += 1;
+            let Ok(target) = self.directory.read_link_contents(&candidate) else {
+                return false;
+            };
+            if hops > MAX_SYMLINK_HOPS {
+                return false;
+            }
+            let target = if target.has_root() || target.is_absolute() {
+                // An absolute target stays inside only when it is lexically
+                // below the root's canonical or requested spelling.
+                let Some(inside) = [&self.canonical_path, &self.requested_path]
+                    .into_iter()
+                    .find_map(|root| target.strip_prefix(root.as_path()).ok())
+                else {
+                    return true;
+                };
+                resolved.clear();
+                inside.to_path_buf()
+            } else {
+                target
+            };
+            if !queue_steps(&mut pending, &target) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// One step of replaying a path resolution inside a rooted capability.
+#[cfg(not(target_arch = "wasm32"))]
+enum ResolutionStep {
+    Parent,
+    Name(OsString),
+}
+
+/// Queue the steps of `path` before the pending ones. Returns `false` when
+/// `path` has a root or prefix component, which leaves the capability.
+#[cfg(not(target_arch = "wasm32"))]
+fn queue_steps(pending: &mut std::collections::VecDeque<ResolutionStep>, path: &Path) -> bool {
+    use std::path::Component;
+    for component in path.components().rev() {
+        match component {
+            Component::Normal(name) => {
+                pending.push_front(ResolutionStep::Name(name.to_os_string()));
+            }
+            Component::ParentDir => pending.push_front(ResolutionStep::Parent),
+            Component::CurDir => {}
+            Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    true
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -793,6 +881,41 @@ mod tests {
         assert!(OutsideRootError::find(&fs_reader.canonicalize(&secret).unwrap_err()).is_some());
         assert!(!fs_reader.is_file(&secret));
         assert!(!fs_reader.exists(&secret));
+    }
+
+    /// A refused escape is classified inside the root,
+    /// without resolving the target. A dangling outside target (which an
+    /// ambient canonicalization cannot resolve) and a chain that climbs out
+    /// through an in-root link are both sandbox refusals; an in-root chain is
+    /// not.
+    #[cfg(unix)]
+    #[test]
+    fn escapes_are_classified_without_resolving_the_target() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let project = parent.path().join("project");
+        fs::create_dir_all(project.join("sub")).unwrap();
+        fs::write(project.join("inside.gcl"), "inside").unwrap();
+        symlink(
+            parent.path().join("missing/target.gcl"),
+            project.join("dangling.gcl"),
+        )
+        .unwrap();
+        symlink("../..", project.join("sub/up")).unwrap();
+        symlink("../inside.gcl", project.join("sub/inner.gcl")).unwrap();
+        let reader = RealFileSystem::rooted(&project).unwrap();
+        let root = reader.root.as_ref().unwrap();
+
+        assert!(root.escapes_root(Path::new("dangling.gcl")));
+        assert!(root.escapes_root(Path::new("sub/up/outside.gcl")));
+        assert!(!root.escapes_root(Path::new("sub/inner.gcl")));
+        assert!(!root.escapes_root(Path::new("sub/missing.gcl")));
+
+        let error = reader
+            .canonicalize(&project.join("dangling.gcl"))
+            .unwrap_err();
+        assert!(OutsideRootError::find(&error).is_some(), "{error:?}");
     }
 
     #[cfg(unix)]
