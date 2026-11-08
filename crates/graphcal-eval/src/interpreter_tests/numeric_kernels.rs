@@ -181,3 +181,31 @@ fn a_quantity_literal_that_underflows_in_its_unit_scale_is_an_error() {
     assert!(find_value(&result, "small") > 0.0);
 }
 
+#[test]
+fn complex_multiplication_scaling_and_division_report_underflow() {
+    let prelude = "param tiny: Dimensionless = 1.0e-200;\n";
+    for (declaration, operation) in [
+        (
+            "node z: Complex<Dimensionless> = complex(@tiny, 0.0) * complex(@tiny, 0.0);",
+            "complex multiplication",
+        ),
+        (
+            "node z: Complex<Dimensionless> = complex(@tiny, @tiny) * @tiny;",
+            "complex scalar multiplication",
+        ),
+        (
+            "node z: Complex<Dimensionless> = complex(@tiny, @tiny) / 1.0e200;",
+            "complex scalar division",
+        ),
+        (
+            "node z: Complex<Dimensionless> = complex(@tiny, @tiny) / complex(1.0e200, 0.0);",
+            "complex division",
+        ),
+    ] {
+        assert_eval_failed(
+            &format!("{prelude}{declaration}"),
+            "z",
+            &format!("{operation} underflowed a nonzero complex component to zero"),
+        );
+    }
+}

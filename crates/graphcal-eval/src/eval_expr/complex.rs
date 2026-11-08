@@ -114,27 +114,25 @@ const fn complex_arithmetic_error(
 }
 
 /// `complex op scalar`: a complex quantity scaled by a real one.
+///
+/// Each component uses the checked real operation, so a nonzero component
+/// lost to zero is an underflow, as for real `*` and `/`.
 pub(super) fn scale_right(
     op: ScaleOp,
     complex: ComplexValue,
     scalar: FiniteQuantity,
 ) -> Result<ComplexValue, ComplexEvalError> {
     match op {
-        ScaleOp::Mul => finite_complex(
-            complex.re() * scalar.get(),
-            complex.im() * scalar.get(),
+        ScaleOp::Mul => scale_components(
+            complex,
+            |component| component.checked_mul(scalar),
             "complex scalar multiplication",
         ),
-        ScaleOp::Div => {
-            if scalar.get() == 0.0 {
-                return Err(ComplexEvalError::DivisionByZero);
-            }
-            finite_complex(
-                complex.re() / scalar.get(),
-                complex.im() / scalar.get(),
-                "complex scalar division",
-            )
-        }
+        ScaleOp::Div => scale_components(
+            complex,
+            |component| component.checked_div(scalar),
+            "complex scalar division",
+        ),
     }
 }
 
@@ -146,9 +144,9 @@ pub(super) fn scale_left(
     complex: ComplexValue,
 ) -> Result<ComplexValue, ComplexEvalError> {
     match op {
-        ScaleOp::Mul => finite_complex(
-            scalar.get() * complex.re(),
-            scalar.get() * complex.im(),
+        ScaleOp::Mul => scale_components(
+            complex,
+            |component| scalar.checked_mul(component),
             "scalar complex multiplication",
         ),
         ScaleOp::Div => divide(
@@ -156,6 +154,19 @@ pub(super) fn scale_left(
             complex,
         ),
     }
+}
+
+/// Apply a checked real operation to both components of `complex`.
+fn scale_components(
+    complex: ComplexValue,
+    operation: impl Fn(FiniteQuantity) -> Result<FiniteQuantity, FiniteArithmeticError>,
+    name: &'static str,
+) -> Result<ComplexValue, ComplexEvalError> {
+    let component = |value| operation(value).map_err(|error| complex_arithmetic_error(error, name));
+    Ok(ComplexValue::from_parts(
+        component(complex.real_part())?,
+        component(complex.imaginary_part())?,
+    ))
 }
 
 /// Divide the exact binary input components and round each final component once.
@@ -188,6 +199,11 @@ fn divide(lhs: ComplexValue, rhs: ComplexValue) -> Result<ComplexValue, ComplexE
             .ok_or(ComplexEvalError::NonFinite {
                 operation: "complex division",
             })?;
+        if !exact_zero && value == 0.0 {
+            return Err(ComplexEvalError::Underflow {
+                operation: "complex division",
+            });
+        }
         // Preserve signed-zero arithmetic where the ordinary numerator is zero;
         // a nonzero exact numerator keeps the sign of its rounded subnormal.
         Ok::<_, ComplexEvalError>(if exact_zero && zero_sign == 0.0 {
@@ -315,6 +331,35 @@ mod tests {
             scale_right(ScaleOp::Div, c(1.0, 2.0), FiniteQuantity::ZERO),
             Err(ComplexEvalError::DivisionByZero)
         ));
+    }
+
+    #[test]
+    fn scaling_and_division_report_a_nonzero_component_lost_to_zero() {
+        let tiny = FiniteQuantity::try_new(1.0e-200).unwrap();
+        let huge = FiniteQuantity::try_new(1.0e200).unwrap();
+        let small = c(1.0e-200, 1.0e-200);
+        for result in [
+            scale_right(ScaleOp::Mul, small, tiny),
+            scale_left(ScaleOp::Mul, tiny, small),
+            scale_right(ScaleOp::Div, small, huge),
+            arith(ArithOp::Div, small, c(1.0e200, 0.0)),
+            scale_left(ScaleOp::Div, tiny, c(1.0e200, 0.0)),
+        ] {
+            assert!(
+                matches!(result, Err(ComplexEvalError::Underflow { .. })),
+                "{result:?}"
+            );
+        }
+        // A zero component stays an ordinary zero.
+        assert_eq!(
+            scale_right(
+                ScaleOp::Mul,
+                c(1.0e-200, 0.0),
+                FiniteQuantity::try_new(2.0).unwrap()
+            )
+            .unwrap(),
+            c(2.0e-200, 0.0)
+        );
     }
 
     #[test]
