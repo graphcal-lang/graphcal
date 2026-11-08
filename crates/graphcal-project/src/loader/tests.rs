@@ -1786,3 +1786,155 @@ fn cancellation_during_any_package_read_is_never_reported_as_a_diagnostic() {
         );
     }
 }
+
+/// PRJ-6: a loose script under a manifest is not covered by the package's
+/// `graphcal.lock` pins, so any wasm plugin import is a loud load error
+/// raised before the plugin bytes are read.
+#[test]
+fn wasm_plugin_in_loose_script_under_manifest_is_rejected() {
+    for script in ["loose.gcl", "scripts/loose.gcl", "src/loose.gcl"] {
+        assert_loose_script_plugin_rejected(script);
+    }
+}
+
+fn assert_loose_script_plugin_rejected(script: &str) {
+    let source = "import plugin \"plugins/p.wasm\" as p {\nfn value() -> Dimensionless;\n}\nnode x: Dimensionless = p::value();";
+    let directory = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+        ("src/mission/main.gcl", "node y: Dimensionless = 1.0;"),
+        (script, source),
+        ("plugins/p.wasm", "not wasm"),
+    ]);
+    let error = load_project(&directory.path().join(script), None, &fs())
+        .expect_err("a loose script under a manifest cannot import wasm plugins");
+    match error {
+        CompileError::Load(LoadError::WasmPluginOutsidePackageNamespace {
+            ref plugin,
+            span,
+            ..
+        }) => {
+            assert_eq!(plugin.as_str(), "plugins/p.wasm");
+            let literal = "\"plugins/p.wasm\"";
+            assert_eq!(span.offset(), source.find(literal).unwrap());
+            assert_eq!(span.len(), literal.len());
+        }
+        other => panic!("expected M038, got {other:?}"),
+    }
+}
+
+/// PRJ-6: ad-hoc files with no manifest above keep loading plugins unpinned,
+/// and package members are still subject to the lockfile pins.
+#[test]
+fn wasm_plugin_trust_regimes_for_ad_hoc_and_package_files() {
+    let source = "import plugin \"p.wasm\" as p {\nfn value() -> Dimensionless;\n}";
+    let ad_hoc = setup_temp_dir(&[("main.gcl", source), ("p.wasm", "bytes")]);
+    let project = load_project(&ad_hoc.path().join("main.gcl"), None, &fs()).unwrap();
+    assert!(
+        project.plugins().values().all(Result::is_ok),
+        "ad-hoc files load plugins unpinned: {:?}",
+        project.plugins()
+    );
+
+    let package = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+        ("src/mission/main.gcl", source),
+        ("p.wasm", "bytes"),
+    ]);
+    let project = load_project(&package.path().join("src/mission/main.gcl"), None, &fs()).unwrap();
+    assert!(
+        project
+            .plugins()
+            .values()
+            .all(|entry| matches!(entry, Err(PluginFileError::NotPinned))),
+        "package files need lockfile pins: {:?}",
+        project.plugins()
+    );
+}
+
+#[cfg(unix)]
+const ESCAPING_PLUGIN_SOURCE: &str = "import plugin \"plugins/p.wasm\" as p {\nfn value() -> Dimensionless;\n}\npub node x: Dimensionless = p::value();";
+
+/// The M038 diagnostic of a load whose plugin import lives in `loose.gcl`.
+#[cfg(unix)]
+fn assert_m038_in_loose_file(error: &CompileError) {
+    match error {
+        CompileError::Load(LoadError::WasmPluginOutsidePackageNamespace {
+            plugin, src, ..
+        }) => {
+            assert_eq!(plugin.as_str(), "plugins/p.wasm");
+            assert!(
+                Path::new(src.name()).ends_with("src/loose.gcl"),
+                "{}",
+                src.name()
+            );
+        }
+        other => panic!("expected M038, got {other:?}"),
+    }
+}
+
+/// PRJ-6: a package module reached through an in-root symlink that leaves
+/// `<source_dir>/<package>/` is judged by where it really lives, so its wasm
+/// plugin import is M038 like a loose script's, before any bytes are read.
+#[cfg(unix)]
+#[test]
+fn wasm_plugin_in_a_symlinked_module_outside_the_namespace_is_rejected() {
+    let directory = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+        (
+            "src/mission/main.gcl",
+            "include mission.escape()::{ x as y };\ninclude mission.inside()::{ z };",
+        ),
+        (
+            "src/mission/inside.gcl",
+            "import plugin \"plugins/p.wasm\" as p {\nfn value() -> Dimensionless;\n}\npub node z: Dimensionless = p::value();",
+        ),
+        ("src/loose.gcl", ESCAPING_PLUGIN_SOURCE),
+        ("plugins/p.wasm", "not wasm"),
+    ]);
+    std::os::unix::fs::symlink(
+        "../loose.gcl",
+        directory.path().join("src/mission/escape.gcl"),
+    )
+    .unwrap();
+    let error = load_project(&directory.path().join("src/mission/main.gcl"), None, &fs())
+        .expect_err("a symlinked module outside the namespace cannot import plugins");
+    assert_m038_in_loose_file(&error);
+
+    // Positive control: an in-namespace module may still import the plugin
+    // (subject to the lockfile pins).
+    std::fs::remove_file(directory.path().join("src/mission/escape.gcl")).unwrap();
+    std::fs::write(
+        directory.path().join("src/mission/main.gcl"),
+        "include mission.inside()::{ z };",
+    )
+    .unwrap();
+    let project =
+        load_project(&directory.path().join("src/mission/main.gcl"), None, &fs()).unwrap();
+    assert!(
+        project
+            .plugins()
+            .values()
+            .all(|entry| matches!(entry, Err(PluginFileError::NotPinned))),
+        "{:?}",
+        project.plugins()
+    );
+}
+
+/// PRJ-6: the same rule holds on the dependency-enabled loading path.
+#[cfg(unix)]
+#[test]
+fn locked_loader_rejects_wasm_plugin_in_a_symlinked_module_outside_the_namespace() {
+    let fixture = locked_package_fixture(
+        "include mission.escape()::{ x as y };",
+        "pub const node one: Dimensionless = 1.0;",
+    );
+    let project_root = fixture.directory.path().join("project");
+    std::fs::write(project_root.join("src/loose.gcl"), ESCAPING_PLUGIN_SOURCE).unwrap();
+    std::fs::create_dir_all(project_root.join("plugins")).unwrap();
+    std::fs::write(project_root.join("plugins/p.wasm"), "not wasm").unwrap();
+    std::os::unix::fs::symlink("../loose.gcl", project_root.join("src/mission/escape.gcl"))
+        .unwrap();
+    let error = load_project(&fixture.root_file, None, &fs())
+        .expect_err("a symlinked module outside the namespace cannot import plugins");
+    assert_m038_in_loose_file(&error);
+}

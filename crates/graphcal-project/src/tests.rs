@@ -169,6 +169,50 @@ fn checked_nodes(
     nodes
 }
 
+/// Register a test host function `name(params: Dimensionless, ...) -> result`
+/// of the host plugin `plugin`, with the signature the pipeline verifies
+/// the test's declaration against.
+fn register_test_host_fn(
+    registry: &mut graphcal_eval::host_fns::HostFunctionRegistry,
+    plugin: &str,
+    name: &str,
+    params: &[&str],
+    result: graphcal_compiler::function_signature::NamedParamKind,
+    function: impl Fn(
+        &[graphcal_eval::host_abi::argument::HostArgument],
+    ) -> Result<
+        graphcal_eval::host_fns::HostFnValue,
+        graphcal_eval::host_fns::HostFnError,
+    > + Send
+    + Sync
+    + 'static,
+) {
+    use graphcal_compiler::function_signature::{
+        FunctionSignature, NamedFunctionParam, NamedParamKind,
+    };
+    let signature = FunctionSignature::try_new(
+        Vec::new(),
+        Vec::new(),
+        params
+            .iter()
+            .map(|param| NamedFunctionParam {
+                name: graphcal_compiler::syntax::function_name::FnParamName::expect_valid(*param),
+                kind: NamedParamKind::dimensionless(),
+            })
+            .collect(),
+        result.into(),
+    )
+    .unwrap();
+    registry.register_with_signature(
+        graphcal_compiler::plugin_identity::PluginIdentity::Host(
+            graphcal_compiler::syntax::plugin::PluginPath::new(plugin),
+        ),
+        graphcal_compiler::syntax::function_name::FnName::expect_valid(name),
+        signature,
+        function,
+    );
+}
+
 #[test]
 fn generated_checked_expression_coverage_includes_every_owned_root_family() {
     let template = r#"
@@ -439,9 +483,12 @@ node measured: Length = if probe::toggle() { 1000.0 m -> km } else { 2.0 m -> m 
     let calls = Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
     let mut host = graphcal_eval::host_fns::HostFunctionRegistry::new();
-    host.register_for_test(
-        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:selector-counter"),
-        graphcal_compiler::syntax::function_name::FnName::expect_valid("toggle"),
+    register_test_host_fn(
+        &mut host,
+        "graphcal:selector-counter",
+        "toggle",
+        &[],
+        graphcal_compiler::function_signature::NamedParamKind::bool(),
         move |_| {
             observed.fetch_add(1, Ordering::SeqCst);
             Ok(graphcal_eval::host_fns::HostFnValue::F64(1.0))
@@ -525,9 +572,12 @@ fn context_capabilities_are_phase_selected_and_checked_scopes_fail_closed() {
 #[test]
 fn pure_plugin_values_agree_across_source_orders_and_root_call_execution() {
     let mut host = graphcal_eval::host_fns::HostFunctionRegistry::new();
-    host.register_for_test(
-        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:pure-plan-test"),
-        graphcal_compiler::syntax::function_name::FnName::expect_valid("twice"),
+    register_test_host_fn(
+        &mut host,
+        "graphcal:pure-plan-test",
+        "twice",
+        &["x"],
+        graphcal_compiler::function_signature::NamedParamKind::dimensionless(),
         |args| match &args[0] {
             graphcal_eval::host_abi::argument::HostArgument::Scalar(
                 graphcal_eval::host_abi::HostScalar::Quantity(value),
@@ -3197,9 +3247,12 @@ fn checked_project_preparation_does_not_recompile_dependencies() {
     let calls = Arc::new(AtomicUsize::new(0));
     let observed_calls = Arc::clone(&calls);
     let mut host_fns = graphcal_eval::host_fns::HostFunctionRegistry::new();
-    host_fns.register_for_test(
-        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:session-test"),
-        graphcal_compiler::syntax::function_name::FnName::expect_valid("count"),
+    register_test_host_fn(
+        &mut host_fns,
+        "graphcal:session-test",
+        "count",
+        &["x"],
+        graphcal_compiler::function_signature::NamedParamKind::dimensionless(),
         move |arguments| {
             observed_calls.fetch_add(1, Ordering::SeqCst);
             Ok(graphcal_eval::host_fns::HostFnValue::from_argument(
@@ -3608,9 +3661,12 @@ fn cancellation_stops_an_exponential_dag_call_chain() {
     let leaves = Arc::new(AtomicUsize::new(0));
     let observed_leaves = Arc::clone(&leaves);
     let mut host_fns = graphcal_eval::host_fns::HostFunctionRegistry::new();
-    host_fns.register_for_test(
-        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:chain-test"),
-        graphcal_compiler::syntax::function_name::FnName::expect_valid("leaf"),
+    register_test_host_fn(
+        &mut host_fns,
+        "graphcal:chain-test",
+        "leaf",
+        &["x"],
+        graphcal_compiler::function_signature::NamedParamKind::dimensionless(),
         move |arguments| {
             observed_leaves.fetch_add(1, Ordering::SeqCst);
             Ok(graphcal_eval::host_fns::HostFnValue::from_argument(

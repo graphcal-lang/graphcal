@@ -838,6 +838,19 @@ pub struct DefinitionInfo {
 }
 
 impl DefinitionInfo {
+    /// The label editors show for this definition under `key`: its name, or
+    /// `alias::fn` for an extern function, whose alias is a typed part of
+    /// the key rather than of the name.
+    #[must_use]
+    pub fn label(&self, key: &SymbolKey) -> std::borrow::Cow<'_, str> {
+        match key {
+            SymbolKey::ExternFunction(function) => {
+                std::borrow::Cow::Owned(format!("{}::{}", function.plugin(), function.function()))
+            }
+            _ => std::borrow::Cow::Borrowed(self.name.as_str()),
+        }
+    }
+
     /// Returns `true` if this is a built-in function or constant.
     pub const fn is_builtin(&self) -> bool {
         matches!(
@@ -2082,7 +2095,7 @@ fn collect_import_decl(u: &ImportDecl, table: &mut SymbolTable) {
 }
 
 /// Register each extern function of an `import plugin` block as an
-/// alias-qualified definition, so completion offers `alias.fn` and
+/// alias-qualified definition, so completion offers `alias::fn` and
 /// go-to-definition lands on the `fn` name inside the block.
 fn collect_plugin_import_decl(
     p: &graphcal_compiler::desugar::desugared_ast::PluginImportDecl,
@@ -2104,7 +2117,9 @@ fn collect_plugin_import_decl(
             )),
             DefinitionInfo {
                 doc: None,
-                name: format!("{}::{}", p.alias.value, function.name.value),
+                // The leaf alone: the alias is the typed `plugin` part of
+                // the key, and display labels qualify it at the boundary.
+                name: function.name.value.to_string(),
                 category: SymbolCategory::ExternFn,
                 name_span: function.name.span,
                 decl_span: function.span,

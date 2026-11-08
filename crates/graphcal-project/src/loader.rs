@@ -80,6 +80,39 @@ fn wasm_plugin_paths(
         .filter(|path| path.source_kind() == PluginSourceKind::WasmModule)
 }
 
+/// Reject every wasm plugin import declared by a loaded file that
+/// `in_namespace` places outside its package namespace.
+///
+/// Plugin trust rests on `graphcal.lock`, which covers the package's own
+/// namespace. A file under a manifest whose canonical path lies outside the
+/// namespace (a loose script, or a module file reached through an in-root
+/// symlink that leaves `<source_dir>/<package>/`) cannot load plugin
+/// binaries at all. The check runs before any plugin bytes are read.
+fn reject_wasm_plugins_outside_package_namespace<'a>(
+    files: impl IntoIterator<Item = &'a LoadedFile<module_path::ModuleTarget>>,
+    sources: &SourceRegistry,
+    mut in_namespace: impl FnMut(&LoadedFile<module_path::ModuleTarget>) -> bool,
+) -> Result<(), CompileError> {
+    use graphcal_compiler::syntax::plugin::PluginSourceKind;
+
+    files
+        .into_iter()
+        .filter(|file| wasm_plugin_paths(&file.ast).next().is_some())
+        .filter(|file| !in_namespace(file))
+        .find_map(|file| {
+            file.ast
+                .plugin_imports()
+                .into_iter()
+                .find(|plugin| plugin.path.value.source_kind() == PluginSourceKind::WasmModule)
+                .map(|plugin| LoadError::WasmPluginOutsidePackageNamespace {
+                    plugin: plugin.path.value.clone(),
+                    src: sources.renderable(file.source_id),
+                    span: plugin.path.span.into(),
+                })
+        })
+        .map_or(Ok(()), |error| Err(error.into()))
+}
+
 fn validate_plugin_call_policy(
     files: &DependencyOrdered<LoadedFile<module_path::ModuleTarget>>,
     policy: &PluginCallPolicy,
@@ -589,8 +622,10 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     // outside the namespace is treated as a virtual package — cross-file
     // imports from it will be rejected. This collapses the two modes into a
     // single rule: to import across files, you must live in a real package.
-    let manifest =
+    let root_package =
         load_manifest_for_root(&project_root, &root_canonical, fs, budget, cancellation)?;
+    let outside_package_namespace = matches!(root_package, RootPackage::OutsideNamespace);
+    let manifest = root_package.into_manifest();
     if let Some(package_manifest) = manifest.as_ref()
         && !package_manifest.dependencies.is_empty()
     {
@@ -626,6 +661,20 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     cancellation.checkpoint()?;
     let (files, sources) = build_loaded_files(snapshot)?;
     cancellation.checkpoint()?;
+    match manifest.as_ref() {
+        // A loose script: none of its files is in the package namespace.
+        None if outside_package_namespace => {
+            reject_wasm_plugins_outside_package_namespace(&files, &sources, |_| false)?;
+        }
+        // An ad-hoc file with no manifest loads plugins unpinned.
+        None => {}
+        Some(package_manifest) => {
+            reject_wasm_plugins_outside_package_namespace(&files, &sources, |file| {
+                root_in_package_namespace(&project_root, &file.path, package_manifest, fs)
+                    == NamespaceMembership::Exact
+            })?;
+        }
+    }
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
     let mut plugins = read_wasm_plugins(
@@ -756,6 +805,17 @@ fn load_locked_package_project<F: FileSystemReader>(
         let (package_root, reader) = context
             .authority_for(package)
             .map_err(loader_manifest_error)?;
+        let manifest = context.graph.manifest(package).ok_or_else(|| {
+            loader_manifest_error(PackageAuthorityError::MissingPackage(package.clone()))
+        })?;
+        reject_wasm_plugins_outside_package_namespace(
+            files.iter().filter(|file| file.dag_id.package() == &owner),
+            &sources,
+            |file| {
+                root_in_package_namespace(package_root, &file.path, manifest, reader)
+                    == NamespaceMembership::Exact
+            },
+        )?;
         let mut package_plugins = read_wasm_plugins(
             files
                 .iter()
@@ -1260,14 +1320,36 @@ fn resolve_project_root<F: FileSystemReader>(
     )
 }
 
+/// How the root file relates to the manifest at the project root.
+#[derive(Debug)]
+enum RootPackage {
+    /// The root file lives inside the manifest's package namespace.
+    Member(PackageManifest),
+    /// A manifest exists, but the root file sits outside its package
+    /// namespace: a loose script that loads as a virtual package and is not
+    /// covered by the package's `graphcal.lock` pins.
+    OutsideNamespace,
+    /// No manifest at the project root: an ad-hoc virtual-package file.
+    NoManifest,
+}
+
+impl RootPackage {
+    fn into_manifest(self) -> Option<PackageManifest> {
+        match self {
+            Self::Member(manifest) => Some(manifest),
+            Self::OutsideNamespace | Self::NoManifest => None,
+        }
+    }
+}
+
 /// Load the manifest at `project_root` and decide whether the root file is
 /// part of the real package.
 ///
-/// Returns `Some(manifest)` only when a manifest is present AND the root file
-/// lives inside the package namespace (either `<source_dir>/<pkg>.gcl` or
-/// under `<source_dir>/<pkg>/`). Returns `None` for the virtual-package
-/// scenarios: no manifest, or the root file sits next to a manifest but
-/// outside the namespace (treated as a standalone script).
+/// The root file is a [`RootPackage::Member`] only when a manifest is present
+/// AND the root file lives inside the package namespace (either
+/// `<source_dir>/<pkg>.gcl` or under `<source_dir>/<pkg>/`). Otherwise it is a
+/// virtual package: a loose script under the manifest, or an ad-hoc file with
+/// no manifest at all.
 ///
 /// # Errors
 ///
@@ -1279,10 +1361,10 @@ fn load_manifest_for_root<F: FileSystemReader>(
     fs: &F,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Option<PackageManifest>, Outcome<CompileError>> {
+) -> Result<RootPackage, Outcome<CompileError>> {
     let manifest_path = project_root.join("graphcal.toml");
     if !fs.exists(&manifest_path) {
-        return Ok(None);
+        return Ok(RootPackage::NoManifest);
     }
     let manifest_content = budget
         .read_text(fs, &manifest_path, LoaderArtifact::Manifest, cancellation)
@@ -1297,39 +1379,83 @@ fn load_manifest_for_root<F: FileSystemReader>(
     let parsed = parse_manifest_str(&manifest_content)
         .map_err(|error| loader_manifest_error(error.to_string()))?;
 
-    if root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
-        let source_dir = parsed.source_dir.join_to(project_root);
-        verify_root_module_file(fs, &source_dir, root_canonical, cancellation)?;
-        Ok(Some(parsed))
-    } else {
-        Ok(None)
+    let source_dir = parsed.source_dir.join_to(project_root);
+    match root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
+        NamespaceMembership::Exact => {
+            verify_root_module_file(fs, &source_dir, root_canonical, cancellation)?;
+            Ok(RootPackage::Member(parsed))
+        }
+        // The entry is in the namespace only if letter case is ignored. On a
+        // case-insensitive reader that keeps the requested spelling that is
+        // the same directory spelled differently (M041); when the exact
+        // spelling is its own directory entry, the file really lives outside
+        // the namespace.
+        NamespaceMembership::IgnoringCase => {
+            verify_root_module_file(fs, &source_dir, root_canonical, cancellation).or_else(
+                |error| match error {
+                    Outcome::Failed(CompileError::Load(
+                        LoadError::ModuleFileSpellingMismatch { .. },
+                    ))
+                    | Outcome::Cancelled => Err(error),
+                    Outcome::Failed(_) => Ok(()),
+                },
+            )?;
+            Ok(RootPackage::OutsideNamespace)
+        }
+        NamespaceMembership::Outside => Ok(RootPackage::OutsideNamespace),
     }
 }
 
-/// True iff `root_canonical` is the package's single-file module
+/// Whether the root file is in the package namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NamespaceMembership {
+    /// It is the package's single-file module or below its namespace
+    /// directory.
+    Exact,
+    /// It would be, if letter case were ignored.
+    IgnoringCase,
+    Outside,
+}
+
+/// Whether `root_canonical` is the package's single-file module
 /// (`<source_dir>/<pkg>.gcl`) or lives under the package namespace directory
 /// (`<source_dir>/<pkg>/...`).
-fn root_in_package_namespace<F: FileSystemReader>(
+fn root_in_package_namespace<F: FileSystemReader + ?Sized>(
     project_root: &Path,
     root_canonical: &Path,
     manifest: &PackageManifest,
     fs: &F,
-) -> bool {
+) -> NamespaceMembership {
     let source_root = manifest.source_dir.join_to(project_root);
-    let pkg_dir = source_root.join(manifest.name.as_str());
-    let pkg_file = source_root.join(format!("{}.gcl", manifest.name));
+    let pkg_dir = fs.canonicalize(&source_root.join(manifest.name.as_str()));
+    let pkg_file = fs.canonicalize(&source_root.join(format!("{}.gcl", manifest.name)));
 
-    if let Ok(canon_pkg_dir) = fs.canonicalize(&pkg_dir)
-        && root_canonical.starts_with(&canon_pkg_dir)
+    if pkg_dir
+        .as_ref()
+        .is_ok_and(|pkg_dir| root_canonical.starts_with(pkg_dir))
+        || pkg_file
+            .as_ref()
+            .is_ok_and(|pkg_file| root_canonical == pkg_file)
     {
-        return true;
+        return NamespaceMembership::Exact;
     }
-    if let Ok(canon_pkg_file) = fs.canonicalize(&pkg_file)
-        && root_canonical == canon_pkg_file
+    let folded = |path: &Path| -> Vec<String> {
+        path.components()
+            .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    let root = folded(root_canonical);
+    if pkg_dir
+        .as_deref()
+        .is_ok_and(|pkg_dir| root.starts_with(&folded(pkg_dir)))
+        || pkg_file
+            .as_deref()
+            .is_ok_and(|pkg_file| root == folded(pkg_file))
     {
-        return true;
+        NamespaceMembership::IgnoringCase
+    } else {
+        NamespaceMembership::Outside
     }
-    false
 }
 
 fn virtual_package_id_for_path(path: &Path) -> Result<DagPackageId, CompileError> {

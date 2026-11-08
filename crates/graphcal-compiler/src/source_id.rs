@@ -12,7 +12,10 @@
 /// The id remembers which registry issued it, so resolving it against a
 /// different registry is detected instead of silently selecting an unrelated
 /// source at the same position.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+///
+/// Ids order by issuing registry and then registration order, which gives
+/// cross-file diagnostics a deterministic "earlier source first" order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SourceId {
     registry: u64,
     index: usize,

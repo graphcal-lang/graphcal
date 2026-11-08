@@ -146,9 +146,12 @@ node control: Dimensionless = probe::tick() + 1.0;
     let calls = std::sync::Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
     let mut host = graphcal_eval::host_fns::HostFunctionRegistry::new();
-    host.register_for_test(
-        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:readiness-counter"),
-        graphcal_compiler::syntax::function_name::FnName::expect_valid("tick"),
+    super::register_test_host_fn(
+        &mut host,
+        "graphcal:readiness-counter",
+        "tick",
+        &[],
+        graphcal_compiler::function_signature::NamedParamKind::dimensionless(),
         move |_| {
             observed.fetch_add(1, Ordering::SeqCst);
             Ok(graphcal_eval::host_fns::HostFnValue::F64(1.0))

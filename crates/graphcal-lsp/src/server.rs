@@ -1818,7 +1818,7 @@ mod tests {
             "import plugin \"graphcal:demo\" as demo {\n",
             "    fn inverse<D: Dim>(x: D) -> D^-1;\n",
             "    fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);\n",
-            "    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2 / Time;\n",
+            "    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;\n",
             "    fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;\n",
             "}\n",
             "node y: Dimensionless = 1.0;\n",
@@ -1848,7 +1848,7 @@ mod tests {
         assert_eq!(
             signature("lerp"),
             Some((
-                "fn demo::lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2 * Frequency",
+                "fn demo::lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D",
                 "a: D; b: D; t: Dimensionless".to_string()
             ))
         );
@@ -1866,7 +1866,7 @@ mod tests {
         let uri = Url::parse("file:///extern-signature-help.gcl").unwrap();
         let declarations = concat!(
             "import plugin \"graphcal:demo\" as demo {\n",
-            "    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2 / Time;\n",
+            "    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;\n",
             "}\n",
         );
         let analysis = run_analysis(
@@ -1880,7 +1880,7 @@ mod tests {
             crate::signature_help::signature_help(&analysis, &source, source.len())
                 .map(|help| (help.signatures[0].label.clone(), help.active_parameter))
         };
-        let label = "fn demo::lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D^2 * Frequency";
+        let label = "fn demo::lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D";
         assert_eq!(active("demo::lerp("), Some((label.to_string(), Some(0))));
         assert_eq!(
             active("demo::lerp(1.0, 2.0, "),

@@ -11,7 +11,6 @@ use crate::symbol_identity::{ExternFunctionId, FieldId, GenericParamId, IndexVar
 use crate::symbol_table::SymbolKey;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::{DimName, UnitName};
-use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
 use graphcal_compiler::syntax::token::SourceIdentifier;
 use graphcal_compiler::syntax::type_name::{
@@ -46,6 +45,13 @@ fn validate_rename_target(
     let definition = resolved_definition(resolved);
     if definition.is_builtin() {
         return Ok(false);
+    }
+    // The plugin ABI fixes an extern function's name: the declaration must
+    // spell the plugin's export, so no rename of it can compile.
+    if let SymbolKey::ExternFunction(function) = &resolved.key {
+        return Err(RenameRefusal::ExternFunction {
+            function: function.clone(),
+        });
     }
 
     if let Some(project) = analysis.project_symbols.complete() {
@@ -146,6 +152,8 @@ pub enum RenameRefusal {
     ImportAlias { alias: String },
     /// An affected open document changed after the project index was built.
     StaleProjectSnapshot,
+    /// Extern function names are fixed by the plugin they come from.
+    ExternFunction { function: ExternFunctionId },
 }
 
 impl std::fmt::Display for RenameRefusal {
@@ -172,6 +180,12 @@ impl std::fmt::Display for RenameRefusal {
             ),
             Self::StaleProjectSnapshot => f.write_str(
                 "cannot safely rename because an affected document changed after project analysis",
+            ),
+            Self::ExternFunction { function } => write!(
+                f,
+                "cannot rename extern function `{}::{}`: its name is fixed by the plugin, so the declaration must spell the plugin's export",
+                function.plugin(),
+                function.function()
             ),
         }
     }
@@ -210,12 +224,8 @@ fn key_with_new_name(key: &SymbolKey, new_name: &str) -> Option<SymbolKey> {
             parameter.owner().clone(),
             GenericParamName::expect_valid(new_name),
         )),
-        SymbolKey::ExternFunction(function) => SymbolKey::ExternFunction(ExternFunctionId::new(
-            function.owner().clone(),
-            function.plugin().clone(),
-            FnName::expect_valid(new_name),
-        )),
         SymbolKey::Local(_)
+        | SymbolKey::ExternFunction(_)
         | SymbolKey::BuiltinFunction(_)
         | SymbolKey::BuiltinConstant(_)
         | SymbolKey::TimeScale(_) => return None,
@@ -421,6 +431,38 @@ mod tests {
                 output
             },
         )
+    }
+
+    /// LSP-6: an extern function's name is fixed by its plugin, so renaming
+    /// it from the declaration or a call site is refused with a dedicated
+    /// reason instead of editing only the declaration (which then fails W003).
+    #[test]
+    fn rename_refuses_extern_functions() {
+        let source = r#"
+import plugin "graphcal:demo" as demo {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+}
+node y: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
+"#;
+        let analysis = analysis_from_source(source);
+        let uri = Url::parse("file:///test.gcl").unwrap();
+        for cursor in [
+            source.find("fn lerp").unwrap() + "fn ".len(),
+            source.find("demo::lerp(").unwrap() + "demo::".len(),
+        ] {
+            let refusal = rename(&analysis, &uri, cursor, "blend").unwrap_err();
+            assert!(
+                matches!(
+                    &refusal,
+                    RenameRefusal::ExternFunction { function }
+                        if function.plugin().as_str() == "demo"
+                            && function.function().as_str() == "lerp"
+                ),
+                "{refusal:?}"
+            );
+            assert!(refusal.to_string().contains("`demo::lerp`"), "{refusal}");
+            assert!(prepare_rename(&analysis, &uri, cursor).is_none());
+        }
     }
 
     #[test]

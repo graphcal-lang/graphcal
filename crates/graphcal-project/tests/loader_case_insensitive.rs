@@ -215,3 +215,20 @@ fn wrong_case_candidate_falls_back_as_on_a_case_sensitive_filesystem() {
         "the wrong-case sibling file must not be loaded"
     );
 }
+
+/// The namespace directory spelled in another case is the package entry
+/// spelled wrongly, not a standalone script.
+#[test]
+fn namespace_directory_in_another_case_is_a_spelling_mismatch() {
+    let fs = CaseInsensitive::new(&[
+        MANIFEST,
+        LIB,
+        (
+            "/p/src/pkg/main.gcl",
+            "import pkg.lib::{k};\nnode a: Dimensionless = @k;",
+        ),
+    ]);
+    let error = load_project(Path::new("/p/src/Pkg/main.gcl"), None, &fs)
+        .expect_err("the namespace directory must be spelled as on disk");
+    assert_spelling_mismatch(&error, "/p/src/Pkg", "pkg");
+}

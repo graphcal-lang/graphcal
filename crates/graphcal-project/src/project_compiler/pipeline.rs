@@ -284,13 +284,7 @@ pub(super) fn check_hir_project<Mode>(
                 },
                 cancellation,
             )?;
-            verify_host_functions(
-                plugins,
-                compiled.program.tir(),
-                file_src,
-                host_metadata,
-                cancellation,
-            )?;
+            verify_host_functions(plugins, compiled.program.tir(), host_metadata, cancellation)?;
             Ok((compiled, file_src))
         };
 
@@ -326,23 +320,23 @@ pub(super) fn check_hir_project<Mode>(
 ///    host must have registered the module (its recorded failure is
 ///    reported otherwise).
 /// 2. The registry must provide the function (`MissingHostFunction`, W003).
-/// 3. When the registry entry carries a manifest-provided signature, the
-///    declared signature must be structurally equivalent to it (W005) —
-///    this is the "declaration verified against the embedded manifest"
-///    guarantee of the plugin design (#25).
+/// 3. The declared signature must be structurally equivalent to the one
+///    the registry entry provides (W005). Every entry carries one (a wasm
+///    manifest's, or a native function's own), so no declaration is
+///    trusted as-is — the "declaration verified against the embedded
+///    manifest" guarantee of the plugin design (#25).
 fn verify_host_functions(
     plugins: &HashMap<
         graphcal_compiler::plugin_identity::PluginIdentity,
         crate::loader::loaded_project::PluginFileEntry,
     >,
     tir: &graphcal_compiler::tir::typed::CheckedTir,
-    src: SourceId,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<(), Outcome<PipelineError>> {
     // Deterministic reporting order: earliest declaration first.
     let mut declared: Vec<_> = tir.extern_functions().iter().collect();
-    declared.sort_by_key(|(_, function)| function.name_span.offset());
+    declared.sort_by_key(|(_, function)| (function.source, function.name_span.offset()));
 
     for (key, function) in declared {
         cancellation.checkpoint()?;
@@ -350,11 +344,11 @@ fn verify_host_functions(
             key.plugin,
             graphcal_compiler::plugin_identity::PluginIdentity::Wasm { .. }
         ) {
-            verify_wasm_plugin(plugins, function, src, host_metadata)?;
+            verify_wasm_plugin(plugins, function, host_metadata)?;
         }
-        if !host_metadata.contains(key) {
+        let Some(provided) = host_metadata.provided_signature(key) else {
             return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+                function.source,
                 function.name_span,
                 PluginError::MissingHostFunction {
                     plugin: function.plugin.clone(),
@@ -362,15 +356,13 @@ fn verify_host_functions(
                 },
             ))
             .into());
-        }
-        if let Some(provided) = host_metadata.provided_signature(key)
-            && !function.signature.structurally_equivalent(provided)
-        {
+        };
+        if !function.signature.structurally_equivalent(provided) {
             let format_dim = |dim: &graphcal_compiler::dimension::Dimension| {
                 tir.registry().dimensions.format_dimension(dim)
             };
             return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+                function.source,
                 function.decl_span,
                 PluginError::ExternSignatureMismatch {
                     plugin: function.plugin.clone(),
@@ -394,13 +386,12 @@ fn verify_wasm_plugin(
         crate::loader::loaded_project::PluginFileEntry,
     >,
     function: &graphcal_compiler::ir::extern_function::ExternFunctionEntry,
-    src: SourceId,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
 ) -> Result<(), PipelineError> {
     match plugins.get(&function.plugin) {
         Some(Err(crate::loader::loaded_project::PluginFileError::NotPinned)) => {
             return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+                function.source,
                 function.path_span,
                 PluginError::PluginNotPinned {
                     plugin: function.plugin.clone(),
@@ -412,7 +403,7 @@ fn verify_wasm_plugin(
             actual,
         })) => {
             return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+                function.source,
                 function.path_span,
                 PluginError::PluginHashMismatch {
                     plugin: function.plugin.clone(),
@@ -423,7 +414,7 @@ fn verify_wasm_plugin(
         }
         Some(Err(file_error)) => {
             return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+                function.source,
                 function.path_span,
                 PluginError::PluginLoadFailed {
                     plugin: function.plugin.clone(),
@@ -439,7 +430,7 @@ fn verify_wasm_plugin(
                     "the project loader recorded no artifact for plugin \"{}\"",
                     function.plugin
                 ),
-                src,
+                function.source,
                 DiagnosticAnchor::Source(function.path_span),
             )));
         }
@@ -451,7 +442,7 @@ fn verify_wasm_plugin(
             module,
             name,
         }) => Err(PipelineError::Semantic(SemanticError::located(
-            src,
+            function.source,
             function.path_span,
             PluginError::PluginForbiddenImport {
                 plugin: function.plugin.clone(),
@@ -461,7 +452,7 @@ fn verify_wasm_plugin(
         ))),
         Some(graphcal_eval::host_fns::PluginRegistrationError::LoadFailed { reason }) => {
             Err(PipelineError::Semantic(SemanticError::located(
-                src,
+                function.source,
                 function.path_span,
                 PluginError::PluginLoadFailed {
                     plugin: function.plugin.clone(),

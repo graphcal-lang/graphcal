@@ -2582,6 +2582,11 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["host_fns", "demo_signatures"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["host_fns", "tests"]
 role = "interpreter"
 

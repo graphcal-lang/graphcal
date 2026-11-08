@@ -1249,3 +1249,123 @@ node midpoint: Length = @lib.mid(a: 1.0 m, b: 3.0 m)::m;
         "expected lerp midpoint 2 m, got {value:?}"
     );
 }
+
+/// RES-9: two files may declare one plugin function with different binder
+/// and parameter names; merging their signatures across files is
+/// structural, like repeated declarations in one file (was X001).
+#[test]
+fn cross_file_extern_declarations_merge_structurally() {
+    let (_dir, root) = write_test_project(
+        "pkg",
+        &[
+            (
+                "a.gcl",
+                r#"
+import plugin "graphcal:demo" as demo {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+}
+pub dag mid { param x: Length; pub node m: Length = demo::lerp(@x, 3.0 m, 0.5); }
+"#,
+            ),
+            (
+                "b.gcl",
+                r#"
+import plugin "graphcal:demo" as native {
+    fn lerp<E: Dim>(lo: E, hi: E, frac: Dimensionless) -> E;
+}
+pub dag mid { param x: Length; pub node m: Length = native::lerp(@x, 5.0 m, 0.5); }
+"#,
+            ),
+            (
+                "main.gcl",
+                r"
+import pkg.a as a;
+import pkg.b as b;
+node left: Length = @a.mid(x: 1.0 m)::m;
+node right: Length = @b.mid(x: 1.0 m)::m;
+",
+            ),
+        ],
+        "main.gcl",
+    );
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_or_else(|err| panic!("structurally equal externs must merge: {err:?}"));
+    for (name, expected) in [("left", 2.0), ("right", 3.0)] {
+        let value = value_for(&result, name).si_value().unwrap().get();
+        assert!((value - expected).abs() < 1e-12, "{name}: {value}");
+    }
+}
+
+/// RES-9: a real cross-file conflict (one struct shape bound to two record
+/// types) is the user-facing W001 at the later-registered declaration, not
+/// X001.
+#[test]
+fn cross_file_extern_conflict_is_w001_in_the_later_file() {
+    let declaration = |record: &str| {
+        format!(
+            r#"
+pub type {record} {{ {record}(min: Velocity, max: Velocity) }}
+import plugin "graphcal:demo" as demo {{
+    fn dv_range<I: Index>(xs: Velocity[I]) -> {record};
+}}
+pub index Burn = {{ A, B }};
+pub node r: {record} = demo::dv_range({{ Burn#A: 1.0 m/s, Burn#B: 3.0 m/s }});
+"#
+        )
+    };
+    let (first, second) = (declaration("RangeA"), declaration("RangeB"));
+    let (_dir, root) = write_test_project(
+        "pkg",
+        &[
+            ("a.gcl", first.as_str()),
+            ("b.gcl", second.as_str()),
+            (
+                "main.gcl",
+                r"
+import pkg.a::{ type RangeA };
+import pkg.b::{ type RangeB };
+include pkg.a()::{ r as ra };
+include pkg.b()::{ r as rb };
+node left: RangeA = @ra;
+node right: RangeB = @rb;
+",
+            ),
+        ],
+        "main.gcl",
+    );
+    let err = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_err();
+    assert_eq!(
+        err.code().map(|code| code.to_string()).as_deref(),
+        Some("graphcal::W001"),
+        "{err:?}"
+    );
+    let CompileError::Eval(rendered) = &err else {
+        panic!("expected a semantic error, got {err:?}");
+    };
+    let error = rendered.error();
+    assert!(
+        matches!(
+            error,
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Plugin(PluginError::InvalidExternSignature {
+                    error: graphcal_compiler::semantic_error::plugin::ExternSignatureError::ConflictingResultType { .. },
+                }),
+                ..
+            })
+        ),
+        "{err:?}"
+    );
+    // Located at a declaration, in its own file (not the importer's).
+    let source = rendered.registered_source();
+    let graphcal_compiler::source_registry::SourceOrigin::File(path) = source.origin() else {
+        panic!("expected a file-backed source, got {}", source.name());
+    };
+    assert!(
+        ["a.gcl", "b.gcl"]
+            .iter()
+            .any(|file| path.ends_with(std::path::Path::new("pkg").join(file))),
+        "{}",
+        path.display()
+    );
+}

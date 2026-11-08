@@ -99,7 +99,7 @@ pub struct ManifestParam {
 /// or `{"array": {"element": "bool", "indexes": ["I", "J"]}}`. Structs have
 /// no parameter ABI representation and therefore are not a variant of this type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ManifestParamKind {
     /// A quantity with the dimension described by the monomial.
     Quantity(ManifestMonomial),
@@ -140,7 +140,7 @@ pub enum ManifestArrayElementKind {
 /// [`ManifestParamKind`]. Results additionally permit
 /// `{"struct": {"fields": […]}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum ManifestResultKind {
     /// A quantity with the dimension described by the monomial.
     Quantity(ManifestMonomial),
@@ -1251,6 +1251,40 @@ mod tests {
             PluginManifest::from_json(json.as_bytes()).unwrap_err(),
             ManifestDecodeError::Json { .. }
         ));
+    }
+
+    #[test]
+    fn unknown_fields_inside_struct_variants_are_rejected() {
+        let valid_array = r#"{"array":{"element":"bool","indexes":["I"]}}"#;
+        let valid_struct = r#"{"struct":{"fields":[{"name":"ok","kind":"bool"}]}}"#;
+        let manifest = |param: &str, result: &str| {
+            format!(
+                r#"{{"abi_version":5,"functions":[{{"name":"f","index_vars":["I"],"params":[{{"name":"xs","kind":{param}}}],"result":{result}}}]}}"#
+            )
+        };
+        PluginManifest::from_json(manifest(valid_array, valid_struct).as_bytes()).unwrap();
+        for json in [
+            manifest(
+                r#"{"array":{"element":"bool","indexes":["I"],"extra":true}}"#,
+                valid_struct,
+            ),
+            manifest(
+                valid_array,
+                r#"{"struct":{"fields":[{"name":"ok","kind":"bool"}],"extra":true}}"#,
+            ),
+            manifest(
+                valid_array,
+                r#"{"array":{"element":"bool","indexes":["I"],"extra":true}}"#,
+            ),
+        ] {
+            assert!(
+                matches!(
+                    PluginManifest::from_json(json.as_bytes()).unwrap_err(),
+                    ManifestDecodeError::Json { .. }
+                ),
+                "{json}"
+            );
+        }
     }
 
     #[test]

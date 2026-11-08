@@ -1,34 +1,111 @@
 //! Evaluator-side validation of host function results at the plugin ABI.
+#![cfg(test)]
 
 use std::collections::HashMap;
 
-use graphcal_compiler::syntax::function_name::FnName;
+use graphcal_compiler::dimension::Dimension;
+use graphcal_compiler::function_signature::{
+    DimMonomial, FunctionSignature, NamedFunctionParam, NamedParamKind, NamedResultKind,
+    ScalarValueKind, StructFieldKind, StructShape, StructShapeField,
+};
+use graphcal_compiler::plugin_identity::PluginIdentity;
+use graphcal_compiler::syntax::dimension::DimVarName;
+use graphcal_compiler::syntax::function_name::{FnName, FnParamName};
+use graphcal_compiler::syntax::index_name::IndexVarName;
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::plugin::PluginPath;
+use graphcal_compiler::syntax::type_name::FieldName;
 use graphcal_eval::host_fns::{HostArray, HostFnValue, HostFunctionRegistry};
 
-#[test]
-fn evaluator_and_cli_boundary_share_scalar_and_composite_abi_policy() {
-    let plugin = PluginPath::new("graphcal:test-abi-policy");
+fn nullary(result: NamedResultKind) -> FunctionSignature {
+    FunctionSignature::try_new(Vec::new(), Vec::new(), Vec::new(), result).unwrap()
+}
+
+fn record(field: &str, kind: StructFieldKind) -> NamedResultKind {
+    NamedResultKind::Struct(
+        StructShape::try_new(vec![StructShapeField {
+            name: FieldName::expect_valid(field),
+            kind,
+        }])
+        .unwrap(),
+    )
+}
+
+/// `<D: Dim, I: Index>(values: D[I]) -> D[I]`
+fn indexed_identity() -> FunctionSignature {
+    let kind = NamedParamKind::Indexed {
+        element: ScalarValueKind::Quantity(DimMonomial::var(DimVarName::expect_valid("D"))),
+        indexes: NonEmpty::singleton(IndexVarName::expect_valid("I")),
+    };
+    FunctionSignature::try_new(
+        vec![DimVarName::expect_valid("D")],
+        vec![IndexVarName::expect_valid("I")],
+        vec![NamedFunctionParam {
+            name: FnParamName::expect_valid("values"),
+            kind: kind.clone(),
+        }],
+        kind.into(),
+    )
+    .unwrap()
+}
+
+/// Host functions returning values the evaluator must accept or reject.
+fn abi_policy_registry() -> HostFunctionRegistry {
+    let plugin = PluginIdentity::Host(PluginPath::new("graphcal:test-abi-policy"));
     let mut registry = HostFunctionRegistry::new();
-    for (name, value) in [
-        ("signed_zero_bool", HostFnValue::F64(-0.0)),
-        ("signed_zero_int", HostFnValue::F64(-0.0)),
-        ("invalid_bool", HostFnValue::F64(0.5)),
-        ("non_finite_quantity", HostFnValue::F64(f64::NAN)),
+    for (name, result, value) in [
+        (
+            "signed_zero_bool",
+            NamedParamKind::bool().into(),
+            HostFnValue::F64(-0.0),
+        ),
+        (
+            "signed_zero_int",
+            NamedParamKind::int().into(),
+            HostFnValue::F64(-0.0),
+        ),
+        (
+            "invalid_bool",
+            NamedParamKind::bool().into(),
+            HostFnValue::F64(0.5),
+        ),
+        (
+            "non_finite_quantity",
+            NamedParamKind::dimensionless().into(),
+            HostFnValue::F64(f64::NAN),
+        ),
         (
             "non_finite_record",
+            record(
+                "value",
+                StructFieldKind::Quantity(Dimension::dimensionless()),
+            ),
             HostFnValue::Record(vec![f64::INFINITY]),
         ),
     ] {
-        registry.register_for_test(plugin.clone(), FnName::expect_valid(name), move |_| {
-            Ok(value.clone())
-        });
+        registry.register_with_signature(
+            plugin.clone(),
+            FnName::expect_valid(name),
+            nullary(result),
+            move |_| Ok(value.clone()),
+        );
     }
-    registry.register_for_test(plugin, FnName::expect_valid("non_finite_array"), |_| {
-        Ok(HostFnValue::Array(
-            HostArray::vector(vec![1.0, f64::NEG_INFINITY]).unwrap(),
-        ))
-    });
+    registry.register_with_signature(
+        plugin,
+        FnName::expect_valid("non_finite_array"),
+        indexed_identity(),
+        |_| {
+            Ok(HostFnValue::Array(
+                HostArray::vector(vec![1.0, f64::NEG_INFINITY]).unwrap(),
+            ))
+        },
+    );
+    registry
+}
+
+#[test]
+fn evaluator_and_cli_boundary_share_scalar_and_composite_abi_policy() {
+    let registry = abi_policy_registry();
     let source = r#"
 pub index Axis = { A, B };
 type QuantityResult {
@@ -88,16 +165,20 @@ node bad_record: QuantityResult = test::non_finite_record();
 
 #[test]
 fn evaluator_rejects_fractional_host_int_results() {
-    let plugin = PluginPath::new("graphcal:test-exact-int");
+    let plugin = PluginIdentity::Host(PluginPath::new("graphcal:test-exact-int"));
     let mut registry = HostFunctionRegistry::new();
-    registry.register_for_test(
+    registry.register_with_signature(
         plugin.clone(),
         FnName::expect_valid("fractional_scalar"),
+        nullary(NamedParamKind::int().into()),
         |_| Ok(HostFnValue::F64(3.7)),
     );
-    registry.register_for_test(plugin, FnName::expect_valid("fractional_record"), |_| {
-        Ok(HostFnValue::Record(vec![3.7]))
-    });
+    registry.register_with_signature(
+        plugin,
+        FnName::expect_valid("fractional_record"),
+        nullary(record("value", StructFieldKind::Int)),
+        |_| Ok(HostFnValue::Record(vec![3.7])),
+    );
     let source = r#"
 type IntResult {
     IntResult(value: Int),

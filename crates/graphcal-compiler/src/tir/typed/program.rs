@@ -16,11 +16,9 @@ use crate::semantic::checked_type::IndexTypeRef;
 use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
 use crate::semantic_error::SemanticError;
-use crate::source_id::SourceId;
 
 use super::model::{
-    CheckedDeclType, CompetingExternFunctionDefinition, DagTIR, ProjectTypeStore,
-    ProjectTypeStoreInsertError, TirCore,
+    CheckedDeclType, DagTIR, ProjectTypeStore, ProjectTypeStoreInsertError, TirCore,
 };
 
 // ---------------------------------------------------------------------------
@@ -211,55 +209,35 @@ impl TirDraft {
         Ok(())
     }
 
-    /// Merge one canonical extern signature without replacing an identical copy.
+    /// Merge one extern signature a checked module published, by the same
+    /// rule as repeated declarations in one file: a structurally equivalent
+    /// copy (binder and parameter names may differ) is accepted and the first
+    /// is kept.
     ///
     /// # Errors
     ///
-    /// Returns [`CompetingExternFunctionDefinition`] when the same plugin and
-    /// function identity already has a different callable signature.
+    /// Returns W001 at `function`'s declaration when the same plugin function
+    /// already has a conflicting signature or struct result type.
     pub fn insert_extern_function(
         &mut self,
-        key: crate::plugin_identity::ExternFnKey,
         function: crate::ir::extern_function::ExternFunctionEntry,
-    ) -> Result<(), CompetingExternFunctionDefinition> {
-        match self.core.extern_functions.get(&key) {
-            Some(existing) if !existing.has_same_callable_definition(&function) => {
-                Err(CompetingExternFunctionDefinition {
-                    plugin: key.plugin,
-                    name: key.name,
-                })
-            }
-            Some(_) => Ok(()),
-            None => {
-                self.core.extern_functions.insert(key, function);
-                Ok(())
-            }
-        }
+    ) -> Result<(), SemanticError> {
+        crate::ir::extern_function::merge_extern_function(&mut self.core.extern_functions, function)
     }
 
     /// Merge the extern signatures a same-file DAG body declared with its
-    /// own `import plugin` blocks.
-    ///
-    /// Unlike [`Self::insert_extern_function`] (which installs signatures an
-    /// already-checked dependency published), these are fresh source
-    /// declarations, so they follow the same rule as several declarations in
-    /// one body: a structurally equivalent redeclaration is accepted and a
-    /// conflicting one is a user-facing diagnostic at the later declaration.
+    /// own `import plugin` blocks, by the rule of
+    /// [`Self::insert_extern_function`].
     pub(crate) fn merge_declared_extern_functions(
         &mut self,
         hir: &crate::ir::model::HirDag,
-        src: SourceId,
     ) -> Result<(), SemanticError> {
         // Deterministic conflict reporting: earliest declaration first.
         let mut declared: Vec<_> = hir.extern_functions().iter().collect();
         declared.sort_by_key(|(_, function)| function.decl_span.offset());
-        declared.into_iter().try_for_each(|(_, function)| {
-            crate::ir::extern_function::merge_extern_function(
-                &mut self.core.extern_functions,
-                function.clone(),
-                src,
-            )
-        })
+        declared
+            .into_iter()
+            .try_for_each(|(_, function)| self.insert_extern_function(function.clone()))
     }
 
     /// End assembly: the registry of local and imported bodies is complete.

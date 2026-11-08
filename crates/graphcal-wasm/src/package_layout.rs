@@ -40,15 +40,32 @@ pub fn package_layout(manifest: &str) -> PackageLayoutView {
     }
 }
 
+/// The layout reported for a manifest too large to read: it is rejected
+/// before its text is copied, with the limit every project file shares.
+#[cfg(any(target_arch = "wasm32", test))]
+#[must_use]
+pub fn oversized_manifest_layout() -> PackageLayoutView {
+    PackageLayoutView::Invalid {
+        message: format!(
+            "graphcal.toml exceeds the {} byte limit for a project file",
+            crate::project::MAX_PLAYGROUND_FILE_BYTES
+        ),
+    }
+}
+
 /// JavaScript boundary: `packageLayout(manifestText)`.
+///
+/// The text is bounded before it is copied into linear memory (#1344).
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen(js_name = packageLayout)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "wasm-bindgen JavaScript exports receive owned strings"
-)]
-pub fn package_layout_js(manifest: String) -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue> {
-    crate::output::to_js(&package_layout(&manifest)).map_err(|error| {
+pub fn package_layout_js(
+    manifest: wasm_bindgen::JsValue,
+) -> Result<wasm_bindgen::JsValue, wasm_bindgen::JsValue> {
+    let layout = match crate::js_request::decode_manifest_text(manifest)? {
+        crate::js_request::ManifestText::Within(text) => package_layout(&text),
+        crate::js_request::ManifestText::TooLarge => oversized_manifest_layout(),
+    };
+    crate::output::to_js(&layout).map_err(|error| {
         wasm_bindgen::JsValue::from_str(&format!("could not serialize package layout: {error}"))
     })
 }
@@ -76,6 +93,17 @@ mod tests {
                 name: "power".to_string(),
                 source_dir: "lib/gcl".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn an_oversized_manifest_names_the_limit() {
+        let PackageLayoutView::Invalid { message } = oversized_manifest_layout() else {
+            panic!("an oversized manifest is invalid");
+        };
+        assert!(
+            message.contains(&crate::project::MAX_PLAYGROUND_FILE_BYTES.to_string()),
+            "{message}"
         );
     }
 

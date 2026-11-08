@@ -265,7 +265,7 @@ impl TirDraft {
         cancellation.checkpoint()?;
         // A nested DAG's `import plugin` signatures join the file's extern
         // map, exactly like the root body's, so calls inside it resolve.
-        self.merge_declared_extern_functions(signed.hir(), src)?;
+        self.merge_declared_extern_functions(signed.hir())?;
         let project_types = self.project_types();
         let dag = type_resolve_signed_single_with_imported_bindings_and_cancellation(
             signed,
