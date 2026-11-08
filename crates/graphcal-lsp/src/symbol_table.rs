@@ -19,6 +19,7 @@ use graphcal_compiler::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedName, ResolvedStructTypeName,
     ResolvedUnitName,
 };
+use graphcal_compiler::syntax::ast::InputBindingCategory;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::names::{NameAtom, NameDef, NamePath};
@@ -2161,10 +2162,31 @@ fn collect_include_decl(
                 .map(SymbolRef::into_resolved)
         };
         for binding in &include.param_bindings {
-            if let Some(declaration) = template_decl(binding.name.name.atom()) {
+            let input = NamePath::local(binding.name.name.atom().clone());
+            let input_target = match binding.category {
+                InputBindingCategory::Unmarked => {
+                    template_decl(binding.name.name.atom()).map(SymbolKey::Declaration)
+                }
+                InputBindingCategory::Index => refs
+                    .resolver
+                    .resolve_index_path(target, &input)
+                    .ok()
+                    .map(|index| SymbolKey::Index(index.into_resolved())),
+                InputBindingCategory::Dimension => refs
+                    .resolver
+                    .resolve_dimension_path(target, &input)
+                    .ok()
+                    .map(|dimension| SymbolKey::Dimension(dimension.into_resolved())),
+                InputBindingCategory::Type => refs
+                    .resolver
+                    .resolve_struct_type_path(target, &input)
+                    .ok()
+                    .map(|nominal| SymbolKey::StructType(nominal.into_resolved())),
+            };
+            if let Some(input_target) = input_target {
                 table.references.push(ReferenceInfo {
                     span: binding.name.span,
-                    target: SymbolKey::Declaration(declaration).into(),
+                    target: input_target.into(),
                 });
             }
         }
@@ -2197,7 +2219,47 @@ fn collect_include_decl(
         }
     }
     for binding in &include.param_bindings {
-        refs.collect_body(&binding.value, table);
+        collect_binding_value_refs(binding, table, refs);
+    }
+}
+
+/// References in an include binding's value: an expression for a value
+/// input, and a name of the bound category for a static input
+/// (`index T: Step`, `dim D: Length`, `type T: Item`).
+fn collect_binding_value_refs(
+    binding: &graphcal_compiler::syntax::ast::ParamBinding<
+        graphcal_compiler::syntax::phase::Desugared,
+    >,
+    table: &mut SymbolTable,
+    refs: &mut HirRefCollector<'_>,
+) {
+    use graphcal_compiler::syntax::ast::{ExprKind, IndexExpr, UnresolvedRef};
+    let unresolved: fn(SourceSymbolPath) -> UnresolvedSymbol = match binding.category {
+        InputBindingCategory::Unmarked => {
+            refs.collect_body(&binding.value, table);
+            return;
+        }
+        InputBindingCategory::Index => {
+            if let Some(IndexExpr::Name(path)) = binding.value.index_binding_arg() {
+                table.references.push(ReferenceInfo {
+                    span: path.span,
+                    target: ReferenceTarget::Unresolved(UnresolvedSymbol::Index(
+                        SourceSymbolPath::from_name_path(&path.value),
+                    )),
+                });
+            }
+            return;
+        }
+        InputBindingCategory::Dimension => UnresolvedSymbol::Dimension,
+        InputBindingCategory::Type => UnresolvedSymbol::StructType,
+    };
+    if let ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) = &binding.value.kind {
+        table.references.push(ReferenceInfo {
+            span: binding.value.span,
+            target: ReferenceTarget::Unresolved(unresolved(SourceSymbolPath::from_name_path(
+                &path.to_name_path(),
+            ))),
+        });
     }
 }
 

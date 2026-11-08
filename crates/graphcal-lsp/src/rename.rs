@@ -9,7 +9,10 @@ use crate::rename_check::{PlannedRename, RenameCheck, RenameCheckFailure};
 use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
 use crate::symbol_identity::ExternFunctionId;
 use crate::symbol_table::SymbolKey;
+use graphcal_compiler::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::token::SourceIdentifier;
+use graphcal_compiler::syntax::type_name::record_constructor_name;
 
 /// Check whether a name is a valid Graphcal identifier.
 ///
@@ -261,26 +264,103 @@ fn plan_rename(
         return Ok(None);
     }
 
-    let plan = if let Some(project) = analysis.project_symbols.complete() {
-        PlannedRename::new(
-            new_name,
-            reference_lookup_keys(&resolved.key)
+    let targets: Vec<SymbolKey> = rename_unit(analysis, &resolved.key)
+        .iter()
+        .flat_map(reference_lookup_keys)
+        .collect();
+    let table = &analysis.symbol_table;
+    let occurrences: Vec<(Url, Span)> = analysis.project_symbols.complete().map_or_else(
+        || {
+            targets
+                .iter()
+                .flat_map(|key| {
+                    table
+                        .find_all_references(key)
+                        .into_iter()
+                        .map(|reference| reference.span)
+                        .chain(
+                            table
+                                .definitions
+                                .get(key)
+                                .filter(|definition| !definition.name_span.is_empty())
+                                .map(|definition| definition.name_span),
+                        )
+                })
+                .map(|span| (uri.clone(), span))
+                .collect()
+        },
+        |project| {
+            targets
                 .iter()
                 .flat_map(|target| project.rename_occurrences(target))
-                .map(|occurrence| (occurrence.uri, occurrence.span)),
-        )
-    } else {
-        PlannedRename::new(
-            new_name,
-            reference_lookup_keys(&resolved.key)
-                .iter()
-                .flat_map(|key| analysis.symbol_table.find_all_references(key))
-                .map(|reference| reference.span)
-                .chain((!definition.name_span.is_empty()).then_some(definition.name_span))
-                .map(|span| (uri.clone(), span)),
-        )
-    };
+                .map(|occurrence| (occurrence.uri, occurrence.span))
+                .collect()
+        },
+    );
+    let plan = PlannedRename::new(new_name, occurrences);
     Ok((!plan.is_empty()).then(|| (plan, definition.name.clone())))
+}
+
+/// The identities one rename respells together.
+///
+/// A record type `type T { T(..) }` and its sole constructor share one
+/// spelling by the language's record rule: renaming either alone turns the
+/// record into a union (S007). Both are declared together in the renamed
+/// symbol's own file.
+fn rename_unit(analysis: &AnalysisResult, key: &SymbolKey) -> Vec<SymbolKey> {
+    let table = &analysis.symbol_table;
+    let record_constructor = |nominal: &ResolvedStructTypeName| {
+        nominal.constructor(record_constructor_name(nominal.leaf()))
+    };
+    let record = match key {
+        SymbolKey::StructType(nominal) => Some((nominal.clone(), record_constructor(nominal))),
+        SymbolKey::Constructor(constructor) => {
+            table
+                .definitions
+                .keys()
+                .find_map(|candidate| match candidate {
+                    SymbolKey::StructType(nominal)
+                        if record_constructor(nominal) == *constructor =>
+                    {
+                        Some((nominal.clone(), constructor.clone()))
+                    }
+                    _ => None,
+                })
+        }
+        _ => None,
+    };
+    let counterpart = record
+        .filter(|(nominal, constructor)| is_record(table, nominal, constructor))
+        .map(|(nominal, constructor)| match key {
+            SymbolKey::StructType(_) => SymbolKey::Constructor(constructor),
+            _ => SymbolKey::StructType(nominal),
+        });
+    std::iter::once(key.clone()).chain(counterpart).collect()
+}
+
+/// Whether `constructor` is the only constructor `nominal` declares.
+fn is_record(
+    table: &crate::symbol_table::SymbolTable,
+    nominal: &ResolvedStructTypeName,
+    constructor: &ResolvedConstructorName,
+) -> bool {
+    let Some(body) = table
+        .definitions
+        .get(&SymbolKey::StructType(nominal.clone()))
+        .map(|definition| definition.decl_span)
+    else {
+        return false;
+    };
+    let mut constructors = table.definitions.iter().filter(|(candidate, definition)| {
+        matches!(candidate, SymbolKey::Constructor(other) if other.owner() == nominal.owner())
+            && body.offset() <= definition.decl_span.offset()
+            && definition.decl_span.offset() + definition.decl_span.len()
+                <= body.offset() + body.len()
+    });
+    matches!(
+        (constructors.next(), constructors.next()),
+        (Some((SymbolKey::Constructor(only), _)), None) if only == constructor
+    )
 }
 
 /// The client edit of a checked plan, in the analysed documents' coordinates.
@@ -366,24 +446,7 @@ mod tests {
     }
 
     fn apply_edits(source: &str, edits: &[TextEdit]) -> String {
-        let mut edits: Vec<_> = edits
-            .iter()
-            .map(|edit| {
-                (
-                    crate::convert::position_to_byte_offset(source, edit.range.start),
-                    crate::convert::position_to_byte_offset(source, edit.range.end),
-                    edit.new_text.as_str(),
-                )
-            })
-            .collect();
-        edits.sort_unstable_by_key(|edit| std::cmp::Reverse(edit.0));
-        edits.into_iter().fold(
-            source.to_string(),
-            |mut output, (start, end, replacement)| {
-                output.replace_range(start..end, replacement);
-                output
-            },
-        )
+        crate::test_edits::apply_text_edits(source, edits)
     }
 
     /// LSP-6: an extern function's name is fixed by its plugin, so renaming
@@ -1206,5 +1269,140 @@ param enabled: Bool[Component, Mode]
         assert!(!is_valid_identifier("_private"));
         assert!(!is_valid_identifier("node"));
         assert!(!is_valid_identifier("true"));
+    }
+
+    /// A record type and its sole constructor share one spelling, so renaming
+    /// either renames both; a union's constructor is renamed alone.
+    #[test]
+    fn rename_keeps_record_type_and_constructor_together() {
+        let source = "\
+type Item { Item(mass: Mass) }
+type Mode { Mode, Other }
+node item: Item = Item(mass: 1.0 kg);
+node mass: Mass = @item.mass;
+node mode: Mode = Mode;
+";
+        let analysis = analysis_from_source(source);
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        let uri = test_uri();
+        for (cursor, expected) in [
+            (source.find("Item {").unwrap(), 4),
+            (source.find("Item(mass").unwrap(), 4),
+            (source.find("Mode {").unwrap(), 2),
+        ] {
+            let edit = rename(&analysis, &uri, cursor, "Renamed")
+                .unwrap()
+                .expect("renameable");
+            let edits = &edit.changes.unwrap()[&uri];
+            assert_eq!(edits.len(), expected, "{edits:?}");
+            let updated = apply_edits(source, edits);
+            assert!(
+                analysis_from_source(&updated).has_no_diagnostics(),
+                "{updated}"
+            );
+        }
+    }
+
+    /// The input name and value of an include's static binding
+    /// (`index T: Step`) are occurrences of the template's port and of the
+    /// bound index.
+    #[test]
+    fn rename_updates_include_static_bindings() {
+        let source = "\
+index Step = { A, B };
+dag scaled {
+    pub(bind) index T;
+    pub node ys: Dimensionless[T] = for t: T { 1.0 };
+}
+include scaled(index T: Step)::{ ys };
+";
+        let analysis = analysis_from_source(source);
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        let uri = test_uri();
+        for (cursor, expected) in [
+            (source.find("Step =").unwrap(), 2),
+            (source.find("index T;").unwrap() + "index ".len(), 4),
+        ] {
+            let edit = rename(&analysis, &uri, cursor, "Renamed")
+                .unwrap()
+                .expect("renameable");
+            let edits = &edit.changes.unwrap()[&uri];
+            assert_eq!(edits.len(), expected, "{edits:?}");
+            let updated = apply_edits(source, edits);
+            assert!(
+                analysis_from_source(&updated).has_no_diagnostics(),
+                "{updated}"
+            );
+        }
+    }
+
+    /// LSP-20: renaming one declaration of each kind in every standalone
+    /// valid fixture to a fresh name is accepted, and the edited program
+    /// still checks cleanly. A missed occurrence would make the re-check
+    /// refuse the rename, so this exercises occurrence completeness.
+    #[test]
+    fn fresh_renames_of_valid_fixtures_are_accepted_and_compile() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/valid");
+        let mut files: Vec<_> = std::fs::read_dir(&fixtures)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "gcl"))
+            .collect();
+        files.sort();
+        let uri = test_uri();
+        let mut renamed = 0usize;
+        let mut failures = Vec::new();
+        for path in files {
+            let source = std::fs::read_to_string(&path).unwrap();
+            let analysis = analysis_from_source(&source);
+            if !analysis.has_no_diagnostics() {
+                continue;
+            }
+            let mut seen = std::collections::HashSet::new();
+            let mut definitions: Vec<_> = analysis
+                .symbol_table
+                .definitions
+                .iter()
+                .filter(|(key, definition)| {
+                    definition.is_navigable() && !matches!(key, SymbolKey::ExternFunction(_))
+                })
+                .map(|(_, definition)| definition)
+                .collect();
+            definitions.sort_by_key(|definition| definition.name_span.offset());
+            for definition in definitions {
+                if !seen.insert(std::mem::discriminant(&definition.category)) {
+                    continue;
+                }
+                let new_name = format!("{}_renamed", definition.name);
+                match rename(&analysis, &uri, definition.name_span.offset(), &new_name) {
+                    Ok(Some(edit)) => {
+                        let updated = apply_edits(&source, &edit.changes.unwrap()[&uri]);
+                        let checked = analysis_from_source(&updated);
+                        if checked.has_no_diagnostics() {
+                            renamed += 1;
+                        } else {
+                            failures.push(format!(
+                                "{}: `{}` -> `{new_name}` broke: {:?}",
+                                path.display(),
+                                definition.name,
+                                checked.diagnostics
+                            ));
+                        }
+                    }
+                    // A field of a record a plugin returns is part of the
+                    // plugin's signature, which no rename can change.
+                    Err(RenameRefusal::WouldNotCompile { reason, .. })
+                        if reason.starts_with("graphcal::W005") => {}
+                    other => failures.push(format!(
+                        "{}: `{}` -> `{new_name}`: {other:?}",
+                        path.display(),
+                        definition.name
+                    )),
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        assert!(renamed > 100, "only {renamed} renames were exercised");
     }
 }
