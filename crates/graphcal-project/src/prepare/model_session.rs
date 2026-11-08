@@ -263,7 +263,7 @@ impl PreparedProject {
                     | WireType::Datetime(_)
                     | WireType::Indexed(_)
                     | WireType::Algebraic(_) => InputBinding::Value(
-                        self.value_codec(&port.value_schema, input.si_scale())
+                        self.value_codec(&port.value_schema, input.wire(), input.si_scale())
                             .map_err(|error| codec_error(input.name(), &error))?,
                     ),
                 };
@@ -290,7 +290,7 @@ impl PreparedProject {
             .iter()
             .zip(schema.outputs())
             .map(|(port, output)| {
-                self.value_codec(&port.value_schema, output.si_scale())
+                self.value_codec(&port.value_schema, output.wire(), output.si_scale())
                     .map_err(|error| codec_error(output.name(), &error))
             })
             .collect::<Result<Vec<_>, _>>()?;

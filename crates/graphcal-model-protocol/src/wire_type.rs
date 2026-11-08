@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::axis::{Axis, KeyRef};
+use crate::content_id::ContentId;
 use crate::datetime_type::DatetimeType;
 use crate::dimension::Dimension;
 use crate::label::{ConstructorName, FieldName, TypeName, UnitSpelling};
@@ -101,19 +102,19 @@ impl From<QuantityType> for QuantityTypeRepr {
 
 /// The position of an entry within a [`KeyType`]'s axis.
 ///
-/// A position is only meaningful together with the key type it came from.
+/// A position carries the identity of the key type it came from, so it
+/// selects nothing in another key type, even one with as many entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct KeyPosition(usize);
+pub struct KeyPosition {
+    key: ContentId,
+    index: usize,
+}
 
 impl KeyPosition {
-    pub(crate) const fn new(position: usize) -> Self {
-        Self(position)
-    }
-
     /// The zero-based position in axis order.
     #[must_use]
     pub const fn get(self) -> usize {
-        self.0
+        self.index
     }
 }
 
@@ -124,16 +125,38 @@ impl KeyPosition {
 /// the canonical SI unit. Positions within a named or coordinate axis are
 /// not semantic identities on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "KeyTypeRepr", into = "KeyTypeRepr")]
 pub struct KeyType {
+    id: ContentId,
     axis: Axis,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyTypeRepr {
+    axis: Axis,
+}
+
+impl From<KeyTypeRepr> for KeyType {
+    fn from(repr: KeyTypeRepr) -> Self {
+        Self::new(repr.axis)
+    }
+}
+
+impl From<KeyType> for KeyTypeRepr {
+    fn from(key: KeyType) -> Self {
+        Self { axis: key.axis }
+    }
 }
 
 impl KeyType {
     /// A key over the entries of `axis`.
     #[must_use]
-    pub const fn new(axis: Axis) -> Self {
-        Self { axis }
+    pub fn new(axis: Axis) -> Self {
+        Self {
+            id: ContentId::of(&axis),
+            axis,
+        }
     }
 
     /// The axis whose entries the key selects.
@@ -142,21 +165,39 @@ impl KeyType {
         &self.axis
     }
 
+    const fn at(&self, index: usize) -> KeyPosition {
+        KeyPosition {
+            key: self.id,
+            index,
+        }
+    }
+
     /// Every position, in axis order.
     pub fn positions(&self) -> impl ExactSizeIterator<Item = KeyPosition> + use<> {
-        (0..self.axis.len()).map(KeyPosition::new)
+        let id = self.id;
+        (0..self.axis.len()).map(move |index| KeyPosition { key: id, index })
+    }
+
+    /// The position of the entry at zero-based axis-order `index`, when it
+    /// is in range.
+    #[must_use]
+    pub fn position_at(&self, index: usize) -> Option<KeyPosition> {
+        (index < self.axis.len()).then(|| self.at(index))
     }
 
     /// The position of the entry `key` selects, if any.
     #[must_use]
     pub fn position(&self, key: KeyRef<'_>) -> Option<KeyPosition> {
-        self.axis.position(key).map(KeyPosition::new)
+        self.axis.position(key).map(|index| self.at(index))
     }
 
-    /// The key of the entry at `position`, when it is in range.
+    /// The key of the entry at `position`; `None` when the position belongs
+    /// to another key type.
     #[must_use]
     pub fn key(&self, position: KeyPosition) -> Option<KeyRef<'_>> {
-        self.axis.key(position.get())
+        (position.key == self.id)
+            .then(|| self.axis.key(position.index))
+            .flatten()
     }
 }
 
@@ -250,24 +291,21 @@ impl ConstructorType {
 
 /// The position of a constructor within an [`AlgebraicType`].
 ///
-/// A position is only meaningful together with the type it came from; on the
-/// wire, constructors are resolved by name.
+/// A position carries the identity of the type it came from, so it selects
+/// nothing in another type; on the wire, constructors are resolved by name.
+/// Obtain one from [`AlgebraicType::position`] or
+/// [`AlgebraicType::entries`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ConstructorPosition(usize);
+pub struct ConstructorPosition {
+    algebraic: ContentId,
+    index: usize,
+}
 
 impl ConstructorPosition {
-    /// The constructor at zero-based declaration-order `position`; values
-    /// using it are checked against their type
-    /// ([`Value::conforms_to`](crate::Value::conforms_to)).
-    #[must_use]
-    pub const fn new(position: usize) -> Self {
-        Self(position)
-    }
-
     /// The zero-based declaration-order position.
     #[must_use]
     pub const fn get(self) -> usize {
-        self.0
+        self.index
     }
 }
 
@@ -276,6 +314,7 @@ impl ConstructorPosition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "AlgebraicTypeRepr", into = "AlgebraicTypeRepr")]
 pub struct AlgebraicType {
+    id: ContentId,
     name: TypeName,
     constructors: Vec<ConstructorType>,
 }
@@ -341,7 +380,18 @@ impl AlgebraicType {
                 });
             }
         }
-        Ok(Self { name, constructors })
+        Ok(Self {
+            id: ContentId::of(&(&name, &constructors)),
+            name,
+            constructors,
+        })
+    }
+
+    const fn at(&self, index: usize) -> ConstructorPosition {
+        ConstructorPosition {
+            algebraic: self.id,
+            index,
+        }
     }
 
     /// The type name.
@@ -363,7 +413,7 @@ impl AlgebraicType {
         self.constructors
             .iter()
             .enumerate()
-            .map(|(position, constructor)| (ConstructorPosition::new(position), constructor))
+            .map(|(index, constructor)| (self.at(index), constructor))
     }
 
     /// The position of the constructor named `name`.
@@ -372,13 +422,23 @@ impl AlgebraicType {
         self.constructors
             .iter()
             .position(|constructor| constructor.name().as_str() == name)
-            .map(ConstructorPosition::new)
+            .map(|index| self.at(index))
     }
 
-    /// The constructor at `position`, when it is in range.
+    /// The position of the constructor at zero-based declaration-order
+    /// `index`, when it is in range.
+    #[must_use]
+    pub fn position_at(&self, index: usize) -> Option<ConstructorPosition> {
+        (index < self.constructors.len()).then(|| self.at(index))
+    }
+
+    /// The constructor at `position`; `None` when the position belongs to
+    /// another type.
     #[must_use]
     pub fn constructor(&self, position: ConstructorPosition) -> Option<&ConstructorType> {
-        self.constructors.get(position.get())
+        (position.algebraic == self.id)
+            .then(|| self.constructors.get(position.index))
+            .flatten()
     }
 }
 

@@ -18,6 +18,7 @@
 pub mod arrow;
 mod axis;
 mod batch;
+mod content_id;
 mod datetime_type;
 mod declared_name;
 mod describe;

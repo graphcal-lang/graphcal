@@ -10814,8 +10814,8 @@ fn indexes_with_one_name_in_two_modules_have_distinct_wire_identities() {
 #[test]
 fn model_sessions_round_trip_rich_values_through_evaluation() {
     use graphcal_model_protocol::{
-        ComplexValue, ConstructorPosition, FiniteF64, InputColumn, RequestBatch, RowFailure,
-        RowOutcome, Value, ValueRef, WireType,
+        ComplexValue, FiniteF64, InputColumn, RequestBatch, RowFailure, RowOutcome, Value,
+        ValueRef, WireType,
     };
 
     let project = crate::loader::LoadedProject::from_source(RICH_MODEL, "model.gcl").unwrap();
@@ -10893,7 +10893,7 @@ fn model_sessions_round_trip_rich_values_through_evaluation() {
     );
     assert!(matches!(
         values.get(schema.output_slot("shape_out").unwrap()),
-        Some(ValueRef::Algebraic { constructor, .. }) if constructor == ConstructorPosition::new(0)
+        Some(ValueRef::Algebraic { constructor, .. }) if constructor.get() == 0
     ));
     assert!(matches!(
         result.row(1),

@@ -3,8 +3,10 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::Serialize;
 use thiserror::Error;
 
+use crate::content_id::ContentId;
 use crate::domain::{Bounds, Domain};
 use crate::fingerprint::InterfaceFingerprint;
 use crate::interface::ModelInterface;
@@ -181,26 +183,38 @@ pub enum SessionError {
 }
 
 /// The position of a varied parameter within a [`SessionSchema`].
+///
+/// A slot carries the identity of its schema, so it selects nothing in a
+/// batch of another schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct InputSlot(usize);
+pub struct InputSlot {
+    schema: ContentId,
+    index: usize,
+}
 
 impl InputSlot {
     /// The zero-based position among the session's inputs.
     #[must_use]
     pub const fn get(self) -> usize {
-        self.0
+        self.index
     }
 }
 
 /// The position of a read output within a [`SessionSchema`].
+///
+/// A slot carries the identity of its schema, so it selects nothing in a
+/// batch of another schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct OutputSlot(usize);
+pub struct OutputSlot {
+    schema: ContentId,
+    index: usize,
+}
 
 impl OutputSlot {
     /// The zero-based position among the session's outputs.
     #[must_use]
     pub const fn get(self) -> usize {
-        self.0
+        self.index
     }
 }
 
@@ -310,9 +324,24 @@ impl SessionOutput {
 /// recorded interface fingerprint without the interface to check it against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSchema {
+    /// Derived from the other fields, the identity of the slots.
+    id: ContentId,
     interface_fingerprint: InterfaceFingerprint,
     inputs: Vec<SessionInput>,
     outputs: Vec<SessionOutput>,
+}
+
+/// The content of a [`SessionSchema`] its identity is derived from.
+#[derive(Serialize)]
+struct SchemaContent<'a> {
+    interface_fingerprint: InterfaceFingerprint,
+    inputs: Vec<(
+        &'a PortName,
+        &'a WireType,
+        Option<&'a Domain>,
+        Option<SiScale>,
+    )>,
+    outputs: Vec<(&'a PortName, &'a WireType, Option<SiScale>)>,
 }
 
 impl SessionSchema {
@@ -346,11 +375,38 @@ impl SessionSchema {
                 name: output.name.clone(),
             });
         }
-        Ok(Self {
+        Ok(Self::from_parts(interface_fingerprint, inputs, outputs))
+    }
+
+    fn from_parts(
+        interface_fingerprint: InterfaceFingerprint,
+        inputs: Vec<SessionInput>,
+        outputs: Vec<SessionOutput>,
+    ) -> Self {
+        let id = ContentId::of(&SchemaContent {
+            interface_fingerprint,
+            inputs: inputs
+                .iter()
+                .map(|input| {
+                    (
+                        &input.name,
+                        &input.wire,
+                        input.domain.as_ref(),
+                        input.si_scale,
+                    )
+                })
+                .collect(),
+            outputs: outputs
+                .iter()
+                .map(|output| (&output.name, &output.wire, output.si_scale))
+                .collect(),
+        });
+        Self {
+            id,
             interface_fingerprint,
             inputs,
             outputs,
-        })
+        }
     }
 
     /// The fingerprint of the interface the session was configured over.
@@ -373,12 +429,14 @@ impl SessionSchema {
 
     /// The slot of every varied parameter, in session order.
     pub fn input_slots(&self) -> impl ExactSizeIterator<Item = InputSlot> + use<> {
-        (0..self.inputs.len()).map(InputSlot)
+        let schema = self.id;
+        (0..self.inputs.len()).map(move |index| InputSlot { schema, index })
     }
 
     /// The slot of every read output, in session order.
     pub fn output_slots(&self) -> impl ExactSizeIterator<Item = OutputSlot> + use<> {
-        (0..self.outputs.len()).map(OutputSlot)
+        let schema = self.id;
+        (0..self.outputs.len()).map(move |index| OutputSlot { schema, index })
     }
 
     /// The slot of the varied parameter named `name`.
@@ -387,7 +445,10 @@ impl SessionSchema {
         self.inputs
             .iter()
             .position(|input| input.name.as_str() == name)
-            .map(InputSlot)
+            .map(|index| InputSlot {
+                schema: self.id,
+                index,
+            })
     }
 
     /// The slot of the read output named `name`.
@@ -396,19 +457,26 @@ impl SessionSchema {
         self.outputs
             .iter()
             .position(|output| output.name.as_str() == name)
-            .map(OutputSlot)
+            .map(|index| OutputSlot {
+                schema: self.id,
+                index,
+            })
     }
 
-    /// The varied parameter at `slot`.
+    /// The varied parameter at `slot`; `None` for a slot of another schema.
     #[must_use]
     pub fn input(&self, slot: InputSlot) -> Option<&SessionInput> {
-        self.inputs.get(slot.0)
+        (slot.schema == self.id)
+            .then(|| self.inputs.get(slot.index))
+            .flatten()
     }
 
-    /// The read output at `slot`.
+    /// The read output at `slot`; `None` for a slot of another schema.
     #[must_use]
     pub fn output(&self, slot: OutputSlot) -> Option<&SessionOutput> {
-        self.outputs.get(slot.0)
+        (slot.schema == self.id)
+            .then(|| self.outputs.get(slot.index))
+            .flatten()
     }
 
     /// The selection this schema was configured from, without the
@@ -640,11 +708,11 @@ impl ModelInterface {
                 }
             }
         }
-        Ok(SessionSchema {
-            interface_fingerprint: InterfaceFingerprint::of(self),
+        Ok(SessionSchema::from_parts(
+            InterfaceFingerprint::of(self),
             inputs,
             outputs,
-        })
+        ))
     }
 }
 

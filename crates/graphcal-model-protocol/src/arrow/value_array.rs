@@ -444,14 +444,12 @@ pub(super) fn key_array(
         .map(|position| {
             position
                 .map(|position| {
-                    (position.get() < key.axis().len())
-                        .then(|| position.get())
-                        .ok_or_else(|| {
-                            ArrowError::InvalidArgumentError(format!(
-                                "key position {} is outside its axis",
-                                position.get()
-                            ))
-                        })
+                    key.key(position).map(|_| position.get()).ok_or_else(|| {
+                        ArrowError::InvalidArgumentError(format!(
+                            "key position {} is not a position of its key type",
+                            position.get()
+                        ))
+                    })
                 })
                 .transpose()
         })
@@ -528,7 +526,7 @@ pub(super) fn decode_key_positions(
             }
         })?
         .into_iter()
-        .map(|position| position.map(KeyPosition::new))
+        .map(|index| index.and_then(|index| key.position_at(index)))
         .collect()),
         AxisKind::Finite { .. } => downcast::<UInt32Array>(array)?
             .iter()
@@ -758,15 +756,20 @@ fn decode_algebraic(
 ) -> Result<Vec<Option<Value>>, ValueDecodeError> {
     let structure = downcast::<StructArray>(array)?;
     Ok(match algebraic.constructors() {
-        [record] => decode_constructor(record, structure, presence)?
-            .into_iter()
-            .map(|fields| {
-                fields.map(|fields| Value::Algebraic {
-                    constructor: ConstructorPosition::new(0),
-                    fields,
+        [record] => {
+            let constructor = algebraic
+                .position_at(0)
+                .ok_or(ValueDecodeError::ArrowType)?;
+            decode_constructor(record, structure, presence)?
+                .into_iter()
+                .map(|fields| {
+                    fields.map(|fields| Value::Algebraic {
+                        constructor,
+                        fields,
+                    })
                 })
-            })
-            .collect(),
+                .collect()
+        }
         constructors => {
             let [tags, variants] = structure.columns() else {
                 return Err(ValueDecodeError::ArrowType);
@@ -818,7 +821,9 @@ fn decode_algebraic(
                         _ => return Err(ValueDecodeError::ConstructorPresence { row }),
                     };
                     Ok(Some(Value::Algebraic {
-                        constructor: ConstructorPosition::new(tag),
+                        constructor: algebraic
+                            .position_at(tag)
+                            .ok_or(ValueDecodeError::ConstructorPresence { row })?,
                         fields,
                     }))
                 })
@@ -1004,16 +1009,24 @@ mod tests {
         )
     }
 
+    /// The constructor `name` of the algebraic wire type `wire`.
+    fn constructor(wire: &WireType, name: &str) -> ConstructorPosition {
+        let WireType::Algebraic(algebraic) = wire else {
+            panic!("an algebraic wire type");
+        };
+        algebraic.position(name).unwrap()
+    }
+
     fn circle(radius: f64) -> Value {
         Value::Algebraic {
-            constructor: ConstructorPosition::new(0),
+            constructor: constructor(&shape(), "Circle"),
             fields: vec![Value::Quantity(finite(radius))],
         }
     }
 
     fn dot() -> Value {
         Value::Algebraic {
-            constructor: ConstructorPosition::new(1),
+            constructor: constructor(&shape(), "Dot"),
             fields: Vec::new(),
         }
     }
@@ -1046,7 +1059,7 @@ mod tests {
     fn rich_results_round_trip_with_failed_rows() {
         let schema = session(&[]);
         let pair_value = Value::Algebraic {
-            constructor: ConstructorPosition::new(0),
+            constructor: constructor(&pair(), "Pair"),
             fields: vec![
                 Value::Datetime(finite(12.5)),
                 Value::Complex(ComplexValue {
@@ -1088,7 +1101,7 @@ mod tests {
     fn every_child_of_a_failed_row_is_null() {
         let schema = session(&[]);
         let pair_value = Value::Algebraic {
-            constructor: ConstructorPosition::new(0),
+            constructor: constructor(&pair(), "Pair"),
             fields: vec![
                 Value::Datetime(finite(12.5)),
                 Value::Complex(ComplexValue {
@@ -1194,6 +1207,31 @@ mod tests {
             panic!("a constructor is a struct");
         };
         assert!(variants[0].is_nullable() && circle[0].is_nullable());
+    }
+
+    #[test]
+    fn positions_of_another_type_select_nothing() {
+        let circle_of_shape = constructor(&shape(), "Circle");
+        let WireType::Algebraic(pair) = pair() else {
+            panic!("pair is algebraic");
+        };
+        assert!(pair.constructor(circle_of_shape).is_none());
+        let foreign = Value::Algebraic {
+            constructor: circle_of_shape,
+            fields: vec![Value::Datetime(finite(1.0)), Value::Datetime(finite(2.0))],
+        };
+        assert!(!foreign.conforms_to(&WireType::Algebraic(pair)));
+
+        let phase = KeyType::new(phases());
+        let fin = KeyType::new(Axis::new(AxisKind::Finite { size: 2 }).unwrap());
+        let climb = phase.position_at(0).unwrap();
+        assert!(
+            fin.key(climb).is_none(),
+            "a Phase position is no Fin(2) position"
+        );
+        assert!(phase.key(climb).is_some());
+        // An equal copy of the type accepts the position.
+        assert!(KeyType::new(phases()).key(climb).is_some());
     }
 
     #[test]

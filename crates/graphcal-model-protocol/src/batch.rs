@@ -89,7 +89,7 @@ pub enum RequestBatchError {
     },
     #[error("a request batch must contain at least one row")]
     Empty,
-    #[error("parameter `{input}` has an out-of-range key at row {row}")]
+    #[error("parameter `{input}` has a key that is not an entry of its key type at row {row}")]
     KeyOutOfRange { input: PortName, row: usize },
     #[error("parameter `{input}` has a value of another shape at row {row}")]
     ShapeMismatch { input: PortName, row: usize },
@@ -198,9 +198,11 @@ impl RequestBatch {
         &self.columns
     }
 
-    /// The column of the varied parameter at `slot`.
+    /// The column of the varied parameter at `slot`; `None` for a slot of
+    /// another schema.
     #[must_use]
     pub fn column(&self, slot: InputSlot) -> Option<&InputColumn> {
+        self.schema.input(slot)?;
         self.columns.get(slot.get())
     }
 
@@ -484,9 +486,11 @@ impl OutputValues {
         &self.columns
     }
 
-    /// The column of the read output at `slot`.
+    /// The column of the read output at `slot`; `None` for a slot of
+    /// another schema.
     #[must_use]
     pub fn column(&self, slot: OutputSlot) -> Option<&OutputColumn> {
+        self.schema.output(slot)?;
         self.columns.get(slot.get())
     }
 }
@@ -666,17 +670,25 @@ mod tests {
         RequestBatch::new(Arc::new(sample_session()), columns)
     }
 
+    /// The position `index` of the sample session's `mode` key.
+    fn mode(index: usize) -> KeyPosition {
+        let WireType::Key(key) = sample_session().inputs()[1].wire().clone() else {
+            panic!("mode is a key");
+        };
+        key.position_at(index).unwrap()
+    }
+
     #[test]
     fn request_batches_match_session_inputs() {
         let batch = request(vec![
             InputColumn::Quantity(vec![finite(1.0), finite(2.0)]),
-            InputColumn::Key(vec![KeyPosition::new(1), KeyPosition::new(0)]),
+            InputColumn::Key(vec![mode(1), mode(0)]),
         ])
         .unwrap();
         assert_eq!(batch.rows(), 2);
-        let mode = batch.schema().input_slot("mode").unwrap();
+        let mode_slot = batch.schema().input_slot("mode").unwrap();
         assert!(matches!(
-            batch.value(mode, 0),
+            batch.value(mode_slot, 0),
             Some(ValueRef::Key(KeyRef::Variant(variant))) if variant.as_str() == "B"
         ));
 
@@ -687,14 +699,14 @@ mod tests {
         assert!(matches!(
             request(vec![
                 InputColumn::Int(vec![1]),
-                InputColumn::Key(vec![KeyPosition::new(0)]),
+                InputColumn::Key(vec![mode(0)]),
             ]),
             Err(RequestBatchError::KindMismatch { .. })
         ));
         assert!(matches!(
             request(vec![
                 InputColumn::Quantity(vec![finite(1.0)]),
-                InputColumn::Key(vec![KeyPosition::new(0), KeyPosition::new(0)]),
+                InputColumn::Key(vec![mode(0), mode(0)]),
             ]),
             Err(RequestBatchError::LengthMismatch { .. })
         ));
@@ -705,13 +717,45 @@ mod tests {
             ]),
             Err(RequestBatchError::Empty)
         ));
+        // A position of another key type with enough entries is rejected,
+        // not read as the session's third mode.
+        let other = crate::wire_type::KeyType::new(
+            crate::axis::Axis::new(crate::axis::AxisKind::Finite { size: 3 }).unwrap(),
+        );
         assert!(matches!(
             request(vec![
                 InputColumn::Quantity(vec![finite(1.0)]),
-                InputColumn::Key(vec![KeyPosition::new(2)]),
+                InputColumn::Key(vec![other.position_at(2).unwrap()]),
             ]),
             Err(RequestBatchError::KeyOutOfRange { row: 0, .. })
         ));
+    }
+
+    #[test]
+    fn slots_of_another_schema_select_nothing() {
+        let batch = request(vec![
+            InputColumn::Quantity(vec![finite(1.0)]),
+            InputColumn::Key(vec![mode(0)]),
+        ])
+        .unwrap();
+        let other = crate::interface::tests::sample_interface()
+            .configure(
+                &crate::session::SessionSpec::new(
+                    vec![
+                        crate::interface::tests::name("mode"),
+                        crate::interface::tests::name("load"),
+                    ],
+                    vec![crate::interface::tests::name("margin")],
+                ),
+                crate::session::CanonicalUnitsOnly,
+            )
+            .unwrap();
+        let foreign = other.input_slot("load").unwrap();
+        assert_eq!(foreign.get(), 0);
+        assert_eq!(batch.value(foreign, 0), None);
+        assert_eq!(batch.column(foreign), None);
+        let own = batch.schema().input_slot("load").unwrap();
+        assert_eq!(batch.value(own, 0), Some(ValueRef::Quantity(finite(1.0))));
     }
 
     #[test]
