@@ -1100,13 +1100,18 @@ fn verify_locked_source(
     budget
         .account_source_tree(root, actual.entries(), actual.bytes())
         .map_err(loader_manifest_error)?;
-    if actual.sha256() == tree_hashes.sha256.to_string() {
+    // The loader computes only the version-1 tree hash; a new algorithm must
+    // decide here how its digests are verified.
+    let expected = match tree_hashes.algorithm {
+        graphcal_package::SourceTreeHashAlgorithm::GraphcalSourceTreeV1 => tree_hashes.sha256,
+    };
+    if actual.sha256() == expected.to_string() {
         Ok(snapshot)
     } else {
         Err(loader_manifest_error(format!(
             "cached package `{}` hash mismatch; expected {}, got {}; run `graphcal deps lock`",
             package.id,
-            tree_hashes.sha256,
+            expected,
             actual.sha256()
         ))
         .into())

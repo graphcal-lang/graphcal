@@ -597,7 +597,6 @@ fn eval_package_project(
 
     if let Some(sha) = pinned_sha {
         let lockfile = graphcal_package::Lockfile {
-            lock_version: graphcal_package::LOCK_VERSION,
             created_by: "test".to_string(),
             graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
             stdlib_version: graphcal_package::STDLIB_VERSION.to_string(),
@@ -709,7 +708,6 @@ node result: Dimensionless = worker::work(7.0);
     )
     .unwrap();
     let lockfile = graphcal_package::Lockfile {
-        lock_version: graphcal_package::LOCK_VERSION,
         created_by: "test".to_string(),
         graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
         stdlib_version: graphcal_package::STDLIB_VERSION.to_string(),

@@ -12,11 +12,11 @@ use graphcal_io::{
     create_file_atomically, replace_file_atomically_if_unchanged,
 };
 use graphcal_package::{
-    DependencyName, DependencySpec, GitCommitHash, GitSourceId, GitTransport, GitUrl, LOCK_VERSION,
+    DependencyName, DependencySpec, GitCommitHash, GitSourceId, GitTransport, GitUrl,
     LockedPackage, LockedPlugin, Lockfile, LockfileParseLimits, PackageGraph, PackageInstanceId,
     PackageManifest, PackageName, PackageSource, PackageSourceDirectory, PluginArtifactPath,
-    PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, Sha256DigestError, SourceTreeHashes,
-    parse_lockfile_str_with_limits, parse_manifest_str,
+    PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, Sha256DigestError,
+    SourceTreeHashAlgorithm, SourceTreeHashes, parse_lockfile_str_with_limits, parse_manifest_str,
 };
 use graphcal_project::loader::discover_project_root;
 use graphcal_project::package_cache::{PackageCacheRoot, PackageCacheRootError};
@@ -304,7 +304,6 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     let resolved_lock = resolver.resolve_root(&root, &mut budget)?;
     let plugins = resolve_plugin_pins(&root, &resolved_lock.source_dir, &mut budget)?;
     let lockfile = Lockfile {
-        lock_version: LOCK_VERSION,
         created_by: "graphcal".to_string(),
         graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
         stdlib_version: STDLIB_VERSION.to_string(),
@@ -528,7 +527,8 @@ fn read_prior_lock(
     })?;
     match budget.read_text(&fs, &path, IngestionArtifact::Lockfile) {
         Ok(content) => {
-            let trusted_sources = trusted_sources_from_lock(&content, budget.policy.max_entries());
+            let trusted_sources = trusted_sources_from_lock(&content, budget.policy.max_entries())
+                .map_err(|source| DepsError::PriorLock { path, source })?;
             Ok(PriorLock::Present {
                 content,
                 trusted_sources,
@@ -543,34 +543,44 @@ fn read_prior_lock(
     }
 }
 
+/// Source-tree pins of the previous lock, which a refetch must reproduce.
+///
+/// The pins are taken from the structurally parsed lock without requiring it
+/// to have been written by this toolchain: upgrading Graphcal is exactly when
+/// users rerun `deps lock`, so a version gate here would drop every pin at the
+/// moment it matters. A lock that cannot be parsed is an error rather than "no
+/// pins", because silently ignoring it would let any dependency change.
 fn trusted_sources_from_lock(
     content: &str,
     max_packages: u64,
-) -> BTreeMap<GitSourceId, Sha256Digest> {
+) -> Result<BTreeMap<GitSourceId, Sha256Digest>, PriorLockError> {
     let max_packages = usize::try_from(max_packages).unwrap_or(usize::MAX);
-    let Ok(lockfile) =
-        parse_lockfile_str_with_limits(content, LockfileParseLimits::new(max_packages))
-    else {
-        return BTreeMap::new();
-    };
-    let Ok(validated) = lockfile.validated(env!("CARGO_PKG_VERSION"), STDLIB_VERSION) else {
-        return BTreeMap::new();
-    };
-    validated
-        .packages()
-        .filter_map(|package| match &package.source {
-            PackageSource::Root => None,
-            PackageSource::Git {
-                url,
-                commit,
-                tree_hashes,
-                ..
-            } => Some((
-                GitSourceId::new(url.clone(), commit.clone()),
-                tree_hashes.sha256,
-            )),
-        })
-        .collect()
+    let lockfile = parse_lockfile_str_with_limits(content, LockfileParseLimits::new(max_packages))?;
+    Ok(lockfile
+        .git_source_pins()?
+        .into_iter()
+        .map(|(source, hashes)| (source, comparable_v1_digest(hashes)))
+        .collect())
+}
+
+/// The digest `deps lock` can recompute for a pin. Lock generation computes
+/// only [`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`]; a new algorithm must
+/// decide here how its older pins are verified.
+const fn comparable_v1_digest(hashes: SourceTreeHashes) -> Sha256Digest {
+    match hashes.algorithm {
+        SourceTreeHashAlgorithm::GraphcalSourceTreeV1 => hashes.sha256,
+    }
+}
+
+/// Why the previous `graphcal.lock` cannot supply trusted source pins.
+#[derive(Debug, Error)]
+pub enum PriorLockError {
+    /// The lock text is not a readable lockfile.
+    #[error(transparent)]
+    Parse(#[from] graphcal_package::LockfileParseError),
+    /// The lock pins one Git source to contradictory trees.
+    #[error(transparent)]
+    Pins(#[from] graphcal_package::LockValidationError),
 }
 
 #[derive(Debug)]
@@ -673,6 +683,7 @@ impl LockResolver {
             requested_rev: spec.git.rev.clone(),
             commit: spec.git.rev.clone(),
             tree_hashes: SourceTreeHashes {
+                algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
                 sha256: materialized.sha256,
             },
         };
@@ -1218,9 +1229,9 @@ pub enum DepsError {
         to: PathBuf,
         source: std::io::Error,
     },
-    /// A refetched immutable source contradicted the prior validated lock.
+    /// A refetched immutable source contradicted the previous lock's pin.
     #[error(
-        "Git dependency `{url}` at immutable commit `{commit}` has source-tree digest `{actual}`, but the prior lock requires `{expected}`"
+        "Git dependency `{url}` at immutable commit `{commit}` has source-tree digest `{actual}`, but the existing graphcal.lock pins `{expected}`; the dependency's contents changed since it was locked. Investigate the change before trusting it; to accept it, delete graphcal.lock and rerun `graphcal deps lock`"
     )]
     CacheIntegrity {
         url: String,
@@ -1255,6 +1266,15 @@ pub enum DepsError {
     Manifest {
         path: PathBuf,
         source: graphcal_package::ManifestError,
+    },
+    /// The existing lockfile cannot supply trusted source pins.
+    #[error(
+        "existing `{}` is invalid, so its source-tree pins cannot be checked: {source}; fix or delete it, then rerun `graphcal deps lock`",
+        path.display()
+    )]
+    PriorLock {
+        path: PathBuf,
+        source: PriorLockError,
     },
     /// Lock validation failed.
     #[error("{0}")]

@@ -370,7 +370,7 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     assert!(stdout.contains("wrote"), "stdout: {stdout}");
 
     let lock = std::fs::read_to_string(project.join("graphcal.lock")).unwrap();
-    assert!(lock.contains("lock_version = 1"), "lock:\n{lock}");
+    assert!(lock.contains("lock_version = 2"), "lock:\n{lock}");
     assert!(lock.contains("root = \"pkg-mission\""), "lock:\n{lock}");
     assert!(
         lock.contains("units_v1 = \"pkg-units-"),
@@ -384,7 +384,7 @@ fn deps_lock_writes_deterministic_git_lockfile() {
         lock.contains(&format!("commit = \"{dep_rev}\"")),
         "commit missing:\n{lock}"
     );
-    assert!(lock.contains("tree_hashes = { sha256 = \""));
+    assert!(lock.contains("tree_hashes = { algorithm = \"graphcal-source-tree-v1\", sha256 = \""));
     assert!(
         !lock.contains(cache.to_str().unwrap()),
         "lock must not serialize cache paths:\n{lock}"
@@ -460,6 +460,113 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     );
     let stdout = String::from_utf8(second.stdout).unwrap();
     assert!(stdout.contains("up to date"), "stdout: {stdout}");
+}
+
+#[cfg(unix)]
+fn run_deps_lock(project: &Path, cache: &Path) -> std::process::Output {
+    graphcal_bin()
+        .args(["deps", "lock", "--root"])
+        .arg(project)
+        .env("GRAPHCAL_CACHE_DIR", cache)
+        .output()
+        .expect("failed to run graphcal")
+}
+
+#[cfg(unix)]
+fn locked_units_project(dir: &Path) -> (PathBuf, PathBuf) {
+    let dep_repo = dir.join("units-repo");
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.join("mission");
+    write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\nunits = {{ git = \"{}\", rev = \"{dep_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ one };\nnode two: Dimensionless = @one + 1.0;\n",
+    );
+    let cache = dir.join("cache");
+    let output = run_deps_lock(&project, &cache);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (project, cache)
+}
+
+/// CLI-3: a lock written by another Graphcal version still pins its sources,
+/// so an upgrade followed by `deps lock` cannot silently accept new contents.
+#[cfg(unix)]
+#[test]
+fn deps_lock_enforces_pins_from_a_lock_written_by_another_graphcal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (project, cache) = locked_units_project(dir.path());
+    let lock_path = project.join("graphcal.lock");
+    let lock = std::fs::read_to_string(&lock_path).unwrap();
+    let parsed = graphcal_package::parse_lockfile_str(&lock).unwrap();
+    let digest = parsed
+        .packages
+        .iter()
+        .find_map(|package| match &package.source {
+            graphcal_package::PackageSource::Git { tree_hashes, .. } => {
+                Some(tree_hashes.sha256.to_string())
+            }
+            graphcal_package::PackageSource::Root => None,
+        })
+        .unwrap();
+    let pinned = "0".repeat(64);
+    let tampered = lock
+        .replace(&digest, &pinned)
+        .replace(
+            &format!("graphcal_version = \"{}\"", env!("CARGO_PKG_VERSION")),
+            "graphcal_version = \"0.0.1-alpha.1\"",
+        )
+        .replace(
+            &format!("stdlib_version = \"{}\"", graphcal_package::STDLIB_VERSION),
+            "stdlib_version = \"0.0.1-alpha.1\"",
+        );
+    assert_ne!(tampered, lock);
+    std::fs::write(&lock_path, &tampered).unwrap();
+
+    let output = run_deps_lock(&project, &cache);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains(&format!("existing graphcal.lock pins `{pinned}`")),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains(&format!("`{digest}`")), "stderr: {stderr}");
+    assert_eq!(std::fs::read_to_string(&lock_path).unwrap(), tampered);
+}
+
+/// CLI-3: an unreadable previous lock is an error, not an absence of pins.
+#[cfg(unix)]
+#[test]
+fn deps_lock_rejects_a_corrupt_previous_lock_instead_of_dropping_its_pins() {
+    let dir = tempfile::tempdir().unwrap();
+    let (project, cache) = locked_units_project(dir.path());
+    let lock_path = project.join("graphcal.lock");
+    for corrupt in [
+        "this is not a lockfile".to_string(),
+        std::fs::read_to_string(&lock_path)
+            .unwrap()
+            .replace("lock_version = 2", "lock_version = 99"),
+    ] {
+        std::fs::write(&lock_path, &corrupt).unwrap();
+        let output = run_deps_lock(&project, &cache);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "stderr: {stderr}");
+        assert!(
+            stderr.contains("graphcal.lock` is invalid, so its source-tree pins cannot be checked"),
+            "stderr: {stderr}"
+        );
+        assert_eq!(std::fs::read_to_string(&lock_path).unwrap(), corrupt);
+    }
 }
 
 /// A minimal LSP client driving `graphcal lsp` over stdio.

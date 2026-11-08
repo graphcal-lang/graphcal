@@ -13,8 +13,16 @@ use thiserror::Error;
 use toml::{Table, Value};
 use url::{Host, Url};
 
-/// Graphcal's first lockfile schema version.
-pub const LOCK_VERSION: u64 = 1;
+/// Lockfile schema version written by this Graphcal.
+///
+/// Version 2 records the source-tree hash algorithm next to every tree digest.
+/// Version 1 locks are still read: their digests were produced by
+/// [`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`], so parsing upgrades them
+/// to the current in-memory model without losing their pins.
+pub const LOCK_VERSION: u64 = 2;
+
+/// Oldest lockfile schema version this Graphcal can read.
+const LEGACY_LOCK_VERSION: u64 = 1;
 /// Current standard-library identity recorded by the MVP lockfile.
 pub const STDLIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Largest per-call plugin fuel budget a project manifest may request.
@@ -1290,9 +1298,10 @@ fn parse_dependency_spec(dependency: &str, item: &Value) -> Result<DependencySpe
 
 /// A tool-maintained package-instance lockfile.
 #[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The schema version is not a field: parsing accepts every readable version
+/// and [`Lockfile::to_deterministic_toml`] always writes [`LOCK_VERSION`].
 pub struct Lockfile {
-    /// Lockfile schema version.
-    pub lock_version: u64,
     /// Tool that created the lockfile. Informational only.
     pub created_by: String,
     /// Graphcal toolchain version used for resolution.
@@ -1505,11 +1514,6 @@ impl Lockfile {
         active_graphcal_version: &str,
         active_stdlib_version: &str,
     ) -> Result<ValidatedLockfile<'_>, LockValidationError> {
-        if self.lock_version != LOCK_VERSION {
-            return Err(LockValidationError::UnsupportedLockVersion {
-                version: self.lock_version,
-            });
-        }
         if self.graphcal_version != active_graphcal_version {
             return Err(LockValidationError::GraphcalVersionMismatch {
                 lockfile: self.graphcal_version.clone(),
@@ -1682,8 +1686,25 @@ impl Lockfile {
     }
 
     fn reject_conflicting_git_source_hashes(&self) -> Result<(), LockValidationError> {
-        let mut sources =
-            BTreeMap::<CanonicalGitSource, (&Sha256Digest, &PackageInstanceId)>::new();
+        self.git_source_pins().map(|_| ())
+    }
+
+    /// Source-tree pins recorded for each immutable Git source.
+    ///
+    /// Unlike [`Self::validated`], this does not require the lock to have been
+    /// written by the running toolchain: a pin binds an immutable `(url,
+    /// commit)` to the tree it hashed, which stays true across upgrades.
+    /// `graphcal deps lock` uses these pins to detect a dependency whose
+    /// contents changed since it was locked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockValidationError::ConflictingGitSourceDigest`] when two
+    /// packages pin the same source to different trees.
+    pub fn git_source_pins(
+        &self,
+    ) -> Result<BTreeMap<GitSourceId, SourceTreeHashes>, LockValidationError> {
+        let mut pins = BTreeMap::<GitSourceId, (SourceTreeHashes, &PackageInstanceId)>::new();
         for package in &self.packages {
             let PackageSource::Git {
                 url,
@@ -1694,30 +1715,30 @@ impl Lockfile {
             else {
                 continue;
             };
-            let source = CanonicalGitSource {
-                url: url.clone(),
-                commit: commit.clone(),
-            };
-            match sources.get(&source) {
-                Some((expected, first)) if *expected != &tree_hashes.sha256 => {
+            let source = GitSourceId::new(url.clone(), commit.clone());
+            match pins.get(&source) {
+                Some((expected, first)) if expected != tree_hashes => {
                     return Err(LockValidationError::ConflictingGitSourceDigest(Box::new(
                         GitSourceDigestConflict {
                             first: (*first).clone(),
                             second: package.id.clone(),
                             url: url.clone(),
                             commit: commit.clone(),
-                            first_digest: **expected,
+                            first_digest: expected.sha256,
                             second_digest: tree_hashes.sha256,
                         },
                     )));
                 }
                 Some(_) => {}
                 None => {
-                    sources.insert(source, (&tree_hashes.sha256, &package.id));
+                    pins.insert(source, (*tree_hashes, &package.id));
                 }
             }
         }
-        Ok(())
+        Ok(pins
+            .into_iter()
+            .map(|(source, (hashes, _))| (source, hashes))
+            .collect())
     }
 
     fn reject_duplicate_canonical_instances(&self) -> Result<(), LockValidationError> {
@@ -1758,7 +1779,7 @@ impl Lockfile {
     #[must_use]
     pub fn to_deterministic_toml(&self) -> String {
         let mut out = String::new();
-        push_kv_u64(&mut out, "lock_version", self.lock_version);
+        push_kv_u64(&mut out, "lock_version", LOCK_VERSION);
         push_kv_string(&mut out, "created_by", &self.created_by);
         push_kv_string(&mut out, "graphcal_version", &self.graphcal_version);
         push_kv_string(&mut out, "stdlib_version", &self.stdlib_version);
@@ -1790,7 +1811,10 @@ impl Lockfile {
                     push_kv_inline_table(
                         &mut out,
                         "tree_hashes",
-                        &[("sha256", &tree_hashes.sha256.to_string())],
+                        &[
+                            ("algorithm", tree_hashes.algorithm.as_str()),
+                            ("sha256", &tree_hashes.sha256.to_string()),
+                        ],
                     );
                 }
             }
@@ -1887,16 +1911,48 @@ enum CanonicalPackageSource {
 }
 
 /// Hashes for a locked Git source tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceTreeHashes {
+    /// Algorithm that selected, framed, and hashed the tree's files.
+    pub algorithm: SourceTreeHashAlgorithm,
     /// SHA-256 digest of the normalized source tree.
     pub sha256: Sha256Digest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct CanonicalGitSource {
-    url: GitUrl,
-    commit: GitCommitHash,
+/// Versioned algorithm that turns a package source tree into its digest.
+///
+/// A digest is only comparable with one computed by the same algorithm, so the
+/// lock records it explicitly. Changing which files a tree hash covers or how
+/// they are framed requires a new variant; every consumer matches on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SourceTreeHashAlgorithm {
+    /// `graphcal.toml`, the declared source directory, and every imported Wasm
+    /// artifact, hashed as SHA-256 over `path NUL length NUL bytes NUL` records
+    /// in portable-path order.
+    GraphcalSourceTreeV1,
+}
+
+impl SourceTreeHashAlgorithm {
+    /// Lockfile spelling of this algorithm.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GraphcalSourceTreeV1 => "graphcal-source-tree-v1",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "graphcal-source-tree-v1" => Some(Self::GraphcalSourceTreeV1),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for SourceTreeHashAlgorithm {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
 }
 
 /// A non-empty, typed path through one dependency cycle.
@@ -1932,9 +1988,6 @@ impl fmt::Display for LockedDependencyCycle {
 /// Lockfile validation error.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LockValidationError {
-    /// Unsupported lock schema.
-    #[error("unsupported graphcal.lock version {version}")]
-    UnsupportedLockVersion { version: u64 },
     /// Active Graphcal toolchain version differs from the lockfile.
     #[error("graphcal.lock was resolved with Graphcal {lockfile}, active version is {active}")]
     GraphcalVersionMismatch { lockfile: String, active: String },
@@ -2352,6 +2405,14 @@ impl LockfileParseLimits {
 /// Lockfile parse error.
 #[derive(Debug, Error)]
 pub enum LockfileParseError {
+    /// The lock uses a schema version this Graphcal cannot read.
+    #[error(
+        "graphcal.lock uses lock format version {version}, but this Graphcal reads versions {LEGACY_LOCK_VERSION} through {LOCK_VERSION}; it was probably written by a newer Graphcal"
+    )]
+    UnsupportedLockVersion { version: u64 },
+    /// A tree digest names an algorithm this Graphcal cannot compute.
+    #[error("unsupported source-tree hash algorithm `{algorithm}` in graphcal.lock")]
+    UnsupportedTreeHashAlgorithm { algorithm: String },
     /// TOML syntax failed.
     #[error("invalid TOML in graphcal.lock: {message}")]
     TomlParseError { message: String },
@@ -2434,8 +2495,7 @@ pub fn parse_lockfile_str_with_limits(
             message: e.to_string(),
         })?;
 
-    let lock_version = required_u64(root.get("lock_version"), "lock_version")?;
-    let strict_schema = lock_version == LOCK_VERSION;
+    let schema = LockSchema::from_version(required_u64(root.get("lock_version"), "lock_version")?)?;
     reject_unknown_lock_fields(
         &root,
         "root",
@@ -2448,7 +2508,6 @@ pub fn parse_lockfile_str_with_limits(
             "package",
             "plugin",
         ],
-        strict_schema,
     )?;
     let created_by = required_string(root.get("created_by"), "created_by")?.to_string();
     let graphcal_version =
@@ -2468,15 +2527,14 @@ pub fn parse_lockfile_str_with_limits(
     let packages = package_array
         .iter()
         .enumerate()
-        .map(|(index, package)| parse_locked_package(index, package, strict_schema))
+        .map(|(index, package)| parse_locked_package(index, package, schema))
         .collect::<Result<Vec<_>, _>>()?;
     let plugins = match root.get("plugin") {
-        Some(plugin) => parse_locked_plugins(plugin, strict_schema)?,
+        Some(plugin) => parse_locked_plugins(plugin)?,
         None => Vec::new(),
     };
 
     Ok(Lockfile {
-        lock_version,
         created_by,
         graphcal_version,
         stdlib_version,
@@ -2486,10 +2544,28 @@ pub fn parse_lockfile_str_with_limits(
     })
 }
 
-fn parse_locked_plugins(
-    item: &Value,
-    strict_schema: bool,
-) -> Result<Vec<LockedPlugin>, LockfileParseError> {
+/// Readable lockfile schema. Every readable schema is parsed strictly; a lock
+/// from an unknown schema is rejected rather than guessed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LockSchema {
+    /// Tree digests carry no algorithm; they were all
+    /// [`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`].
+    V1,
+    /// Tree digests name their algorithm.
+    V2,
+}
+
+impl LockSchema {
+    const fn from_version(version: u64) -> Result<Self, LockfileParseError> {
+        match version {
+            LEGACY_LOCK_VERSION => Ok(Self::V1),
+            LOCK_VERSION => Ok(Self::V2),
+            version => Err(LockfileParseError::UnsupportedLockVersion { version }),
+        }
+    }
+}
+
+fn parse_locked_plugins(item: &Value) -> Result<Vec<LockedPlugin>, LockfileParseError> {
     let Some(array) = item.as_array() else {
         return Err(LockfileParseError::InvalidType {
             field: "plugin".to_string(),
@@ -2506,12 +2582,7 @@ fn parse_locked_plugins(
                     expected: "a table",
                 });
             };
-            reject_unknown_lock_fields(
-                table,
-                &format!("plugin[{index}]"),
-                &["path", "sha256"],
-                strict_schema,
-            )?;
+            reject_unknown_lock_fields(table, &format!("plugin[{index}]"), &["path", "sha256"])?;
             let path = required_string(table.get("path"), "plugin.path")?;
             let sha256 = required_string(table.get("sha256"), "plugin.sha256")?;
             Ok(LockedPlugin::new(path, sha256)?)
@@ -2522,7 +2593,7 @@ fn parse_locked_plugins(
 fn parse_locked_package(
     index: usize,
     item: &Value,
-    strict_schema: bool,
+    schema: LockSchema,
 ) -> Result<LockedPackage, LockfileParseError> {
     let Some(table) = item.as_table() else {
         return Err(LockfileParseError::InvalidType {
@@ -2534,7 +2605,6 @@ fn parse_locked_package(
         table,
         &format!("package[{index}]"),
         &["id", "name", "source_dir", "source", "dependencies"],
-        strict_schema,
     )?;
     let id = PackageInstanceId::new(required_string(table.get("id"), "package.id")?)?;
     let name = PackageName::new(required_string(table.get("name"), "package.name")?)?;
@@ -2549,7 +2619,7 @@ fn parse_locked_package(
             .ok_or(LockfileParseError::MissingField {
                 field: "package.source",
             })?;
-    let source = parse_package_source(source_table, strict_schema)?;
+    let source = parse_package_source(source_table, schema)?;
     let dependencies = match table.get("dependencies") {
         Some(dependencies) => parse_package_dependencies(dependencies)?,
         None => BTreeMap::new(),
@@ -2573,12 +2643,12 @@ fn parse_lock_source_dir(value: &str) -> Result<PackageSourceDirectory, Lockfile
 
 fn parse_package_source(
     table: &Table,
-    strict_schema: bool,
+    schema: LockSchema,
 ) -> Result<PackageSource, LockfileParseError> {
     let source_type = required_string(table.get("type"), "package.source.type")?;
     match source_type {
         "path" => {
-            reject_unknown_lock_fields(table, "package.source", &["type", "path"], strict_schema)?;
+            reject_unknown_lock_fields(table, "package.source", &["type", "path"])?;
             let path = required_string(table.get("path"), "package.source.path")?;
             if path != "." {
                 return Err(LockfileParseError::UnsupportedPathSource {
@@ -2592,7 +2662,6 @@ fn parse_package_source(
                 table,
                 "package.source",
                 &["type", "url", "requested_rev", "commit", "tree_hashes"],
-                strict_schema,
             )?;
             let url = GitUrl::new(required_string(table.get("url"), "package.source.url")?)?;
             let requested_rev = GitCommitHash::new(required_string(
@@ -2608,27 +2677,48 @@ fn parse_package_source(
                     field: "package.source.tree_hashes",
                 },
             )?;
-            reject_unknown_lock_fields(
-                hashes,
-                "package.source.tree_hashes",
-                &["sha256"],
-                strict_schema,
-            )?;
-            let sha256 = Sha256Digest::new(required_string(
-                hashes.get("sha256"),
-                "package.source.tree_hashes.sha256",
-            )?)?;
+            let tree_hashes = parse_tree_hashes(hashes, schema)?;
             Ok(PackageSource::Git {
                 url,
                 requested_rev,
                 commit,
-                tree_hashes: SourceTreeHashes { sha256 },
+                tree_hashes,
             })
         }
         other => Err(LockfileParseError::UnsupportedSourceType {
             source_type: other.to_string(),
         }),
     }
+}
+
+fn parse_tree_hashes(
+    hashes: &Table,
+    schema: LockSchema,
+) -> Result<SourceTreeHashes, LockfileParseError> {
+    const TABLE: &str = "package.source.tree_hashes";
+    let algorithm = match schema {
+        LockSchema::V1 => {
+            reject_unknown_lock_fields(hashes, TABLE, &["sha256"])?;
+            SourceTreeHashAlgorithm::GraphcalSourceTreeV1
+        }
+        LockSchema::V2 => {
+            reject_unknown_lock_fields(hashes, TABLE, &["algorithm", "sha256"])?;
+            let algorithm = required_string(
+                hashes.get("algorithm"),
+                "package.source.tree_hashes.algorithm",
+            )?;
+            SourceTreeHashAlgorithm::parse(algorithm).ok_or_else(|| {
+                LockfileParseError::UnsupportedTreeHashAlgorithm {
+                    algorithm: algorithm.to_string(),
+                }
+            })?
+        }
+    };
+    let sha256 = Sha256Digest::new(required_string(
+        hashes.get("sha256"),
+        "package.source.tree_hashes.sha256",
+    )?)?;
+    Ok(SourceTreeHashes { algorithm, sha256 })
 }
 
 fn parse_package_dependencies(
@@ -2679,11 +2769,7 @@ fn reject_unknown_lock_fields(
     table: &Table,
     table_name: &str,
     allowed: &[&str],
-    strict_schema: bool,
 ) -> Result<(), LockfileParseError> {
-    if !strict_schema {
-        return Ok(());
-    }
     table
         .keys()
         .find(|field| !allowed.contains(&field.as_str()))
@@ -2809,6 +2895,7 @@ mod tests {
             requested_rev: hash(rev_char),
             commit: hash(rev_char),
             tree_hashes: SourceTreeHashes {
+                algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
                 sha256: digest(digest_char),
             },
         }
@@ -2835,7 +2922,6 @@ mod tests {
 
     fn lockfile(packages: Vec<LockedPackage>) -> Lockfile {
         Lockfile {
-            lock_version: LOCK_VERSION,
             created_by: "graphcal".to_string(),
             graphcal_version: GRAPHICAL_VERSION.to_string(),
             stdlib_version: STDLIB_VERSION.to_string(),
@@ -3780,6 +3866,122 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         parse_lockfile_str_with_limits(&content, LockfileParseLimits::new(2)).unwrap();
     }
 
+    fn units_lock() -> Lockfile {
+        lockfile(vec![
+            package(
+                "pkg-mission",
+                "mission",
+                path_source(),
+                BTreeMap::from([(dep("units"), id("pkg-units"))]),
+            ),
+            package(
+                "pkg-units",
+                "units",
+                git_source("https://github.com/acme/units.git", '1'),
+                BTreeMap::new(),
+            ),
+        ])
+    }
+
+    #[test]
+    fn lock_records_the_tree_hash_algorithm_next_to_each_digest() {
+        let text = units_lock().to_deterministic_toml();
+        assert!(text.starts_with("lock_version = 2\n"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "tree_hashes = {{ algorithm = \"graphcal-source-tree-v1\", sha256 = \"{}\" }}",
+                "1".repeat(64)
+            )),
+            "{text}"
+        );
+        assert_eq!(parse_lockfile_str(&text).unwrap(), units_lock());
+    }
+
+    #[test]
+    fn current_lock_schema_requires_a_known_tree_hash_algorithm() {
+        let text = units_lock().to_deterministic_toml();
+        let unknown = text.replace("graphcal-source-tree-v1", "graphcal-source-tree-v9");
+        assert!(matches!(
+            parse_lockfile_str(&unknown),
+            Err(LockfileParseError::UnsupportedTreeHashAlgorithm { algorithm })
+                if algorithm == "graphcal-source-tree-v9"
+        ));
+        let missing = text.replace("algorithm = \"graphcal-source-tree-v1\", ", "");
+        assert!(matches!(
+            parse_lockfile_str(&missing),
+            Err(LockfileParseError::MissingField {
+                field: "package.source.tree_hashes.algorithm"
+            })
+        ));
+    }
+
+    #[test]
+    fn version_one_locks_keep_their_pins_under_the_implied_algorithm() {
+        let current = units_lock().to_deterministic_toml();
+        let legacy = current
+            .replace("lock_version = 2", "lock_version = 1")
+            .replace("algorithm = \"graphcal-source-tree-v1\", ", "");
+        let parsed = parse_lockfile_str(&legacy).unwrap();
+        assert_eq!(parsed, units_lock());
+        // Re-serializing upgrades the schema without changing any pin.
+        assert_eq!(parsed.to_deterministic_toml(), current);
+        // A version 1 lock never named an algorithm.
+        assert!(matches!(
+            parse_lockfile_str(&legacy.replace("{ sha256", "{ algorithm = \"graphcal-source-tree-v1\", sha256")),
+            Err(LockfileParseError::UnknownField { field, .. }) if field == "algorithm"
+        ));
+    }
+
+    #[test]
+    fn locks_from_unknown_schema_versions_are_rejected_loudly() {
+        for version in [0, 3, 99] {
+            let text = units_lock()
+                .to_deterministic_toml()
+                .replace("lock_version = 2", &format!("lock_version = {version}"));
+            let error = parse_lockfile_str(&text).unwrap_err();
+            assert!(
+                matches!(error, LockfileParseError::UnsupportedLockVersion { version: v } if v == version),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn git_source_pins_ignore_the_toolchain_versions_that_wrote_the_lock() {
+        let mut lock = units_lock();
+        lock.graphcal_version = "0.0.1-alpha.1".to_string();
+        lock.stdlib_version = "0.0.1-alpha.1".to_string();
+        assert!(lock.validated(GRAPHCAL_VERSION, STDLIB_VERSION).is_err());
+        let pins = lock.git_source_pins().unwrap();
+        let source = GitSourceId::new(url("https://github.com/acme/units.git"), hash('1'));
+        assert_eq!(
+            pins.get(&source),
+            Some(&SourceTreeHashes {
+                algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
+                sha256: digest('1'),
+            })
+        );
+        assert_eq!(pins.len(), 1);
+    }
+
+    #[test]
+    fn git_source_pins_reject_contradictory_digests() {
+        let mut lock = units_lock();
+        lock.packages[0]
+            .dependencies
+            .insert(dep("other"), id("pkg-units-copy"));
+        lock.packages.push(package(
+            "pkg-units-copy",
+            "units",
+            git_source_with_digest("https://github.com/acme/units.git", '1', '2'),
+            BTreeMap::new(),
+        ));
+        assert!(matches!(
+            lock.git_source_pins(),
+            Err(LockValidationError::ConflictingGitSourceDigest(_))
+        ));
+    }
+
     #[test]
     fn current_lock_schema_rejects_unknown_fields_at_every_fixed_table_level() {
         let mut lock = lockfile(vec![
@@ -3816,8 +4018,8 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             ),
             (
                 base.replacen(
-                    "tree_hashes = { sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\" }",
-                    "tree_hashes = { sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\", unexpected = true }",
+                    "\"1111111111111111111111111111111111111111111111111111111111111111\" }",
+                    "\"1111111111111111111111111111111111111111111111111111111111111111\", unexpected = true }",
                     1,
                 ),
                 "package.source.tree_hashes",
