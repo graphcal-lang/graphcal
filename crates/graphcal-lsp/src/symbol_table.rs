@@ -20,9 +20,11 @@ use graphcal_compiler::resolved_name::{
     ResolvedUnitName,
 };
 use graphcal_compiler::syntax::attribute::AttributeName;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::names::{NameAtom, NameDef, NamePath};
 use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::type_name::GenericParamName;
 
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
@@ -166,6 +168,31 @@ impl<'a> HirRefCollector<'a> {
                 span: item.name.span,
                 target: SymbolKey::Unit(item.name.value.resolved().clone()).into(),
             });
+        }
+    }
+
+    /// Record an attribute's `Index#Label` (`#[expected_fail(Mode#Boost)]`):
+    /// the index path and, when it names a variant of that index, the label.
+    fn attribute_label(
+        &self,
+        index: &Spanned<NamePath>,
+        label: &Spanned<IndexVariantName>,
+        table: &mut SymbolTable,
+    ) {
+        match self
+            .resolver
+            .resolve_index_variant_parts(self.dag_id, &index.value, &label.value)
+        {
+            Ok(variant) => {
+                Self::reference(table, label.span, Self::variant_key(&variant));
+                Self::reference(table, index.span, SymbolKey::Index(variant.index().clone()));
+            }
+            Err(_) => table.references.push(ReferenceInfo {
+                span: index.span,
+                target: ReferenceTarget::Unresolved(UnresolvedSymbol::Index(
+                    SourceSymbolPath::from_name_path(&index.value),
+                )),
+            }),
         }
     }
 
@@ -1588,12 +1615,18 @@ fn collect_attribute_refs(
                     collect_argument(element, table, refs);
                 }
             }
-            AttributeArg::IndexLabel { .. } | AttributeArg::FinitePosition { .. } => {}
+            AttributeArg::IndexLabel { index, label, .. } => {
+                refs.attribute_label(index, label, table);
+            }
+            AttributeArg::FinitePosition { .. } => {}
         }
     }
 
     for attribute in attributes {
-        if attribute.name.name.as_str().parse::<AttributeName>() == Ok(AttributeName::Assumes) {
+        if matches!(
+            attribute.name.name.as_str().parse::<AttributeName>(),
+            Ok(AttributeName::Assumes | AttributeName::ExpectedFail)
+        ) {
             for argument in &attribute.args {
                 collect_argument(argument, table, refs);
             }

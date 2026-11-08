@@ -1036,6 +1036,39 @@ node kinetic: Energy = 0.5 * @mass * @velocity ^ 2;
         }
     }
 
+    /// LSP-8: an attribute's `Index#Label` is an occurrence of both the
+    /// index and its label, so renaming either keeps the program compiling.
+    #[test]
+    fn rename_updates_expected_fail_index_labels() {
+        let source = "\
+index Mode = { Normal, Eco, Boost };
+node power_use: Dimensionless[Mode] = for m: Mode { 1.0 };
+node power_gen: Dimensionless[Mode] = table[Mode] { Normal: 2.0; Eco: 2.0; Boost: 0.5; };
+#[expected_fail(Mode#Boost)]
+assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
+";
+        let analysis = analysis_from_source(source);
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        let uri = test_uri();
+        for (needle, old, new) in [("Boost }", "Boost", "Surge"), ("Mode =", "Mode", "Regime")] {
+            let edit = rename(&analysis, &uri, source.find(needle).unwrap(), new)
+                .unwrap()
+                .expect("renameable");
+            let updated = apply_edits(source, &edit.changes.unwrap()[&uri]);
+            assert!(!updated.contains(old), "{updated}");
+            let checked = analysis_from_source(&updated);
+            assert!(
+                checked.has_no_diagnostics(),
+                "{updated}: {:?}",
+                checked.diagnostics
+            );
+        }
+        let attribute_label = source.find("Mode#Boost").unwrap() + "Mode#".len();
+        let references = crate::references::references(&analysis, &uri, attribute_label, true)
+            .expect("label references");
+        assert_eq!(references.len(), 3, "{references:?}");
+    }
+
     /// Issue #829, scoped namespaces: a variant name only collides with a
     /// sibling variant of the same index, not with a same-named variant of
     /// another index.
