@@ -166,6 +166,33 @@ fn calls_a_quantity_kernel() {
     assert!((f64_value(&result) - 2.0).abs() < f64::EPSILON);
 }
 
+/// PLG-4: wasmi runs the Wasm 3.0 deterministic profile, so NaN results are
+/// canonical (positive sign) on every host CPU. Without it, x86-64 produces
+/// a negative NaN for `0 / 0` and a guest observing the sign through
+/// `copysign` returns `-1.0` there but `+1.0` on `AArch64`.
+#[test]
+fn nan_bits_are_canonical_across_platforms() {
+    let wat = r#"
+    (module
+      (memory (export "memory") 1)
+      (func (export "const_nan_sign") (param f64) (result f64)
+        (f64.copysign (f64.const 1) (f64.div (f64.const 0) (f64.const 0))))
+      (func (export "runtime_nan_sign") (param f64) (result f64)
+        (f64.copysign (f64.const 1) (f64.div (local.get 0) (local.get 0)))))
+    "#;
+    let manifest = manifest(
+        ["const_nan_sign", "runtime_nan_sign"]
+            .into_iter()
+            .map(|name| function(name, &[], &[("x", dimensionless())], dimensionless()))
+            .collect(),
+    );
+    let module = PluginHost::new().load(&plugin(wat, &manifest)).unwrap();
+    for name in ["const_nan_sign", "runtime_nan_sign"] {
+        let result = module.call(&fn_name(name), &f64_values(&[0.0])).unwrap();
+        assert_eq!(f64_value(&result).to_bits(), 1.0_f64.to_bits(), "{name}");
+    }
+}
+
 #[test]
 fn equal_calls_cannot_observe_mutable_global_history() {
     let wat = r#"

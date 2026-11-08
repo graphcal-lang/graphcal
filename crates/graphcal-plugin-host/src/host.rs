@@ -57,11 +57,15 @@ impl PluginHost {
         // Fuel metering is the availability bound; mandatory, not optional
         // hardening (issue #25 decision log).
         config.consume_fuel(true);
-        // Determinism note: this build of wasmi has no SIMD support, so the
-        // relaxed-SIMD proposal (implementation-defined results) cannot be
-        // reached. If the `simd` feature is ever enabled, relaxed SIMD must
-        // be disabled here — plugin results are required to be
-        // bit-identical across platforms.
+        // Determinism note: plugin results are required to be bit-identical
+        // across platforms. The workspace enables wasmi's `deterministic`
+        // feature (the Wasm 3.0 deterministic profile), which canonicalizes
+        // every NaN an arithmetic instruction produces; without it, NaN bits
+        // follow the host CPU and a guest can observe them through
+        // `copysign` or `reinterpret`. This build of wasmi has no SIMD
+        // support, so the relaxed-SIMD proposal (implementation-defined
+        // results) cannot be reached either. If the `simd` feature is ever
+        // enabled, relaxed SIMD must be disabled here.
         // Compile eagerly so invalid function bodies fail at load time
         // rather than mid-evaluation.
         config.compilation_mode(wasmi::CompilationMode::Eager);
