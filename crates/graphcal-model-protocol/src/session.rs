@@ -371,6 +371,16 @@ impl SessionSchema {
         &self.outputs
     }
 
+    /// The slot of every varied parameter, in session order.
+    pub fn input_slots(&self) -> impl ExactSizeIterator<Item = InputSlot> + use<> {
+        (0..self.inputs.len()).map(InputSlot)
+    }
+
+    /// The slot of every read output, in session order.
+    pub fn output_slots(&self) -> impl ExactSizeIterator<Item = OutputSlot> + use<> {
+        (0..self.outputs.len()).map(OutputSlot)
+    }
+
     /// The slot of the varied parameter named `name`.
     #[must_use]
     pub fn input_slot(&self, name: &str) -> Option<InputSlot> {

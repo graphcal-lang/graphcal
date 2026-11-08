@@ -2,18 +2,13 @@
 
 use std::sync::Arc;
 
-use arrow_array::{
-    Array, ArrayRef, BooleanArray, Float64Array, Int64Array, RecordBatch, StructArray,
-};
+use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
 use arrow_schema::ArrowError;
 use thiserror::Error;
 
 use super::schema::{input_fields, request_schema};
-use super::value_array::{
-    Presence, ValueDecodeError, decode, decode_key_positions, encode, key_array,
-};
+use super::value_array::{Presence, ValueDecodeError, decode, decode_key_positions, encode};
 use crate::batch::{InputColumn, RequestBatch, RequestBatchError};
-use crate::finite::FiniteF64;
 use crate::label::PortName;
 use crate::session::SessionSchema;
 use crate::value::Value;
@@ -24,14 +19,10 @@ use crate::wire_type::WireType;
 pub enum RequestDecodeError {
     #[error("the request has {received} columns; the session varies {expected} parameters")]
     ColumnCount { expected: usize, received: usize },
-    #[error("the column for parameter `{input}` does not have its Arrow type")]
-    ArrowType { input: PortName },
     #[error("the inputs struct contains {count} null row(s)")]
     StructNulls { count: usize },
     #[error("the column for parameter `{input}` contains {count} null value(s)")]
     Nulls { input: PortName, count: usize },
-    #[error("parameter `{input}` has a non-finite value at row {row}")]
-    NonFinite { input: PortName, row: usize },
     #[error("the column for parameter `{input}` {source}")]
     Value {
         input: PortName,
@@ -68,43 +59,11 @@ impl RequestBatch {
             .inputs()
             .iter()
             .zip(self.columns())
-            .map(|(input, column)| -> Result<ArrayRef, ArrowError> {
-                Ok(match (column, input.wire()) {
-                    (InputColumn::Quantity(values), _) => Arc::new(Float64Array::from_iter_values(
-                        values.iter().map(|value| value.get()),
-                    )),
-                    (InputColumn::Int(values), _) => Arc::new(Int64Array::from(values.clone())),
-                    (InputColumn::Bool(values), _) => Arc::new(BooleanArray::from(values.clone())),
-                    (InputColumn::Key(positions), WireType::Key(key)) => {
-                        key_array(key, positions.iter().map(|position| Some(*position)))?
-                    }
-                    (InputColumn::Key(_), _) => {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "key column for non-key parameter `{}`",
-                            input.name()
-                        )));
-                    }
-                    (InputColumn::Datetime(values), _) => Arc::new(Float64Array::from_iter_values(
-                        values.iter().map(|value| value.get()),
-                    )),
-                    (InputColumn::Complex(values), wire) => {
-                        let values = values
-                            .iter()
-                            .copied()
-                            .map(Value::Complex)
-                            .collect::<Vec<_>>();
-                        encode(
-                            wire,
-                            &values.iter().map(Some).collect::<Vec<_>>(),
-                            Presence::Always,
-                        )?
-                    }
-                    (InputColumn::Structured(values), wire) => encode(
-                        wire,
-                        &values.iter().map(Some).collect::<Vec<_>>(),
-                        Presence::Always,
-                    )?,
-                })
+            .map(|(input, column)| {
+                let rows = (0..self.rows())
+                    .map(|row| column.value(input.wire(), row))
+                    .collect::<Vec<_>>();
+                encode(input.wire(), &rows, Presence::Always)
             })
             .collect()
     }
@@ -182,119 +141,86 @@ fn decode_column(
     wire: &WireType,
     array: &dyn Array,
 ) -> Result<InputColumn, RequestDecodeError> {
-    let arrow_type = || RequestDecodeError::ArrowType {
-        input: input.clone(),
-    };
     reject_nulls(input, array)?;
+    let value_error = |source| RequestDecodeError::Value {
+        input: input.clone(),
+        source,
+    };
+    // A key column keeps the positions its dictionary resolves to.
+    if let WireType::Key(key) = wire {
+        return decode_key_positions(key, array)
+            .map_err(value_error)?
+            .into_iter()
+            .enumerate()
+            .map(|(row, position)| {
+                position.ok_or_else(|| value_error(ValueDecodeError::Null { row }))
+            })
+            .collect::<Result<_, _>>()
+            .map(InputColumn::Key);
+    }
+    let values = decode(wire, array, Presence::Always)
+        .map_err(value_error)?
+        .into_iter()
+        .enumerate()
+        .map(|(row, value)| value.ok_or_else(|| value_error(ValueDecodeError::Null { row })))
+        .collect::<Result<Vec<_>, _>>()?;
+    let primitive = |pick: fn(Value) -> Option<_>| {
+        values
+            .iter()
+            .cloned()
+            .map(pick)
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| value_error(ValueDecodeError::ArrowType))
+    };
     Ok(match wire {
-        WireType::Quantity(_) => {
-            let values = array
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(arrow_type)?;
-            InputColumn::Quantity(
-                values
-                    .values()
-                    .iter()
-                    .enumerate()
-                    .map(|(row, value)| {
-                        FiniteF64::new(*value).map_err(|_| RequestDecodeError::NonFinite {
-                            input: input.clone(),
-                            row,
-                        })
-                    })
-                    .collect::<Result<_, _>>()?,
-            )
-        }
+        WireType::Quantity(_) => InputColumn::Quantity(primitive(|value| match value {
+            Value::Quantity(value) => Some(value),
+            _ => None,
+        })?),
+        WireType::Datetime(_) => InputColumn::Datetime(primitive(|value| match value {
+            Value::Datetime(value) => Some(value),
+            _ => None,
+        })?),
         WireType::Int => InputColumn::Int(
-            array
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .ok_or_else(arrow_type)?
-                .values()
-                .to_vec(),
+            values
+                .into_iter()
+                .map(|value| match value {
+                    Value::Int(value) => Ok(value),
+                    _ => Err(value_error(ValueDecodeError::ArrowType)),
+                })
+                .collect::<Result<_, _>>()?,
         ),
         WireType::Bool => InputColumn::Bool(
-            array
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .ok_or_else(arrow_type)?
-                .values()
-                .iter()
-                .collect(),
+            values
+                .into_iter()
+                .map(|value| match value {
+                    Value::Bool(value) => Ok(value),
+                    _ => Err(value_error(ValueDecodeError::ArrowType)),
+                })
+                .collect::<Result<_, _>>()?,
         ),
         WireType::Complex(_) => InputColumn::Complex(
-            all_values(input, wire, array)?
+            values
                 .into_iter()
                 .map(|value| match value {
                     Value::Complex(value) => Ok(value),
-                    _ => Err(arrow_type()),
+                    _ => Err(value_error(ValueDecodeError::ArrowType)),
                 })
                 .collect::<Result<_, _>>()?,
         ),
-        WireType::Datetime(_) => InputColumn::Datetime(
-            all_values(input, wire, array)?
-                .into_iter()
-                .map(|value| match value {
-                    Value::Datetime(value) => Ok(value),
-                    _ => Err(arrow_type()),
-                })
-                .collect::<Result<_, _>>()?,
-        ),
-        WireType::Indexed(_) | WireType::Algebraic(_) => {
-            InputColumn::Structured(all_values(input, wire, array)?)
-        }
-        WireType::Key(key) => {
-            let positions =
-                decode_key_positions(key, array).map_err(|source| RequestDecodeError::Value {
-                    input: input.clone(),
-                    source,
-                })?;
-            InputColumn::Key(
-                positions
-                    .into_iter()
-                    .enumerate()
-                    .map(|(row, position)| {
-                        position.ok_or_else(|| RequestDecodeError::Value {
-                            input: input.clone(),
-                            source: ValueDecodeError::Null { row },
-                        })
-                    })
-                    .collect::<Result<_, _>>()?,
-            )
-        }
+        WireType::Indexed(_) | WireType::Algebraic(_) => InputColumn::Structured(values),
+        WireType::Key(_) => return Err(value_error(ValueDecodeError::ArrowType)),
     })
-}
-
-/// The value in every row of a column without nulls.
-fn all_values(
-    input: &PortName,
-    wire: &WireType,
-    array: &dyn Array,
-) -> Result<Vec<Value>, RequestDecodeError> {
-    decode(wire, array, Presence::Always)
-        .map_err(|source| RequestDecodeError::Value {
-            input: input.clone(),
-            source,
-        })?
-        .into_iter()
-        .enumerate()
-        .map(|(row, value)| {
-            value.ok_or_else(|| RequestDecodeError::Value {
-                input: input.clone(),
-                source: ValueDecodeError::Null { row },
-            })
-        })
-        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use arrow_array::types::Int32Type;
-    use arrow_array::{DictionaryArray, Int32Array, StringArray};
+    use arrow_array::{DictionaryArray, Float64Array, Int32Array, StringArray};
 
     use super::*;
     use crate::axis::KeyRef;
+    use crate::finite::FiniteF64;
     use crate::label::VariantName;
     use crate::session::tests::sample_session;
 
@@ -386,7 +312,10 @@ mod tests {
                 Arc::clone(batch.schema()),
                 &record(vec![f64::NAN], vec!["A"])
             ),
-            Err(RequestDecodeError::NonFinite { row: 0, .. })
+            Err(RequestDecodeError::Value {
+                source: ValueDecodeError::NonFinite { row: 0 },
+                ..
+            })
         ));
         assert!(matches!(
             RequestBatch::from_record_batch(

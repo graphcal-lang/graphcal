@@ -51,7 +51,10 @@ impl InputColumn {
         self.len() == 0
     }
 
-    fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
+    /// The value at `row` as a value of `wire`, the wire of this column's
+    /// parameter; `None` when `row` is out of range or the column does not
+    /// hold values of `wire`.
+    pub(crate) fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
         Some(match (self, wire) {
             (Self::Quantity(values), WireType::Quantity(_)) => {
                 ValueRef::Quantity(*values.get(row)?)
@@ -312,7 +315,10 @@ impl OutputColumn {
         }
     }
 
-    fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
+    /// The value at `row` as a value of `wire`, the wire of this column's
+    /// output; `None` in a row without values, when `row` is out of range,
+    /// or when the column does not hold values of `wire`.
+    pub(crate) fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
         Some(match (self, wire) {
             (Self::Quantity(values), WireType::Quantity(_)) => {
                 ValueRef::Quantity((*values.get(row)?)?)

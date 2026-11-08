@@ -21,7 +21,7 @@ use thiserror::Error;
 use crate::axis::{AxisKind, KeyRef};
 use crate::finite::FiniteF64;
 use crate::label::VariantName;
-use crate::value::{ComplexValue, Value};
+use crate::value::{ComplexValue, Value, ValueRef};
 use crate::wire_type::{AlgebraicType, ConstructorPosition, ConstructorType};
 use crate::wire_type::{KeyPosition, KeyType, WireType};
 
@@ -219,7 +219,7 @@ fn mismatch() -> ArrowError {
 /// both out beforehand.
 pub(super) fn encode(
     wire: &WireType,
-    rows: &[Option<&Value>],
+    rows: &[Option<ValueRef<'_>>],
     presence: Presence,
 ) -> Result<ArrayRef, ArrowError> {
     Ok(match wire {
@@ -227,7 +227,9 @@ pub(super) fn encode(
             let numbers = rows
                 .iter()
                 .map(|row| match row {
-                    Some(Value::Quantity(value) | Value::Datetime(value)) => Ok(Some(value.get())),
+                    Some(ValueRef::Quantity(value) | ValueRef::Datetime(value)) => {
+                        Ok(Some(value.get()))
+                    }
                     None => Ok(None),
                     Some(_) => Err(mismatch()),
                 })
@@ -238,7 +240,7 @@ pub(super) fn encode(
             let numbers = rows
                 .iter()
                 .map(|row| match row {
-                    Some(Value::Int(value)) => Ok(Some(*value)),
+                    Some(ValueRef::Int(value)) => Ok(Some(*value)),
                     None => Ok(None),
                     Some(_) => Err(mismatch()),
                 })
@@ -249,7 +251,7 @@ pub(super) fn encode(
             let booleans = rows
                 .iter()
                 .map(|row| match row {
-                    Some(Value::Bool(value)) => Ok(Some(*value)),
+                    Some(ValueRef::Bool(value)) => Ok(Some(*value)),
                     None => Ok(None),
                     Some(_) => Err(mismatch()),
                 })
@@ -260,10 +262,9 @@ pub(super) fn encode(
             let positions = rows
                 .iter()
                 .map(|row| match row {
-                    Some(Value::Key(value)) => key
-                        .position(value.as_key_ref())
-                        .map(Some)
-                        .ok_or_else(mismatch),
+                    Some(ValueRef::Key(value)) => {
+                        key.position(*value).map(Some).ok_or_else(mismatch)
+                    }
                     None => Ok(None),
                     Some(_) => Err(mismatch()),
                 })
@@ -274,7 +275,7 @@ pub(super) fn encode(
             let parts = rows
                 .iter()
                 .map(|row| match row {
-                    Some(Value::Complex(value)) => Ok(Some(*value)),
+                    Some(ValueRef::Complex(value)) => Ok(Some(*value)),
                     None => Ok(None),
                     Some(_) => Err(mismatch()),
                 })
@@ -299,8 +300,8 @@ pub(super) fn encode(
             let mut entries = Vec::with_capacity(rows.len() * size);
             for row in rows {
                 match row {
-                    Some(Value::Indexed(values)) if values.len() == size => {
-                        entries.extend(values.iter().map(Some));
+                    Some(ValueRef::Indexed(values)) if values.len() == size => {
+                        entries.extend(values.iter().map(|value| Some(value.as_value_ref())));
                     }
                     None => entries.extend(std::iter::repeat_n(None, size)),
                     Some(_) => return Err(mismatch()),
@@ -323,16 +324,16 @@ pub(super) fn encode(
 /// one nullable struct per constructor.
 fn encode_algebraic(
     algebraic: &AlgebraicType,
-    rows: &[Option<&Value>],
+    rows: &[Option<ValueRef<'_>>],
     presence: Presence,
 ) -> Result<ArrayRef, ArrowError> {
     let rows = rows
         .iter()
         .map(|row| match row {
-            Some(Value::Algebraic {
+            Some(ValueRef::Algebraic {
                 constructor,
                 fields,
-            }) => Ok(Some((*constructor, fields.as_slice()))),
+            }) => Ok(Some((*constructor, *fields))),
             None => Ok(None),
             Some(_) => Err(mismatch()),
         })
@@ -409,11 +410,14 @@ fn encode_constructor(
                 .iter()
                 .map(|row| {
                     row.map(|fields| {
-                        fields.get(position).ok_or_else(|| {
-                            ArrowError::InvalidArgumentError(
-                                "a constructor value lacks a field".to_owned(),
-                            )
-                        })
+                        fields
+                            .get(position)
+                            .map(Value::as_value_ref)
+                            .ok_or_else(|| {
+                                ArrowError::InvalidArgumentError(
+                                    "a constructor value lacks a field".to_owned(),
+                                )
+                            })
                     })
                     .transpose()
                 })
@@ -1212,7 +1216,12 @@ mod tests {
             Value::Key(KeyValue::Position(2)),
             Value::Key(KeyValue::Position(0)),
         ];
-        let encoded = encode(&fin_wire, &[Some(&fin_values[0]), None], Presence::Nullable).unwrap();
+        let encoded = encode(
+            &fin_wire,
+            &[Some(fin_values[0].as_value_ref()), None],
+            Presence::Nullable,
+        )
+        .unwrap();
         assert_eq!(
             encoded.as_any().downcast_ref::<UInt32Array>().unwrap(),
             &UInt32Array::from(vec![Some(2), None])
@@ -1223,7 +1232,12 @@ mod tests {
         );
 
         let grid_values = [Value::Key(KeyValue::Coordinate(finite(0.25)))];
-        let encoded = encode(&grid_wire, &[Some(&grid_values[0])], Presence::Always).unwrap();
+        let encoded = encode(
+            &grid_wire,
+            &[Some(grid_values[0].as_value_ref())],
+            Presence::Always,
+        )
+        .unwrap();
         assert_eq!(
             decode(&grid_wire, encoded.as_ref(), Presence::Always).unwrap(),
             [Some(grid_values[0].clone())]
@@ -1232,7 +1246,7 @@ mod tests {
         assert!(
             encode(
                 &fin_wire,
-                &[Some(&Value::Key(KeyValue::Position(3)))],
+                &[Some(ValueRef::Key(KeyRef::Position(3)))],
                 Presence::Always
             )
             .is_err()
@@ -1283,7 +1297,12 @@ mod tests {
             Err(ValueDecodeError::Null { row: 0 })
         );
 
-        let encoded = encode(&shape(), &[Some(&circle(1.0))], Presence::Always).unwrap();
+        let encoded = encode(
+            &shape(),
+            &[Some(circle(1.0).as_value_ref())],
+            Presence::Always,
+        )
+        .unwrap();
         let union = encoded.as_any().downcast_ref::<StructArray>().unwrap();
         let tags = DictionaryArray::<Int32Type>::try_new(
             Int32Array::from(vec![1]),

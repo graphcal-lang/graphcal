@@ -182,7 +182,12 @@ fn out_of_range(value: f64) -> ValueBindError {
     ))
 }
 
-fn to_si(scale: Option<SiScale>, value: FiniteF64) -> Result<f64, ValueBindError> {
+/// `value`, given in the unit of `scale` (SI when `None`), in SI.
+///
+/// # Errors
+///
+/// Returns [`ValueBindError::OutOfRange`] when the converted value overflows.
+pub(super) fn to_si(scale: Option<SiScale>, value: FiniteF64) -> Result<f64, ValueBindError> {
     scale
         .map_or(Ok(value), |scale| scale.to_si(value))
         .map(FiniteF64::get)

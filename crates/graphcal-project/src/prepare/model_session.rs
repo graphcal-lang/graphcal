@@ -12,13 +12,13 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_eval::eval::bindings::RuntimeParameterBinding;
 use graphcal_eval::eval_expr::j2000_seconds::seconds_since_j2000;
 use graphcal_model_protocol::{
-    Bounds, Domain, FiniteF64, InputColumn, InterfaceError, InterfaceFingerprint, LabelError,
-    ModelInterface, OutputDescription, ParameterDescription, ParameterError, PortName,
+    Bounds, Domain, FiniteF64, InputColumn, InputSlot, InterfaceError, InterfaceFingerprint,
+    LabelError, ModelInterface, OutputDescription, ParameterDescription, ParameterError, PortName,
     QuantityType, RequestBatch, ResultBatch, ResultBatchBuilder, RowFailure, RowOutcome,
     SessionError, SessionSchema, SessionSpec, SiScale, UnitSpelling, WireType,
 };
 
-use super::model_value::{ValueBindError, ValueCodec, ValueCodecError};
+use super::model_value::{ValueBindError, ValueCodec, ValueCodecError, to_si};
 use super::{
     CompileError, DeclName, Error, ModelExecutionError, ModelOutputPort, ModelRowFailure,
     ModelRowOutcome, ParameterBindingBuilder, ParameterBindingRow, ParameterDomain, ParameterPort,
@@ -41,6 +41,8 @@ enum InputBinding {
 #[derive(Debug, Clone)]
 struct SessionInputPort {
     name: PortName,
+    /// Where the parameter's column is in the session's requests.
+    slot: InputSlot,
     position: ParameterPosition,
     binding: InputBinding,
 }
@@ -245,7 +247,8 @@ impl PreparedProject {
         let inputs = schema
             .inputs()
             .iter()
-            .map(|input| {
+            .zip(schema.input_slots())
+            .map(|(input, slot)| {
                 let port = self
                     .parameter_ports
                     .iter()
@@ -266,6 +269,7 @@ impl PreparedProject {
                 };
                 Ok(SessionInputPort {
                     name: input.name().clone(),
+                    slot,
                     position: port.position,
                     binding,
                 })
@@ -385,20 +389,18 @@ impl PreparedProject {
             builder.insert(*position, binding.clone())?;
         }
         for (input, column) in session.inputs.iter().zip(request.columns()) {
+            let out_of_domain = |error: ValueBindError| match error {
+                ValueBindError::OutOfRange(message) => Ok(RowFailure::InputOutOfDomain {
+                    parameter: input.name.clone(),
+                    message,
+                }),
+                ValueBindError::Shape => Err(ModelExecutionError::SessionMismatch),
+            };
             let bound = match (&input.binding, column) {
                 (InputBinding::Quantity(scale), InputColumn::Quantity(values)) => {
-                    let value = values[row];
-                    match scale.map_or(Ok(value), |scale| scale.to_si(value)) {
-                        Ok(si) => builder.bind_quantity(input.position, si.get()),
-                        Err(_) => {
-                            return Ok(Err(RowFailure::InputOutOfDomain {
-                                parameter: input.name.clone(),
-                                message: format!(
-                                    "{} in the chosen unit overflows when converted to SI",
-                                    value.get()
-                                ),
-                            }));
-                        }
+                    match to_si(*scale, values[row]) {
+                        Ok(si) => builder.bind_quantity(input.position, si),
+                        Err(error) => return out_of_domain(error).map(Err),
                     }
                 }
                 (InputBinding::Int, InputColumn::Int(values)) => {
@@ -409,27 +411,13 @@ impl PreparedProject {
                 }
                 (InputBinding::Value(codec), _) => {
                     let value = request
-                        .value(
-                            session
-                                .schema
-                                .input_slot(input.name.as_str())
-                                .ok_or(ModelExecutionError::SessionMismatch)?,
-                            row,
-                        )
+                        .value(input.slot, row)
                         .ok_or(ModelExecutionError::SessionMismatch)?;
                     match codec.runtime_value(value) {
                         Ok(runtime) => {
                             builder.insert(input.position, RuntimeParameterBinding::plain(runtime))
                         }
-                        Err(ValueBindError::OutOfRange(message)) => {
-                            return Ok(Err(RowFailure::InputOutOfDomain {
-                                parameter: input.name.clone(),
-                                message,
-                            }));
-                        }
-                        Err(ValueBindError::Shape) => {
-                            return Err(ModelExecutionError::SessionMismatch);
-                        }
+                        Err(error) => return out_of_domain(error).map(Err),
                     }
                 }
                 _ => return Err(ModelExecutionError::SessionMismatch),
