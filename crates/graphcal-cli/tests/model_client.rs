@@ -156,10 +156,34 @@ fn client_sessions_carry_quantities_in_server_resolved_units() {
         .output_in(&margin, unit("mm"))
         .spawn()
         .unwrap();
-    let Some(Domain::Quantity(bounds)) = session.schema().inputs()[0].domain() else {
+    let Some(Domain::Quantity(bounds)) = session.input(&load).unwrap().domain() else {
         panic!("load has a quantity domain");
     };
     assert_eq!(bounds.max().map(|max| max.get()), Some(1000.0));
+    // The handles describe the model's canonical units; the session carries
+    // the chosen ones.
+    let Some(Domain::Quantity(canonical)) = load.canonical_domain() else {
+        panic!("load has a quantity domain");
+    };
+    assert_eq!(canonical.max().map(|max| max.get()), Some(10.0));
+    assert_eq!(load.detail().unit(), Some(&unit("m")));
+    let carried_unit = |wire: &graphcal_model_protocol::WireType| {
+        wire.quantity()
+            .and_then(|quantity| quantity.unit())
+            .cloned()
+    };
+    assert_eq!(
+        carried_unit(session.input(&load).unwrap().wire()),
+        Some(unit("cm"))
+    );
+    assert_eq!(
+        carried_unit(session.output(&margin).unwrap().wire()),
+        Some(unit("mm"))
+    );
+    assert!(matches!(
+        session.input(&model.input::<Quantity>("factor").unwrap()),
+        Err(ClientError::NotVaried { .. })
+    ));
     let request = session
         .batch()
         .column(&load, [100.0, 2000.0])

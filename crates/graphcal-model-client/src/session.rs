@@ -10,8 +10,8 @@ use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
 use graphcal_model_protocol::arrow::{request_schema, result_schema, si_scales, validate_schema};
 use graphcal_model_protocol::{
-    CanonicalUnitsOnly, PortName, RequestBatch, ResultBatch, SessionSchema, SessionSpec, SiScale,
-    UnitSpelling,
+    CanonicalUnitsOnly, PortName, RequestBatch, ResultBatch, SessionInput, SessionOutput,
+    SessionSchema, SessionSpec, SiScale, UnitSpelling,
 };
 
 use crate::batch::{BatchBuilder, Request};
@@ -333,6 +333,43 @@ impl Session {
     #[must_use]
     pub const fn schema(&self) -> &Arc<SessionSchema> {
         &self.schema
+    }
+
+    /// The varied parameter `input` as this session carries it: its wire
+    /// type in the session's unit, its domain converted into that unit, and
+    /// the unit's scale. Sample request values from this domain, not from
+    /// the handle's canonical one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] for a handle of another model or a parameter
+    /// this session does not vary.
+    pub fn input<K: Kind>(&self, input: &InputHandle<K>) -> Result<&SessionInput, ClientError> {
+        input.port().ensure_model(self.model)?;
+        self.schema
+            .input_slot(input.name().as_str())
+            .and_then(|slot| self.schema.input(slot))
+            .ok_or_else(|| ClientError::NotVaried {
+                name: input.name().clone(),
+            })
+    }
+
+    /// The read output `output` as this session carries it: its wire type
+    /// in the session's unit and the unit's scale. Label result values with
+    /// this unit, not with the handle's canonical one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] for a handle of another model or an output
+    /// this session does not read.
+    pub fn output<K: Kind>(&self, output: &OutputHandle<K>) -> Result<&SessionOutput, ClientError> {
+        output.port().ensure_model(self.model)?;
+        self.schema
+            .output_slot(output.name().as_str())
+            .and_then(|slot| self.schema.output(slot))
+            .ok_or_else(|| ClientError::NotRead {
+                name: output.name().clone(),
+            })
     }
 
     /// Start building a request.
