@@ -859,7 +859,7 @@ struct LockedPackageFixture {
 
 fn install_dependency_cache_generation(
     cache_root: &Path,
-    source: &GitSourceId,
+    source: &graphcal_package::GitSourceId,
     dependency_source: &str,
 ) -> (PathBuf, PackageManifest, Sha256Digest) {
     let staging = cache_root.join("dependency-staging");
@@ -891,7 +891,9 @@ fn install_dependency_cache_generation(
 }
 
 fn locked_package_fixture(root_source: &str, dependency_source: &str) -> LockedPackageFixture {
-    use graphcal_package::{LOCK_VERSION, Lockfile, PackageInstanceId, SourceTreeHashes};
+    use graphcal_package::{
+        Lockfile, PackageInstanceId, SourceTreeHashAlgorithm, SourceTreeHashes,
+    };
 
     let directory = tempfile::tempdir().unwrap();
     let project_root = directory.path().join("project");
@@ -910,9 +912,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         .dependencies
         .first_key_value()
         .expect("fixture dependency");
-    let revision = dependency_spec.git.rev.clone();
-    let url = dependency_spec.git.url.clone();
-    let source = GitSourceId::new(url.clone(), revision.clone());
+    let source = dependency_spec.git.clone();
     let (dependency_root, dependency_manifest, tree_hash) =
         install_dependency_cache_generation(&cache_root, &source, dependency_source);
     std::fs::write(project_root.join("graphcal.toml"), root_manifest).unwrap();
@@ -929,7 +929,6 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
     let root_id = PackageInstanceId::new("pkg-mission").unwrap();
     let dependency_id = PackageInstanceId::new("pkg-units-v1").unwrap();
     let lockfile = Lockfile {
-        lock_version: LOCK_VERSION,
         created_by: "graphcal-test".to_string(),
         graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
         stdlib_version: STDLIB_VERSION.to_string(),
@@ -948,10 +947,11 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
                 name: dependency_manifest.name,
                 source_dir: dependency_manifest.source_dir,
                 source: PackageSource::Git {
-                    url,
-                    requested_rev: revision.clone(),
-                    commit: revision,
-                    tree_hashes: SourceTreeHashes { sha256: tree_hash },
+                    source,
+                    tree_hashes: SourceTreeHashes {
+                        algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
+                        sha256: tree_hash,
+                    },
                 },
                 dependencies: BTreeMap::new(),
             },

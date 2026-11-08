@@ -370,21 +370,18 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     assert!(stdout.contains("wrote"), "stdout: {stdout}");
 
     let lock = std::fs::read_to_string(project.join("graphcal.lock")).unwrap();
-    assert!(lock.contains("lock_version = 1"), "lock:\n{lock}");
+    assert!(lock.contains("lock_version = 2"), "lock:\n{lock}");
     assert!(lock.contains("root = \"pkg-mission\""), "lock:\n{lock}");
     assert!(
         lock.contains("units_v1 = \"pkg-units-"),
         "dependency edge missing:\n{lock}"
     );
-    assert!(
-        lock.contains(&format!("requested_rev = \"{dep_rev}\"")),
-        "requested_rev missing:\n{lock}"
-    );
+    assert!(!lock.contains("requested_rev"), "lock:\n{lock}");
     assert!(
         lock.contains(&format!("commit = \"{dep_rev}\"")),
         "commit missing:\n{lock}"
     );
-    assert!(lock.contains("tree_hashes = { sha256 = \""));
+    assert!(lock.contains("tree_hashes = { algorithm = \"graphcal-source-tree-v1\", sha256 = \""));
     assert!(
         !lock.contains(cache.to_str().unwrap()),
         "lock must not serialize cache paths:\n{lock}"
@@ -431,14 +428,9 @@ fn deps_lock_writes_deterministic_git_lockfile() {
         .iter()
         .find_map(|package| match &package.source {
             graphcal_package::PackageSource::Git {
-                url,
-                commit,
+                source,
                 tree_hashes,
-                ..
-            } => Some((
-                graphcal_package::GitSourceId::new(url.clone(), commit.clone()),
-                tree_hashes.sha256,
-            )),
+            } => Some((source.clone(), tree_hashes.sha256)),
             graphcal_package::PackageSource::Root => None,
         })
         .unwrap();
@@ -460,6 +452,178 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     );
     let stdout = String::from_utf8(second.stdout).unwrap();
     assert!(stdout.contains("up to date"), "stdout: {stdout}");
+}
+
+#[cfg(unix)]
+fn run_deps_lock(project: &Path, cache: &Path) -> std::process::Output {
+    graphcal_bin()
+        .args(["deps", "lock", "--root"])
+        .arg(project)
+        .env("GRAPHCAL_CACHE_DIR", cache)
+        .output()
+        .expect("failed to run graphcal")
+}
+
+#[cfg(unix)]
+fn locked_units_project(dir: &Path) -> (PathBuf, PathBuf) {
+    let dep_repo = dir.join("units-repo");
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.join("mission");
+    write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\nunits = {{ git = \"{}\", rev = \"{dep_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ one };\nnode two: Dimensionless = @one + 1.0;\n",
+    );
+    let cache = dir.join("cache");
+    let output = run_deps_lock(&project, &cache);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (project, cache)
+}
+
+/// CLI-3: a lock written by another Graphcal version still pins its sources,
+/// so an upgrade followed by `deps lock` cannot silently accept new contents.
+#[cfg(unix)]
+#[test]
+fn deps_lock_enforces_pins_from_a_lock_written_by_another_graphcal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (project, cache) = locked_units_project(dir.path());
+    let lock_path = project.join("graphcal.lock");
+    let lock = std::fs::read_to_string(&lock_path).unwrap();
+    let parsed = graphcal_package::parse_lockfile_str(&lock).unwrap();
+    let digest = parsed
+        .packages
+        .iter()
+        .find_map(|package| match &package.source {
+            graphcal_package::PackageSource::Git { tree_hashes, .. } => {
+                Some(tree_hashes.sha256.to_string())
+            }
+            graphcal_package::PackageSource::Root => None,
+        })
+        .unwrap();
+    let pinned = "0".repeat(64);
+    let tampered = lock
+        .replace(&digest, &pinned)
+        .replace(
+            &format!("graphcal_version = \"{}\"", env!("CARGO_PKG_VERSION")),
+            "graphcal_version = \"0.0.1-alpha.1\"",
+        )
+        .replace(
+            &format!("stdlib_version = \"{}\"", graphcal_package::STDLIB_VERSION),
+            "stdlib_version = \"0.0.1-alpha.1\"",
+        );
+    assert_ne!(tampered, lock);
+    std::fs::write(&lock_path, &tampered).unwrap();
+
+    let output = run_deps_lock(&project, &cache);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains(&format!("existing graphcal.lock pins `{pinned}`")),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains(&format!("`{digest}`")), "stderr: {stderr}");
+    assert_eq!(std::fs::read_to_string(&lock_path).unwrap(), tampered);
+}
+
+/// CLI-3: an unreadable previous lock is an error, not an absence of pins.
+#[cfg(unix)]
+#[test]
+fn deps_lock_rejects_a_corrupt_previous_lock_instead_of_dropping_its_pins() {
+    let dir = tempfile::tempdir().unwrap();
+    let (project, cache) = locked_units_project(dir.path());
+    let lock_path = project.join("graphcal.lock");
+    for corrupt in [
+        "this is not a lockfile".to_string(),
+        std::fs::read_to_string(&lock_path)
+            .unwrap()
+            .replace("lock_version = 2", "lock_version = 99"),
+    ] {
+        std::fs::write(&lock_path, &corrupt).unwrap();
+        let output = run_deps_lock(&project, &cache);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "stderr: {stderr}");
+        assert!(
+            stderr.contains("graphcal.lock` is invalid, so its source-tree pins cannot be checked"),
+            "stderr: {stderr}"
+        );
+        assert_eq!(std::fs::read_to_string(&lock_path).unwrap(), corrupt);
+    }
+}
+
+/// CLI-6: a commit whose paths differ only in case cannot be checked out
+/// faithfully on case-insensitive filesystems, so `deps lock` rejects it on
+/// every host instead of locking whichever spelling survived. The colliding
+/// tree is built directly from objects, so the test also runs on macOS.
+#[cfg(unix)]
+#[test]
+fn deps_lock_rejects_commits_with_case_fold_colliding_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let repo = gix::open(&dep_repo).unwrap();
+    let base_tree = write_tree_object(&repo, &dep_repo);
+    let mut tree: gix::objs::Tree = repo.find_tree(base_tree).unwrap().decode().unwrap().into();
+    tree.entries.push(gix::objs::tree::Entry {
+        mode: gix::objs::tree::EntryKind::Blob.into(),
+        filename: "GRAPHCAL.toml".into(),
+        oid: repo
+            .write_blob(b"[package]\nname = \"shadow\"\n")
+            .unwrap()
+            .detach(),
+    });
+    tree.entries.sort();
+    let tree_id = repo.write_object(tree).unwrap().detach();
+    let parent = repo.head_id().unwrap().detach();
+    let signature =
+        gix::actor::SignatureRef::from_bytes(b"Graphcal Test <graphcal@example.invalid> 0 +0000")
+            .unwrap();
+    let rev = repo
+        .commit_as(
+            signature,
+            signature,
+            "HEAD",
+            "case collision",
+            tree_id,
+            [parent],
+        )
+        .unwrap()
+        .detach()
+        .to_hex()
+        .to_string();
+    let project = dir.path().join("mission");
+    write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\nunits = {{ git = \"{}\", rev = \"{rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ one };\nnode two: Dimensionless = @one;\n",
+    );
+
+    let output = run_deps_lock(&project, &dir.path().join("cache"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains("differ only in letter case")
+            && stderr.contains("`GRAPHCAL.toml` and `graphcal.toml`"),
+        "stderr: {stderr}"
+    );
+    assert!(!project.join("graphcal.lock").exists());
 }
 
 /// A minimal LSP client driving `graphcal lsp` over stdio.
@@ -7670,7 +7834,7 @@ fn offline_dependency_reports_preserve_transitive_plugins_and_versions() {
 #[cfg(unix)]
 #[test]
 fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() {
-    use graphcal_package::{GitSourceId, PackageSource};
+    use graphcal_package::PackageSource;
     let binary = scale_plugin_wasm;
     let dir = tempfile::tempdir().unwrap();
     let repository = dir.path().join("kernels");
@@ -7714,14 +7878,9 @@ fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() 
         .iter()
         .filter_map(|package| match &package.source {
             PackageSource::Git {
-                url,
-                commit,
+                source,
                 tree_hashes,
-                ..
-            } => Some((
-                GitSourceId::new(url.clone(), commit.clone()),
-                tree_hashes.sha256,
-            )),
+            } => Some((source.clone(), tree_hashes.sha256)),
             PackageSource::Root => None,
         })
         .collect();

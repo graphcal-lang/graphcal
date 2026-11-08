@@ -12,11 +12,11 @@ use graphcal_io::{
     create_file_atomically, replace_file_atomically_if_unchanged,
 };
 use graphcal_package::{
-    DependencyName, DependencySpec, GitCommitHash, GitSourceId, GitTransport, GitUrl, LOCK_VERSION,
+    DependencyName, DependencySpec, GitCommitHash, GitSourceId, GitTransport, GitUrl,
     LockedPackage, LockedPlugin, Lockfile, LockfileParseLimits, PackageGraph, PackageInstanceId,
     PackageManifest, PackageName, PackageSource, PackageSourceDirectory, PluginArtifactPath,
-    PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, Sha256DigestError, SourceTreeHashes,
-    parse_lockfile_str_with_limits, parse_manifest_str,
+    PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, Sha256DigestError,
+    SourceTreeHashAlgorithm, SourceTreeHashes, parse_lockfile_str_with_limits, parse_manifest_str,
 };
 use graphcal_project::loader::discover_project_root;
 use graphcal_project::package_cache::{PackageCacheRoot, PackageCacheRootError};
@@ -255,7 +255,23 @@ impl PackageIngestionBudget {
         )
     }
 
-    fn account_source_tree(&mut self, root: &Path, hash: &SourceTreeHash) -> Result<(), DepsError> {
+    /// Limits for rereading part of a tree this budget already charged. The
+    /// reread is bounded by what the charged tree consumed rather than by the
+    /// remaining budget, which already excludes that tree, and it is not
+    /// charged again.
+    const fn recheck_limits(&self, charged: ChargedSourceTree) -> SourceTreeHashLimits {
+        SourceTreeHashLimits::new(
+            self.policy.source_tree_file(),
+            charged.bytes,
+            charged.entries,
+        )
+    }
+
+    fn account_source_tree(
+        &mut self,
+        root: &Path,
+        hash: &SourceTreeHash,
+    ) -> Result<ChargedSourceTree, DepsError> {
         let entries =
             self.entries
                 .checked_add(hash.entries())
@@ -273,8 +289,20 @@ impl PackageIngestionBudget {
         }
         self.account_bytes(root, hash.bytes())?;
         self.entries = entries;
-        Ok(())
+        Ok(ChargedSourceTree {
+            entries: hash.entries(),
+            bytes: hash.bytes(),
+        })
     }
+}
+
+/// Resources one source tree consumed, as charged to a
+/// [`PackageIngestionBudget`]. Only [`PackageIngestionBudget::account_source_tree`]
+/// creates it, so it always describes a tree that was actually charged.
+#[derive(Debug, Clone, Copy)]
+struct ChargedSourceTree {
+    entries: u64,
+    bytes: u64,
 }
 
 /// Result of a successful `graphcal deps lock` run.
@@ -304,7 +332,6 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
     let resolved_lock = resolver.resolve_root(&root, &mut budget)?;
     let plugins = resolve_plugin_pins(&root, &resolved_lock.source_dir, &mut budget)?;
     let lockfile = Lockfile {
-        lock_version: LOCK_VERSION,
         created_by: "graphcal".to_string(),
         graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
         stdlib_version: STDLIB_VERSION.to_string(),
@@ -389,12 +416,12 @@ fn resolve_plugin_pins(
             let file = path.join_to(root);
             match fs.entry_kind(&file) {
                 Ok(FileSystemEntryKind::File) => {}
-                Ok(
-                    FileSystemEntryKind::Directory
-                    | FileSystemEntryKind::Symlink
-                    | FileSystemEntryKind::Other,
-                ) => {
-                    return Err(DepsError::UnsupportedSourceEntry { path: file });
+                // The loader refuses symlinked plugin artifacts too.
+                Ok(FileSystemEntryKind::Symlink) => {
+                    return Err(DepsError::PluginSymlink { path: file });
+                }
+                Ok(FileSystemEntryKind::Directory | FileSystemEntryKind::Other) => {
+                    return Err(DepsError::NotARegularFile { path: file });
                 }
                 Err(source) => {
                     return Err(DepsError::PluginFileUnreadable {
@@ -409,6 +436,15 @@ fn resolve_plugin_pins(
         .collect()
 }
 
+/// Collect the root package's `.gcl` files under the loader's symlink policy.
+///
+/// The loader reads the root package through a filesystem rooted at the
+/// project, which follows a symbolic link whenever it resolves inside the
+/// project root. Scanning follows exactly those links, so every file another
+/// command can load is scanned for plugin imports; a link the loader cannot
+/// follow is an error that says so. Files and directories are identified by
+/// their canonical path, so a target reached twice is read once and a
+/// directory link cycle terminates.
 fn collect_gcl_files_bounded(
     fs: &dyn FileSystemReader,
     root: &Path,
@@ -417,18 +453,15 @@ fn collect_gcl_files_bounded(
     if !fs.exists(root) {
         return Ok(Vec::new());
     }
-    if fs.entry_kind(root).map_err(|source| DepsError::Metadata {
-        path: root.to_path_buf(),
-        source,
-    })? != FileSystemEntryKind::Directory
-    {
-        return Err(DepsError::UnsupportedSourceEntry {
+    let (canonical_root, FileSystemEntryKind::Directory) = resolve_root_entry(fs, root)? else {
+        return Err(DepsError::SourceDirNotDirectory {
             path: root.to_path_buf(),
         });
-    }
+    };
 
-    let mut files = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
+    let mut files = BTreeSet::new();
+    let mut visited = BTreeSet::from([canonical_root.clone()]);
+    let mut pending = vec![canonical_root];
     while let Some(directory) = pending.pop() {
         let mut names = graphcal_compiler::outcome::without_cancellation(|cancellation| {
             fs.read_directory_bounded(
@@ -452,25 +485,70 @@ fn collect_gcl_files_bounded(
         for name in names.into_iter().rev() {
             let path = directory.join(name);
             budget.account_entry(&path)?;
-            match fs.entry_kind(&path).map_err(|source| DepsError::Metadata {
-                path: path.clone(),
-                source,
-            })? {
-                FileSystemEntryKind::Directory => pending.push(path),
-                FileSystemEntryKind::File
-                    if path.extension() == Some(std::ffi::OsStr::new("gcl")) =>
-                {
-                    files.push(path);
+            let is_gcl = path.extension() == Some(std::ffi::OsStr::new("gcl"));
+            match resolve_root_entry(fs, &path)? {
+                (canonical, FileSystemEntryKind::Directory) => {
+                    if visited.insert(canonical.clone()) {
+                        pending.push(canonical);
+                    }
                 }
-                FileSystemEntryKind::File => {}
-                FileSystemEntryKind::Symlink | FileSystemEntryKind::Other => {
-                    return Err(DepsError::UnsupportedSourceEntry { path });
+                (canonical, FileSystemEntryKind::File) if is_gcl => {
+                    files.insert(canonical);
+                }
+                (_, FileSystemEntryKind::File) => {}
+                (_, FileSystemEntryKind::Symlink | FileSystemEntryKind::Other) => {
+                    return Err(DepsError::SpecialSourceEntry { path });
                 }
             }
         }
     }
-    files.sort();
-    Ok(files)
+    Ok(files.into_iter().collect())
+}
+
+/// Canonical path and kind of a root-package entry, following a symbolic link
+/// only when it resolves inside the project root.
+fn resolve_root_entry(
+    fs: &dyn FileSystemReader,
+    path: &Path,
+) -> Result<(PathBuf, FileSystemEntryKind), DepsError> {
+    let metadata = |path: &Path| {
+        fs.entry_kind(path).map_err(|source| DepsError::Metadata {
+            path: path.to_path_buf(),
+            source,
+        })
+    };
+    match metadata(path)? {
+        FileSystemEntryKind::Other => Err(DepsError::SpecialSourceEntry {
+            path: path.to_path_buf(),
+        }),
+        FileSystemEntryKind::Symlink => {
+            let canonical =
+                fs.canonicalize(path)
+                    .map_err(|source| DepsError::RootSymlinkUnresolved {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
+            match metadata(&canonical)? {
+                kind @ (FileSystemEntryKind::File | FileSystemEntryKind::Directory) => {
+                    Ok((canonical, kind))
+                }
+                FileSystemEntryKind::Symlink | FileSystemEntryKind::Other => {
+                    Err(DepsError::SpecialSourceEntry {
+                        path: path.to_path_buf(),
+                    })
+                }
+            }
+        }
+        kind @ (FileSystemEntryKind::File | FileSystemEntryKind::Directory) => {
+            let canonical = fs
+                .canonicalize(path)
+                .map_err(|source| DepsError::Canonicalize {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            Ok((canonical, kind))
+        }
+    }
 }
 
 fn ensure_lock_graph_loadable(graph: &PackageGraph) -> Result<(), DepsError> {
@@ -502,12 +580,12 @@ enum PriorLock {
     Missing,
     Present {
         content: String,
-        trusted_sources: BTreeMap<GitSourceId, Sha256Digest>,
+        trusted_sources: BTreeMap<GitSourceId, TrustedPin>,
     },
 }
 
 impl PriorLock {
-    fn trusted_sources(&self) -> BTreeMap<GitSourceId, Sha256Digest> {
+    fn trusted_sources(&self) -> BTreeMap<GitSourceId, TrustedPin> {
         match self {
             Self::Missing => BTreeMap::new(),
             Self::Present {
@@ -528,7 +606,8 @@ fn read_prior_lock(
     })?;
     match budget.read_text(&fs, &path, IngestionArtifact::Lockfile) {
         Ok(content) => {
-            let trusted_sources = trusted_sources_from_lock(&content, budget.policy.max_entries());
+            let trusted_sources = trusted_sources_from_lock(&content, budget.policy.max_entries())
+                .map_err(|source| DepsError::PriorLock { path, source })?;
             Ok(PriorLock::Present {
                 content,
                 trusted_sources,
@@ -543,34 +622,77 @@ fn read_prior_lock(
     }
 }
 
+/// Source-tree pins of the previous lock, which a refetch must reproduce.
+///
+/// The pins are taken from the structurally parsed lock without requiring it
+/// to have been written by this toolchain: upgrading Graphcal is exactly when
+/// users rerun `deps lock`, so a version gate here would drop every pin at the
+/// moment it matters. A lock that cannot be parsed is an error rather than "no
+/// pins", because silently ignoring it would let any dependency change.
 fn trusted_sources_from_lock(
     content: &str,
     max_packages: u64,
-) -> BTreeMap<GitSourceId, Sha256Digest> {
+) -> Result<BTreeMap<GitSourceId, TrustedPin>, PriorLockError> {
     let max_packages = usize::try_from(max_packages).unwrap_or(usize::MAX);
-    let Ok(lockfile) =
-        parse_lockfile_str_with_limits(content, LockfileParseLimits::new(max_packages))
-    else {
-        return BTreeMap::new();
-    };
-    let Ok(validated) = lockfile.validated(env!("CARGO_PKG_VERSION"), STDLIB_VERSION) else {
-        return BTreeMap::new();
-    };
-    validated
-        .packages()
-        .filter_map(|package| match &package.source {
-            PackageSource::Root => None,
-            PackageSource::Git {
-                url,
-                commit,
-                tree_hashes,
-                ..
-            } => Some((
-                GitSourceId::new(url.clone(), commit.clone()),
-                tree_hashes.sha256,
-            )),
-        })
-        .collect()
+    let lockfile = parse_lockfile_str_with_limits(content, LockfileParseLimits::new(max_packages))?;
+    Ok(lockfile
+        .git_source_pins()?
+        .into_iter()
+        .map(|(source, hashes)| (source, TrustedPin::from_lock(hashes)))
+        .collect())
+}
+
+/// A previous lock's pin for one immutable Git source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TrustedPin {
+    sha256: Sha256Digest,
+    coverage: PinCoverage,
+}
+
+/// Which files a pin's digest is known to cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PinCoverage {
+    /// Exactly what `deps lock` hashes now
+    /// ([`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`]).
+    Current,
+    /// A lock format 1 pin: either the current coverage or the older one that
+    /// omitted Wasm artifacts imported from outside the source directory.
+    LegacyUnrecorded,
+}
+
+impl TrustedPin {
+    /// Lock generation computes only
+    /// [`SourceTreeHashAlgorithm::GraphcalSourceTreeV1`]; a new algorithm must
+    /// decide here how its older pins are verified.
+    const fn from_lock(hashes: SourceTreeHashes) -> Self {
+        let coverage = match hashes.algorithm {
+            SourceTreeHashAlgorithm::GraphcalSourceTreeV1 => PinCoverage::Current,
+            SourceTreeHashAlgorithm::LegacyUnrecordedCoverage => PinCoverage::LegacyUnrecorded,
+        };
+        Self {
+            sha256: hashes.sha256,
+            coverage,
+        }
+    }
+
+    #[cfg(test)]
+    const fn current(sha256: Sha256Digest) -> Self {
+        Self {
+            sha256,
+            coverage: PinCoverage::Current,
+        }
+    }
+}
+
+/// Why the previous `graphcal.lock` cannot supply trusted source pins.
+#[derive(Debug, Error)]
+pub enum PriorLockError {
+    /// The lock text is not a readable lockfile.
+    #[error(transparent)]
+    Parse(#[from] graphcal_package::LockfileParseError),
+    /// The lock pins one Git source to contradictory trees.
+    #[error(transparent)]
+    Pins(#[from] graphcal_package::LockValidationError),
 }
 
 #[derive(Debug)]
@@ -655,8 +777,7 @@ impl LockResolver {
         state: &mut ResolveState,
         budget: &mut PackageIngestionBudget,
     ) -> Result<ResolvedDependency, DepsError> {
-        let source_id = GitSourceId::new(spec.git.url.clone(), spec.git.rev.clone());
-        let materialized = self.package_cache.materialize(&source_id, budget)?;
+        let materialized = self.package_cache.materialize(&spec.git, budget)?;
         let manifest = materialized.manifest;
         let expected = spec.expected_package_name(alias);
         if manifest.name != expected {
@@ -667,12 +788,11 @@ impl LockResolver {
                 actual: manifest.name,
             });
         }
-        let id = git_package_id(&manifest.name, &spec.git.url, &spec.git.rev)?;
+        let id = git_package_id(&manifest.name, &spec.git)?;
         let source = PackageSource::Git {
-            url: spec.git.url.clone(),
-            requested_rev: spec.git.rev.clone(),
-            commit: spec.git.rev.clone(),
+            source: spec.git.clone(),
             tree_hashes: SourceTreeHashes {
+                algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
                 sha256: materialized.sha256,
             },
         };
@@ -750,11 +870,17 @@ fn checkout_git_commit(
     let commit = repo.find_commit(commit_id)?;
     let tree_id = commit.tree_id()?.detach();
     let mut index = repo.index_from_tree(&tree_id)?;
+    reject_case_fold_collisions(
+        index
+            .entries()
+            .iter()
+            .map(|entry| entry.path(&index).as_ref()),
+    )?;
     let mut checkout_options =
         repo.checkout_options(gix::worktree::stack::state::attributes::Source::IdMapping)?;
     checkout_options.destination_is_initially_empty = true;
 
-    gix::worktree::state::checkout(
+    let outcome = gix::worktree::state::checkout(
         &mut index,
         workdir,
         repo.objects.clone().into_arc()?,
@@ -763,8 +889,181 @@ fn checkout_git_commit(
         &AtomicBool::new(false),
         checkout_options,
     )?;
+    reject_incomplete_checkout(&outcome)?;
     index.write(gix::index::write::Options::default())?;
     Ok(())
+}
+
+/// A commit tree whose checkout would not reproduce it on every host.
+#[derive(Debug, Error)]
+pub enum CheckoutIntegrityError {
+    /// Two tree paths (or path prefixes) differ only in letter case. A
+    /// case-insensitive filesystem keeps only one of them, so the locked tree
+    /// would depend on the host that ran `deps lock`.
+    #[error(
+        "the commit contains paths that differ only in letter case, which cannot be checked out faithfully on case-insensitive filesystems: {}",
+        render_path_pairs(.0)
+    )]
+    CaseFoldCollision(Vec<(String, String)>),
+    /// The checkout skipped or failed some paths, so the materialized tree is
+    /// not the commit's tree.
+    #[error("the checkout did not reproduce the commit's tree: {}", render_problems(.0))]
+    Incomplete(Vec<CheckoutProblem>),
+}
+
+/// One path the checkout did not write faithfully.
+#[derive(Debug)]
+pub struct CheckoutProblem {
+    path: String,
+    kind: CheckoutProblemKind,
+}
+
+#[derive(Debug)]
+enum CheckoutProblemKind {
+    /// The path collided with an entry already written (case folding or
+    /// Unicode normalization on the host filesystem).
+    Collision(std::io::ErrorKind),
+    /// Writing the path failed.
+    Error(String),
+    /// A filter process reported a path it was never given.
+    DelayedUnknown,
+    /// A filter process never returned a path it was given.
+    DelayedUnprocessed,
+}
+
+impl std::fmt::Display for CheckoutProblem {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            CheckoutProblemKind::Collision(kind) => {
+                write!(
+                    formatter,
+                    "`{}` collided with another path ({kind})",
+                    self.path
+                )
+            }
+            CheckoutProblemKind::Error(message) => {
+                write!(formatter, "`{}` could not be written: {message}", self.path)
+            }
+            CheckoutProblemKind::DelayedUnknown => write!(
+                formatter,
+                "`{}` was reported by a filter process that never received it",
+                self.path
+            ),
+            CheckoutProblemKind::DelayedUnprocessed => {
+                write!(
+                    formatter,
+                    "`{}` was never returned by a filter process",
+                    self.path
+                )
+            }
+        }
+    }
+}
+
+fn render_path_pairs(pairs: &[(String, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(first, second)| format!("`{first}` and `{second}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn render_problems(problems: &[CheckoutProblem]) -> String {
+    problems
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Reject tree paths whose lowercase spellings coincide, comparing every
+/// directory prefix too: `Lib/a.gcl` and `lib/b.gcl` merge into one directory
+/// on a case-insensitive filesystem even though no file collides.
+///
+/// This runs before checkout so the outcome is the same on every host.
+/// Unicode-normalization collisions (macOS NFD) are not detected here; the
+/// checkout's own collision report covers them on the hosts where they occur.
+fn reject_case_fold_collisions<'a>(
+    paths: impl IntoIterator<Item = &'a [u8]>,
+) -> Result<(), CheckoutIntegrityError> {
+    let mut spellings = BTreeMap::<String, String>::new();
+    let mut collisions = BTreeSet::new();
+    for path in paths {
+        let path = String::from_utf8_lossy(path);
+        let prefixes = path
+            .match_indices('/')
+            .map(|(end, _)| &path[..end])
+            .chain(std::iter::once(path.as_ref()));
+        for prefix in prefixes {
+            match spellings.entry(prefix.to_lowercase()) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(prefix.to_string());
+                }
+                std::collections::btree_map::Entry::Occupied(existing)
+                    if existing.get() != prefix =>
+                {
+                    let (first, second) = if existing.get().as_str() < prefix {
+                        (existing.get().clone(), prefix.to_string())
+                    } else {
+                        (prefix.to_string(), existing.get().clone())
+                    };
+                    collisions.insert((first, second));
+                }
+                std::collections::btree_map::Entry::Occupied(_) => {}
+            }
+        }
+    }
+    if collisions.is_empty() {
+        Ok(())
+    } else {
+        Err(CheckoutIntegrityError::CaseFoldCollision(
+            collisions.into_iter().collect(),
+        ))
+    }
+}
+
+/// Reject a checkout that reported anything it did not write faithfully.
+/// gix returns these as data rather than as an error, so ignoring them would
+/// lock a partial tree.
+fn reject_incomplete_checkout(
+    outcome: &gix::worktree::state::checkout::Outcome,
+) -> Result<(), CheckoutIntegrityError> {
+    let lossy = |path: &gix::bstr::BString| String::from_utf8_lossy(path.as_ref()).into_owned();
+    let problems = outcome
+        .collisions
+        .iter()
+        .map(|collision| CheckoutProblem {
+            path: lossy(&collision.path),
+            kind: CheckoutProblemKind::Collision(collision.error_kind),
+        })
+        .chain(outcome.errors.iter().map(|record| CheckoutProblem {
+            path: lossy(&record.path),
+            kind: CheckoutProblemKind::Error(record.error.to_string()),
+        }))
+        .chain(
+            outcome
+                .delayed_paths_unknown
+                .iter()
+                .map(|path| CheckoutProblem {
+                    path: lossy(path),
+                    kind: CheckoutProblemKind::DelayedUnknown,
+                }),
+        )
+        .chain(
+            outcome
+                .delayed_paths_unprocessed
+                .iter()
+                .map(|path| CheckoutProblem {
+                    path: lossy(path),
+                    kind: CheckoutProblemKind::DelayedUnprocessed,
+                }),
+        )
+        .collect::<Vec<_>>();
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(CheckoutIntegrityError::Incomplete(problems))
+    }
 }
 
 fn git_materialize_error(
@@ -798,14 +1097,14 @@ struct ResolvedDependency {
 
 struct PackageCache {
     root: PackageCacheRoot,
-    trusted_sources: BTreeMap<GitSourceId, Sha256Digest>,
+    trusted_sources: BTreeMap<GitSourceId, TrustedPin>,
     session: BTreeMap<GitSourceId, MaterializedGit>,
 }
 
 impl PackageCache {
     const fn new(
         root: PackageCacheRoot,
-        trusted_sources: BTreeMap<GitSourceId, Sha256Digest>,
+        trusted_sources: BTreeMap<GitSourceId, TrustedPin>,
     ) -> Self {
         Self {
             root,
@@ -835,7 +1134,8 @@ impl PackageCache {
         }
 
         let _writer_lock = CacheWriterLock::acquire(&self.root, source)?;
-        let expected = self.trusted_sources.get(source).copied();
+        let pin = self.trusted_sources.get(source).copied();
+        let expected = pin.map(|pin| pin.sha256);
         let trusted_checkout = match expected {
             Some(expected) => {
                 let path = self.root.git_checkout(source, &expected);
@@ -866,15 +1166,10 @@ impl PackageCache {
             })?;
         fetch(temporary.path())?;
         let fetched = inspect_materialized_package(temporary.path(), budget)?;
-        if let Some(expected) = expected
-            && fetched.sha256 != expected
+        if let Some(pin) = pin
+            && fetched.sha256 != pin.sha256
         {
-            return Err(DepsError::CacheIntegrity {
-                url: source.url().to_string(),
-                commit: source.commit().as_str().to_string(),
-                expected,
-                actual: fetched.sha256,
-            });
+            verify_mismatched_pin(source, pin, &fetched, temporary.path(), budget)?;
         }
 
         let path = self.root.git_checkout(source, &fetched.sha256);
@@ -892,6 +1187,50 @@ impl PackageCache {
         };
         self.session.insert(source.clone(), materialized.clone());
         Ok(materialized)
+    }
+}
+
+/// Decide whether a fetched tree whose current digest differs from its pin
+/// still matches it.
+///
+/// A current pin must match exactly. A lock format 1 pin may have been written
+/// by Graphcal 0.0.1-alpha.30 or earlier, which hashed only `graphcal.toml`
+/// and the source directory; it is accepted when that older coverage of the
+/// fetched tree reproduces it. The files it covered are then unchanged, and
+/// the new lock pins the full current coverage. Matching neither coverage is
+/// reported as unverifiable rather than as changed contents, because a
+/// coverage difference cannot be told apart from a change.
+fn verify_mismatched_pin(
+    source: &GitSourceId,
+    pin: TrustedPin,
+    fetched: &InspectedPackage,
+    checkout: &Path,
+    budget: &PackageIngestionBudget,
+) -> Result<(), DepsError> {
+    match pin.coverage {
+        PinCoverage::Current => Err(DepsError::CacheIntegrity {
+            url: source.url().to_string(),
+            commit: source.commit().as_str().to_string(),
+            expected: pin.sha256,
+            actual: fetched.sha256,
+        }),
+        PinCoverage::LegacyUnrecorded => {
+            let source_dir_only = hash_source_dir_only(
+                checkout,
+                &fetched.manifest.source_dir,
+                budget.recheck_limits(fetched.charged),
+            )?;
+            if source_dir_only == pin.sha256 {
+                Ok(())
+            } else {
+                Err(DepsError::LegacyPinUnverifiable {
+                    url: source.url().to_string(),
+                    commit: source.commit().as_str().to_string(),
+                    expected: pin.sha256,
+                    actual: fetched.sha256,
+                })
+            }
+        }
     }
 }
 
@@ -1032,6 +1371,7 @@ struct MaterializedGit {
 struct InspectedPackage {
     sha256: Sha256Digest,
     manifest: PackageManifest,
+    charged: ChargedSourceTree,
 }
 
 impl InspectedPackage {
@@ -1048,8 +1388,12 @@ fn inspect_materialized_package(
     budget: &mut PackageIngestionBudget,
 ) -> Result<InspectedPackage, DepsError> {
     let manifest = read_manifest(root, budget)?;
-    let sha256 = hash_source_tree(root, &manifest.source_dir, budget)?;
-    Ok(InspectedPackage { sha256, manifest })
+    let (sha256, charged) = hash_source_tree(root, &manifest.source_dir, budget)?;
+    Ok(InspectedPackage {
+        sha256,
+        manifest,
+        charged,
+    })
 }
 
 fn read_manifest(
@@ -1067,7 +1411,7 @@ fn read_manifest(
             FileSystemEntryKind::Directory
             | FileSystemEntryKind::Symlink
             | FileSystemEntryKind::Other,
-        ) => return Err(DepsError::UnsupportedSourceEntry { path }),
+        ) => return Err(DepsError::NotARegularFile { path }),
         Err(source) => {
             return Err(DepsError::Metadata { path, source });
         }
@@ -1082,9 +1426,9 @@ fn root_package_id(name: &PackageName) -> Result<PackageInstanceId, DepsError> {
 
 fn git_package_id(
     name: &PackageName,
-    url: &GitUrl,
-    rev: &GitCommitHash,
+    source: &GitSourceId,
 ) -> Result<PackageInstanceId, DepsError> {
+    let (url, rev) = (source.url(), source.commit());
     let mut key_hash = Sha256::new();
     key_hash.update(name.as_str().as_bytes());
     key_hash.update([0]);
@@ -1103,7 +1447,7 @@ fn hash_source_tree(
     root: &Path,
     source_dir: &PackageSourceDirectory,
     budget: &mut PackageIngestionBudget,
-) -> Result<Sha256Digest, DepsError> {
+) -> Result<(Sha256Digest, ChargedSourceTree), DepsError> {
     let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
         path: root.to_path_buf(),
         source,
@@ -1124,7 +1468,27 @@ fn hash_source_tree(
         other => DepsError::PackageSnapshot(other),
     })?
     .hash();
-    budget.account_source_tree(root, &hash)?;
+    let charged = budget.account_source_tree(root, &hash)?;
+    let sha256 = Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)?;
+    Ok((sha256, charged))
+}
+
+/// Digest of `graphcal.toml` and the source directory alone: the coverage of
+/// tree hashes written before Graphcal 0.0.1-alpha.31. It rereads a subset of
+/// a tree already charged, under [`PackageIngestionBudget::recheck_limits`].
+fn hash_source_dir_only(
+    root: &Path,
+    source_dir: &PackageSourceDirectory,
+    limits: SourceTreeHashLimits,
+) -> Result<Sha256Digest, DepsError> {
+    let fs = RealFileSystem::rooted(root).map_err(|source| DepsError::Canonicalize {
+        path: root.to_path_buf(),
+        source,
+    })?;
+    let hash = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        graphcal_io::capture_source_tree(&fs, root, &source_dir.to_path_buf(), limits, cancellation)
+    })?
+    .hash();
     Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)
 }
 
@@ -1218,11 +1582,22 @@ pub enum DepsError {
         to: PathBuf,
         source: std::io::Error,
     },
-    /// A refetched immutable source contradicted the prior validated lock.
+    /// A refetched immutable source contradicted the previous lock's pin.
     #[error(
-        "Git dependency `{url}` at immutable commit `{commit}` has source-tree digest `{actual}`, but the prior lock requires `{expected}`"
+        "Git dependency `{url}` at immutable commit `{commit}` has source-tree digest `{actual}`, but the existing graphcal.lock pins `{expected}`; the dependency's contents changed since it was locked. Investigate the change before trusting it; to accept it, delete graphcal.lock and rerun `graphcal deps lock`"
     )]
     CacheIntegrity {
+        url: String,
+        commit: String,
+        expected: Sha256Digest,
+        actual: Sha256Digest,
+    },
+    /// A lock format 1 pin matches neither coverage it may have been computed
+    /// with, so whether the dependency changed cannot be determined.
+    #[error(
+        "Git dependency `{url}` at immutable commit `{commit}` has source-tree digest `{actual}`, but the existing graphcal.lock (lock format 1) pins `{expected}`. Format 1 pins do not record which files they cover (Graphcal 0.0.1-alpha.30 and earlier hashed only graphcal.toml and the source directory), and this pin matches neither coverage, so Graphcal cannot tell whether the dependency changed. Review the dependency at this commit; if you trust it, delete graphcal.lock and rerun `graphcal deps lock` to pin it again"
+    )]
+    LegacyPinUnverifiable {
         url: String,
         commit: String,
         expected: Sha256Digest,
@@ -1247,14 +1622,47 @@ pub enum DepsError {
         publish: std::io::Error,
         rollback: std::io::Error,
     },
-    /// Unsupported file type in source hash input.
-    #[error("unsupported source entry `{}`", path.display())]
-    UnsupportedSourceEntry { path: PathBuf },
+    /// A manifest or plugin artifact is not a regular file.
+    #[error("`{}` must be a regular file", path.display())]
+    NotARegularFile { path: PathBuf },
+    /// The root package's source directory is not a directory.
+    #[error("package source directory `{}` is not a directory", path.display())]
+    SourceDirNotDirectory { path: PathBuf },
+    /// A plugin artifact is a symbolic link.
+    #[error(
+        "plugin artifact `{}` is a symbolic link; plugins are pinned and loaded only from regular files",
+        path.display()
+    )]
+    PluginSymlink { path: PathBuf },
+    /// A socket, device, FIFO, or similar entry in the root package sources.
+    #[error(
+        "`{}` is not a regular file, directory, or symbolic link to one; package sources cannot contain special files",
+        path.display()
+    )]
+    SpecialSourceEntry { path: PathBuf },
+    /// A root-package symbolic link the loader cannot follow either.
+    #[error(
+        "symbolic link `{}` does not resolve to an entry inside the project root ({source}); Graphcal follows symbolic links in the root package only when they stay inside the project root",
+        path.display()
+    )]
+    RootSymlinkUnresolved {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     /// Manifest parse failed.
     #[error("invalid manifest `{}`: {source}", path.display())]
     Manifest {
         path: PathBuf,
         source: graphcal_package::ManifestError,
+    },
+    /// The existing lockfile cannot supply trusted source pins.
+    #[error(
+        "existing `{}` is invalid, so its source-tree pins cannot be checked: {source}; fix or delete it, then rerun `graphcal deps lock`",
+        path.display()
+    )]
+    PriorLock {
+        path: PathBuf,
+        source: PriorLockError,
     },
     /// Lock validation failed.
     #[error("{0}")]
@@ -1322,7 +1730,7 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
         )
         .unwrap();
         let dependency = manifest.dependencies.into_values().next().unwrap();
-        GitSourceId::new(dependency.git.url, dependency.git.rev)
+        dependency.git
     }
 
     fn write_cached_package(root: &Path, source: &str) {
@@ -1374,6 +1782,50 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
     }
 
     #[test]
+    fn case_fold_collisions_are_rejected_for_files_and_directory_prefixes() {
+        let accept = [b"src/lib.gcl".as_slice(), b"src/main.gcl", b"README.md"];
+        assert!(reject_case_fold_collisions(accept).is_ok());
+
+        let files = [b"src/kernel.wasm".as_slice(), b"src/KERNEL.wasm"];
+        assert!(matches!(
+            reject_case_fold_collisions(files),
+            Err(CheckoutIntegrityError::CaseFoldCollision(pairs))
+                if pairs == [("src/KERNEL.wasm".to_string(), "src/kernel.wasm".to_string())]
+        ));
+
+        let directories = [b"Lib/a.gcl".as_slice(), b"lib/b.gcl"];
+        let error = reject_case_fold_collisions(directories).unwrap_err();
+        assert!(matches!(
+            &error,
+            CheckoutIntegrityError::CaseFoldCollision(pairs)
+                if pairs == &[("Lib".to_string(), "lib".to_string())]
+        ));
+        assert!(error.to_string().contains("`Lib` and `lib`"), "{error}");
+    }
+
+    #[test]
+    fn incomplete_checkouts_name_every_skipped_path() {
+        use gix::worktree::state::checkout::{Collision, Outcome};
+
+        assert!(reject_incomplete_checkout(&Outcome::default()).is_ok());
+
+        let outcome = Outcome {
+            collisions: vec![Collision {
+                path: "src/KERNEL.wasm".into(),
+                error_kind: std::io::ErrorKind::AlreadyExists,
+            }],
+            delayed_paths_unknown: vec!["unknown.gcl".into()],
+            delayed_paths_unprocessed: vec!["pending.gcl".into()],
+            ..Outcome::default()
+        };
+        let error = reject_incomplete_checkout(&outcome).unwrap_err();
+        let message = error.to_string();
+        for path in ["src/KERNEL.wasm", "unknown.gcl", "pending.gcl"] {
+            assert!(message.contains(&format!("`{path}`")), "{message}");
+        }
+    }
+
+    #[test]
     fn package_cache_reuses_a_trusted_checkout_without_network_access() {
         use std::cell::Cell;
 
@@ -1382,8 +1834,10 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
         let source = test_git_source();
         let (_checkout, inspected) =
             install_cached_package(&root, &source, "node x: Dimensionless = 1.0;\n");
-        let mut cache =
-            PackageCache::new(root, BTreeMap::from([(source.clone(), inspected.sha256)]));
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), TrustedPin::current(inspected.sha256))]),
+        );
         let fetches = Cell::new(0_u8);
 
         let materialized = cache
@@ -1435,7 +1889,10 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
         let old_source = "node old: Dimensionless = 1.0;\n";
         let (checkout, _inspected) = install_cached_package(&root, &source, old_source);
         let contradictory = Sha256Digest::new("f".repeat(64)).unwrap();
-        let mut cache = PackageCache::new(root, BTreeMap::from([(source.clone(), contradictory)]));
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), TrustedPin::current(contradictory))]),
+        );
 
         let error = cache
             .materialize_with(&source, &mut PackageIngestionBudget::default(), |_path| {
@@ -1459,8 +1916,10 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
             install_cached_package(&root, &source, "node old: Dimensionless = 1.0;\n");
         let corrupted = "node corrupt: Dimensionless = 99.0;\n";
         std::fs::write(checkout.join("src/units.gcl"), corrupted).unwrap();
-        let mut cache =
-            PackageCache::new(root, BTreeMap::from([(source.clone(), inspected.sha256)]));
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), TrustedPin::current(inspected.sha256))]),
+        );
 
         let error = cache
             .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
@@ -1481,6 +1940,137 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
             std::fs::read_to_string(checkout.join("src/units.gcl")).unwrap(),
             corrupted
         );
+    }
+
+    /// A package importing a Wasm artifact from outside its source directory,
+    /// whose current and pre-alpha.31 tree hashes therefore differ.
+    fn write_package_with_outside_plugin(root: &Path, source: &str) {
+        write_cached_package(
+            root,
+            &format!(
+                "import plugin \"plugins/k.wasm\" as k {{ fn f(x: Dimensionless) -> Dimensionless; }}\n{source}"
+            ),
+        );
+        std::fs::create_dir_all(root.join("plugins")).unwrap();
+        std::fs::write(root.join("plugins/k.wasm"), b"kernel bytes").unwrap();
+    }
+
+    fn legacy_pin(sha256: Sha256Digest) -> TrustedPin {
+        TrustedPin {
+            sha256,
+            coverage: PinCoverage::LegacyUnrecorded,
+        }
+    }
+
+    #[test]
+    fn legacy_pins_written_without_plugin_coverage_still_verify() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        write_package_with_outside_plugin(fixture.path(), "node x: Dimensionless = 1.0;\n");
+        let current = inspect_for_test(fixture.path());
+        let legacy = hash_source_dir_only(
+            fixture.path(),
+            &current.manifest.source_dir,
+            PackageIngestionBudget::default().recheck_limits(current.charged),
+        )
+        .unwrap();
+        assert_ne!(legacy, current.sha256, "the fixture must exercise coverage");
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let mut cache =
+            PackageCache::new(root, BTreeMap::from([(source.clone(), legacy_pin(legacy))]));
+
+        let materialized = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
+                write_package_with_outside_plugin(path, "node x: Dimensionless = 1.0;\n");
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(materialized.sha256, current.sha256);
+
+        // A legacy pin with the current coverage verifies too.
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), legacy_pin(current.sha256))]),
+        );
+        let materialized = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
+                write_package_with_outside_plugin(path, "node x: Dimensionless = 1.0;\n");
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(materialized.sha256, current.sha256);
+    }
+
+    /// The legacy re-hash rereads files the budget already charged, so it must
+    /// not be limited by what remains after charging them.
+    #[test]
+    fn legacy_pin_recheck_fits_a_budget_the_fetched_tree_exhausted() {
+        let fixture = tempfile::tempdir().unwrap();
+        write_package_with_outside_plugin(fixture.path(), "node x: Dimensionless = 1.0;\n");
+        let probe = inspect_for_test(fixture.path());
+        let legacy = hash_source_dir_only(
+            fixture.path(),
+            &probe.manifest.source_dir,
+            PackageIngestionBudget::default().recheck_limits(probe.charged),
+        )
+        .unwrap();
+        let manifest_bytes = std::fs::metadata(fixture.path().join("graphcal.toml"))
+            .unwrap()
+            .len();
+        // Exactly enough for the manifest read plus the full tree: nothing
+        // remains once the fetched package is inspected.
+        let budget = test_budget(
+            1024,
+            1024,
+            1024,
+            1024,
+            1 + probe.charged.entries,
+            manifest_bytes + probe.charged.bytes,
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let mut cache =
+            PackageCache::new(root, BTreeMap::from([(source.clone(), legacy_pin(legacy))]));
+        let mut budget = budget;
+
+        let materialized = cache
+            .materialize_with(&source, &mut budget, |path| {
+                write_package_with_outside_plugin(path, "node x: Dimensionless = 1.0;\n");
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(materialized.sha256, probe.sha256);
+        assert_eq!(budget.remaining_bytes(), 0);
+    }
+
+    #[test]
+    fn legacy_pins_matching_neither_coverage_are_unverifiable_not_changed() {
+        let directory = tempfile::tempdir().unwrap();
+        let fixture = tempfile::tempdir().unwrap();
+        write_package_with_outside_plugin(fixture.path(), "node old: Dimensionless = 1.0;\n");
+        let old = inspect_for_test(fixture.path());
+        let root = PackageCacheRoot::from_path(directory.path()).unwrap();
+        let source = test_git_source();
+        let mut cache = PackageCache::new(
+            root,
+            BTreeMap::from([(source.clone(), legacy_pin(old.sha256))]),
+        );
+
+        let error = cache
+            .materialize_with(&source, &mut PackageIngestionBudget::default(), |path| {
+                write_package_with_outside_plugin(path, "node new: Dimensionless = 2.0;\n");
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(
+            matches!(&error, DepsError::LegacyPinUnverifiable { expected, .. } if *expected == old.sha256),
+            "{error:?}"
+        );
+        assert!(error.to_string().contains("delete graphcal.lock and rerun"));
     }
 
     #[test]
@@ -1764,9 +2354,65 @@ import plugin "plugins/linked.wasm" as linked {
 
         assert!(matches!(
             resolve_plugin_pins(&root, &source_dir, &mut budget),
-            Err(DepsError::UnsupportedSourceEntry { path })
+            Err(DepsError::PluginSymlink { path })
                 if path.ends_with("plugins/linked.wasm")
         ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// CLI-16: `deps lock` follows root-package symlinks exactly when the
+    /// loader does, so a symlinked module's plugin imports are pinned.
+    #[cfg(unix)]
+    #[test]
+    fn plugin_scan_follows_root_symlinks_that_stay_inside_the_project() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src/app")).unwrap();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        std::fs::create_dir_all(root.join("plugins")).unwrap();
+        std::fs::write(
+            root.join("shared/lib.gcl"),
+            "import plugin \"plugins/demo.wasm\" as demo {\n    fn f(x: Dimensionless) -> Dimensionless;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("plugins/demo.wasm"), b"bytes").unwrap();
+        std::os::unix::fs::symlink("../../shared/lib.gcl", root.join("src/app/lib.gcl")).unwrap();
+        std::os::unix::fs::symlink("../../shared", root.join("src/app/shared")).unwrap();
+        // A directory cycle must terminate.
+        std::os::unix::fs::symlink("..", root.join("src/app/loop")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+
+        let pins = resolve_plugin_pins(&root, &source_dir, &mut PackageIngestionBudget::default())
+            .unwrap();
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].path().to_string(), "plugins/demo.wasm");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_scan_explains_root_symlinks_that_escape_the_project() {
+        let root = unique_temp_dir();
+        let outside = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("lib.gcl"), "node x: Dimensionless = 1.0;\n").unwrap();
+        std::os::unix::fs::symlink(outside.join("lib.gcl"), root.join("src/lib.gcl")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+
+        let error = resolve_plugin_pins(&root, &source_dir, &mut PackageIngestionBudget::default())
+            .unwrap_err();
+        assert!(
+            matches!(&error, DepsError::RootSymlinkUnresolved { path, .. } if path.ends_with("src/lib.gcl")),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("only when they stay inside the project root")
+        );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
     }
