@@ -495,7 +495,7 @@ fn parse_standard_git_url(value: &str) -> Result<GitUrlKind, GitUrlErrorReason> 
         .host()
         .map(|host| host.to_owned())
         .ok_or(GitUrlErrorReason::MissingHost)?;
-    reject_option_shaped(&host.to_string())?;
+    reject_authority_component(&host.to_string())?;
     let path = parse_repository_path(
         parsed
             .path_segments()
@@ -542,7 +542,7 @@ fn parse_scp_git_url(value: &str) -> Result<GitUrlKind, GitUrlErrorReason> {
     if host_text.contains('@') {
         return Err(GitUrlErrorReason::Malformed);
     }
-    reject_option_shaped(host_text)?;
+    reject_authority_component(host_text)?;
     let host = Host::parse(host_text).map_err(|_| GitUrlErrorReason::Malformed)?;
     let user = parse_required_ssh_user(user)?;
     let path = parse_repository_path(path.split('/'))?;
@@ -561,7 +561,7 @@ fn parse_required_ssh_user(value: &str) -> Result<SshUser, GitUrlErrorReason> {
     if value.is_empty() || value.contains('@') {
         return Err(GitUrlErrorReason::Malformed);
     }
-    reject_option_shaped(value)?;
+    reject_authority_component(value)?;
     Ok(SshUser(value.to_string()))
 }
 
@@ -603,8 +603,29 @@ fn parse_repository_path<'a>(
     Ok(GitRepositoryPath { components })
 }
 
+/// Validate an SSH user or a host before it can reach a transport.
+///
+/// Percent-encoding is rejected outright rather than decoded: no real SSH
+/// user name or host name needs it, and Git implementations disagree on
+/// whether to decode it, so `%2DoProxyCommand` could pass this check while a
+/// transport sees `-oProxyCommand`. Rejecting `%` keeps the validated spelling
+/// identical to the one every transport receives.
+fn reject_authority_component(value: &str) -> Result<(), GitUrlErrorReason> {
+    if value.contains('%') {
+        return Err(GitUrlErrorReason::PercentEncodedAuthority);
+    }
+    reject_option_shaped(value)
+}
+
+/// Reject a component that is, or decodes to, an option-shaped argument.
+///
+/// Repository paths keep percent-encoding (it is legitimate there, e.g. for
+/// spaces), so the check covers both the raw `-` and its encoding `%2D`.
 fn reject_option_shaped(value: &str) -> Result<(), GitUrlErrorReason> {
-    if value.starts_with('-') {
+    let encoded_dash = value
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("%2d"));
+    if value.starts_with('-') || encoded_dash {
         Err(GitUrlErrorReason::OptionShaped)
     } else {
         Ok(())
@@ -701,6 +722,7 @@ enum GitUrlErrorReason {
     Credentials,
     QueryOrFragment,
     OptionShaped,
+    PercentEncodedAuthority,
 }
 
 impl fmt::Display for GitUrlErrorReason {
@@ -722,6 +744,9 @@ impl fmt::Display for GitUrlErrorReason {
             }
             Self::OptionShaped => {
                 formatter.write_str("must not contain option-shaped authority or path components")
+            }
+            Self::PercentEncodedAuthority => {
+                formatter.write_str("must not percent-encode the user name or host name")
             }
         }
     }
@@ -3411,6 +3436,39 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
                 GitUrlErrorReason::OptionShaped,
             ),
             ("git@host:../repo", GitUrlErrorReason::Malformed),
+            // CLI-7: percent-encoding must not smuggle an option past the check.
+            (
+                "ssh://git@%2DoProxyCommand=x/org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "ssh://%2DoProxyCommand=x@host/org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "ssh://git%40evil@host/org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "%2Doops@host:org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "git@ho%2Dst:org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "ssh://git@host/%2DoProxyCommand=x",
+                GitUrlErrorReason::OptionShaped,
+            ),
+            (
+                "git@host:%2doProxyCommand=x",
+                GitUrlErrorReason::OptionShaped,
+            ),
+            (
+                "https://host/org/%2D-upload-pack",
+                GitUrlErrorReason::OptionShaped,
+            ),
         ];
         for (invalid, expected_reason) in cases {
             assert_eq!(
@@ -3419,6 +3477,12 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
                 "wrong rejection reason for `{invalid}`"
             );
         }
+    }
+
+    #[test]
+    fn git_urls_keep_percent_encoding_inside_repository_paths() {
+        let url = GitUrl::new("https://host/org/my%20repo.git").unwrap();
+        assert_eq!(url.to_string(), "https://host/org/my%20repo.git");
     }
 
     #[test]
