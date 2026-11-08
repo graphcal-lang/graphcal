@@ -383,7 +383,10 @@ jobs:
       - plan
       - build-view
       - announce
-    if: ${{ needs.plan.outputs.publishing == 'true' }}
+    # Opt-in until the maintainer has created the `cloudflare-view` environment
+    # and its secrets: set the repository variable VIEW_DEPLOY to `true` then.
+    # Without the gate a release would fail here on empty secrets.
+    if: ${{ needs.plan.outputs.publishing == 'true' && vars.VIEW_DEPLOY == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

@@ -178,7 +178,9 @@ dependencies or plugins, files over 256 KiB, and projects over 1 MiB.
   browser extension answers. It is served as Cloudflare Workers static assets:
   the release workflow's `build-view` job builds `web/view/dist` with
   `VIEW_BASE=/`, and `deploy-view` runs `wrangler deploy` with
-  `web/view-deploy/wrangler.jsonc`. The HTTP headers, CSP included, are in
+  `web/view-deploy/wrangler.jsonc`. `deploy-view` runs only when the
+  repository variable `VIEW_DEPLOY` is `true`; set it once the `cloudflare-view`
+  environment and its secrets exist. The HTTP headers, CSP included, are in
   `web/view/public/_headers`; they apply only to assets, so the Worker must
   stay without a script.
 - Until that origin is live, `just docs-build` still assembles the `/view/`
