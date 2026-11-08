@@ -41,6 +41,64 @@ impl FileSystemReadError {
     }
 }
 
+impl FileSystemReadError {
+    /// The sandbox refusal carried by this failure, when a rooted reader
+    /// rejected the path because it resolves outside the root.
+    #[must_use]
+    pub fn outside_root(&self) -> Option<&OutsideRootError> {
+        match self {
+            Self::Io(error) => OutsideRootError::find(error),
+            Self::ByteLimitExceeded { .. } | Self::EntryLimitExceeded { .. } => None,
+        }
+    }
+}
+
+/// A rooted reader refused a path because it resolves outside the root.
+///
+/// It is distinct from "not found": the entry may well exist, but the sandbox
+/// does not let the reader see it. The [`FileSystemReader`] methods return
+/// [`io::Error`], so the refusal travels as the error's typed payload (with
+/// [`io::ErrorKind::PermissionDenied`]); recover it with [`Self::find`] rather
+/// than by inspecting the error kind or message.
+#[derive(Debug, thiserror::Error)]
+#[error("path {} is outside the filesystem root {}", path.display(), root.display())]
+pub struct OutsideRootError {
+    path: PathBuf,
+    root: PathBuf,
+}
+
+impl OutsideRootError {
+    /// The refusal of `path`, which resolves outside `root`.
+    #[must_use]
+    pub const fn new(path: PathBuf, root: PathBuf) -> Self {
+        Self { path, root }
+    }
+
+    /// The refused path, as requested.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// The root of the reader that refused the path.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    /// Carry this refusal through an [`io::Error`] boundary.
+    #[must_use]
+    pub fn into_io_error(self) -> io::Error {
+        io::Error::new(io::ErrorKind::PermissionDenied, self)
+    }
+
+    /// The refusal carried by `error`, if it is one.
+    #[must_use]
+    pub fn find(error: &io::Error) -> Option<&Self> {
+        error.get_ref()?.downcast_ref()
+    }
+}
+
 impl From<FileSystemReadError> for Outcome<FileSystemReadError> {
     fn from(error: FileSystemReadError) -> Self {
         Self::Failed(error)

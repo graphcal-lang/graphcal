@@ -399,6 +399,9 @@ pub(super) enum ResolveFailure {
     UnknownDependency { package: PackageName },
     /// The lockfile or package authority is inconsistent.
     PackageAuthority(PackageAuthorityError),
+    /// A candidate file exists but could not be inspected (for example a
+    /// symlink loop or a permission failure). `reason` is host text.
+    Unreadable { file: PathBuf, reason: String },
 }
 
 impl ResolveFailure {
@@ -441,6 +444,11 @@ impl ResolveFailure {
             .into(),
             Self::PackageAuthority(error) => LoadError::ManifestError {
                 message: error.to_string(),
+            }
+            .into(),
+            Self::Unreadable { file, reason } => LoadError::SourceReadFailed {
+                path: file.clone(),
+                reason: reason.clone(),
             }
             .into(),
         }

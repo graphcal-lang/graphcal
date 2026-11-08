@@ -17,7 +17,7 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
 use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_io::{FileSystemReadError, FileSystemReader};
+use graphcal_io::{FileSystemReadError, FileSystemReader, OutsideRootError};
 use graphcal_package::PackageManifest;
 
 use super::budget::{
@@ -235,8 +235,29 @@ pub(super) fn resolve_module<A: ModuleSourceAuthority>(
                 file_path.join(segment.name.as_str())
             });
         file_path.set_extension("gcl");
-        let Ok(canonical) = tree.reader.canonicalize(&file_path) else {
-            continue;
+        // Only a missing file moves on to a shorter prefix. A sandbox refusal
+        // or an unreadable entry is reported, never treated as absence: an
+        // escaping symlink must not resolve to an inline DAG of a shorter
+        // prefix instead.
+        let canonical = match tree.reader.canonicalize(&file_path) {
+            Ok(canonical) => canonical,
+            Err(error) if OutsideRootError::find(&error).is_some() => {
+                return ModuleResolution::OutsideRoot;
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return ModuleResolution::Failed(ResolveFailure::Unreadable {
+                    file: file_path,
+                    reason: error.to_string(),
+                });
+            }
         };
         // Path sandboxing: modules must stay inside their package's root.
         if !canonical.starts_with(tree.root) {

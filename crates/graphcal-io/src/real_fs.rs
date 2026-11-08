@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use crate::VirtualAbsolutePath;
 use crate::{
     BoundedFileHash, ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError,
-    FileSystemReader,
+    FileSystemReader, OutsideRootError,
 };
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -84,14 +84,7 @@ impl RealFileSystem {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn outside_root_error(path: &Path, root: &Path) -> io::Error {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "path {} is outside the filesystem root {}",
-                path.display(),
-                root.display()
-            ),
-        )
+        OutsideRootError::new(path.to_path_buf(), root.to_path_buf()).into_io_error()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -133,12 +126,12 @@ impl RealFileSystem {
         let canonicalize = |relative: &Path| {
             root.directory
                 .canonicalize(relative)
-                .map_err(normalize_rooted_error)
+                .map_err(|error| root.classify_error(relative, error))
         };
         let metadata = root
             .directory
             .metadata(relative)
-            .map_err(normalize_rooted_error)?;
+            .map_err(|error| root.classify_error(relative, error))?;
         if metadata.is_file() || metadata.is_dir() {
             return canonicalize(relative);
         }
@@ -238,7 +231,7 @@ impl RealFileSystem {
             if !root
                 .directory
                 .metadata(&relative)
-                .map_err(normalize_rooted_error)?
+                .map_err(|error| root.classify_error(&relative, error))?
                 .is_file()
             {
                 return Err(reject());
@@ -253,8 +246,8 @@ impl RealFileSystem {
             }
             let file = root
                 .directory
-                .open_with(relative, &options)
-                .map_err(normalize_rooted_error)?
+                .open_with(&relative, &options)
+                .map_err(|error| root.classify_error(&relative, error))?
                 .into_std();
             return if file.metadata()?.is_file() {
                 Ok(file)
@@ -312,8 +305,8 @@ impl RealFileSystem {
             before_open();
             for entry in root
                 .directory
-                .read_dir(relative)
-                .map_err(normalize_rooted_error)
+                .read_dir(&relative)
+                .map_err(|error| root.classify_error(&relative, error))
                 .map_err(FileSystemReadError::Io)?
             {
                 cancellation.checkpoint()?;
@@ -322,7 +315,7 @@ impl RealFileSystem {
                 }
                 names.push(
                     entry
-                        .map_err(normalize_rooted_error)
+                        .map_err(|error| root.classify_error(&relative, error))
                         .map_err(FileSystemReadError::Io)?
                         .file_name(),
                 );
@@ -359,14 +352,27 @@ const fn classify_entry_kind(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn normalize_rooted_error(error: io::Error) -> io::Error {
-    if error.kind() == io::ErrorKind::PermissionDenied {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("rooted filesystem rejected path traversal: {error}"),
-        )
-    } else {
-        error
+impl RootCapability {
+    /// Tell a sandbox escape apart from an ordinary permission failure.
+    ///
+    /// `cap-std` reports a path that resolves outside the held root (for
+    /// example through an escaping symlink) as
+    /// [`io::ErrorKind::PermissionDenied`], the same kind as a real access
+    /// failure, and carries no typed marker. The ambient resolution below only
+    /// classifies that refusal; nothing is opened or read through it. An
+    /// escape becomes an [`OutsideRootError`], and every other failure keeps
+    /// its own kind, so a refused path is never mistaken for a missing one.
+    fn classify_error(&self, relative: &Path, error: io::Error) -> io::Error {
+        if error.kind() != io::ErrorKind::PermissionDenied {
+            return error;
+        }
+        let requested = self.canonical_path.as_path().join(relative);
+        match requested.canonicalize() {
+            Ok(resolved) if !resolved.starts_with(self.canonical_path.as_path()) => {
+                RealFileSystem::outside_root_error(&requested, self.canonical_path.as_path())
+            }
+            _ => error,
+        }
     }
 }
 
@@ -426,8 +432,8 @@ impl FileSystemReader for RealFileSystem {
             let relative = Self::rooted_relative_path(root, path)?;
             let file_type = root
                 .directory
-                .symlink_metadata(relative)
-                .map_err(normalize_rooted_error)?
+                .symlink_metadata(&relative)
+                .map_err(|error| root.classify_error(&relative, error))?
                 .file_type();
             return Ok(classify_entry_kind(
                 file_type.is_file(),
@@ -485,6 +491,13 @@ mod tests {
     use std::fs;
 
     const TEST_LIMIT: ByteLimit = ByteLimit::new(1024);
+
+    fn assert_outside_root(outcome: &Outcome<FileSystemReadError>) {
+        assert!(
+            matches!(outcome, Outcome::Failed(error) if error.outside_root().is_some()),
+            "{outcome:?}"
+        );
+    }
 
     #[test]
     fn unrooted_reads_any_absolute_path() {
@@ -773,7 +786,8 @@ mod tests {
         let error = fs_reader
             .read_to_string_bounded(&secret, TEST_LIMIT, &CancellationToken::unbounded())
             .unwrap_err();
-        assert_eq!(io_kind(error), Some(io::ErrorKind::NotFound));
+        assert_outside_root(&error);
+        assert!(OutsideRootError::find(&fs_reader.canonicalize(&secret).unwrap_err()).is_some());
         assert!(!fs_reader.is_file(&secret));
         assert!(!fs_reader.exists(&secret));
     }
@@ -799,7 +813,20 @@ mod tests {
         let error = fs_reader
             .read_to_string_bounded(&link, TEST_LIMIT, &CancellationToken::unbounded())
             .unwrap_err();
-        assert_eq!(io_kind(error), Some(io::ErrorKind::NotFound));
+        assert_outside_root(&error);
+        // PRJ-9: canonicalizing an escaping symlink is a sandbox refusal, not
+        // a missing entry, so callers cannot fall back as if it were absent.
+        let error = fs_reader.canonicalize(&link).unwrap_err();
+        assert!(OutsideRootError::find(&error).is_some(), "{error:?}");
+        assert_ne!(error.kind(), io::ErrorKind::NotFound);
+        // A missing in-root entry is still reported as not found.
+        assert_eq!(
+            fs_reader
+                .canonicalize(&project.join("missing.gcl"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
         assert_eq!(
             fs_reader.entry_kind(&link).unwrap(),
             FileSystemEntryKind::Symlink
