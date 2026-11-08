@@ -427,3 +427,55 @@ fn unknown_dimension_binding_target_is_reported_at_the_include() {
         );
     }
 }
+
+const RECORD_LIB: &str = "\
+pub(bind) index I = { a, b };
+pub type T { T(x: Length[I]) }
+param v: Length[I] = { I#a: 1.0 m, I#b: 2.0 m };
+pub node out: T = T(x: @v);
+pub type U { A(a: Length), B(b: Length) }
+pub node u: U = A(a: 1.0 m);
+";
+
+/// Field access and `match` on a value read from an included instance do
+/// not depend on the reading module naming or constructing its type
+/// (RES-20, #1942).
+#[test]
+fn nominal_value_of_an_include_needs_no_local_mention_of_its_type() {
+    let (_dir, main) = package(&[
+        ("lib.gcl", RECORD_LIB),
+        (
+            "main.gcl",
+            "include p.lib() as l;\n\
+             node z: Length = sum(@l::out.x);\n",
+        ),
+    ]);
+    assert_eq!(si_value(&eval(&main), "z"), 3.0);
+
+    let (_dir, main) = package(&[
+        ("lib.gcl", RECORD_LIB),
+        (
+            "main.gcl",
+            "import p.lib::{ A, B };\n\
+             include p.lib() as l;\n\
+             node z: Length = match @l::u { A(a: x) => x, B(b: x) => x };\n",
+        ),
+    ]);
+    assert_eq!(si_value(&eval(&main), "z"), 1.0);
+
+    // The same holds in a DAG that is itself included.
+    let (_dir, main) = package(&[
+        ("lib.gcl", RECORD_LIB),
+        (
+            "middle.gcl",
+            "include p.lib() as a;\n\
+             pub node total: Length = sum(@a::out.x);\n",
+        ),
+        (
+            "main.gcl",
+            "include p.middle()::{ total };\n\
+             node z: Length = @total;\n",
+        ),
+    ]);
+    assert_eq!(si_value(&eval(&main), "z"), 3.0);
+}

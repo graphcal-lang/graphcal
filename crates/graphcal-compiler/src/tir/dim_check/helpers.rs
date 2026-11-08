@@ -13,8 +13,12 @@ pub(super) fn is_bool_type(ty: &CheckedType<Symbolic>) -> bool {
     }
 }
 
-/// Look up the nominal type of an inferred struct identity as `dag` records
-/// it.
+/// Look up the nominal type of an inferred struct identity: as `dag` records
+/// it, else as the DAG of `tir` that records its metadata.
+///
+/// `dag` records the types it names and constructs. A value it reads from an
+/// included instance or a DAG call can have a type `dag` never names; that
+/// type's field metadata lives with a DAG that does (#1942).
 ///
 /// This lookup is canonical-owner based only. Falling back from a resolved
 /// identity to a bare leaf would make diamond imports with same-named types
@@ -22,8 +26,15 @@ pub(super) fn is_bool_type(ty: &CheckedType<Symbolic>) -> bool {
 pub(super) fn nominal_for_inferred<'a>(
     ty: &StructTypeRef,
     dag: &'a crate::tir::typed::DagTIR,
+    tir: &'a dyn crate::tir::typed::TirRead,
 ) -> Option<&'a crate::tir::typed::ResolvedNominal> {
-    dag.semantic.type_defs.nominal(ty.resolved())
+    let identity = ty.resolved();
+    dag.semantic.type_defs.nominal(identity).or_else(|| {
+        tir.dag_with_type_metadata(identity)?
+            .semantic
+            .type_defs
+            .nominal(identity)
+    })
 }
 
 /// Require `inferred` to be a real quantity; see
