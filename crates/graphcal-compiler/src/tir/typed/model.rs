@@ -1,6 +1,7 @@
 use crate::semantic_error::index::IndexError;
 use crate::syntax::non_empty::NonEmpty;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use indexmap::IndexMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -539,8 +540,10 @@ pub struct ResolvedDagDependencies {
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
     /// Each nominal type with its fields' semantics, keyed by its own
-    /// identity.
-    nominals: std::sync::Arc<HashMap<ResolvedStructTypeName, ResolvedNominal>>,
+    /// identity. Ordered by identity so that every walk over the table (and
+    /// so the first diagnostic it reports) is the same on every run, however
+    /// the tables were unioned.
+    nominals: std::sync::Arc<BTreeMap<ResolvedStructTypeName, ResolvedNominal>>,
 }
 
 impl ResolvedTypeDefs {
@@ -782,13 +785,16 @@ impl DeclarationIdentityLookup {
 /// This structure stores only facts derived or indexed from those bodies.
 #[derive(Debug, Clone, Default)]
 pub struct DagSemanticBody {
-    /// Domain bounds per declaration, lowered to HIR, in source order.
-    pub domain_bounds: HashMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>,
-    /// Source-qualified dynamic unit definitions keyed by canonical unit identity.
+    /// Domain bounds per declaration, lowered to HIR, in declaration-table
+    /// order (constants, then parameters, then nodes, each in source order).
+    /// The order is deterministic, so the first bound diagnostic is too.
+    pub domain_bounds: IndexMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>,
+    /// Source-qualified dynamic unit definitions keyed by canonical unit
+    /// identity, in source order.
     ///
     /// Each entry carries the validated declared/base dimensions and strictly
     /// lowered HIR scalar expression as one semantic record.
-    pub dynamic_unit_scales: HashMap<ResolvedUnitName, crate::ir::model::DynamicUnitScaleEntry>,
+    pub dynamic_unit_scales: IndexMap<ResolvedUnitName, crate::ir::model::DynamicUnitScaleEntry>,
     /// Canonical dependency maps for this DAG.
     pub dependencies: ResolvedDagDependencies,
     /// Include override obligations keyed by the canonical param whose default

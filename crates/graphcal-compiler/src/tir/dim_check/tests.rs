@@ -5227,3 +5227,80 @@ fn unfinished_formulas_are_checked_but_never_executable() {
     assert!(tir.root().is_unfinished(&pending.identity()));
     assert!(!tir.root().is_unfinished(&done.identity()));
 }
+
+/// Each source declares several equally bad facts; the checker must report
+/// the first in declaration order on every run. Semantic facts used to live
+/// in `HashMap`s, whose per-instance random seed made the reported fact vary
+/// between runs (TIR-5), so each source is checked repeatedly.
+#[test]
+fn several_bad_semantic_facts_report_the_first_in_declaration_order() {
+    let cases = [
+        // Domain bound dimension mismatches.
+        (
+            "param a: Length(min: 1.0 s) = 2.0 m;\n\
+             param b: Length(min: 1.0 s) = 2.0 m;\n\
+             param c: Length(min: 1.0 s) = 2.0 m;\n\
+             param d: Length(min: 1.0 s) = 2.0 m;",
+            "param a",
+        ),
+        // Runtime reads in declaration domain bounds.
+        (
+            "param p: Length = 1.0 m;\n\
+             param a: Length(min: @p) = 2.0 m;\n\
+             param b: Length(min: @p) = 2.0 m;\n\
+             param c: Length(min: @p) = 2.0 m;\n\
+             param d: Length(min: @p) = 2.0 m;",
+            "param a",
+        ),
+        // Runtime reads in field domain bounds.
+        (
+            "param p: Length = 1.0 m;\n\
+             type Ta { Ta(v: Length(min: @p)) }\n\
+             type Tb { Tb(v: Length(min: @p)) }\n\
+             type Tc { Tc(v: Length(min: @p)) }\n\
+             type Td { Td(v: Length(min: @p)) }",
+            "type Ta",
+        ),
+        // Dynamic unit scales of the wrong dimension.
+        (
+            "base dim Money;\n\
+             base unit USD: Money;\n\
+             param rate: Dimensionless = 2.0;\n\
+             unit ua: Money = (@rate * 1.0 m) USD;\n\
+             unit ub: Money = (@rate * 1.0 m) USD;\n\
+             unit uc: Money = (@rate * 1.0 m) USD;\n\
+             unit ud: Money = (@rate * 1.0 m) USD;",
+            "unit ua",
+        ),
+        // Dynamic unit scales that read an assertion.
+        (
+            "base dim Money;\n\
+             base unit USD: Money;\n\
+             param rate: Dimensionless = 2.0;\n\
+             assert ok = @rate > 0.0;\n\
+             unit ua: Money = (@ok) USD;\n\
+             unit ub: Money = (@ok) USD;\n\
+             unit uc: Money = (@ok) USD;\n\
+             unit ud: Money = (@ok) USD;",
+            "unit ua",
+        ),
+    ];
+    for (source, first_bad_line) in cases {
+        let line_start = source.find(first_bad_line).unwrap();
+        let line_end = source[line_start..]
+            .find('\n')
+            .map_or(source.len(), |end| line_start + end);
+        for _ in 0..16 {
+            let error = check(source).unwrap_err();
+            let SemanticError::Located(crate::diagnostic::Diagnostic { primary: span, .. }) =
+                &error
+            else {
+                panic!("expected a located diagnostic for `{source}`, got {error:?}");
+            };
+            assert!(
+                (line_start..line_end).contains(&span.offset()),
+                "`{source}`: expected the diagnostic on `{first_bad_line}`, got {error:?}"
+            );
+        }
+    }
+}
