@@ -127,3 +127,18 @@ node c_x: Dimensionless = @c[0];
     assert!((find_value(&result, "z_im") / 1.68e308 - 1.0).abs() < 1.0e-15);
     assert!((find_value(&result, "c_x") / 1.6e308 - 1.0).abs() < 1.0e-15);
 }
+
+#[test]
+fn solve_near_the_edge_of_the_binary64_range_passes_its_residual_check() {
+    let result = compile_and_eval(
+        r"
+node m: Dimensionless[Fin(1), Fin(1)] = table[Fin(1), Fin(1)] { 1e308; };
+node b: Dimensionless[Fin(1)] = table[Fin(1)] { 1e308; };
+node x: Dimensionless[Fin(1)] = solve(@m, @b);
+node x_0: Dimensionless = @x[0];
+",
+    )
+    .unwrap();
+    assert!(!result.has_errors(), "{result:?}");
+    assert_eq!(find_value(&result, "x_0"), 1.0);
+}

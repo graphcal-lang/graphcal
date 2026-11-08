@@ -2305,6 +2305,16 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["eval_expr", "binary_scale"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "binary_scale", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["eval_expr", "coordinate_search"]
 role = "interpreter"
 

@@ -1,5 +1,6 @@
 mod aggregations;
 mod arithmetic;
+mod binary_scale;
 mod complex;
 mod context;
 mod conversions;

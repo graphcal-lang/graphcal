@@ -13,6 +13,7 @@ use graphcal_compiler::outcome::Outcome;
 
 use graphcal_compiler::cancellation::Cancelled;
 
+use super::binary_scale::{Normalized, scaled_by_power_of_two};
 use super::kernel_checkpoint::KernelCheckpoint;
 use crate::invariant::{Failure, Invariant};
 
@@ -344,8 +345,33 @@ impl LuDecomposition {
     }
 }
 
+/// The binary exponent `e` with `2^e <= |value| < 2^(e + 1)`, or `0` for
+/// zero.
+fn binary_exponent(value: f64) -> i32 {
+    Normalized::of(value).map_or(0, |normalized| normalized.exponent)
+}
+
+/// `value * 2^exponent`, rounded once.
+fn scaled(value: f64, exponent: i32) -> f64 {
+    scaled_by_power_of_two(value, i64::from(exponent))
+}
+
+/// The largest magnitude of `values` (zero when empty).
+fn max_magnitude(values: impl IntoIterator<Item = f64>) -> f64 {
+    values
+        .into_iter()
+        .fold(0.0_f64, |norm, value| norm.max(value.abs()))
+}
+
 /// Check the residual of `solution` for `rhs`, both of exactly `order`
-/// values.
+/// values: `‖Ax − b‖∞ ≤ threshold · (‖A‖∞ · ‖x‖∞ + ‖b‖∞)`.
+///
+/// The comparison runs in a normalized domain: `A` is divided by a power of
+/// two near its largest entry, and `x` and `b` by a common power of two, so
+/// every intermediate stays near one and a valid solve whose norms lie near
+/// the edge of the binary64 range is not rejected for overflow. Scaling by a
+/// power of two is exact, so the inequality is unchanged (up to negligible
+/// subnormal rounding of terms far below the tolerance).
 fn checked_residual(
     matrix: &SquareMatrix,
     rhs: &[f64],
@@ -354,35 +380,49 @@ fn checked_residual(
     control: &mut KernelCheckpoint<'_>,
 ) -> Result<(), LuFailure> {
     let order = matrix.order();
+    let matrix_exponent = binary_exponent(max_magnitude(matrix.values.iter().copied()));
+    let solution_exponent = binary_exponent(max_magnitude(solution.iter().copied()));
+    let rhs_exponent = binary_exponent(max_magnitude(rhs.iter().copied()));
+    // `A x` scales by 2^(matrix + solution); `b` must share that scale, and the
+    // larger of the two keeps both normalized values at most about one.
+    let common_exponent = matrix_exponent
+        .saturating_add(solution_exponent)
+        .max(rhs_exponent);
+    let normalized_solution = solution
+        .iter()
+        .map(|value| scaled(*value, matrix_exponent.saturating_sub(common_exponent)))
+        .collect::<Vec<_>>();
     let mut matrix_norm = 0.0_f64;
     let mut residual_norm = 0.0_f64;
     for (row, expected) in rhs.iter().enumerate() {
         let mut row_norm = 0.0_f64;
         let mut product = 0.0_f64;
-        for (column, value) in solution.iter().enumerate() {
+        for (column, value) in normalized_solution.iter().enumerate() {
             control.step()?;
-            let coefficient = matrix.at(row, column);
+            let coefficient = scaled(matrix.at(row, column), matrix_exponent.saturating_neg());
             row_norm = finite(row_norm + coefficient.abs(), operation)?;
             product = finite(coefficient.mul_add(*value, product), operation)?;
         }
+        let expected = scaled(*expected, common_exponent.saturating_neg());
         matrix_norm = matrix_norm.max(row_norm);
-        residual_norm = residual_norm.max((product - expected).abs());
+        residual_norm = residual_norm.max(finite((product - expected).abs(), operation)?);
     }
-    let solution_norm = solution
-        .iter()
-        .fold(0.0_f64, |norm, value| norm.max(value.abs()));
-    let rhs_norm = rhs
-        .iter()
-        .fold(0.0_f64, |norm, value| norm.max(value.abs()));
+    let solution_norm = max_magnitude(normalized_solution);
+    let rhs_norm = max_magnitude(
+        rhs.iter()
+            .map(|value| scaled(*value, common_exponent.saturating_neg())),
+    );
     let scale = finite(matrix_norm.mul_add(solution_norm, rhs_norm), operation)?;
-    let tolerance = finite(numerical_threshold(order) * scale, operation)?;
+    let tolerance = numerical_threshold(order) * scale;
     if residual_norm <= tolerance {
         Ok(())
     } else {
+        // Report both in the caller's units; they saturate to infinity only
+        // beyond the binary64 range.
         Err(LuError::ResidualTooLarge {
             operation,
-            residual: residual_norm,
-            tolerance,
+            residual: scaled(residual_norm, common_exponent),
+            tolerance: scaled(tolerance, common_exponent),
         }
         .into())
     }
@@ -601,6 +641,60 @@ mod tests {
             determinant(&[f64::MAX, 0.0, 0.0, 2.0], 2),
             Err(Outcome::Failed(Failure::Error(LuError::NonFinite { .. })))
         ));
+    }
+
+    fn residual(
+        matrix: &[f64],
+        order: usize,
+        rhs: &[f64],
+        solution: &[f64],
+    ) -> Result<(), LuFailure> {
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        checked_residual(
+            &square(matrix, order),
+            rhs,
+            solution,
+            "solved",
+            &mut KernelCheckpoint::new(&cancellation),
+        )
+    }
+
+    #[test]
+    fn solves_near_the_edge_of_the_binary64_range_pass_the_residual_check() {
+        assert_eq!(solve(&[1.0e308], 1, &[1.0e308]).unwrap(), vec![1.0]);
+        assert_eq!(solve(&[f64::MAX], 1, &[f64::MAX]).unwrap(), vec![1.0]);
+        assert_eq!(
+            solve(&[1.0e308, 0.0, 0.0, 1.0e308], 2, &[1.0e308, 1.0e308]).unwrap(),
+            vec![1.0, 1.0]
+        );
+        let tiny = f64::from_bits(1);
+        assert_eq!(solve(&[tiny], 1, &[tiny]).unwrap(), vec![1.0]);
+    }
+
+    #[test]
+    fn residual_tolerance_pins_norms_and_threshold() {
+        // A = [[1, 1], [0, 1]], b = [2, 1]: ‖A‖∞ = 2, ‖x‖∞ ≈ 1, ‖b‖∞ = 2,
+        // threshold = 128 ε = 2^-45, so the tolerance is about 2^-43.
+        let matrix = [1.0, 1.0, 0.0, 1.0];
+        let rhs = [2.0, 1.0];
+        let step = 2.0_f64.powi(-45);
+        assert!(residual(&matrix, 2, &rhs, &[3.0_f64.mul_add(step, 1.0), 1.0]).is_ok());
+        assert!(matches!(
+            residual(&matrix, 2, &rhs, &[5.0_f64.mul_add(step, 1.0), 1.0]),
+            Err(Outcome::Failed(Failure::Error(
+                LuError::ResidualTooLarge { .. }
+            )))
+        ));
+        let Err(Outcome::Failed(Failure::Error(LuError::ResidualTooLarge {
+            residual,
+            tolerance,
+            ..
+        }))) = residual(&[1.0e300], 1, &[1.0e300], &[2.0])
+        else {
+            panic!("a wrong solution must fail the residual check");
+        };
+        assert!((residual / 1.0e300 - 1.0).abs() < 1.0e-15);
+        assert!((tolerance / (64.0 * f64::EPSILON * 3.0e300) - 1.0).abs() < 1.0e-15);
     }
 
     #[test]
