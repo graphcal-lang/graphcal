@@ -196,6 +196,10 @@ pub enum InterfaceError {
     DuplicateParameter { name: PortName },
     #[error("output `{name}` is listed more than once")]
     DuplicateOutput { name: PortName },
+    /// Ports share one namespace: unit choices, unit scales, and records
+    /// name a port without saying whether it is a parameter or an output.
+    #[error("`{name}` is listed both as a parameter and as an output")]
+    ParameterAndOutput { name: PortName },
 }
 
 impl ModelInterface {
@@ -204,7 +208,8 @@ impl ModelInterface {
     ///
     /// # Errors
     ///
-    /// Returns [`InterfaceError`] when a parameter or output name repeats.
+    /// Returns [`InterfaceError`] when a parameter or output name repeats,
+    /// or when a parameter and an output share a name.
     pub fn new(
         parameters: Vec<ParameterDescription>,
         outputs: Vec<OutputDescription>,
@@ -218,9 +223,18 @@ impl ModelInterface {
                 name: parameter.name.clone(),
             });
         }
+        let parameter_names = seen;
         let mut seen = HashSet::with_capacity(outputs.len());
         if let Some(output) = outputs.iter().find(|output| !seen.insert(&output.name)) {
             return Err(InterfaceError::DuplicateOutput {
+                name: output.name.clone(),
+            });
+        }
+        if let Some(output) = outputs
+            .iter()
+            .find(|output| parameter_names.contains(&output.name))
+        {
+            return Err(InterfaceError::ParameterAndOutput {
                 name: output.name.clone(),
             });
         }
@@ -412,6 +426,25 @@ pub mod tests {
             ModelInterface::new(Vec::new(), vec![output(), output()]),
             Err(InterfaceError::DuplicateOutput { name: name("x") })
         );
+    }
+
+    #[test]
+    fn parameters_and_outputs_share_one_namespace() {
+        let parameter = ParameterDescription::new(
+            name("x"),
+            "Bool",
+            PortWire::Supported(WireType::Bool),
+            None,
+            true,
+        )
+        .unwrap();
+        let output = OutputDescription::new(name("x"), "Bool", PortWire::Supported(WireType::Bool));
+        assert_eq!(
+            ModelInterface::new(vec![parameter], vec![output]),
+            Err(InterfaceError::ParameterAndOutput { name: name("x") })
+        );
+        let json = r#"{"parameters":[{"name":"x","graphcal_type":"Bool","wire":{"kind":"bool"},"domain":null,"has_default":true}],"outputs":[{"name":"x","graphcal_type":"Bool","wire":{"kind":"bool"}}]}"#;
+        assert!(serde_json::from_str::<ModelInterface>(json).is_err());
     }
 
     #[test]
