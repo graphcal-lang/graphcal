@@ -1203,6 +1203,16 @@ fn error_domain_violation() {
     insta::assert_snapshot!(rendered);
 }
 
+/// EV-14 (#2265): a recurrence-group member's domain violation names the
+/// step it occurs at, as the same violation of an ordinary indexed node does.
+#[test]
+fn error_recurrence_group_domain_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/recurrence_group_domain_violation.gcl");
+    let rendered = render_node_error(source, "recurrence_group_domain_violation.gcl", "action");
+    insta::assert_snapshot!(rendered);
+}
+
 #[test]
 fn error_domain_min_exceeds_max() {
     let source = include_str!("../../../tests/fixtures/invalid/domain_min_exceeds_max.gcl");
