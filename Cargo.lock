@@ -2252,6 +2252,7 @@ dependencies = [
  "graphcal-package",
  "graphcal-test-support",
  "hifitime",
+ "indexmap",
  "insta",
  "jiff",
  "miette",

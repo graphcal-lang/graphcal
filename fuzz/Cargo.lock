@@ -482,6 +482,7 @@ dependencies = [
  "graphcal-model-protocol",
  "graphcal-package",
  "hifitime",
+ "indexmap",
  "miette",
  "serde",
  "serde_json",

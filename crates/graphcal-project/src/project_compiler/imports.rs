@@ -866,9 +866,11 @@ pub(super) fn process_include<'a>(
         DeclName,
         Vec<graphcal_compiler::desugar::desugared_ast::Attribute>,
     > = HashMap::new();
-    let mut requested_plots: HashMap<DeclName, graphcal_compiler::ir::model::RequestedPlot> =
-        HashMap::new();
-    let mut assertion_aliases = HashMap::new();
+    let mut requested_plots: indexmap::IndexMap<
+        DeclName,
+        graphcal_compiler::ir::model::RequestedPlot,
+    > = indexmap::IndexMap::new();
+    let mut assertion_aliases = indexmap::IndexMap::new();
     let mut unit_projection_aliases = Vec::new();
     let exports = importer_scope
         .resolver()
