@@ -281,6 +281,28 @@ console.log("structured controls: constructor drafts, nested fields and fixed-ax
 }
 console.log("nested controls: schema graph references and deep edits passed");
 
+{
+  const run = runtime(`
+    pub index Category = { Alpha, Beta };
+    param m: Dimensionless[Fin(2), Fin(2)] = for i: Fin(2) { for j: Fin(2) { 1.0 } };
+    param g: Length[Category, Fin(2)] = for c: Category { for j: Fin(2) { 1.0 m } };
+  `);
+  for (const name of ["m", "g"]) {
+    run.apply(name);
+    run.evaluate();
+  }
+  const cells = run.descendants(run.cards.get("g")).filter(child => child.className === "control-field");
+  assert.deepEqual(cells.map(cell => cell.value), ["1.0 m", "1.0 m", "1.0 m", "1.0 m"]);
+  cells[3].value = "4.0 km";
+  cells[3].events.input();
+  run.apply("g");
+  const g = value(run.evaluate(), "g");
+  assert.equal(g.entries[1].value.entries[1].value.si_value, 4000);
+  assert.equal(g.entries[0].value.entries[1].value.si_value, 1);
+  run.prepared.free();
+}
+console.log("multi-axis controls: unchanged and edited rank-2 drafts bind");
+
 const vegaContext = { console, structuredClone };
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega.min.js", "utf8"), vegaContext);
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega-lite.min.js", "utf8"), vegaContext);

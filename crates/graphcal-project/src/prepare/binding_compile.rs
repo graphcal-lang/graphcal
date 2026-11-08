@@ -34,7 +34,7 @@ use super::{
 #[derive(Debug, Clone)]
 pub enum StructuredValueExpr {
     /// A scalar/key/datetime/complex closed literal.
-    Literal(Expr),
+    Literal(StructuredLiteral),
     /// One constructor and its declaration-order field values.
     Algebraic {
         definition: usize,
@@ -43,6 +43,54 @@ pub enum StructuredValueExpr {
     },
     /// Every value on one fixed axis, in schema order.
     Indexed { entries: Vec<Self> },
+}
+
+/// One closed literal leaf of a structured value: the expression it parses
+/// to, with the source spelling that expression spans.
+#[derive(Debug, Clone)]
+pub struct StructuredLiteral {
+    spelling: String,
+    expr: Expr,
+}
+
+impl StructuredLiteral {
+    /// Parse one closed literal expression.
+    ///
+    /// # Errors
+    ///
+    /// Returns the parse error when `source` is not exactly one expression.
+    pub fn parse(source: &str) -> Result<Self, ParseError> {
+        let raw = Parser::new(source).parse_single_expr()?;
+        // The expression's own span excludes trailing comments and
+        // whitespace, and contains a line comment only together with the
+        // line break that ends it, so the spelling never comments out
+        // source written after it.
+        let span = raw.span;
+        let spelling = source
+            .get(span.offset()..)
+            .and_then(|rest| rest.get(..span.len()))
+            .unwrap_or(source)
+            .to_string();
+        Ok(Self {
+            spelling,
+            expr: raw.into(),
+        })
+    }
+
+    /// The expression's source spelling.
+    #[must_use]
+    pub fn spelling(&self) -> &str {
+        &self.spelling
+    }
+}
+
+/// One indexed level of a structured value: its entries, in schema order on
+/// `axis`, each of schema `element`.
+#[derive(Clone, Copy)]
+struct StructuredAxisLevel<'a> {
+    entries: &'a [StructuredValueExpr],
+    element: &'a ModelValueSchema,
+    axis: &'a ModelIndexSchema,
 }
 
 /// Typed address into a structured editor value.
@@ -117,7 +165,7 @@ pub enum StructuredBindingErrorKind {
     Compile(Box<CompileError>),
 }
 
-fn structured_error(
+pub(super) fn structured_error(
     path: &[StructuredBindingPathSegment],
     kind: StructuredBindingErrorKind,
 ) -> StructuredBindingError {
@@ -350,8 +398,8 @@ impl PreparedProject {
             (StructuredValueExpr::Literal(_), ModelValueSchema::Indexed { .. }) => Err(
                 structured_error(path, StructuredBindingErrorKind::ExpectedIndexed),
             ),
-            (StructuredValueExpr::Literal(expr), _) => {
-                self.structured_literal_expr(site, expr, expected, owner, path)
+            (StructuredValueExpr::Literal(literal), _) => {
+                self.structured_literal_expr(site, &literal.expr, expected, owner, path)
             }
             (
                 StructuredValueExpr::Algebraic {
@@ -494,6 +542,9 @@ impl PreparedProject {
         ))
     }
 
+    /// A multi-axis value is one map literal with a tuple key per leaf, the
+    /// only spelling the checker accepts for rank two or more: nested indexed
+    /// levels are flattened into the keys of their enclosing entries.
     fn structured_indexed_expr(
         &self,
         site: ValueSite<'_>,
@@ -503,6 +554,41 @@ impl PreparedProject {
         owner: &graphcal_compiler::dag_id::DagId,
         path: &mut Vec<StructuredBindingPathSegment>,
     ) -> Result<Expr, StructuredBindingError> {
+        let mut leaves = Vec::new();
+        self.structured_indexed_leaves(
+            site,
+            StructuredAxisLevel {
+                entries,
+                element,
+                axis,
+            },
+            owner,
+            path,
+            &mut Vec::new(),
+            &mut leaves,
+        )?;
+        Ok(Expr::new(
+            AstExprKind::MapLiteral { entries: leaves },
+            Span::new(0, 0),
+        ))
+    }
+
+    /// Append one map entry per leaf of `level`, keyed by `prefix` (the keys
+    /// on the enclosing axes) followed by the leaf's key on each nested axis.
+    fn structured_indexed_leaves(
+        &self,
+        site: ValueSite<'_>,
+        level: StructuredAxisLevel<'_>,
+        owner: &graphcal_compiler::dag_id::DagId,
+        path: &mut Vec<StructuredBindingPathSegment>,
+        prefix: &mut Vec<MapEntryKey>,
+        leaves: &mut Vec<MapEntry<Desugared>>,
+    ) -> Result<(), StructuredBindingError> {
+        let StructuredAxisLevel {
+            entries,
+            element,
+            axis,
+        } = level;
         let expected_count = match axis.kind() {
             ModelIndexKind::Named { variants } => variants.len().get(),
             ModelIndexKind::Coordinate { coordinates_si, .. } => coordinates_si.len(),
@@ -518,20 +604,47 @@ impl PreparedProject {
             ));
         }
         let span = Span::new(0, 0);
-        let entries = entries
-            .iter()
-            .enumerate()
-            .map(|(index, entry)| {
-                path.push(StructuredBindingPathSegment::Entry(index));
-                let value = self.structured_binding_expr(site, entry, element, owner, path);
-                path.pop();
-                Ok(MapEntry {
-                    keys: NonEmpty::singleton(self.structured_map_key(axis, index, span, path)?),
-                    value: value?,
-                })
-            })
-            .collect::<Result<Vec<_>, StructuredBindingError>>()?;
-        Ok(Expr::new(AstExprKind::MapLiteral { entries }, span))
+        for (index, entry) in entries.iter().enumerate() {
+            let key = self.structured_map_key(axis, index, span, path)?;
+            path.push(StructuredBindingPathSegment::Entry(index));
+            let appended = match (entry, element) {
+                (
+                    StructuredValueExpr::Indexed { entries },
+                    ModelValueSchema::Indexed { element, axis },
+                ) => {
+                    prefix.push(key);
+                    let nested = self.structured_indexed_leaves(
+                        site,
+                        StructuredAxisLevel {
+                            entries,
+                            element,
+                            axis,
+                        },
+                        owner,
+                        path,
+                        prefix,
+                        leaves,
+                    );
+                    prefix.pop();
+                    nested
+                }
+                _ => self
+                    .structured_binding_expr(site, entry, element, owner, path)
+                    .map(|value| {
+                        let keys = match prefix.split_first() {
+                            None => NonEmpty::singleton(key),
+                            Some((outermost, inner)) => NonEmpty::new(
+                                outermost.clone(),
+                                inner.iter().cloned().chain([key]).collect(),
+                            ),
+                        };
+                        leaves.push(MapEntry { keys, value });
+                    }),
+            };
+            path.pop();
+            appended?;
+        }
+        Ok(())
     }
 
     /// Key of entry `position` on `axis`.
@@ -583,21 +696,26 @@ impl PreparedProject {
 
 impl ParameterBindingBuilder<'_> {
     /// Bind one recursively structured browser value by entry name.
+    ///
+    /// Returns the value's canonical source spelling, which `graphcal eval
+    /// --param name=<spelling>` binds to the same value.
     pub fn bind_structured_expression(
         &mut self,
         name: &DeclName,
         value: &StructuredValueExpr,
-    ) -> Result<(), StructuredBindingError> {
+    ) -> Result<String, StructuredBindingError> {
         let index = self
             .project
             .parameter_index(name)
             .map_err(|error| structured_compile_error(&[], error))?;
-        let parameter = self.project.compile_structured_parameter_value(
-            self.project.parameter_ports[index].position,
-            value,
-        )?;
+        let port = &self.project.parameter_ports[index];
+        let parameter = self
+            .project
+            .compile_structured_parameter_value(port.position, value)?;
+        let spelling = self.project.structured_source(value, &port.value_schema)?;
         self.bind_value(parameter)
-            .map_err(|error| structured_compile_error(&[], error))
+            .map_err(|error| structured_compile_error(&[], error))?;
+        Ok(spelling)
     }
 
     /// Validate required slots and finish this row.

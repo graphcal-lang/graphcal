@@ -4619,7 +4619,11 @@ fn structured_binding_of_coordinate_indexed_entries_is_rejected_clearly() {
     let prepared = prepare_from_project(&project).unwrap();
     let value = StructuredValueExpr::Indexed {
         entries: (0..3)
-            .map(|_| StructuredValueExpr::Literal(parse_synthesized_expr("1.0 m")))
+            .map(|_| {
+                StructuredValueExpr::Literal(
+                    crate::prepare::StructuredLiteral::parse("1.0 m").unwrap(),
+                )
+            })
             .collect(),
     };
 

@@ -63,11 +63,13 @@ mod model_unit;
 mod model_value;
 #[path = "model_wire.rs"]
 mod model_wire;
+#[path = "structured_source.rs"]
+mod structured_source;
 
 use binding_compile::build_parameter_ports;
 pub use binding_compile::{
     ExternalValue, ParameterBindingRow, StructuredBindingError, StructuredBindingErrorKind,
-    StructuredBindingPathSegment, StructuredValueExpr,
+    StructuredBindingPathSegment, StructuredLiteral, StructuredValueExpr,
 };
 pub use model_port::{
     InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,

@@ -24,7 +24,7 @@ pub use prepared::{
     ModelSession, ModelSessionError, ModelUnitError, ParameterBindingBuilder, ParameterBindingRow,
     ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,
     PreparedProject, StructuredBindingError, StructuredBindingErrorKind,
-    StructuredBindingPathSegment, StructuredValueExpr,
+    StructuredBindingPathSegment, StructuredLiteral, StructuredValueExpr,
 };
 
 /// Prepare a loaded project once for repeated typed evaluation.

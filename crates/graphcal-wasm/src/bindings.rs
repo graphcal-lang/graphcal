@@ -1,7 +1,9 @@
 //! Closed-value bindings at the browser transport boundary.
 
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_project::prepare::{StructuredBindingPathSegment, StructuredValueExpr};
+use graphcal_project::prepare::{
+    StructuredBindingPathSegment, StructuredLiteral, StructuredValueExpr,
+};
 use serde::{Deserialize, Serialize};
 
 /// Maximum UTF-8 size of one binding expression string.
@@ -104,14 +106,16 @@ fn root_binding_error(message: impl Into<String>) -> BrowserBindingError {
     }
 }
 
+/// Bind one browser value and return it as the CLI spells it: an expression
+/// binding unchanged, a structured one in its canonical source spelling.
 pub fn bind_browser_one(
     builder: &mut graphcal_project::prepare::ParameterBindingBuilder<'_>,
     binding: &BrowserBindingRequest,
-) -> Result<(), BrowserBindingError> {
+) -> Result<BindingRequest, BrowserBindingError> {
     match binding {
-        BrowserBindingRequest::Expression(binding) => {
-            bind_one(builder, binding).map_err(root_binding_error)
-        }
+        BrowserBindingRequest::Expression(binding) => bind_one(builder, binding)
+            .map(|()| binding.clone())
+            .map_err(root_binding_error),
         BrowserBindingRequest::Structured(binding) => {
             let name = DeclName::try_new(&binding.name)
                 .map_err(|error| root_binding_error(format!("invalid parameter name: {error}")))?;
@@ -119,6 +123,10 @@ pub fn bind_browser_one(
             let value = decode_structured_value(&binding.value, 0, &mut nodes, &mut Vec::new())?;
             builder
                 .bind_structured_expression(&name, &value)
+                .map(|expr| BindingRequest {
+                    name: binding.name.clone(),
+                    expr,
+                })
                 .map_err(|error| BrowserBindingError {
                     message: error.to_string(),
                     path: error
@@ -166,10 +174,9 @@ fn decode_structured_value(
                     "binding literal exceeds {MAX_BINDING_EXPR_BYTES} bytes"
                 )));
             }
-            let raw = graphcal_compiler::syntax::parser::Parser::new(expr)
-                .parse_single_expr()
-                .map_err(|parse_error| error(parse_error.to_string()))?;
-            Ok(StructuredValueExpr::Literal(raw.into()))
+            StructuredLiteral::parse(expr)
+                .map(StructuredValueExpr::Literal)
+                .map_err(|parse_error| error(parse_error.to_string()))
         }
         StructuredValueRequest::Algebraic {
             definition,

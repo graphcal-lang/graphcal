@@ -2100,6 +2100,11 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["prepare", "prepared", "structured_source"]
+role = "facade"
+
+[[module]]
+package = "project"
 path = ["prepare", "prepared", "model_port"]
 role = "facade"
 
