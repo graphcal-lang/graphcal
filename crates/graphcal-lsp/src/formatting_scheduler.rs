@@ -4,12 +4,13 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
-use graphcal_compiler::cancellation::{CancellationSource, CancellationToken};
+use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_project::loader::LoaderArtifactByteLimits;
 use tokio::sync::Semaphore;
 use tower_lsp::lsp_types::TextEdit;
 
+use crate::cancel_on_drop::CancelOnDrop;
 use crate::formatting::format_document_with_cancellation;
 
 /// One formatter worker reserves a 64 MiB stack segment while rendering.
@@ -137,29 +138,6 @@ impl FormattingScheduler {
                 cancellation.cancel();
                 Err(FormattingTaskError::Timeout(self.policy.timeout))
             })
-    }
-}
-
-#[derive(Debug)]
-struct CancelOnDrop(CancellationSource);
-
-impl CancelOnDrop {
-    fn new() -> Self {
-        Self(CancellationSource::new())
-    }
-
-    fn token(&self) -> CancellationToken {
-        self.0.token()
-    }
-
-    fn cancel(&self) {
-        self.0.cancel();
-    }
-}
-
-impl Drop for CancelOnDrop {
-    fn drop(&mut self) {
-        self.cancel();
     }
 }
 

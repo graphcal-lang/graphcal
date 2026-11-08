@@ -1,6 +1,6 @@
 //! Symbol table for LSP features: maps source locations to definitions and references.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use graphcal_compiler::dag_id::DagId;
@@ -1191,6 +1191,18 @@ impl SymbolTable {
     /// handler iterates this directly instead of filtering every definition.
     pub fn inlay_hint_entries(&self) -> &[InlayHintEntry] {
         &self.inlay_hint_entries
+    }
+
+    /// Declaration identities some inlay hint can display a value for.
+    #[must_use]
+    pub fn inlay_hint_declarations(&self) -> HashSet<&ResolvedDeclName> {
+        self.inlay_hint_entries
+            .iter()
+            .filter_map(|entry| match entry.key.as_ref() {
+                SymbolKey::Declaration(identity) => Some(identity),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Look up the key for a definition by its name-span byte offset.

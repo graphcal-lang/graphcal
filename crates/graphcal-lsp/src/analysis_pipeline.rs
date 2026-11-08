@@ -544,21 +544,17 @@ pub fn run_eval_from_checked(
 ) -> std::result::Result<EvalAnalysisOutput, Cancelled> {
     let uri = documents.root();
     let is_library = checked.is_library();
-    let mut output = EvalAnalysisOutput {
-        diagnostics: HashMap::from([(uri.clone(), Vec::new())]),
-        values: HashMap::new(),
-        result: None,
-    };
+    let mut output = EvalAnalysisCollector::new(uri, text, symbol_table);
     let prepared = match checked.prepare_with_host_fns_and_cancellation(host_fns, cancellation) {
         Ok(prepared) => prepared,
         Err(Outcome::Cancelled) => return Err(Cancelled),
         // A library cannot run standalone, so its own preparation failure
         // (an unbound required index) is not reported; its DAGs show no
         // values then.
-        Err(Outcome::Failed(_)) if is_library => return Ok(output),
+        Err(Outcome::Failed(_)) if is_library => return Ok(output.finish()),
         Err(Outcome::Failed(error)) => {
             output.add_failure(&error, documents);
-            return Ok(output);
+            return Ok(output.finish());
         }
     };
     if !is_library {
@@ -569,76 +565,97 @@ pub fn run_eval_from_checked(
         match evaluated {
             Ok(result) => {
                 cancellation.checkpoint()?;
-                output.add_result(
-                    &result,
-                    prepared.tir(),
-                    uri,
-                    text,
-                    symbol_table,
-                    cancellation,
-                )?;
-                output.result = Some(result);
+                output.add_result(&result, prepared.tir(), cancellation)?;
+                output.keep_result(result);
             }
             Err(Outcome::Cancelled) => return Err(Cancelled),
             Err(Outcome::Failed(error)) => {
                 output.add_failure(&error, documents);
-                return Ok(output);
+                return Ok(output.finish());
             }
         }
     }
     match prepared.evaluate_dag_defaults_with_cancellation(cancellation) {
         Ok(results) => {
             for result in &results {
-                output.add_result(
-                    result,
-                    prepared.tir(),
-                    uri,
-                    text,
-                    symbol_table,
-                    cancellation,
-                )?;
+                output.add_result(result, prepared.tir(), cancellation)?;
             }
         }
         Err(Outcome::Cancelled) => return Err(Cancelled),
         Err(Outcome::Failed(error)) => output.add_failure(&error, documents),
     }
-    Ok(output)
+    Ok(output.finish())
 }
 
-impl EvalAnalysisOutput {
+/// Accumulates [`EvalAnalysisOutput`] over the evaluations of one analysis.
+///
+/// The declarations that inlay hints display are computed once here, not per
+/// evaluation result.
+struct EvalAnalysisCollector<'a> {
+    output: EvalAnalysisOutput,
+    uri: &'a Url,
+    text: &'a str,
+    symbol_table: &'a SymbolTable,
+    shown: HashSet<&'a ResolvedDeclName>,
+}
+
+impl<'a> EvalAnalysisCollector<'a> {
+    fn new(uri: &'a Url, text: &'a str, symbol_table: &'a SymbolTable) -> Self {
+        Self {
+            output: EvalAnalysisOutput {
+                diagnostics: HashMap::from([(uri.clone(), Vec::new())]),
+                values: HashMap::new(),
+                result: None,
+            },
+            uri,
+            text,
+            symbol_table,
+            shown: symbol_table.inlay_hint_declarations(),
+        }
+    }
+
     /// Add the values and runtime-failure diagnostics of one evaluation.
     fn add_result(
         &mut self,
         result: &EvalResult,
         tir: &graphcal_compiler::tir::typed::CheckedTir,
-        uri: &Url,
-        text: &str,
-        symbol_table: &SymbolTable,
         cancellation: &CancellationToken,
     ) -> std::result::Result<(), Cancelled> {
-        self.diagnostics
-            .entry(uri.clone())
+        self.output
+            .diagnostics
+            .entry(self.uri.clone())
             .or_default()
             .extend(eval_result_to_diagnostics(
                 result,
                 tir,
-                uri,
-                text,
-                symbol_table,
+                self.uri,
+                self.text,
+                self.symbol_table,
             ));
-        self.values
-            .extend(format_eval_values(result, cancellation)?);
+        self.output
+            .values
+            .extend(format_eval_values(result, &self.shown, cancellation)?);
         Ok(())
     }
 
     /// Add the diagnostics of an evaluation that could not run.
     fn add_failure(&mut self, error: &CompileError, documents: &DocumentUris) {
         for (target, diagnostics) in compile_error_to_diagnostics_grouped(error, documents) {
-            self.diagnostics
+            self.output
+                .diagnostics
                 .entry(target)
                 .or_default()
                 .extend(diagnostics);
         }
+    }
+
+    /// Keep the root evaluation itself for the view projection.
+    fn keep_result(&mut self, result: EvalResult) {
+        self.output.result = Some(result);
+    }
+
+    fn finish(self) -> EvalAnalysisOutput {
+        self.output
     }
 }
 

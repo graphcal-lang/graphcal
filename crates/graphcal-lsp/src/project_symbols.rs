@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use graphcal_compiler::syntax::lexer::Lexer;
 use graphcal_compiler::syntax::span::Span;
-use tower_lsp::lsp_types::Url;
+use tower_lsp::lsp_types::{Range, Url};
 
+use crate::convert::LineIndex;
 use crate::symbol_identity::{
     ReferenceTarget, UnresolvedSymbol, VisibleBinding, resolve_visible_target,
 };
@@ -367,6 +368,40 @@ impl ProjectSymbolIndex {
     }
 }
 
+impl ProjectSymbolIndex {
+    /// Converter from occurrences to editor ranges that scans each document's
+    /// source at most once, however many occurrences it converts.
+    #[must_use]
+    pub fn line_indexes(&self) -> ProjectLineIndexes<'_> {
+        ProjectLineIndexes {
+            project: self,
+            lines: HashMap::new(),
+        }
+    }
+}
+
+/// Lazily built line indexes for the documents of one [`ProjectSymbolIndex`].
+///
+/// References and rename convert every occurrence of a symbol; building a
+/// line index per occurrence made them quadratic in the source size.
+pub struct ProjectLineIndexes<'a> {
+    project: &'a ProjectSymbolIndex,
+    lines: HashMap<&'a Url, LineIndex<'a>>,
+}
+
+impl ProjectLineIndexes<'_> {
+    /// The editor range of `occurrence`, or `None` when its document is not
+    /// part of the project snapshot.
+    pub fn range(&mut self, occurrence: &ProjectOccurrence) -> Option<Range> {
+        let (uri, document) = self.project.documents.get_key_value(&occurrence.uri)?;
+        let lines = self
+            .lines
+            .entry(uri)
+            .or_insert_with(|| LineIndex::new(&document.source));
+        Some(lines.span_to_range(occurrence.span))
+    }
+}
+
 /// Provenance of the project occurrence set attached to an analysis result.
 #[derive(Debug, Default)]
 pub enum ProjectSymbols {
@@ -410,4 +445,59 @@ fn sort_and_dedup(occurrences: &mut Vec<ProjectOccurrence>) {
     });
     let mut seen = HashSet::new();
     occurrences.retain(|occurrence| seen.insert((occurrence.uri.clone(), occurrence.span)));
+}
+
+#[cfg(test)]
+mod tests {
+    use tower_lsp::lsp_types::Position;
+
+    use super::*;
+    use crate::symbol_table;
+
+    fn document(uri: &Url, source: &str) -> ProjectDocumentSymbols {
+        let ast = graphcal_compiler::desugar::desugared_ast::File::from(
+            graphcal_compiler::syntax::parser::Parser::new(source)
+                .parse_file()
+                .unwrap(),
+        );
+        ProjectDocumentSymbols::new(
+            uri.clone(),
+            Arc::new(source.to_string()),
+            symbol_table::build_for_buffer(&ast, source),
+            Vec::new(),
+        )
+    }
+
+    /// LSP-2 (#2253): converting many occurrences builds one line index per
+    /// document instead of rescanning the source for every occurrence.
+    #[test]
+    fn line_indexes_scan_each_document_once() {
+        let root = Url::parse("file:///root.gcl").unwrap();
+        let other = Url::parse("file:///other.gcl").unwrap();
+        let missing = Url::parse("file:///missing.gcl").unwrap();
+        let source = "node a: Dimensionless = 1.0;\nnode b: Dimensionless = @a;\n";
+        let index = ProjectSymbolIndex::standalone(
+            root.clone(),
+            [document(&root, source), document(&other, source)],
+        );
+        let mut lines = index.line_indexes();
+        let occurrences: Vec<_> = (0..100)
+            .flat_map(|_| [&root, &other])
+            .map(|uri| ProjectOccurrence {
+                uri: uri.clone(),
+                span: Span::new(source.rfind('a').unwrap(), 1),
+            })
+            .collect();
+        for occurrence in &occurrences {
+            let range = lines.range(occurrence).unwrap();
+            assert_eq!(range.start, Position::new(1, 25));
+            assert_eq!(range.end, Position::new(1, 26));
+        }
+        assert_eq!(lines.lines.len(), 2);
+        let missing = ProjectOccurrence {
+            uri: missing,
+            span: Span::new(0, 1),
+        };
+        assert_eq!(lines.range(&missing), None);
+    }
 }
