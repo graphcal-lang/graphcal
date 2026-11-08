@@ -1352,16 +1352,45 @@ fn load_manifest_for_root<F: FileSystemReader>(
     let parsed = parse_manifest_str(&manifest_content)
         .map_err(|error| loader_manifest_error(error.to_string()))?;
 
-    if root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
-        let source_dir = parsed.source_dir.join_to(project_root);
-        verify_root_module_file(fs, &source_dir, root_canonical, cancellation)?;
-        Ok(RootPackage::Member(parsed))
-    } else {
-        Ok(RootPackage::OutsideNamespace)
+    let source_dir = parsed.source_dir.join_to(project_root);
+    match root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
+        NamespaceMembership::Exact => {
+            verify_root_module_file(fs, &source_dir, root_canonical, cancellation)?;
+            Ok(RootPackage::Member(parsed))
+        }
+        // The entry is in the namespace only if letter case is ignored. On a
+        // case-insensitive reader that keeps the requested spelling that is
+        // the same directory spelled differently (M041); when the exact
+        // spelling is its own directory entry, the file really lives outside
+        // the namespace.
+        NamespaceMembership::IgnoringCase => {
+            verify_root_module_file(fs, &source_dir, root_canonical, cancellation).or_else(
+                |error| match error {
+                    Outcome::Failed(CompileError::Load(
+                        LoadError::ModuleFileSpellingMismatch { .. },
+                    ))
+                    | Outcome::Cancelled => Err(error),
+                    Outcome::Failed(_) => Ok(()),
+                },
+            )?;
+            Ok(RootPackage::OutsideNamespace)
+        }
+        NamespaceMembership::Outside => Ok(RootPackage::OutsideNamespace),
     }
 }
 
-/// True iff `root_canonical` is the package's single-file module
+/// Whether the root file is in the package namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NamespaceMembership {
+    /// It is the package's single-file module or below its namespace
+    /// directory.
+    Exact,
+    /// It would be, if letter case were ignored.
+    IgnoringCase,
+    Outside,
+}
+
+/// Whether `root_canonical` is the package's single-file module
 /// (`<source_dir>/<pkg>.gcl`) or lives under the package namespace directory
 /// (`<source_dir>/<pkg>/...`).
 fn root_in_package_namespace<F: FileSystemReader>(
@@ -1369,22 +1398,37 @@ fn root_in_package_namespace<F: FileSystemReader>(
     root_canonical: &Path,
     manifest: &PackageManifest,
     fs: &F,
-) -> bool {
+) -> NamespaceMembership {
     let source_root = manifest.source_dir.join_to(project_root);
-    let pkg_dir = source_root.join(manifest.name.as_str());
-    let pkg_file = source_root.join(format!("{}.gcl", manifest.name));
+    let pkg_dir = fs.canonicalize(&source_root.join(manifest.name.as_str()));
+    let pkg_file = fs.canonicalize(&source_root.join(format!("{}.gcl", manifest.name)));
 
-    if let Ok(canon_pkg_dir) = fs.canonicalize(&pkg_dir)
-        && root_canonical.starts_with(&canon_pkg_dir)
+    if pkg_dir
+        .as_ref()
+        .is_ok_and(|pkg_dir| root_canonical.starts_with(pkg_dir))
+        || pkg_file
+            .as_ref()
+            .is_ok_and(|pkg_file| root_canonical == pkg_file)
     {
-        return true;
+        return NamespaceMembership::Exact;
     }
-    if let Ok(canon_pkg_file) = fs.canonicalize(&pkg_file)
-        && root_canonical == canon_pkg_file
+    let folded = |path: &Path| -> Vec<String> {
+        path.components()
+            .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    let root = folded(root_canonical);
+    if pkg_dir
+        .as_deref()
+        .is_ok_and(|pkg_dir| root.starts_with(&folded(pkg_dir)))
+        || pkg_file
+            .as_deref()
+            .is_ok_and(|pkg_file| root == folded(pkg_file))
     {
-        return true;
+        NamespaceMembership::IgnoringCase
+    } else {
+        NamespaceMembership::Outside
     }
-    false
 }
 
 fn virtual_package_id_for_path(path: &Path) -> Result<DagPackageId, CompileError> {
