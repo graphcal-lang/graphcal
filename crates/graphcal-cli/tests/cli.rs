@@ -3453,15 +3453,15 @@ fn special_file_inputs_are_rejected_without_blocking() {
             output.stdout,
             output.stderr
         );
-        // miette wraps long messages behind a `│` gutter.
+        // miette wraps long messages behind a `│` gutter, possibly right
+        // after a hyphen, so compare without whitespace.
         let flat = output
             .stderr
             .split_whitespace()
             .filter(|word| *word != "│")
-            .collect::<Vec<_>>()
-            .join(" ");
+            .collect::<String>();
         assert!(
-            flat.contains("cannot read non-regular file"),
+            flat.contains("cannotreadnon-regularfile"),
             "{command:?}\nstderr: {}",
             output.stderr
         );
@@ -5144,6 +5144,42 @@ fn certification_commands_fail_when_directory_discovery_is_incomplete() {
         assert!(
             stderr.contains("source discovery was incomplete"),
             "{stderr}"
+        );
+    }
+}
+
+/// CLI-4: a directory named on the command line is walked even when its name
+/// is one that discovery skips below the walk root (`target`, `.git`, ...).
+#[test]
+fn check_and_format_walk_an_explicitly_named_skip_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(target.join("a.gcl"), "param x: Dimensionless = 1.0 m;\n").unwrap();
+    std::fs::write(src.join("b.gcl"), "param y: Dimensionless = 1.0;\n").unwrap();
+    std::fs::write(target.join("c.gcl"), "param   z:Dimensionless=1.0;\n").unwrap();
+
+    for arguments in [
+        vec!["check", target.to_str().unwrap(), src.to_str().unwrap()],
+        vec![
+            "format",
+            "--check",
+            target.to_str().unwrap(),
+            src.to_str().unwrap(),
+        ],
+    ] {
+        let output = graphcal_bin()
+            .args(&arguments)
+            .output()
+            .expect("failed to run graphcal");
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?} must examine `target`\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

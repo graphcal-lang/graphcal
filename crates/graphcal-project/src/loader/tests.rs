@@ -1241,13 +1241,87 @@ fn single_package_import_symlinked_outside_root_is_rejected() {
         )
         .unwrap();
 
-        let error = load_project(
-            &directory.path().join("project/src/mission/main.gcl"),
-            None,
-            &RealFileSystem::default(),
+        let project = directory.path().join("project");
+        for reader in [RealFileSystem::rooted(&project).unwrap(), fs()] {
+            let error = load_project(&project.join("src/mission/main.gcl"), None, &reader)
+                .expect_err("a module outside the project root must be rejected");
+            assert_outside_root(&error, "mission.escape");
+        }
+    }
+}
+
+/// PRJ-9: an escaping symlink at the longest prefix is reported, not skipped
+/// in favour of an inline DAG of a shorter prefix (or "file not found").
+#[cfg(unix)]
+#[test]
+fn escaping_module_symlink_does_not_fall_back_to_a_shorter_prefix() {
+    use std::os::unix::fs::symlink;
+
+    for shorter_prefix in [
+        Some("dag b {\n    pub const node k: Dimensionless = 1.0;\n}"),
+        None,
+    ] {
+        let mut files = vec![
+            ("project/graphcal.toml", "[package]\nname = \"mission\"\n"),
+            (
+                "project/src/mission/main.gcl",
+                "import mission.a.b::{ k };\nnode x: Dimensionless = @k;",
+            ),
+            ("project/src/mission/a/.keep", ""),
+            ("outside.gcl", "pub const node k: Dimensionless = 2.0;"),
+        ];
+        if let Some(inline) = shorter_prefix {
+            files.push(("project/src/mission/a.gcl", inline));
+        }
+        let directory = setup_temp_dir(&files);
+        let project = directory.path().join("project");
+        symlink(
+            directory.path().join("outside.gcl"),
+            project.join("src/mission/a/b.gcl"),
         )
-        .expect_err("a module outside the project root must be rejected");
-        assert_outside_root(&error, "mission.escape");
+        .unwrap();
+
+        for reader in [RealFileSystem::rooted(&project).unwrap(), fs()] {
+            let error = load_project(&project.join("src/mission/main.gcl"), None, &reader)
+                .expect_err("the escaping module must be rejected");
+            assert_outside_root(&error, "mission.a.b");
+        }
+    }
+}
+
+/// PRJ-9: a module symlink loop is an unreadable source, not a missing one.
+#[cfg(unix)]
+#[test]
+fn module_symlink_loop_is_reported_as_unreadable() {
+    use std::os::unix::fs::symlink;
+
+    let directory = setup_temp_dir(&[
+        ("project/graphcal.toml", "[package]\nname = \"mission\"\n"),
+        (
+            "project/src/mission/main.gcl",
+            "import mission.loop1::{ k };\nnode x: Dimensionless = @k;",
+        ),
+        (
+            "project/src/mission.gcl",
+            "dag loop1 {\n    pub const node k: Dimensionless = 1.0;\n}",
+        ),
+    ]);
+    let project = directory.path().join("project");
+    let package = project.join("src/mission");
+    symlink(package.join("loop2.gcl"), package.join("loop1.gcl")).unwrap();
+    symlink(package.join("loop1.gcl"), package.join("loop2.gcl")).unwrap();
+
+    for reader in [RealFileSystem::rooted(&project).unwrap(), fs()] {
+        let error = load_project(&package.join("main.gcl"), None, &reader)
+            .expect_err("a symlink loop must not resolve");
+        assert!(
+            matches!(
+                &error,
+                CompileError::Load(LoadError::SourceReadFailed { path, .. })
+                    if path.ends_with("loop1.gcl")
+            ),
+            "{error:?}"
+        );
     }
 }
 
@@ -1271,9 +1345,12 @@ fn locked_package_import_symlinked_outside_root_is_rejected() {
         )
         .unwrap();
 
-        let error = load_project(&fixture.root_file, None, &RealFileSystem::default())
-            .expect_err("a module outside the package root must be rejected");
-        assert_outside_root(&error, "mission.escape");
+        let project = fixture.directory.path().join("project");
+        for reader in [RealFileSystem::rooted(&project).unwrap(), fs()] {
+            let error = load_project(&fixture.root_file, None, &reader)
+                .expect_err("a module outside the package root must be rejected");
+            assert_outside_root(&error, "mission.escape");
+        }
     }
 }
 
@@ -1599,7 +1676,10 @@ fn project_module_resolution_is_typed_and_span_free() {
             &sources.authority(),
             import.path(),
             &scripted_path("main"),
+            &mut source_authority::DirectoryEntries::default(),
+            &CancellationToken::unbounded(),
         )
+        .unwrap()
     };
 
     assert_eq!(
@@ -1652,7 +1732,10 @@ fn project_module_resolution_is_typed_and_span_free() {
             },
             import.path(),
             &scripted_path("main"),
-        ),
+            &mut source_authority::DirectoryEntries::default(),
+            &CancellationToken::unbounded(),
+        )
+        .unwrap(),
         ModuleResolution::Failed(ResolveFailure::CrossFileImportInVirtualPackage)
     );
 }

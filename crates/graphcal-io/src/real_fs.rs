@@ -14,6 +14,8 @@ use graphcal_compiler::{cancellation::CancellationToken, outcome::Outcome};
 use sha2::{Digest, Sha256};
 
 #[cfg(not(target_arch = "wasm32"))]
+use crate::OutsideRootError;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::VirtualAbsolutePath;
 use crate::{
     BoundedFileHash, ByteLimit, EntryLimit, FileSystemEntryKind, FileSystemReadError,
@@ -84,14 +86,7 @@ impl RealFileSystem {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn outside_root_error(path: &Path, root: &Path) -> io::Error {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!(
-                "path {} is outside the filesystem root {}",
-                path.display(),
-                root.display()
-            ),
-        )
+        OutsideRootError::new(path.to_path_buf(), root.to_path_buf()).into_io_error()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -133,12 +128,12 @@ impl RealFileSystem {
         let canonicalize = |relative: &Path| {
             root.directory
                 .canonicalize(relative)
-                .map_err(normalize_rooted_error)
+                .map_err(|error| root.classify_error(relative, error))
         };
         let metadata = root
             .directory
             .metadata(relative)
-            .map_err(normalize_rooted_error)?;
+            .map_err(|error| root.classify_error(relative, error))?;
         if metadata.is_file() || metadata.is_dir() {
             return canonicalize(relative);
         }
@@ -238,7 +233,7 @@ impl RealFileSystem {
             if !root
                 .directory
                 .metadata(&relative)
-                .map_err(normalize_rooted_error)?
+                .map_err(|error| root.classify_error(&relative, error))?
                 .is_file()
             {
                 return Err(reject());
@@ -253,8 +248,8 @@ impl RealFileSystem {
             }
             let file = root
                 .directory
-                .open_with(relative, &options)
-                .map_err(normalize_rooted_error)?
+                .open_with(&relative, &options)
+                .map_err(|error| root.classify_error(&relative, error))?
                 .into_std();
             return if file.metadata()?.is_file() {
                 Ok(file)
@@ -312,8 +307,8 @@ impl RealFileSystem {
             before_open();
             for entry in root
                 .directory
-                .read_dir(relative)
-                .map_err(normalize_rooted_error)
+                .read_dir(&relative)
+                .map_err(|error| root.classify_error(&relative, error))
                 .map_err(FileSystemReadError::Io)?
             {
                 cancellation.checkpoint()?;
@@ -322,7 +317,7 @@ impl RealFileSystem {
                 }
                 names.push(
                     entry
-                        .map_err(normalize_rooted_error)
+                        .map_err(|error| root.classify_error(&relative, error))
                         .map_err(FileSystemReadError::Io)?
                         .file_name(),
                 );
@@ -359,15 +354,116 @@ const fn classify_entry_kind(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn normalize_rooted_error(error: io::Error) -> io::Error {
-    if error.kind() == io::ErrorKind::PermissionDenied {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("rooted filesystem rejected path traversal: {error}"),
-        )
-    } else {
-        error
+impl RootCapability {
+    /// Tell a sandbox escape apart from an ordinary permission failure.
+    ///
+    /// `cap-std` reports a path that resolves outside the held root (for
+    /// example through an escaping symlink) as
+    /// [`io::ErrorKind::PermissionDenied`], the same kind as a real access
+    /// failure, and carries no typed marker. [`Self::escapes_root`] replays
+    /// the resolution inside the capability, so an escape becomes an
+    /// [`OutsideRootError`] and every other failure keeps its own kind: a
+    /// refused path is never mistaken for a missing one.
+    fn classify_error(&self, relative: &Path, error: io::Error) -> io::Error {
+        if error.kind() == io::ErrorKind::PermissionDenied && self.escapes_root(relative) {
+            RealFileSystem::outside_root_error(
+                &self.canonical_path.as_path().join(relative),
+                self.canonical_path.as_path(),
+            )
+        } else {
+            error
+        }
     }
+
+    /// Whether resolving `relative` leaves the root.
+    ///
+    /// The walk inspects only entries inside the root, through the held
+    /// directory: each component is examined with `symlink_metadata` and a
+    /// symlink's target is read, never followed. Leaving the root is decided
+    /// lexically the moment a `..` would climb above it or a target is
+    /// absolute outside it, so a target outside the root (on Windows possibly
+    /// a UNC share) is never resolved, opened, or contacted.
+    fn escapes_root(&self, relative: &Path) -> bool {
+        /// Bound on followed links, like the kernel's `ELOOP` limit.
+        const MAX_SYMLINK_HOPS: usize = 40;
+
+        let mut resolved: Vec<OsString> = Vec::new();
+        let mut pending = std::collections::VecDeque::new();
+        if !queue_steps(&mut pending, relative) {
+            return true;
+        }
+        let mut hops = 0_usize;
+        while let Some(step) = pending.pop_front() {
+            let name = match step {
+                ResolutionStep::Parent => {
+                    if resolved.pop().is_none() {
+                        return true;
+                    }
+                    continue;
+                }
+                ResolutionStep::Name(name) => name,
+            };
+            let candidate: PathBuf = resolved.iter().chain(std::iter::once(&name)).collect();
+            let is_symlink = self
+                .directory
+                .symlink_metadata(&candidate)
+                .is_ok_and(|metadata| metadata.file_type().is_symlink());
+            if !is_symlink {
+                resolved.push(name);
+                continue;
+            }
+            hops += 1;
+            let Ok(target) = self.directory.read_link_contents(&candidate) else {
+                return false;
+            };
+            if hops > MAX_SYMLINK_HOPS {
+                return false;
+            }
+            let target = if target.has_root() || target.is_absolute() {
+                // An absolute target stays inside only when it is lexically
+                // below the root's canonical or requested spelling.
+                let Some(inside) = [&self.canonical_path, &self.requested_path]
+                    .into_iter()
+                    .find_map(|root| target.strip_prefix(root.as_path()).ok())
+                else {
+                    return true;
+                };
+                resolved.clear();
+                inside.to_path_buf()
+            } else {
+                target
+            };
+            if !queue_steps(&mut pending, &target) {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// One step of replaying a path resolution inside a rooted capability.
+#[cfg(not(target_arch = "wasm32"))]
+enum ResolutionStep {
+    Parent,
+    Name(OsString),
+}
+
+/// Queue the steps of `path` before the pending ones. Returns `false` when
+/// `path` has a root or prefix component, which leaves the capability.
+#[cfg(not(target_arch = "wasm32"))]
+fn queue_steps(pending: &mut std::collections::VecDeque<ResolutionStep>, path: &Path) -> bool {
+    use std::path::Component;
+    for component in path.components().rev() {
+        match component {
+            Component::Normal(name) => {
+                pending.push_front(ResolutionStep::Name(name.to_os_string()));
+            }
+            Component::ParentDir => pending.push_front(ResolutionStep::Parent),
+            Component::CurDir => {}
+            Component::RootDir | Component::Prefix(_) => return false,
+        }
+    }
+    true
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -426,8 +522,8 @@ impl FileSystemReader for RealFileSystem {
             let relative = Self::rooted_relative_path(root, path)?;
             let file_type = root
                 .directory
-                .symlink_metadata(relative)
-                .map_err(normalize_rooted_error)?
+                .symlink_metadata(&relative)
+                .map_err(|error| root.classify_error(&relative, error))?
                 .file_type();
             return Ok(classify_entry_kind(
                 file_type.is_file(),
@@ -474,6 +570,7 @@ impl FileSystemReader for RealFileSystem {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
     fn io_kind(outcome: Outcome<FileSystemReadError>) -> Option<io::ErrorKind> {
         match outcome {
             Outcome::Failed(error) => error.io_kind(),
@@ -485,6 +582,13 @@ mod tests {
     use std::fs;
 
     const TEST_LIMIT: ByteLimit = ByteLimit::new(1024);
+
+    fn assert_outside_root(outcome: &Outcome<FileSystemReadError>) {
+        assert!(
+            matches!(outcome, Outcome::Failed(error) if error.outside_root().is_some()),
+            "{outcome:?}"
+        );
+    }
 
     #[test]
     fn unrooted_reads_any_absolute_path() {
@@ -773,9 +877,45 @@ mod tests {
         let error = fs_reader
             .read_to_string_bounded(&secret, TEST_LIMIT, &CancellationToken::unbounded())
             .unwrap_err();
-        assert_eq!(io_kind(error), Some(io::ErrorKind::NotFound));
+        assert_outside_root(&error);
+        assert!(OutsideRootError::find(&fs_reader.canonicalize(&secret).unwrap_err()).is_some());
         assert!(!fs_reader.is_file(&secret));
         assert!(!fs_reader.exists(&secret));
+    }
+
+    /// A refused escape is classified inside the root,
+    /// without resolving the target. A dangling outside target (which an
+    /// ambient canonicalization cannot resolve) and a chain that climbs out
+    /// through an in-root link are both sandbox refusals; an in-root chain is
+    /// not.
+    #[cfg(unix)]
+    #[test]
+    fn escapes_are_classified_without_resolving_the_target() {
+        use std::os::unix::fs::symlink;
+
+        let parent = tempfile::tempdir().unwrap();
+        let project = parent.path().join("project");
+        fs::create_dir_all(project.join("sub")).unwrap();
+        fs::write(project.join("inside.gcl"), "inside").unwrap();
+        symlink(
+            parent.path().join("missing/target.gcl"),
+            project.join("dangling.gcl"),
+        )
+        .unwrap();
+        symlink("../..", project.join("sub/up")).unwrap();
+        symlink("../inside.gcl", project.join("sub/inner.gcl")).unwrap();
+        let reader = RealFileSystem::rooted(&project).unwrap();
+        let root = reader.root.as_ref().unwrap();
+
+        assert!(root.escapes_root(Path::new("dangling.gcl")));
+        assert!(root.escapes_root(Path::new("sub/up/outside.gcl")));
+        assert!(!root.escapes_root(Path::new("sub/inner.gcl")));
+        assert!(!root.escapes_root(Path::new("sub/missing.gcl")));
+
+        let error = reader
+            .canonicalize(&project.join("dangling.gcl"))
+            .unwrap_err();
+        assert!(OutsideRootError::find(&error).is_some(), "{error:?}");
     }
 
     #[cfg(unix)]
@@ -799,7 +939,20 @@ mod tests {
         let error = fs_reader
             .read_to_string_bounded(&link, TEST_LIMIT, &CancellationToken::unbounded())
             .unwrap_err();
-        assert_eq!(io_kind(error), Some(io::ErrorKind::NotFound));
+        assert_outside_root(&error);
+        // PRJ-9: canonicalizing an escaping symlink is a sandbox refusal, not
+        // a missing entry, so callers cannot fall back as if it were absent.
+        let error = fs_reader.canonicalize(&link).unwrap_err();
+        assert!(OutsideRootError::find(&error).is_some(), "{error:?}");
+        assert_ne!(error.kind(), io::ErrorKind::NotFound);
+        // A missing in-root entry is still reported as not found.
+        assert_eq!(
+            fs_reader
+                .canonicalize(&project.join("missing.gcl"))
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotFound
+        );
         assert_eq!(
             fs_reader.entry_kind(&link).unwrap(),
             FileSystemEntryKind::Symlink

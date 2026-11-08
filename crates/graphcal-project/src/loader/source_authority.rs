@@ -7,8 +7,9 @@
 //! locating the longest file prefix of a module path inside the selected
 //! package tree, the source-root sandbox, and the depth-first fetch order.
 
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::collections::{HashMap, HashSet};
+use std::ffi::OsString;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
@@ -17,19 +18,23 @@ use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
 use graphcal_compiler::syntax::ast::ModulePath;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_io::{FileSystemReadError, FileSystemReader};
+use graphcal_io::{
+    EntryLimit, FileSystemReadError, FileSystemReader, OutsideRootError, ProjectIngestionPolicy,
+};
 use graphcal_package::PackageManifest;
 
 use super::budget::{
     LoaderArtifact, LoaderBudgetState, LoaderReadError, PackageAuthorityError, io_not_found,
     loader_manifest_error,
 };
+use super::module_file::{ModuleFileFailure, ModuleFilePath};
 use super::module_path::PackageSelector;
 use super::source_snapshot::{
     FetchedFile, ModuleLocation, ModuleResolution, ModuleRoot, ParsedFile, ParsedSource,
     ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot,
 };
 use crate::compile_error::CompileError;
+use crate::load_error::LoadError;
 
 /// Read capability and semantic identity of one package's source tree.
 pub(super) struct SourceTree<'a> {
@@ -97,12 +102,20 @@ pub(super) fn fetch_source_snapshot<A: ModuleSourceAuthority>(
 ) -> Result<SourceSnapshot<A::Key>, Cancelled> {
     let mut files = HashMap::new();
     let mut sources = SourceRegistry::new();
+    let mut entries = DirectoryEntries::default();
     let mut pending = vec![root.clone()];
     while let Some(file) = pending.pop() {
         if files.contains_key(&file) {
             continue;
         }
-        let fetched = fetch_file(authority, &file, &mut sources, budget, cancellation)?;
+        let fetched = fetch_file(
+            authority,
+            &file,
+            &mut sources,
+            &mut entries,
+            budget,
+            cancellation,
+        )?;
         let Ok(parsed) = &fetched else {
             files.insert(file, fetched);
             break;
@@ -124,6 +137,7 @@ fn fetch_file<A: ModuleSourceAuthority>(
     authority: &A,
     file: &A::Key,
     sources: &mut SourceRegistry,
+    entries: &mut DirectoryEntries,
     budget: &mut LoaderBudgetState,
     cancellation: &CancellationToken,
 ) -> Result<FetchedFile<A::Key>, Cancelled> {
@@ -157,7 +171,7 @@ fn fetch_file<A: ModuleSourceAuthority>(
     let stem = tree.module_root.stem_reference(file.path());
     ParsedSource::resolve(location, parsed, stem, |path| {
         cancellation.checkpoint()?;
-        Ok(resolve_module(authority, path, file))
+        resolve_module(authority, path, file, entries, cancellation)
     })
     .map(Ok)
 }
@@ -179,10 +193,10 @@ fn read_source_file(
                 LoaderReadError::Filesystem(filesystem) if is_not_found(&filesystem) => {
                     io_not_found(path)
                 }
-                other => loader_manifest_error(format!(
-                    "could not read source `{}`: {other}",
-                    path.display()
-                )),
+                other => CompileError::Load(LoadError::SourceReadFailed {
+                    path: path.to_path_buf(),
+                    reason: other.to_string(),
+                }),
             })
         })?;
     ParsedFile::parse(
@@ -207,26 +221,42 @@ fn is_not_found(error: &FileSystemReadError) -> bool {
 /// directory wins (`nasa.rocket` resolves to
 /// `<root>/<source_dir>/nasa/rocket.gcl`). Any remaining segments are an exact
 /// nested inline-DAG path in that file.
+///
+/// A candidate must be spelled exactly as its directory entries are, and the
+/// file must have a module name ([`verify_module_file`]), so resolution is
+/// the same on case-sensitive and case-insensitive filesystems and one file
+/// never loads under two identities.
+///
+/// # Errors
+///
+/// Returns only cooperative cancellation; resolution failures are values.
 pub(super) fn resolve_module<A: ModuleSourceAuthority>(
     authority: &A,
     path: &ModulePath,
     from: &A::Key,
-) -> ModuleResolution<A::Key> {
+    entries: &mut DirectoryEntries,
+    cancellation: &CancellationToken,
+) -> Result<ModuleResolution<A::Key>, Cancelled> {
     let Ok(selector) = PackageSelector::classify(path) else {
-        return ModuleResolution::Failed(ResolveFailure::StdlibNotImplemented);
+        return Ok(ModuleResolution::Failed(
+            ResolveFailure::StdlibNotImplemented,
+        ));
     };
     let selected = match authority.select_package(selector, from) {
         Ok(selected) => selected,
-        Err(failure) => return ModuleResolution::Failed(failure),
+        Err(failure) => return Ok(ModuleResolution::Failed(failure)),
     };
     let tree = match authority.tree(&selected.package) {
         Ok(tree) => tree,
         Err(error) => {
-            return ModuleResolution::Failed(ResolveFailure::PackageAuthority(error));
+            return Ok(ModuleResolution::Failed(ResolveFailure::PackageAuthority(
+                error,
+            )));
         }
     };
     let namespace_dir = tree.root.join(&selected.namespace_dir);
     let module_segments = selector.module_segments();
+    let mut mismatch = None;
     for file_segment_count in (0..=module_segments.len()).rev() {
         let mut file_path = module_segments[..file_segment_count]
             .iter()
@@ -234,23 +264,199 @@ pub(super) fn resolve_module<A: ModuleSourceAuthority>(
                 file_path.join(segment.name.as_str())
             });
         file_path.set_extension("gcl");
-        let Ok(canonical) = tree.reader.canonicalize(&file_path) else {
-            continue;
+        // Only a missing file moves on to a shorter prefix. A sandbox refusal
+        // or an unreadable entry is reported, never treated as absence: an
+        // escaping symlink must not resolve to an inline DAG of a shorter
+        // prefix instead.
+        let canonical = match tree.reader.canonicalize(&file_path) {
+            Ok(canonical) => canonical,
+            Err(error) if OutsideRootError::find(&error).is_some() => {
+                return Ok(ModuleResolution::OutsideRoot);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => {
+                return Ok(ModuleResolution::Failed(ResolveFailure::Unreadable {
+                    file: file_path,
+                    reason: error.to_string(),
+                }));
+            }
         };
         // Path sandboxing: modules must stay inside their package's root.
         if !canonical.starts_with(tree.root) {
-            return ModuleResolution::OutsideRoot;
+            return Ok(ModuleResolution::OutsideRoot);
+        }
+        if let ModuleRoot::SourceDir(source_dir) = &tree.module_root {
+            // A candidate found only under another letter case does not exist
+            // on a case-sensitive filesystem, so it is skipped like a missing
+            // one: resolution is the same on every host. It is reported only
+            // if no shorter prefix resolves either.
+            if let Ok(relative) = file_path.strip_prefix(source_dir) {
+                match verify_spelling(tree.reader, source_dir, relative, entries, cancellation)? {
+                    Ok(()) => {}
+                    Err(failure @ ModuleFileFailure::SpellingMismatch { .. }) => {
+                        mismatch.get_or_insert(failure);
+                        continue;
+                    }
+                    Err(failure) => {
+                        return Ok(ModuleResolution::Failed(ResolveFailure::ModuleFile(
+                            failure,
+                        )));
+                    }
+                }
+            }
+            if let Err(failure) =
+                verify_module_file(tree.reader, source_dir, &canonical, entries, cancellation)?
+            {
+                return Ok(ModuleResolution::Failed(ResolveFailure::ModuleFile(
+                    failure,
+                )));
+            }
         }
         let inline_path = module_segments[file_segment_count..]
             .iter()
             .map(|segment| DeclName::classify(segment.name.atom().clone()))
             .collect();
-        return ModuleResolution::Resolved(ResolvedFile {
+        return Ok(ModuleResolution::Resolved(ResolvedFile {
             file: A::Key::in_package(selected.package, canonical),
             inline_path,
-        });
+        }));
     }
-    ModuleResolution::Failed(ResolveFailure::FileNotFound)
+    Ok(ModuleResolution::Failed(mismatch.map_or(
+        ResolveFailure::FileNotFound,
+        ResolveFailure::ModuleFile,
+    )))
+}
+
+/// Directory listings fetched while checking on-disk spellings, so a load
+/// lists each directory at most once.
+#[derive(Debug, Default)]
+pub(super) struct DirectoryEntries(HashMap<PathBuf, HashSet<OsString>>);
+
+impl DirectoryEntries {
+    /// Names in `directory`, listed through `reader` on first use.
+    fn names(
+        &mut self,
+        reader: &dyn FileSystemReader,
+        directory: &Path,
+        cancellation: &CancellationToken,
+    ) -> Result<&HashSet<OsString>, Outcome<FileSystemReadError>> {
+        if !self.0.contains_key(directory) {
+            let limit = EntryLimit::new(ProjectIngestionPolicy::default().max_entries());
+            let names = reader.read_directory_bounded(directory, limit, cancellation)?;
+            self.0
+                .insert(directory.to_path_buf(), names.into_iter().collect());
+        }
+        Ok(&self.0[directory])
+    }
+}
+
+/// Check a package file canonicalized to `canonical` before it is loaded:
+///
+/// - its spelling must match its directory entries exactly below
+///   `source_dir`, so a case-insensitive filesystem (macOS, Windows) cannot
+///   load one file under two canonical spellings;
+/// - its path below `source_dir` must name a module ([`ModuleFilePath`]).
+///
+/// A file reached through an in-root symlink that leaves the source
+/// directory is not checked.
+///
+/// # Errors
+///
+/// Returns only cooperative cancellation; a failed check is the inner
+/// [`ModuleFileFailure`].
+pub(super) fn verify_module_file(
+    reader: &dyn FileSystemReader,
+    source_dir: &Path,
+    canonical: &Path,
+    entries: &mut DirectoryEntries,
+    cancellation: &CancellationToken,
+) -> Result<Result<(), ModuleFileFailure>, Cancelled> {
+    let Ok(relative) = canonical.strip_prefix(source_dir) else {
+        return Ok(Ok(()));
+    };
+    if let Err(failure) = verify_spelling(reader, source_dir, relative, entries, cancellation)? {
+        return Ok(Err(failure));
+    }
+    Ok(ModuleFilePath::parse(relative)
+        .map(drop)
+        .map_err(|error| ModuleFileFailure::Invalid {
+            path: canonical.to_path_buf(),
+            error,
+        }))
+}
+
+/// Check the root file of a package load like an imported module file, so
+/// the entry is rejected under a name or spelling an import could not use
+/// (`notes.txt`, `MyModule.gcl`, `Lib.gcl` for `lib.gcl`).
+///
+/// # Errors
+///
+/// Returns the failed check's diagnostic, or cooperative cancellation.
+pub(super) fn verify_root_module_file(
+    reader: &dyn FileSystemReader,
+    source_dir: &Path,
+    root_canonical: &Path,
+    cancellation: &CancellationToken,
+) -> Result<(), Outcome<CompileError>> {
+    let source_dir = reader
+        .canonicalize(source_dir)
+        .unwrap_or_else(|_| source_dir.to_path_buf());
+    verify_module_file(
+        reader,
+        &source_dir,
+        root_canonical,
+        &mut DirectoryEntries::default(),
+        cancellation,
+    )
+    .map_err(|Cancelled| Outcome::Cancelled)?
+    .map_err(|failure| Outcome::Failed(failure.to_load_error().into()))
+}
+
+/// Check that every component of `relative` below `base` is spelled exactly
+/// as its directory entry.
+fn verify_spelling(
+    reader: &dyn FileSystemReader,
+    base: &Path,
+    relative: &Path,
+    entries: &mut DirectoryEntries,
+    cancellation: &CancellationToken,
+) -> Result<Result<(), ModuleFileFailure>, Cancelled> {
+    let mut directory = base.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(name) = component else {
+            continue;
+        };
+        let names = match entries.names(reader, &directory, cancellation) {
+            Ok(names) => names,
+            Err(Outcome::Cancelled) => return Err(Cancelled),
+            Err(Outcome::Failed(error)) => {
+                return Ok(Err(ModuleFileFailure::Unreadable {
+                    path: directory,
+                    reason: error.to_string(),
+                }));
+            }
+        };
+        if !names.contains(name) {
+            let folded = name.to_string_lossy().to_lowercase();
+            let on_disk = names
+                .iter()
+                .find(|entry| entry.to_string_lossy().to_lowercase() == folded)
+                .cloned();
+            return Ok(Err(ModuleFileFailure::SpellingMismatch {
+                path: directory.join(name),
+                on_disk,
+            }));
+        }
+        directory.push(name);
+    }
+    Ok(Ok(()))
 }
 
 /// Filesystem authority of a single-package project: a real package whose

@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
+use super::module_file::{ModuleFileFailure, ModuleFilePath};
 use super::module_path::ModuleTarget;
 use super::same_file_reference::{LexicalSite, PathScope, SameFileScope, StemReference};
 use crate::compile_error::CompileError;
@@ -25,7 +26,7 @@ use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::import_cycle::ImportChainFile;
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::syntax::names::NameAtom;
+use graphcal_compiler::syntax::token::SourceIdentifier;
 use graphcal_package::PackageName;
 
 use super::budget::PackageAuthorityError;
@@ -170,7 +171,8 @@ impl ModuleRoot {
         let Some(stem) = file
             .file_stem()
             .and_then(|stem| stem.to_str())
-            .and_then(|stem| NameAtom::parse(stem).ok())
+            .and_then(|stem| SourceIdentifier::parse(stem).ok())
+            .map(SourceIdentifier::into_atom)
         else {
             return StemReference::Unspellable;
         };
@@ -183,25 +185,21 @@ impl ModuleRoot {
         }
     }
 
-    /// The module path that names `file` (a canonical path) in this tree.
+    /// The module path that names `file` (a canonical path) in this tree:
+    /// its [`ModuleFilePath`] below the source directory, or a standalone
+    /// file's stem when that is an identifier.
     pub(super) fn module_path_of(&self, file: &Path) -> Option<ModulePathKey> {
         use graphcal_compiler::syntax::non_empty::NonEmpty;
-        use std::path::Component;
 
-        let atoms = match self {
-            Self::SourceDir(dir) => file
-                .strip_prefix(dir)
-                .ok()?
-                .with_extension("")
-                .components()
-                .map(|component| match component {
-                    Component::Normal(segment) => NameAtom::parse(segment.to_str()?).ok(),
-                    _ => None,
-                })
-                .collect::<Option<Vec<_>>>()?,
-            Self::Standalone => vec![NameAtom::parse(file.file_stem()?.to_str()?).ok()?],
-        };
-        NonEmpty::try_from_vec(atoms).ok().map(ModulePathKey::new)
+        match self {
+            Self::SourceDir(dir) => ModuleFilePath::parse(file.strip_prefix(dir).ok()?)
+                .ok()
+                .map(|module_file| module_file.module_path()),
+            Self::Standalone => {
+                let stem = SourceIdentifier::parse(file.file_stem()?.to_str()?).ok()?;
+                Some(ModulePathKey::new(NonEmpty::singleton(stem.into_atom())))
+            }
+        }
     }
 }
 
@@ -399,6 +397,11 @@ pub(super) enum ResolveFailure {
     UnknownDependency { package: PackageName },
     /// The lockfile or package authority is inconsistent.
     PackageAuthority(PackageAuthorityError),
+    /// A candidate file exists but could not be inspected (for example a
+    /// symlink loop or a permission failure). `reason` is host text.
+    Unreadable { file: PathBuf, reason: String },
+    /// The file was found but cannot be loaded under the path that reached it.
+    ModuleFile(ModuleFileFailure),
 }
 
 impl ResolveFailure {
@@ -443,6 +446,12 @@ impl ResolveFailure {
                 message: error.to_string(),
             }
             .into(),
+            Self::Unreadable { file, reason } => LoadError::SourceReadFailed {
+                path: file.clone(),
+                reason: reason.clone(),
+            }
+            .into(),
+            Self::ModuleFile(failure) => failure.to_load_error().into(),
         }
     }
 }

@@ -182,7 +182,10 @@ impl FileDiscovery {
 ///
 /// Uses `walkdir` for safe traversal: only regular files are collected,
 /// symlinks are not followed, and common generated directories (`.git`,
-/// `target`, `node_modules`, etc.) are skipped. Incomplete traversal is a
+/// `target`, `node_modules`, etc.) are skipped below `dir`. `dir` itself is
+/// never skipped: a directory the user names explicitly is always walked, so a
+/// CI gate such as `graphcal check target` cannot pass vacuously. Incomplete
+/// traversal is a
 /// distinct result variant so certification commands cannot accidentally treat
 /// a partial file list as complete.
 #[must_use]
@@ -193,12 +196,13 @@ pub fn collect_gcl_files(dir: &Path) -> FileDiscovery {
         .follow_links(false)
         .into_iter()
         .filter_entry(|e| {
-            // Skip well-known generated/vendored directories.
+            // Skip well-known generated/vendored directories below the walk
+            // root (depth 0 is the directory the user named).
             // Non-UTF-8 directory names are not skipped — they won't match
             // any SKIP_DIRS entry anyway, so we intentionally let them
             // through rather than treating them as if they were the empty
             // string.
-            if e.file_type().is_dir() {
+            if e.depth() > 0 && e.file_type().is_dir() {
                 return !e
                     .file_name()
                     .to_str()
@@ -239,6 +243,23 @@ mod tests {
         assert_eq!(files, [] as [PathBuf; 0]);
         assert_eq!(failures.count(), 1);
         assert_eq!(failures.iter().next().unwrap().path(), root);
+    }
+
+    #[test]
+    fn skip_dirs_apply_only_below_the_named_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let named = directory.path().join("target");
+        std::fs::create_dir_all(named.join("node_modules")).unwrap();
+        std::fs::create_dir_all(named.join("nested/target")).unwrap();
+        std::fs::write(named.join("a.gcl"), "").unwrap();
+        std::fs::write(named.join("node_modules/skipped.gcl"), "").unwrap();
+        std::fs::write(named.join("nested/b.gcl"), "").unwrap();
+        std::fs::write(named.join("nested/target/skipped.gcl"), "").unwrap();
+
+        let FileDiscovery::Complete(files) = collect_gcl_files(&named) else {
+            panic!("an existing tree must be discovered completely");
+        };
+        assert_eq!(files, [named.join("a.gcl"), named.join("nested/b.gcl")]);
     }
 
     #[test]

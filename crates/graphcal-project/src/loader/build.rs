@@ -167,17 +167,10 @@ impl<K: SourceKey> Builder<'_, K> {
         let module_path = location.module_path.clone();
         let dag_id = DagId::from_relative_path(location.package.clone(), &location.relative_path)
             .map_err(|error| {
-            CompileError::semantic(
-                SemanticError::internal_error(
-                    format!(
-                        "invalid module path `{}`: {error}",
-                        location.relative_path.display()
-                    ),
-                    parsed.source_id(),
-                    DiagnosticAnchor::WholeFile,
-                ),
-                self.sources,
-            )
+            CompileError::Load(LoadError::InvalidSourcePath {
+                path: file.path().to_path_buf(),
+                reason: error.to_string(),
+            })
         })?;
         let mut resolved_imports =
             same_file_root_targets(parsed.ast(), parsed.same_file(), &dag_id, named_source)?;

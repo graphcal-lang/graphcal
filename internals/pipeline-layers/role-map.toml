@@ -3030,6 +3030,16 @@ role = "contracts"
 
 [[module]]
 package = "project"
+path = ["loader", "module_file"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "module_file", "tests"]
+role = "contracts"
+
+[[module]]
+package = "project"
 path = ["loader", "module_path"]
 role = "contracts"
 
