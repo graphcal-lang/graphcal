@@ -354,7 +354,14 @@ fn build_encoding(spec: &PlotSpec, label_layout: XLabelLayout) -> JsonValue {
 
     for (channel, value) in &spec.encodings {
         let ch_name = channel_vega_name(*channel);
-        let vega_type = infer_vega_type(value);
+        let vega_type = match value {
+            // A channel without a scale (tooltip, text, detail) formats a
+            // temporal field in the viewer's local time zone, even with a
+            // UTC time unit (checked against the vendored Vega-Lite 5.23);
+            // the RFC 3339 UTC instant itself is the exact label.
+            PlotFieldValue::Datetimes(_) if !channel_has_scale(*channel) => "nominal",
+            _ => infer_vega_type(value),
+        };
         let mut ch_spec = serde_json::Map::new();
         ch_spec.insert("field".to_string(), json!(ch_name));
         ch_spec.insert("type".to_string(), json!(vega_type));
@@ -668,6 +675,8 @@ plot p = {
             json!("Datetime (UTC)")
         );
         assert!(spec["encoding"]["tooltip"].get("scale").is_none());
+        // Without a scale, a temporal tooltip would show local time (#2287).
+        assert_eq!(spec["encoding"]["tooltip"]["type"], json!("nominal"));
     }
 
     /// The Vega-Lite specs of every figure `source` renders, by figure name.

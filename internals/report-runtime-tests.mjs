@@ -356,6 +356,19 @@ for (const [x, y, encodings] of [
 vegaContext.console = console;
 console.log("pan/zoom: mixed, continuous, categorical and temporal projections compile without warnings");
 
+{
+  // A tooltip has no scale: a datetime shows its UTC instant, never a time
+  // formatted in the viewer's local time zone (#2287).
+  const project = { entry: "main.gcl", files: [{ path: "main.gcl", content:
+    'node instant: Datetime<GPST> = epoch<GPST>("2025-06-01T12:00:00");\nplot p = { mark: point, encode: { x: 1.0, y: 1.0, tooltip: @instant } };' }] };
+  const spec = reportEngine.evaluateProject(project).evaluation.figures[0].spec;
+  assert.equal(spec.data.values[0].tooltip, "2025-06-01T11:59:42Z");
+  const tooltip = vegaContext.vegaLite.compile(spec).spec.marks[0].encode.update.tooltip.signal;
+  assert.ok(!/timeFormat|utcFormat/.test(tooltip), tooltip);
+  assert.ok(tooltip.includes('datum["tooltip"]'), tooltip);
+}
+console.log("datetime tooltips show the UTC instant unformatted");
+
 for (const [lower, upper, slider] of [
   ["0", "10", true], ["9007199254740990", "9007199254740991", true],
   ["-9007199254740991", "-9007199254740990", true],
