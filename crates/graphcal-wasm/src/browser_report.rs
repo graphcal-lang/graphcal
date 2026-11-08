@@ -1,14 +1,12 @@
 //! Browser-specific report metadata and rendering adapter.
 
 use std::collections::BTreeMap;
-use std::fmt::Write;
 
-use graphcal_eval::eval::{EvalOutputView, EvalResult};
+use graphcal_eval::eval::EvalResult;
 use graphcal_project::loader::LoadedProject;
 use graphcal_report::report_html::render_host_report_html;
-use graphcal_report::report_ir::{
-    Provenance, ReportInputs, SourceDigest, build_report, collect_doc_captions,
-};
+use graphcal_report::report_ir::{ReportInputs, SourceDigest, build_report, collect_doc_captions};
+use graphcal_report::report_provenance::{ReproInvocation, build_provenance};
 use sha2::{Digest, Sha256};
 
 use crate::bindings::BindingRequest;
@@ -57,19 +55,27 @@ impl ReportMetadata {
         result: &EvalResult,
         bindings: &[BindingRequest],
     ) -> Result<String, String> {
-        let provenance = Provenance {
-            compiler_version: env!("CARGO_PKG_VERSION").to_string(),
-            sources: self
-                .sources
+        let provenance = build_provenance(
+            env!("CARGO_PKG_VERSION"),
+            self.sources
                 .iter()
                 .map(|source| SourceDigest {
                     name: source.name.clone(),
                     sha256: source.sha256.clone(),
                 })
                 .collect(),
-            baseline_params: baseline_params(result),
-            repro_command: repro_command(&self.entry, bindings),
-        };
+            result,
+            &ReproInvocation {
+                entry: &self.entry,
+                root: None,
+                parameters: bindings
+                    .iter()
+                    .map(|binding| (binding.name.as_str(), binding.expr.as_str()))
+                    .collect(),
+                parameter_json: None,
+                parameter_json_max_bytes: None,
+            },
+        );
         let document = build_report(ReportInputs {
             title: &self.title,
             result,
@@ -79,36 +85,4 @@ impl ReportMetadata {
         .map_err(|error| error.to_string())?;
         Ok(render_host_report_html(&document))
     }
-}
-
-fn baseline_params(result: &EvalResult) -> Vec<(String, String)> {
-    result
-        .output_params(EvalOutputView::Surface)
-        .map(|(name, outcome)| {
-            let value = outcome.as_ref().map_or_else(
-                |error| format!("ERROR: {error}"),
-                |value| {
-                    graphcal_report::value_display::scalar_display(value, &result.render)
-                        .unwrap_or_else(|error| format!("ERROR: {error}"))
-                },
-            );
-            (name.to_string(), value)
-        })
-        .collect()
-}
-
-fn repro_command(entry: &str, bindings: &[BindingRequest]) -> String {
-    let mut command = format!("graphcal eval {}", shell_quote(entry));
-    for binding in bindings {
-        let _ = write!(
-            command,
-            " --param {}",
-            shell_quote(&format!("{}={}", binding.name, binding.expr))
-        );
-    }
-    command
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }

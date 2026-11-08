@@ -12,6 +12,7 @@ pub mod report_html;
 pub mod report_hydrate;
 pub mod report_ir;
 pub mod report_markdown;
+pub mod report_provenance;
 pub mod value_display;
 pub mod vega;
 pub(crate) mod vega_assets;
