@@ -185,11 +185,27 @@ impl ModuleRoot {
         }
     }
 
+    /// The source directory `source_dir` of a package tree, canonicalized
+    /// through `reader` like the module files below it, so a file's path
+    /// below it is found even when the source directory is reached through
+    /// a symlink.
+    pub(super) fn source_dir(
+        reader: &dyn graphcal_io::FileSystemReader,
+        source_dir: PathBuf,
+    ) -> Self {
+        Self::SourceDir(reader.canonicalize(&source_dir).unwrap_or(source_dir))
+    }
+
     /// The path of `file` (a canonical path in the tree rooted at
     /// `tree_root`) that its [`DagId`](graphcal_compiler::dag_id::DagId) is
     /// built from: relative to the source directory, so the identity mirrors
     /// the module path the user writes and not the filesystem layout, or
     /// relative to the tree root for a standalone file.
+    ///
+    /// A package module file outside its source directory is rejected
+    /// before it is loaded (`graphcal::M042`), so the fallback to the tree
+    /// root never names a package module; `LoadedFiles` refuses two modules
+    /// with one identity in any case.
     pub(super) fn identity_path(&self, file: &Path, tree_root: &Path) -> PathBuf {
         let root = match self {
             Self::SourceDir(dir) => dir.as_path(),

@@ -987,7 +987,7 @@ impl ModuleSourceAuthority for PackageLoadContext<'_> {
             reader,
             root,
             package: DagPackageId::new(package.as_str()),
-            module_root: ModuleRoot::SourceDir(source_dir),
+            module_root: ModuleRoot::source_dir(reader, source_dir),
         })
     }
 

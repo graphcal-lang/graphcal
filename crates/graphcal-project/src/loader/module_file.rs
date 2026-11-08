@@ -122,6 +122,9 @@ pub(super) enum ModuleFileFailure {
     },
     /// A directory on the path could not be listed. `reason` is host text.
     Unreadable { path: PathBuf, reason: String },
+    /// The file, reached through a symlink, lies outside the source
+    /// directory, so no module path below it names the file.
+    OutsideSourceDir { path: PathBuf, source_dir: PathBuf },
 }
 
 impl ModuleFileFailure {
@@ -148,6 +151,10 @@ impl ModuleFileFailure {
             Self::Unreadable { path, reason } => LoadError::SourceReadFailed {
                 path: path.clone(),
                 reason: reason.clone(),
+            },
+            Self::OutsideSourceDir { path, source_dir } => LoadError::ModuleOutsideSourceDir {
+                path: path.clone(),
+                source_dir: source_dir.clone(),
             },
         }
     }

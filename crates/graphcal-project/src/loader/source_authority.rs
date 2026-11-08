@@ -358,10 +358,10 @@ impl DirectoryEntries {
 /// - its spelling must match its directory entries exactly below
 ///   `source_dir`, so a case-insensitive filesystem (macOS, Windows) cannot
 ///   load one file under two canonical spellings;
-/// - its path below `source_dir` must name a module ([`ModuleFilePath`]).
-///
-/// A file reached through an in-root symlink that leaves the source
-/// directory is not checked.
+/// - its path below `source_dir` must name a module ([`ModuleFilePath`]);
+/// - it must lie below `source_dir`: a module's identity is its path below
+///   the source directory, so a file an in-root symlink leads out of it to
+///   has none, and could otherwise share one with another module.
 ///
 /// # Errors
 ///
@@ -375,7 +375,10 @@ pub(super) fn verify_module_file(
     cancellation: &CancellationToken,
 ) -> Result<Result<(), ModuleFileFailure>, Cancelled> {
     let Ok(relative) = canonical.strip_prefix(source_dir) else {
-        return Ok(Ok(()));
+        return Ok(Err(ModuleFileFailure::OutsideSourceDir {
+            path: canonical.to_path_buf(),
+            source_dir: source_dir.to_path_buf(),
+        }));
     };
     if let Err(failure) = verify_spelling(reader, source_dir, relative, entries, cancellation)? {
         return Ok(Err(failure));
@@ -476,7 +479,7 @@ impl ModuleSourceAuthority for ProjectSources<'_> {
             root: self.project_root,
             package: self.package_id.clone(),
             module_root: self.manifest.map_or(ModuleRoot::Standalone, |manifest| {
-                ModuleRoot::SourceDir(manifest.source_dir.join_to(self.project_root))
+                ModuleRoot::source_dir(self.fs, manifest.source_dir.join_to(self.project_root))
             }),
         })
     }
