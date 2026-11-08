@@ -132,7 +132,7 @@
     var waiting = 0;
     controls.forEach(function (control) { if (control.isDirty()) waiting += 1; });
     applyAll.hidden = autoRun;
-    applyAll.disabled = waiting === 0;
+    applyAll.disabled = halted || waiting === 0;
     applyAll.textContent = waiting > 1 ? "Apply " + waiting + " edits" : "Apply edits";
   }
   var inputToolbar = element("div", "input-toolbar");
@@ -200,6 +200,12 @@
   var halted = false;
   function fatal(message) {
     halted = true;
+    // Nothing can evaluate any more, so nothing may be edited or submitted:
+    // an accepted edit would otherwise stay pending forever.
+    controls.forEach(function (control) { control.disable(); });
+    autoRunToggle.disabled = true;
+    applyAll.disabled = true;
+    resetButton.disabled = true;
     var shown = hasApplied ? "the last results the engine produced" : "the as-published baseline";
     setStatus("Interactive mode unavailable", "error", hasApplied && inputsDiffer());
     var main = document.querySelector("main");
@@ -660,6 +666,15 @@
         updateDraftStatus();
       },
       isDirty: function () { return dirty && !pending; },
+      disable: function () {
+        if (autoRunTimer) clearTimeout(autoRunTimer);
+        autoRunTimer = null;
+        control.abandonPending();
+        if (!holder.querySelectorAll) return;
+        holder.querySelectorAll("input, select, textarea, button").forEach(function (node) {
+          node.disabled = true;
+        });
+      },
       submitIfDirty: function () { if (dirty && !pending) submitDraft(true); },
     };
 
@@ -691,6 +706,7 @@
       }, AUTO_RUN_DELAY_MS);
     }
     function editDraft() {
+      if (halted) return;
       revision += 1;
       dirty = true;
       sourceChanged = false;
@@ -720,6 +736,7 @@
       "Each run overrides the whole parameter, including unchanged fields.",
     ));
     function submitDraft(reportIncomplete) {
+      if (halted) return;
       var incomplete = incompleteDraft(draft, []);
       if (incomplete) {
         if (reportIncomplete) control.setError(incomplete.message, incomplete.path);
@@ -753,6 +770,7 @@
       var clear = element("button", "control-clear", "Use default");
       clear.type = "button";
       clear.addEventListener("click", function () {
+        if (halted) return;
         if (autoRunTimer) clearTimeout(autoRunTimer);
         autoRunTimer = null;
         pending = true;
@@ -797,6 +815,7 @@
     }
     if (workspace) workspace.refresh(true);
     resetButton.addEventListener("click", function () {
+      if (halted) return;
       controls.forEach(function (control) {
         control.setError("");
         control.stageBaseline();

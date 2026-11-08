@@ -621,7 +621,7 @@ function mountedRuntime(source) {
   const toggle = all(inputsSection).find(child => child["aria-describedby"] === "auto-run-description");
   toggle.checked = false;
   toggle.events.change();
-  return { prepared, transports, transport, lastRequest, answer, ready, edit, draftStatus, stale, fatalNotices, timeout, body, main, sections };
+  return { prepared, transports, transport, lastRequest, answer, ready, edit, draftStatus, stale, fatalNotices, timeout, body, main, sections, toggle, all, inputsSection };
 }
 const failureModel = "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;\nnode s: Dimensionless = @a + @b;";
 {
@@ -658,8 +658,11 @@ const failureModel = "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.
   assert.equal(run.fatalNotices().length, 1);
   assert.match(run.fatalNotices()[0].textContent, /still — the page shows the last results the engine produced/);
   const requests = run.transport().posted.length;
+  assert.equal(run.toggle.disabled, true, "a stopped engine disables the toolbar");
+  assert.ok(run.all(run.inputsSection).filter(node => node.className === "apply-all").every(node => node.disabled));
   run.edit("a", "9.0");
   assert.equal(run.transport().posted.length, requests, "a stopped engine receives no requests");
+  assert.notEqual(run.draftStatus("a"), "Updating the complete parameter value…", "no edit is left pending");
   assert.equal(statusText(run.body), "Interactive mode unavailable");
   run.prepared.free();
 }
