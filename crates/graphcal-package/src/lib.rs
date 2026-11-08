@@ -520,21 +520,25 @@ impl fmt::Display for GitRepositoryPath {
 /// Rejected URLs end up in terminal output, CI logs, and editor diagnostics,
 /// so any userinfo that may carry a secret is replaced before the error is
 /// built: all userinfo of a non-SSH URL (an HTTPS user name is commonly a
-/// token), and SSH userinfo that contains a `:` password. A plain SSH user
-/// such as `git` is kept because it helps identify the URL.
+/// token), and SSH userinfo that contains a `:` password (or a `/`, which
+/// a plain user name never does). A plain SSH user such as `git` is kept
+/// because it helps identify the URL.
 fn redact_userinfo(value: &str) -> String {
     const REDACTED: &str = "<redacted>";
     let (scheme, rest) = match value.split_once("://") {
         Some((scheme, rest)) => (Some(scheme), rest),
         None => (None, value),
     };
-    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let Some(at) = rest[..authority_end].rfind('@') else {
+    // A password may contain `/`, so the userinfo is conservatively taken to
+    // end at the last `@` before any query or fragment, even if that
+    // over-redacts a repository path containing `@`.
+    let redactable_end = rest.find(['?', '#']).unwrap_or(rest.len());
+    let Some(at) = rest[..redactable_end].rfind('@') else {
         return value.to_string();
     };
     let userinfo = &rest[..at];
     let ssh_like = scheme.is_none_or(|scheme| scheme.eq_ignore_ascii_case("ssh"));
-    if ssh_like && !userinfo.contains(':') {
+    if ssh_like && !userinfo.contains([':', '/']) {
         return value.to_string();
     }
     let host_and_path = &rest[at..];
@@ -3562,10 +3566,22 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
                 "ftp://u:FAKE-TOKEN-1234@host/repo",
                 "ftp://<redacted>@host/repo",
             ),
+            (
+                "https://user:FAKE/TOKEN-1234@host/acme/units.git",
+                "https://<redacted>@host/acme/units.git",
+            ),
+            (
+                "ssh://git:FAKE/TOKEN-1234@host/acme/units.git",
+                "ssh://<redacted>@host/acme/units.git",
+            ),
+            (
+                "user:FAKE/TOKEN-1234@host:acme/units.git",
+                "<redacted>@host:acme/units.git",
+            ),
         ] {
             let error = GitUrl::new(input).unwrap_err();
             let message = error.to_string();
-            assert!(!message.contains("FAKE-TOKEN-1234"), "{message}");
+            assert!(!message.contains("TOKEN-1234"), "{message}");
             assert!(message.contains(&format!("`{rendered}`")), "{message}");
         }
         // A plain SSH user is not a secret and stays visible.
