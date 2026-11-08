@@ -209,6 +209,38 @@ impl GenericScope {
         }
     }
 
+    /// Insert a declaration's own generic binder, which lives in the Static
+    /// namespace of the declaring `module`: it may neither reuse a reserved
+    /// Static name (prelude dimensions, built-in types, ...) nor shadow a
+    /// Static name visible there, so a binder can never silently change what
+    /// a visible name means inside its declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HirLowerError::GenericParamShadowsStatic`] for a reserved or
+    /// visible name, and [`HirLowerError::DuplicateGenericParam`] for a
+    /// binder already in scope.
+    pub(crate) fn insert_declared_binder(
+        &mut self,
+        binding: GenericParamBinding,
+        module: crate::resolve::ModuleRef<'_>,
+    ) -> Result<(), HirLowerError> {
+        use crate::resolve::namespace::Namespace;
+
+        let atom = binding.id.name.atom();
+        let visible = module.visible_span(Namespace::Static, atom);
+        if crate::resolve::reserved_name::validate_reserved_name(Namespace::Static, atom).is_err()
+            || visible.is_some()
+        {
+            return Err(HirLowerError::GenericParamShadowsStatic {
+                name: binding.id.name.clone(),
+                original: visible,
+                duplicate: binding.span,
+            });
+        }
+        self.insert_binding(binding)
+    }
+
     /// Look up a generic parameter by its leaf name.
     #[must_use]
     pub(crate) fn get(&self, name: &GenericParamName) -> Option<&GenericParamBinding> {
