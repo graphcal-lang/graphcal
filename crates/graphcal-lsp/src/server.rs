@@ -404,10 +404,19 @@ impl Backend {
         });
     }
 
-    fn is_graphcal_file(uri: &Url) -> bool {
-        std::path::Path::new(uri.path())
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("gcl"))
+    /// Whether a document the client opens is Graphcal: its language
+    /// identifier says so, or its path ends in `.gcl`. An untitled buffer
+    /// has no suffix, so the language identifier is all that marks it.
+    fn opens_as_graphcal(uri: &Url, language_id: &str) -> bool {
+        language_id.eq_ignore_ascii_case("graphcal")
+            || std::path::Path::new(uri.path())
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("gcl"))
+    }
+
+    /// Whether `uri` is a document opened as Graphcal and not yet closed.
+    async fn is_open_graphcal_document(&self, uri: &Url) -> bool {
+        self.latest_text.read().await.contains_key(uri)
     }
 
     /// The cached analysis of `uri` when `accept` admits it against the
@@ -629,10 +638,6 @@ impl Backend {
     /// The analysis runs on its own task: a notification handler that awaited
     /// it would hold one of tower-lsp's few handler slots for the whole pass.
     async fn record_and_analyze(&self, uri: Url, text: Arc<String>, version: Option<i32>) {
-        if !Self::is_graphcal_file(&uri) {
-            return;
-        }
-
         self.analysis_scheduler.open_document(&uri);
         let recorded = match self
             .record_latest_text(&uri, Arc::clone(&text), version)
@@ -1275,6 +1280,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        if !Self::opens_as_graphcal(&params.text_document.uri, &params.text_document.language_id) {
+            return;
+        }
         self.record_and_analyze(
             params.text_document.uri,
             Arc::new(params.text_document.text),
@@ -1288,7 +1296,7 @@ impl LanguageServer for Backend {
             return;
         };
         let uri = params.text_document.uri;
-        if !Self::is_graphcal_file(&uri) {
+        if !self.is_open_graphcal_document(&uri).await {
             return;
         }
         let text = Arc::new(change.text);
@@ -1318,6 +1326,12 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        if !self
+            .is_open_graphcal_document(&params.text_document.uri)
+            .await
+        {
+            return;
+        }
         if let Some(text) = params.text {
             self.record_and_analyze(params.text_document.uri, Arc::new(text), None)
                 .await;

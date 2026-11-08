@@ -146,16 +146,33 @@ impl ProjectBuild {
     }
 }
 
+/// The source name a buffer analysed on its own is registered under.
+///
+/// A standalone source's name also names its module, which must end in
+/// `.gcl`; an untitled buffer the client marked as Graphcal by its language
+/// identifier (`untitled:Untitled-1`) has no such suffix, so it gets one.
+fn standalone_source_name(uri: &Url) -> std::borrow::Cow<'_, str> {
+    // The module path is case-sensitive: `.GCL` does not name a module.
+    if std::path::Path::new(uri.as_str())
+        .extension()
+        .is_some_and(|extension| extension == "gcl")
+    {
+        std::borrow::Cow::Borrowed(uri.as_str())
+    } else {
+        std::borrow::Cow::Owned(format!("{uri}.gcl"))
+    }
+}
+
 pub fn build_project(
     uri: &Url,
     text: &str,
     open_buffers: &[OpenBuffer],
     cancellation: &CancellationToken,
 ) -> ProjectBuild {
-    let name = uri.as_str();
     let Ok(path) = uri.to_file_path() else {
+        let name = standalone_source_name(uri);
         return ProjectBuild {
-            project: LoadedProject::from_source_with_cancellation(text, name, cancellation)
+            project: LoadedProject::from_source_with_cancellation(text, &name, cancellation)
                 .map_err(|outcome| outcome.map_failed(Box::new)),
             filesystem_inputs: HashSet::new(),
         };
@@ -352,8 +369,11 @@ pub fn run_analysis_with_cancellation(
             // diagnostics-only fallback and `store_analysis` retains the
             // previous symbol state (#834).
             let (symbol_table, buffer_parsed, degradations) =
-                match LoadedProject::from_source_with_cancellation(text, uri.as_str(), cancellation)
-                {
+                match LoadedProject::from_source_with_cancellation(
+                    text,
+                    &standalone_source_name(uri),
+                    cancellation,
+                ) {
                     Ok(single) => (
                         symbol_table::build_for_buffer(single.root_file().ast(), text),
                         true,

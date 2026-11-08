@@ -1458,3 +1458,53 @@ async fn rename_refusals_reach_the_client_with_their_reason() {
     .await;
     assert!(blank.is_null(), "{blank}");
 }
+
+/// LSP-19: an untitled buffer has no `.gcl` suffix; its `languageId` alone
+/// marks it as Graphcal, and its later changes are analysed too. A buffer
+/// opened under another language stays ignored.
+#[tokio::test]
+async fn untitled_buffers_are_recognized_by_language_id() {
+    let (mut service, mut socket) = service();
+    initialize(&mut service, json!({})).await;
+    let other = Url::parse("untitled:Untitled-2").unwrap();
+    let mut plain = open_params(&other, 1, "node broken: Dimensionless =");
+    plain["textDocument"]["languageId"] = json!("plaintext");
+    notify(&mut service, "textDocument/didOpen", plain).await;
+
+    let uri = Url::parse("untitled:Untitled-1").unwrap();
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&uri, 1, "node broken: Dimensionless = @missing;"),
+    )
+    .await;
+    // The first publication is for the Graphcal buffer: the plaintext one
+    // was never analysed.
+    let params = loop {
+        let message = timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("publish diagnostics timeout")
+            .expect("client socket closed");
+        if message.method() == "textDocument/publishDiagnostics" {
+            break message.params().expect("diagnostic params").clone();
+        }
+    };
+    assert_eq!(params["uri"], json!(uri));
+    assert_eq!(
+        diagnostic_codes(&params["diagnostics"]),
+        ["graphcal::N002"],
+        "{}",
+        params["diagnostics"]
+    );
+
+    notify(
+        &mut service,
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "text": "node fixed: Dimensionless = 1.0;" }]
+        }),
+    )
+    .await;
+    assert_eq!(next_diagnostics(&mut socket, &uri).await, json!([]));
+}
