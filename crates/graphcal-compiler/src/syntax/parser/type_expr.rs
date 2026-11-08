@@ -164,7 +164,7 @@ impl Parser<'_> {
     }
 
     /// Whether the next token continues a dimension expression after a term.
-    fn peeks_dim_operator(&mut self) -> bool {
+    fn peeks_dim_operator(&self) -> bool {
         matches!(
             self.lexer.peek(),
             Some(&Token::Star | &Token::Slash | &Token::Caret)
@@ -705,7 +705,7 @@ impl Parser<'_> {
 
     /// Parse one generic argument without guessing its semantic sort.
     ///
-    /// A type-expression parse is attempted on a cloned parser. If it consumes
+    /// A type-expression parse is attempted speculatively. If it consumes
     /// the complete argument, a bare name or name-only product is retained as
     /// [`GenericArg::Ambiguous`]; other type shapes are unambiguously
     /// [`GenericArg::Type`]. Forms involving a literal or `+` are parsed as Nat.
@@ -718,25 +718,28 @@ impl Parser<'_> {
         }
 
         if self.lexer.peek() != Some(&Token::Number) {
-            let mut type_candidate = self.clone();
-            match type_candidate.parse_type_expr() {
+            // `None` rejects a type parse that does not end the argument.
+            let type_candidate = self.speculate(|parser| match parser.parse_type_expr() {
                 Ok(type_expr)
-                    if matches!(
-                        type_candidate.lexer.peek(),
-                        Some(&Token::Comma | &Token::Gt)
-                    ) =>
+                    if matches!(parser.lexer.peek(), Some(&Token::Comma | &Token::Gt)) =>
                 {
-                    *self = type_candidate;
+                    Ok(type_expr)
+                }
+                Ok(_) => Err(None),
+                Err(error) => Err(Some(error)),
+            });
+            match type_candidate {
+                Ok(type_expr) => {
                     return Ok(Self::ambiguous_generic_arg(&type_expr)
                         .map_or(GenericArg::Type(type_expr), GenericArg::Ambiguous));
                 }
-                Err(
+                Err(Some(
                     error @ ParseError {
                         kind: ParseErrorKind::TooDeeplyNested,
                         ..
                     },
-                ) => return Err(error),
-                Ok(_) | Err(_) => {}
+                )) => return Err(error),
+                Err(_) => {}
             }
         }
 

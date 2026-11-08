@@ -11,6 +11,9 @@ pub struct Formatter<'src> {
     source: &'src str,
     metadata: &'src SourceMetadata,
     next_comment: usize,
+    /// Set by [`Self::request_verbatim`] while a region is being formatted;
+    /// consumed by the enclosing [`Self::format_or_verbatim`].
+    verbatim_requested: bool,
 }
 
 impl<'src> Formatter<'src> {
@@ -19,6 +22,7 @@ impl<'src> Formatter<'src> {
             source,
             metadata,
             next_comment: 0,
+            verbatim_requested: false,
         }
     }
 
@@ -80,9 +84,7 @@ impl<'src> Formatter<'src> {
 
     /// Check if there's a blank line in the source between two byte offsets.
     pub fn has_blank_line_between(&self, start: usize, end: usize) -> bool {
-        self.metadata.blank_lines().iter().any(|blank_line| {
-            blank_line.span().offset() >= start && blank_line.span().offset() < end
-        })
+        self.metadata.has_blank_line_starting_in(start..end)
     }
 
     /// Returns `true` if the next undrained comment starts before `offset`.
@@ -102,14 +104,22 @@ impl<'src> Formatter<'src> {
         }
     }
 
-    /// Make a speculative formatter for pre-rendering aligned table cells.
+    /// Run `render` on a speculative formatter, used for pre-rendering
+    /// aligned table cells.
     ///
     /// Cell width pre-rendering must not consume row/slice comments from the
     /// real formatter cursor. Comments before the cell value are skipped in the
     /// fork so row-level drains can decide where they belong; comments inside
     /// the cell remain undrained in the real formatter and trigger the usual
-    /// declaration-level verbatim fallback.
-    pub fn fork_skipping_comments_before(&self, offset: usize) -> Self {
+    /// declaration-level verbatim fallback. The fork's comment cursor is
+    /// discarded, but a verbatim request made while rendering is carried back
+    /// to `self`: the fork only exists inside this call, so no request can be
+    /// lost with it.
+    pub fn with_fork_skipping_comments_before<T>(
+        &mut self,
+        offset: usize,
+        render: impl FnOnce(&mut Self) -> T,
+    ) -> T {
         let mut next_comment = self.next_comment;
         while self
             .metadata
@@ -119,21 +129,33 @@ impl<'src> Formatter<'src> {
         {
             next_comment += 1;
         }
-        Self {
+        let mut fork = Self {
             source: self.source,
             metadata: self.metadata,
             next_comment,
-        }
+            verbatim_requested: false,
+        };
+        let rendered = render(&mut fork);
+        self.verbatim_requested |= fork.verbatim_requested;
+        rendered
+    }
+
+    /// Report that the region being formatted has a shape the formatter
+    /// cannot reproduce faithfully (for example a table with duplicate
+    /// labels), so the enclosing [`Self::format_or_verbatim`] must emit its
+    /// original source instead of the formatted doc.
+    pub const fn request_verbatim(&mut self) {
+        self.verbatim_requested = true;
     }
 
     /// Format the source region `span` with `format`, falling back to the
     /// region's original text when `format` leaves a comment inside `span`
-    /// undrained.
+    /// undrained or calls [`Self::request_verbatim`].
     ///
     /// Leftover comments would silently migrate to the next declaration (or
     /// vanish, for multi-decl sugar), so the formatted doc is discarded and the
-    /// source is emitted verbatim instead. The only formatter state is the
-    /// comment cursor, so the rollback is a cursor reset.
+    /// source is emitted verbatim instead. The formatter state is the comment
+    /// cursor and the verbatim request, so the rollback is a cursor reset.
     pub fn format_or_verbatim(
         &mut self,
         span: Span,
@@ -141,8 +163,10 @@ impl<'src> Formatter<'src> {
     ) -> RcDoc<'static> {
         let end = span.offset() + span.len();
         let comment_snapshot = self.next_comment;
+        let outer_request = std::mem::replace(&mut self.verbatim_requested, false);
         let formatted = format(self);
-        if self.has_comment_before(end) {
+        let verbatim_requested = std::mem::replace(&mut self.verbatim_requested, outer_request);
+        if verbatim_requested || self.has_comment_before(end) {
             self.next_comment = comment_snapshot;
             self.skip_comments_before(end);
             text_with_hardlines(self.slice(span))
