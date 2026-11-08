@@ -53,13 +53,28 @@ pub struct StructuredLiteral {
     expr: Expr,
 }
 
+/// Why a structured literal leaf was rejected.
+#[derive(Debug, thiserror::Error)]
+pub enum StructuredLiteralError {
+    /// The leaf is not exactly one expression.
+    #[error(transparent)]
+    Parse(#[from] ParseError),
+    /// The parsed expression's span does not lie on character boundaries of
+    /// its source, so it has no spelling of its own; a fallback to the whole
+    /// text could carry a trailing comment into a reproduce command.
+    #[error("internal error: the literal's expression span {offset}+{len} lies outside its source")]
+    SpanOutsideSource { offset: usize, len: usize },
+}
+
 impl StructuredLiteral {
     /// Parse one closed literal expression.
     ///
     /// # Errors
     ///
-    /// Returns the parse error when `source` is not exactly one expression.
-    pub fn parse(source: &str) -> Result<Self, ParseError> {
+    /// Returns the parse error when `source` is not exactly one expression,
+    /// and [`StructuredLiteralError::SpanOutsideSource`] when the parser
+    /// reports a span its source cannot be sliced at.
+    pub fn parse(source: &str) -> Result<Self, StructuredLiteralError> {
         let raw = Parser::new(source).parse_single_expr()?;
         // The expression's own span excludes trailing comments and
         // whitespace, and contains a line comment only together with the
@@ -69,7 +84,10 @@ impl StructuredLiteral {
         let spelling = source
             .get(span.offset()..)
             .and_then(|rest| rest.get(..span.len()))
-            .unwrap_or(source)
+            .ok_or_else(|| StructuredLiteralError::SpanOutsideSource {
+                offset: span.offset(),
+                len: span.len(),
+            })?
             .to_string();
         Ok(Self {
             spelling,

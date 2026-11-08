@@ -69,7 +69,7 @@ mod structured_source;
 use binding_compile::build_parameter_ports;
 pub use binding_compile::{
     ExternalValue, ParameterBindingRow, StructuredBindingError, StructuredBindingErrorKind,
-    StructuredBindingPathSegment, StructuredLiteral, StructuredValueExpr,
+    StructuredBindingPathSegment, StructuredLiteral, StructuredLiteralError, StructuredValueExpr,
 };
 pub use model_port::{
     InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,
