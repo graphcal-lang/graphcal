@@ -1358,11 +1358,14 @@ node right: RangeB = @rb;
     );
     // Located at a declaration, in its own file (not the importer's).
     let source = rendered.registered_source();
+    let graphcal_compiler::source_registry::SourceOrigin::File(path) = source.origin() else {
+        panic!("expected a file-backed source, got {}", source.name());
+    };
     assert!(
         ["a.gcl", "b.gcl"]
             .iter()
-            .any(|file| source.name().ends_with(&format!("/pkg/{file}"))),
+            .any(|file| path.ends_with(std::path::Path::new("pkg").join(file))),
         "{}",
-        source.name()
+        path.display()
     );
 }
