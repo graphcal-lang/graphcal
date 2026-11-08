@@ -923,24 +923,23 @@ fn project_type_store_rejects_an_unused_recursive_type() {
 }
 
 #[test]
-fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
+fn tir_builder_merges_equivalent_externs_and_rejects_competing_signatures() {
     let mut builder = parse_and_type_resolve_builder(
         r#"import plugin "graphcal:demo" as first {
             fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
         }"#,
     )
     .unwrap();
-    let identical = parse_and_type_resolve(
+    // RES-9: binder and parameter names are not part of the signature.
+    let renamed = parse_and_type_resolve(
         r#"
         import plugin "graphcal:demo" as second {
-            fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+            fn lerp<E: Dim>(lo: E, hi: E, frac: Dimensionless) -> E;
         }"#,
     )
     .unwrap();
-    let (key, function) = identical.extern_functions().iter().next().unwrap();
-    builder
-        .insert_extern_function(key.clone(), function.clone())
-        .unwrap();
+    let function = renamed.extern_functions().values().next().unwrap();
+    builder.insert_extern_function(function.clone()).unwrap();
 
     let competing = parse_and_type_resolve(
         r#"import plugin "graphcal:demo" as third {
@@ -948,14 +947,25 @@ fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
         }"#,
     )
     .unwrap();
-    let (key, function) = competing.extern_functions().iter().next().unwrap();
-    let expected_key = key.clone();
+    let function = competing.extern_functions().values().next().unwrap();
     let error = builder
-        .insert_extern_function(key.clone(), function.clone())
+        .insert_extern_function(function.clone())
         .unwrap_err();
 
-    assert_eq!(error.plugin, expected_key.plugin);
-    assert_eq!(error.name, expected_key.name);
+    assert!(
+        matches!(
+            &error,
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: crate::semantic_error::SemanticErrorKind::Plugin(
+                    crate::semantic_error::plugin::PluginError::InvalidExternSignature {
+                        error: crate::semantic_error::plugin::ExternSignatureError::ConflictingSignature { .. },
+                    }
+                ),
+                ..
+            })
+        ),
+        "expected W001, got {error:?}"
+    );
 }
 
 /// Single-file integration helper: lower + type-resolve + compile each

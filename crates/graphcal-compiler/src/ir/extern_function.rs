@@ -27,6 +27,8 @@ pub struct ExternFunctionEntry {
     /// manifest-facing field shape and the nominal record type the
     /// declaration binds it to.
     pub signature: crate::function_signature::FunctionSignature<ExternStructResult>,
+    /// The declaring file, which every span below points into.
+    pub source: SourceId,
     /// Span of the function name inside the declaring block.
     pub name_span: Span,
     /// Span of the whole `fn ...;` declaration.
@@ -45,24 +47,16 @@ impl ExternFunctionEntry {
             name: self.name.clone(),
         }
     }
-
-    /// Whether two entries describe the same callable definition.
-    ///
-    /// Source aliases and spans are diagnostic provenance, not signature
-    /// identity, so independently compiled copies may differ in those fields.
-    pub(crate) fn has_same_callable_definition(&self, other: &Self) -> bool {
-        self.plugin == other.plugin && self.name == other.name && self.signature == other.signature
-    }
 }
 
 /// Merge one declared extern signature into a map of already-declared ones.
 ///
-/// The same plugin function may be declared under several aliases (or in
-/// several DAG bodies of one file), but its signature is a single fact about
-/// the plugin — conflicting declarations are rejected at the later
-/// declaration. Comparison is structural: renaming dimension variables or
-/// parameters does not make a different signature, and the first
-/// declaration is kept.
+/// The same plugin function may be declared under several aliases, in
+/// several DAG bodies of one file, or in several files, but its signature is
+/// a single fact about the plugin — conflicting declarations are rejected at
+/// the later declaration, in its own file. Comparison is structural:
+/// renaming dimension variables or parameters does not make a different
+/// signature, and the first declaration is kept.
 ///
 /// # Errors
 ///
@@ -72,7 +66,6 @@ impl ExternFunctionEntry {
 pub(crate) fn merge_extern_function(
     map: &mut HashMap<crate::plugin_identity::ExternFnKey, ExternFunctionEntry>,
     entry: ExternFunctionEntry,
-    src: SourceId,
 ) -> Result<(), SemanticError> {
     use std::collections::hash_map::Entry;
 
@@ -83,7 +76,7 @@ pub(crate) fn merge_extern_function(
             let existing = existing.get();
             if !existing.signature.structurally_equivalent(&entry.signature) {
                 return Err(SemanticError::located(
-                    src,
+                    entry.source,
                     entry.decl_span,
                     PluginError::InvalidExternSignature {
                         error: ExternSignatureError::ConflictingSignature {
@@ -101,7 +94,7 @@ pub(crate) fn merge_extern_function(
                 && !existing.same_record(declared)
             {
                 return Err(SemanticError::located(
-                    src,
+                    entry.source,
                     entry.decl_span,
                     PluginError::InvalidExternSignature {
                         error: ExternSignatureError::ConflictingResultType {

@@ -224,7 +224,7 @@ pub(super) fn resolve_plugin_imports(
     for decl in decls {
         for function in &decl.functions {
             let entry = resolve_extern_function(decl, function, scope, src)?;
-            merge_extern_function(&mut map, entry, src)?;
+            merge_extern_function(&mut map, entry)?;
         }
     }
     Ok(map)
@@ -340,6 +340,7 @@ fn resolve_extern_function(
         alias: decl.alias.value.clone(),
         name: key.name,
         signature,
+        source: src,
         name_span: function.name.span,
         decl_span: function.span,
         path_span: decl.path.span,

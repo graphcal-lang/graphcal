@@ -808,15 +808,6 @@ pub struct DagSemanticBody {
 // TIR struct
 // ---------------------------------------------------------------------------
 
-/// A project TIR already carried a different signature for one canonical
-/// plugin function.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("TIR already contains a different definition for plugin `{plugin}` function `{name}`")]
-pub struct CompetingExternFunctionDefinition {
-    pub plugin: crate::plugin_identity::PluginIdentity,
-    pub name: crate::syntax::function_name::FnName,
-}
-
 /// Resolved extern function signatures keyed by plugin and function identity.
 pub type ExternFunctions =
     HashMap<crate::plugin_identity::ExternFnKey, crate::ir::extern_function::ExternFunctionEntry>;

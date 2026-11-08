@@ -648,22 +648,22 @@ pub(super) fn install_shared_module_artifacts(
     module_artifacts: &ModuleArtifactStore,
     src: SourceId,
 ) -> Result<(), PipelineError> {
-    for dep_eval in module_artifacts.values() {
-        // Extern signatures travel with the dep's dag bodies: a qualified
-        // inline call into a dep dag that uses extern functions resolves its
-        // signature from the importer's merged TIR at eval time. Repeated
-        // identical signatures are idempotent; a divergent copy is an
-        // internal project-assembly error even if upstream checks missed it.
-        for (key, function) in &dep_eval.extern_functions {
-            tir.insert_extern_function(key.clone(), function.clone())
-                .map_err(|error| {
-                    PipelineError::Semantic(SemanticError::internal_error(
-                        error.to_string(),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    ))
-                })?;
-        }
+    // Extern signatures travel with the deps' dag bodies: a qualified inline
+    // call into a dep dag that uses extern functions resolves its signature
+    // from the importer's merged TIR at eval time. Files may declare one
+    // plugin function independently; structurally equivalent copies merge,
+    // and a real conflict is W001 at the later declaration, in its own file.
+    //
+    // Deterministic conflict reporting: earliest source, then earliest
+    // declaration, first.
+    let mut functions: Vec<_> = module_artifacts
+        .values()
+        .flat_map(|artifact| artifact.extern_functions.values())
+        .collect();
+    functions.sort_by_key(|function| (function.source, function.decl_span.offset()));
+    for function in functions {
+        tir.insert_extern_function(function.clone())
+            .map_err(PipelineError::Semantic)?;
     }
     // Every loaded module's store is installed at once, so each store's
     // callees (its own imports' bodies) are installed with it.
