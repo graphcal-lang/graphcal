@@ -445,16 +445,16 @@ fn chosen_wire(
     let Some(unit) = choice else {
         return Ok((wire.clone(), None));
     };
-    let Some(chosen) = wire.with_unit(unit) else {
-        return Err(SessionError::UnitForNonQuantity { name: name.clone() });
-    };
-    let unresolved = |reason: String| SessionError::UnresolvedUnit {
-        name: name.clone(),
-        unit: unit.clone(),
-        reason,
-    };
-    let scale = resolver.si_scale(name, unit).map_err(unresolved)?;
-    let chosen = chosen.map_err(|error| unresolved(error.to_string()))?;
+    let chosen = wire
+        .with_unit(unit)
+        .map_err(|_| SessionError::UnitForNonQuantity { name: name.clone() })?;
+    let scale = resolver
+        .si_scale(name, unit)
+        .map_err(|reason| SessionError::UnresolvedUnit {
+            name: name.clone(),
+            unit: unit.clone(),
+            reason,
+        })?;
     Ok((chosen, Some(scale)))
 }
 
@@ -481,24 +481,31 @@ fn unit_choices<'s>(
     Ok(choices)
 }
 
-/// `domain` (in the canonical unit) in the unit of `scale`, rounded inward so
-/// that every value within the converted bounds converts back into the SI
-/// bounds the model checks.
-fn converted_domain(domain: Domain, scale: Option<SiScale>) -> Option<Domain> {
+/// The domain of parameter `name`, `domain` in the canonical unit, in the
+/// unit of `scale`, rounded inward so that every value within the converted
+/// bounds converts back into the SI bounds the model checks.
+fn converted_domain(
+    name: &PortName,
+    domain: Domain,
+    scale: Option<SiScale>,
+) -> Result<Domain, SessionError> {
     let (Domain::Quantity(bounds), Some(scale)) = (domain, scale) else {
-        return Some(domain);
+        return Ok(domain);
     };
+    let unrepresentable = || SessionError::UnrepresentableDomain { name: name.clone() };
     let min = bounds
         .min()
         .map(|min| scale.lower_bound_from_si(*min))
         .transpose()
-        .ok()?;
+        .map_err(|_| unrepresentable())?;
     let max = bounds
         .max()
         .map(|max| scale.upper_bound_from_si(*max))
         .transpose()
-        .ok()?;
-    Bounds::new(min, max).ok().map(Domain::Quantity)
+        .map_err(|_| unrepresentable())?;
+    Bounds::new(min, max)
+        .map(Domain::Quantity)
+        .map_err(|_| unrepresentable())
 }
 
 impl ModelInterface {
@@ -583,13 +590,7 @@ impl ModelInterface {
                     let (wire, si_scale) = chosen_wire(parameter.name(), wire, choice, &mut units)?;
                     let domain = parameter
                         .domain()
-                        .map(|domain| {
-                            converted_domain(*domain, si_scale).ok_or_else(|| {
-                                SessionError::UnrepresentableDomain {
-                                    name: parameter.name().clone(),
-                                }
-                            })
-                        })
+                        .map(|domain| converted_domain(parameter.name(), *domain, si_scale))
                         .transpose()?;
                     inputs.push(SessionInput {
                         name: parameter.name().clone(),

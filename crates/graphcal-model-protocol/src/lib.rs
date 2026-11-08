@@ -53,7 +53,7 @@ pub use label::{
     UnitSpelling, VariantName,
 };
 pub use outcome::{RowFailure, RowOutcome, RowStatus, UnknownRowStatus};
-pub use resolved_unit::ResolvedUnit;
+pub use resolved_unit::{ResolvedUnit, UnitConversionError};
 pub use session::{
     CanonicalUnitsOnly, InputSlot, OutputSlot, SessionError, SessionInput, SessionOutput,
     SessionSchema, SessionSpec, UnitChoice, UnitResolver,
@@ -63,5 +63,6 @@ pub use value::{ComplexValue, Value, ValueRef};
 pub use version::PROTOCOL_VERSION;
 pub use wire_type::{
     AlgebraicType, AlgebraicTypeError, ConstructorPosition, ConstructorType, FieldType,
-    IndexedType, KeyPosition, KeyType, PortWire, QuantityType, QuantityTypeError, WireType,
+    IndexedType, KeyPosition, KeyType, NoQuantities, PortWire, QuantityType, QuantityTypeError,
+    WireType,
 };

@@ -230,6 +230,25 @@ pub enum OutputColumn {
 }
 
 impl OutputColumn {
+    /// The number of rows, with or without values.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        match self {
+            Self::Quantity(values) | Self::Datetime(values) => values.len(),
+            Self::Int(values) => values.len(),
+            Self::Bool(values) => values.len(),
+            Self::Key(values) => values.len(),
+            Self::Complex(values) => values.len(),
+            Self::Structured(values) => values.len(),
+        }
+    }
+
+    /// Whether the column has no rows.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     const fn empty(wire: &WireType) -> Self {
         match wire {
             WireType::Quantity(_) => Self::Quantity(Vec::new()),
@@ -253,30 +272,44 @@ impl OutputColumn {
         }
     }
 
-    /// Append `value`, which has already been checked against `wire`.
-    fn push(&mut self, wire: &WireType, value: &Value) -> bool {
+    /// Append `value`, checking that it has the shape of `wire`, the wire of
+    /// the output this column was created for. The column is unchanged on
+    /// error.
+    fn push(&mut self, wire: &WireType, value: &Value) -> Result<(), ValueShapeMismatch> {
         match (self, value, wire) {
-            (Self::Quantity(values), Value::Quantity(value), _)
-            | (Self::Datetime(values), Value::Datetime(value), _) => values.push(Some(*value)),
-            (Self::Int(values), Value::Int(value), _) => values.push(Some(*value)),
-            (Self::Bool(values), Value::Bool(value), _) => values.push(Some(*value)),
+            (Self::Quantity(values), Value::Quantity(value), WireType::Quantity(_))
+            | (Self::Datetime(values), Value::Datetime(value), WireType::Datetime(_)) => {
+                values.push(Some(*value));
+            }
+            (Self::Int(values), Value::Int(value), WireType::Int) => values.push(Some(*value)),
+            (Self::Bool(values), Value::Bool(value), WireType::Bool) => values.push(Some(*value)),
             (Self::Key(values), Value::Key(value), WireType::Key(key)) => {
-                let Some(position) = key.position(value.as_key_ref()) else {
-                    return false;
-                };
+                let position = key.position(value.as_key_ref()).ok_or(ValueShapeMismatch)?;
                 values.push(Some(position));
             }
-            (Self::Complex(values), Value::Complex(value), _) => values.push(Some(*value)),
+            (Self::Complex(values), Value::Complex(value), WireType::Complex(_)) => {
+                values.push(Some(*value));
+            }
             (
                 Self::Structured(values),
                 value @ (Value::Indexed(_) | Value::Algebraic { .. }),
-                _,
-            ) => {
-                values.push(Some(value.clone()));
-            }
-            _ => return false,
+                wire @ (WireType::Indexed(_) | WireType::Algebraic(_)),
+            ) if value.conforms_to(wire) => values.push(Some(value.clone())),
+            _ => return Err(ValueShapeMismatch),
         }
-        true
+        Ok(())
+    }
+
+    /// Drop every row from `rows` on.
+    fn truncate(&mut self, rows: usize) {
+        match self {
+            Self::Quantity(values) | Self::Datetime(values) => values.truncate(rows),
+            Self::Int(values) => values.truncate(rows),
+            Self::Bool(values) => values.truncate(rows),
+            Self::Key(values) => values.truncate(rows),
+            Self::Complex(values) => values.truncate(rows),
+            Self::Structured(values) => values.truncate(rows),
+        }
     }
 
     fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
@@ -302,6 +335,10 @@ impl OutputColumn {
         })
     }
 }
+
+/// A value does not have the shape of its column's wire type.
+#[derive(Debug, Clone, Copy)]
+struct ValueShapeMismatch;
 
 /// Why rows cannot form output values for a session.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -367,18 +404,18 @@ impl OutputValuesBuilder {
                 found: values.len(),
             });
         }
-        if let Some(output) = outputs
-            .iter()
-            .zip(&values)
-            .find_map(|(output, value)| (!value.conforms_to(output.wire())).then_some(output))
-        {
-            return Err(OutputValuesError::KindMismatch {
-                output: output.name().clone(),
-            });
-        }
+        let rows = self.present.len();
         for ((column, output), value) in self.columns.iter_mut().zip(outputs).zip(&values) {
-            // Conformance was checked above, so every push succeeds.
-            let _pushed = column.push(output.wire(), value);
+            if column.push(output.wire(), value).is_err() {
+                // Each push checks its own value, so rolling back the columns
+                // already extended keeps every column one row per pushed row.
+                for column in &mut self.columns {
+                    column.truncate(rows);
+                }
+                return Err(OutputValuesError::KindMismatch {
+                    output: output.name().clone(),
+                });
+            }
         }
         self.present.push(true);
         Ok(())
@@ -669,6 +706,25 @@ mod tests {
             ]),
             Err(RequestBatchError::KeyOutOfRange { row: 0, .. })
         ));
+    }
+
+    #[test]
+    fn a_rejected_row_leaves_every_output_column_unchanged() {
+        let mut builder = OutputValuesBuilder::new(Arc::new(sample_session()));
+        // The first value fits `failure`; the second does not fit `margin`.
+        assert_eq!(
+            builder.push(Some(vec![Value::Bool(true), Value::Int(1)])),
+            Err(OutputValuesError::KindMismatch {
+                output: crate::interface::tests::name("margin"),
+            })
+        );
+        builder
+            .push(Some(vec![Value::Bool(false), Value::Quantity(finite(2.0))]))
+            .unwrap();
+        let values = builder.finish().unwrap();
+        assert_eq!(values.rows(), 1);
+        assert!(values.columns().iter().all(|column| column.len() == 1));
+        assert_eq!(values.columns()[0], OutputColumn::Bool(vec![Some(false)]));
     }
 
     #[test]

@@ -96,10 +96,10 @@ fn client_resolves_units_in_the_scope_of_the_model() {
     let length = margin.wire().supported().unwrap().quantity().unwrap();
     let value = FiniteF64::new(2500.0).unwrap();
     assert_eq!(
-        resolved[0].from_si(length, value),
-        Some(Ok(FiniteF64::new(2.5).unwrap()))
+        resolved[0].from_si(length.dimension(), value),
+        Ok(FiniteF64::new(2.5).unwrap())
     );
-    assert_eq!(resolved[1].from_si(length, value), None);
+    assert!(resolved[1].from_si(length.dimension(), value).is_err());
 
     // A spelling is compared exactly, so surrounding whitespace is rejected
     // before it reaches the server rather than trimmed by some commands.

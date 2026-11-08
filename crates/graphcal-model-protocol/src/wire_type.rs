@@ -57,7 +57,22 @@ impl QuantityType {
     pub const fn unit(&self) -> Option<&UnitSpelling> {
         self.unit.as_ref()
     }
+
+    /// The same dimension with values expressed in `unit`. Naming a unit
+    /// always satisfies [`Self::new`].
+    #[must_use]
+    pub fn in_unit(&self, unit: UnitSpelling) -> Self {
+        Self {
+            dimension: self.dimension.clone(),
+            unit: Some(unit),
+        }
+    }
 }
+
+/// A unit was chosen for a wire type that carries no quantities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("the wire type carries no quantities")]
+pub struct NoQuantities;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -431,24 +446,20 @@ impl WireType {
     ///
     /// # Errors
     ///
-    /// Returns `None` when the wire is not quantity-like (see
-    /// [`Self::quantity`]), or [`QuantityTypeError`] when the quantity cannot
-    /// name `unit`.
-    pub fn with_unit(&self, unit: &UnitSpelling) -> Option<Result<Self, QuantityTypeError>> {
-        let rewrap = |quantity: &QuantityType| {
-            QuantityType::new(quantity.dimension().clone(), Some(unit.clone()))
-        };
-        Some(match self {
-            Self::Quantity(quantity) => rewrap(quantity).map(Self::Quantity),
-            Self::Complex(quantity) => rewrap(quantity).map(Self::Complex),
-            Self::Indexed(indexed) => indexed
-                .element()
-                .with_unit(unit)?
-                .map(|element| Self::Indexed(IndexedType::new(indexed.axis().clone(), element))),
+    /// Returns [`NoQuantities`] when the wire is not quantity-like (see
+    /// [`Self::quantity`]).
+    pub fn with_unit(&self, unit: &UnitSpelling) -> Result<Self, NoQuantities> {
+        match self {
+            Self::Quantity(quantity) => Ok(Self::Quantity(quantity.in_unit(unit.clone()))),
+            Self::Complex(quantity) => Ok(Self::Complex(quantity.in_unit(unit.clone()))),
+            Self::Indexed(indexed) => Ok(Self::Indexed(IndexedType::new(
+                indexed.axis().clone(),
+                indexed.element().with_unit(unit)?,
+            ))),
             Self::Int | Self::Bool | Self::Key(_) | Self::Datetime(_) | Self::Algebraic(_) => {
-                return None;
+                Err(NoQuantities)
             }
-        })
+        }
     }
 
     /// The innermost element of an indexed wire, or the wire itself.
