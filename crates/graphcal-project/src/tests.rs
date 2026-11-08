@@ -3269,6 +3269,172 @@ fn cancellation_is_observed_at_every_pipeline_checkpoint() {
     }
 }
 
+/// A file whose every DAG includes the previous one twice, so the root's
+/// include of `d{depth}` materializes `2^(depth + 1) - 2` instances.
+fn exponential_include_source(stem: &str, depth: usize) -> String {
+    let levels = (1..=depth)
+        .enumerate()
+        .fold(String::new(), |mut levels, (previous, level)| {
+            std::fmt::Write::write_fmt(
+                &mut levels,
+                format_args!(
+                    "pub dag d{level} {{\n\
+                     import {stem}::{{d{previous}}};\n\
+                     include d{previous}(x: 1.0) as a;\n\
+                     include d{previous}(x: 2.0) as b;\n\
+                     param x: Dimensionless = 1.0;\n\
+                     pub node y: Dimensionless = @a::y + @b::y;\n\
+                     }}\n"
+                ),
+            )
+            .expect("writing to a String cannot fail");
+            levels
+        });
+    format!(
+        "pub dag d0 {{\n\
+         param x: Dimensionless = 1.0;\n\
+         pub node y: Dimensionless = @x;\n\
+         }}\n\
+         {levels}\
+         include d{depth}() as top;\n\
+         node r: Dimensionless = @top::y;\n"
+    )
+}
+
+/// Check the exponential include tree of `depth` with a token that cancels
+/// once `phase` has made a few steps, and return the outcome with the steps
+/// `phase` made in all (the whole tree takes thousands).
+fn cancel_during(
+    phase: graphcal_compiler::cancellation::ProgressPhase,
+    depth: usize,
+) -> (Result<(), Outcome<CompileError>>, usize) {
+    const STEPS_BEFORE_CANCELLING: usize = 10;
+    let project = crate::loader::LoadedProject::from_source(
+        &exponential_include_source("exponential", depth),
+        "exponential.gcl",
+    )
+    .unwrap();
+    // The check runs on this thread, whose progress the token watches.
+    let before = phase.steps_on_this_thread();
+    let cancellation = graphcal_compiler::cancellation::CancellationToken::cancel_after_progress(
+        phase,
+        STEPS_BEFORE_CANCELLING,
+    );
+    let result = ProjectCompiler::new(&project)
+        .cancellation(&cancellation)
+        .check()
+        .map(|_| ());
+    (result, phase.steps_on_this_thread().saturating_sub(before))
+}
+
+#[test]
+fn cancellation_stops_exponential_include_expansion() {
+    // The token cancels only once the resolver has expanded some instances,
+    // so the check stops promptly only if the expansion itself observes it.
+    let (result, steps) = cancel_during(
+        graphcal_compiler::cancellation::ProgressPhase::IncludeExpansion,
+        14,
+    );
+    assert!(
+        matches!(result, Err(Outcome::Cancelled)),
+        "unexpected outcome: {result:?}"
+    );
+    assert!(
+        steps <= 11,
+        "expanded {steps} instances, not 10, before stopping"
+    );
+}
+
+#[test]
+fn cancellation_stops_exponential_instantiation() {
+    // The token cancels only once instantiation has materialized some
+    // instances, so the check stops promptly only if instantiation itself
+    // observes it.
+    let (result, steps) = cancel_during(
+        graphcal_compiler::cancellation::ProgressPhase::Instantiation,
+        10,
+    );
+    assert!(
+        matches!(result, Err(Outcome::Cancelled)),
+        "unexpected outcome: {result:?}"
+    );
+    assert!(
+        steps <= 11,
+        "instantiated {steps} edges, not 10, before stopping"
+    );
+}
+
+#[test]
+fn instances_share_one_type_definition_table() {
+    // Each instance used to copy the type definitions of every DAG present,
+    // so materializing N instances cost O(N * #DAGs).
+    let source = "pub type Pair { Pair(left: Dimensionless, right: Dimensionless) }\n\
+                  pub dag leaf {\n\
+                  import shared::{type Pair, Pair};\n\
+                  param x: Dimensionless = 1.0;\n\
+                  pub node pair: Pair = Pair(left: @x, right: @x);\n\
+                  }\n\
+                  pub dag middle {\n\
+                  import shared::{leaf};\n\
+                  include leaf(x: 1.0) as a;\n\
+                  include leaf(x: 2.0) as b;\n\
+                  pub node y: Dimensionless = 1.0;\n\
+                  }\n\
+                  include middle() as first;\n\
+                  include middle() as second;\n\
+                  node r: Dimensionless = @first::y + @second::y;\n";
+    let tir = compile_to_tir(source, "shared.gcl").unwrap();
+    let instances = tir
+        .local_dags()
+        .filter(|(id, _)| id.leaf().is_instance())
+        .map(|(_, dag)| &dag.body_for_test().semantic().type_defs)
+        .collect::<Vec<_>>();
+    assert!(
+        instances.len() >= 6,
+        "two middles, each with two leaves: {}",
+        instances.len()
+    );
+    assert!(
+        instances
+            .iter()
+            .all(|type_defs| type_defs.shares_table_with(instances[0])),
+        "every instance must share the project-wide type-definition table"
+    );
+}
+
+#[test]
+fn rigid_templates_are_built_once_however_many_includes_rebind_them() {
+    // Each rebinding include used to rebuild its template's rigid view from
+    // a clone of the whole TIR, twice (to instantiate it and to infer its
+    // port-generic trees), so N rebinding includes cost O(N^2). The rigid
+    // views are now built once per template and port set.
+    let rigid_view_builds = |includes: usize| {
+        let includes = (0..includes)
+            .map(|index| format!("include lib(dim Out: Time, value: {index}.0 s) as i{index};\n"))
+            .collect::<Vec<_>>()
+            .concat();
+        let source = format!(
+            "dag lib {{\n\
+             pub(bind) dim Out = Length;\n\
+             param value: Out;\n\
+             pub node v: Out = @value;\n\
+             }}\n\
+             {includes}"
+        );
+        // The check runs on this thread, so the thread's count is its own.
+        let before = graphcal_compiler::tir::typed::rigid_view_builds_for_test();
+        compile_to_tir(&source, "rigid.gcl").unwrap();
+        graphcal_compiler::tir::typed::rigid_view_builds_for_test() - before
+    };
+    let one = rigid_view_builds(1);
+    assert!(one > 0, "a rebinding include must build a rigid view");
+    assert_eq!(
+        rigid_view_builds(50),
+        one,
+        "rigid views must be built once per template and port set, not per include"
+    );
+}
+
 #[test]
 fn cancellation_stops_an_in_flight_evaluation() {
     use std::{
@@ -5715,7 +5881,9 @@ fn project_selective_includes_still_reject_duplicate_local_names() {
     );
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
 
-    match project.build_module_resolver() {
+    match graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        project.build_module_resolver(cancellation)
+    }) {
         Err(graphcal_compiler::resolve::error::ModuleResolveError::DuplicateImportName {
             namespace,
             name,

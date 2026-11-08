@@ -117,7 +117,11 @@ impl CheckedBody {
         body: TBody<Symbolic>,
         definition: &AxisDefinition<'_>,
     ) -> Result<Self, DischargeError> {
-        Self::discharge_with(body, definition, &mut ToConcrete::new(definition))
+        Self::discharge_with(
+            body,
+            definition,
+            &mut ToConcrete::new(definition, &AxisCache::default()),
+        )
     }
 
     fn discharge_with(
@@ -165,21 +169,55 @@ impl From<UnavailableIndex> for NotConcrete {
     }
 }
 
+/// The concrete axes built so far, by concrete index identity.
+///
+/// An axis's keys and coordinates are a function of its concrete index
+/// identity within one program, so one cache can serve every tree of every
+/// DAG and instance: each is then built once, however many bodies rely on
+/// it. The cached axis keeps the spelling of its first user; others take it
+/// respelled.
+#[derive(Default)]
+pub struct AxisCache(std::cell::RefCell<HashMap<IndexTypeRef<Concrete>, IndexAxis>>);
+
+impl AxisCache {
+    /// The axis of the concrete `index`, built from `definition` the first
+    /// time it is asked for.
+    pub(super) fn axis(
+        &self,
+        index: &IndexTypeRef<Concrete>,
+        definition: &AxisDefinition<'_>,
+    ) -> Result<IndexAxis, NotConcrete> {
+        if let Some(axis) = self.0.borrow().get(index) {
+            return Ok(axis.clone());
+        }
+        let kind = definition(&index.to_symbolic())?.ok_or(NotConcrete::Waiting)?;
+        let axis = IndexAxis::from_concrete(index.clone(), kind.into_owned()).map_err(|_| {
+            NotConcrete::Discharge(DischargeError::NonFiniteAxis(Box::new(index.clone())))
+        })?;
+        self.0.borrow_mut().insert(index.clone(), axis.clone());
+        Ok(axis)
+    }
+}
+
 /// Close every type of a symbolic tree that mentions no `Nat` variable, and
 /// give each node the concrete axes and keys it relies on.
 ///
-/// Each axis is built once per tree from its definition.
+/// Each axis is built once per [`AxisCache`] from its definition.
 pub struct ToConcrete<'d, 'a> {
     definition: &'d AxisDefinition<'a>,
-    axes: HashMap<IndexTypeRef<Concrete>, IndexAxis>,
+    axes: &'d AxisCache,
+    /// The axes these trees use, spelled as they first spell each index.
+    spelled: HashMap<IndexTypeRef<Concrete>, IndexAxis>,
 }
 
 impl<'d, 'a> ToConcrete<'d, 'a> {
-    /// Close trees whose axes are defined by `definition`.
-    pub(crate) fn new(definition: &'d AxisDefinition<'a>) -> Self {
+    /// Close trees whose axes are defined by `definition`, sharing the axes
+    /// of `axes`.
+    pub(crate) fn new(definition: &'d AxisDefinition<'a>, axes: &'d AxisCache) -> Self {
         Self {
             definition,
-            axes: HashMap::new(),
+            axes,
+            spelled: HashMap::new(),
         }
     }
 
@@ -190,14 +228,14 @@ impl<'d, 'a> ToConcrete<'d, 'a> {
         span: Span,
     ) -> Result<IndexAxis, NotConcrete> {
         let index = index.ok_or(NotConcrete::Discharge(DischargeError::AxisShape(span)))?;
-        if let Some(axis) = self.axes.get(index) {
+        if let Some(axis) = self.spelled.get(index) {
             return Ok(axis.clone());
         }
-        let kind = (self.definition)(&index.to_symbolic())?.ok_or(NotConcrete::Waiting)?;
-        let axis = IndexAxis::from_concrete(index.clone(), kind.into_owned()).ok_or_else(|| {
-            NotConcrete::Discharge(DischargeError::NonFiniteAxis(Box::new(index.clone())))
-        })?;
-        self.axes.insert(index.clone(), axis.clone());
+        let axis = self
+            .axes
+            .axis(index, self.definition)?
+            .respelled(index.clone());
+        self.spelled.insert(index.clone(), axis.clone());
         Ok(axis)
     }
 }
@@ -429,10 +467,11 @@ impl CheckedBodies {
         claimed: ClaimedRoots,
         mut nominal_uses: HashMap<ExprId, Arc<[NominalObservation]>>,
         definition: &AxisDefinition<'_>,
+        axes: &AxisCache,
     ) -> Result<Self, DischargeError> {
         let ClaimedRoots { roots, calls } = claimed;
         let mut published = IndexMap::with_capacity(roots.len());
-        let mut concrete = ToConcrete::new(definition);
+        let mut concrete = ToConcrete::new(definition, axes);
         for (id, body) in roots {
             let body = CheckedBody::discharge_with(body, definition, &mut concrete)?;
             published.insert(id, body);

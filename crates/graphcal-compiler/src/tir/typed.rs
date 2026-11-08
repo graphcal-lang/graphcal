@@ -291,14 +291,16 @@ impl TirDraft {
     ///
     /// # Errors
     ///
-    /// Returns a [`SemanticError`] when an instance cannot be specialized.
+    /// Returns a [`SemanticError`] when an instance cannot be specialized,
+    /// or [`Outcome::Cancelled`] once `cancellation` is cancelled.
     pub fn instantiate(
         self,
         overrides: &CheckedOverrideDependencies,
         src: SourceId,
-    ) -> Result<InstantiatedTir, SemanticError> {
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<InstantiatedTir, Outcome<SemanticError>> {
         let mut tir = self.finish();
-        let instances = specialization::instantiate_semantic_edges(&mut tir, src)?;
+        let instances = specialization::instantiate_semantic_edges(&mut tir, src, cancellation)?;
         augment_runtime_deps_for_dynamic_units(&mut tir);
         overrides.reconcile(&mut tir);
         Ok(InstantiatedTir { tir, instances })
@@ -1867,12 +1869,7 @@ pub(crate) fn rigid_dimension_view(
     ports: &[ResolvedDimName],
     src: SourceId,
 ) -> Result<UncheckedTir, SemanticError> {
-    let rigid_types = tir
-        .project_type_store()
-        .with_rigid_dimensions(ports)
-        .map_err(|_| {
-            SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
-        })?;
+    let rigid_types = rigid_project_types(tir, ports, src)?;
     let mut rigid = tir.clone();
     for port in ports {
         rigid
@@ -1880,21 +1877,74 @@ pub(crate) fn rigid_dimension_view(
             .dimensions
             .register_rigid_dimension(port);
     }
-    let rigid_dag = rigid.dags.localized_mut(position);
+    resolve_rigid_signatures(rigid.dags.localized_mut(position), &rigid_types, src)?;
+    rigid.replace_project_types(rigid_types);
+    Ok(rigid)
+}
+
+/// The DAG at `position` alone, with its source-authored declaration
+/// signatures re-resolved where the optional dimension `ports` are rigid:
+/// what an include binding these ports specializes. Unlike
+/// [`rigid_dimension_view`], no other DAG is copied.
+pub(crate) fn rigid_template_dag(
+    tir: &UncheckedTir,
+    position: dag_position::DagPosition,
+    ports: &[ResolvedDimName],
+    src: SourceId,
+) -> Result<DagTIR, SemanticError> {
+    let rigid_types = rigid_project_types(tir, ports, src)?;
+    let mut template = tir.dags.at(position).clone();
+    resolve_rigid_signatures(&mut template, &rigid_types, src)?;
+    Ok(template)
+}
+
+#[cfg(any(test, feature = "test-identities"))]
+thread_local! {
+    static RIGID_VIEW_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many rigid views (of a template or of the whole TIR) this thread has
+/// built, so tests can bound that work without timing it.
+#[cfg(any(test, feature = "test-identities"))]
+#[must_use]
+pub fn rigid_view_builds_for_test() -> usize {
+    RIGID_VIEW_BUILDS.with(std::cell::Cell::get)
+}
+
+/// The project types in which the optional dimension `ports` are rigid.
+fn rigid_project_types(
+    tir: &UncheckedTir,
+    ports: &[ResolvedDimName],
+    src: SourceId,
+) -> Result<ProjectTypeStore, SemanticError> {
+    #[cfg(any(test, feature = "test-identities"))]
+    RIGID_VIEW_BUILDS.with(|builds| builds.set(builds.get().saturating_add(1)));
+    tir.project_type_store()
+        .with_rigid_dimensions(ports)
+        .map_err(|_| {
+            SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
+        })
+}
+
+/// Re-resolve the source-authored declaration signatures of `dag` in
+/// `rigid_types`.
+fn resolve_rigid_signatures(
+    dag: &mut DagTIR,
+    rigid_types: &ProjectTypeStore,
+    src: SourceId,
+) -> Result<(), SemanticError> {
     let resolved = crate::outcome::without_cancellation(|cancellation| {
         resolve_declared_types(
-            rigid_dag
-                .value_decl_types()
+            dag.value_decl_types()
                 .map(|(identity, annotation)| (identity, &annotation.decl_type)),
-            &rigid_dag.semantic_instances,
-            &rigid_types,
+            &dag.semantic_instances,
+            rigid_types,
             src,
             cancellation,
         )
     })?;
-    rigid_dag.replace_value_decl_types(resolved);
-    rigid.replace_project_types(rigid_types);
-    Ok(rigid)
+    dag.replace_value_decl_types(resolved);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

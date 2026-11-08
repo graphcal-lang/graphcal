@@ -29,6 +29,8 @@ use super::module_table::{ModuleHandle, ModuleTable};
 use super::scope::{ModuleScope, declare_aliases};
 use super::symbols::ModuleSymbols;
 use super::{ModuleEntry, ModuleResolver};
+use crate::cancellation::CancellationToken;
+use crate::outcome::Outcome;
 
 /// Loader decisions about which module each `import` / `include` path names.
 ///
@@ -209,6 +211,22 @@ impl<'a> SymbolTables<'a> {
         Ok(())
     }
 
+    /// Complete the scopes of the collected modules with no edge between
+    /// them. Nothing expands without edges, so the work is linear in the
+    /// modules and is not cancellable.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error of [`Self::scopes`] or
+    /// [`ScopeBuilder::freeze`].
+    pub fn freeze_without_edges(self) -> Result<ModuleResolver, ModuleResolveError> {
+        crate::outcome::without_cancellation(|cancellation| {
+            self.scopes(&NoModuleTargets, cancellation)?
+                .freeze(cancellation)
+                .map_err(|outcome| outcome.map_failed(|ScopeError { error, .. }| error))
+        })
+    }
+
     /// Connect every source module's edges to the modules `targets` names and
     /// expand each include into its concrete instance modules.
     ///
@@ -222,11 +240,15 @@ impl<'a> SymbolTables<'a> {
     /// of includes, [`ModuleResolveError::UnknownModule`] when an include
     /// names a module that was not added, and
     /// [`ModuleResolveError::DuplicateModule`] when two includes of one module
-    /// allocate the same instance.
+    /// allocate the same instance, or [`Outcome::Cancelled`] once
+    /// `cancellation` is cancelled: nested includes can expand into
+    /// exponentially many instances, so the expansion observes it once per
+    /// instance.
     pub fn scopes(
         self,
         targets: &impl ModuleTargets,
-    ) -> Result<ScopeBuilder<'a>, ModuleResolveError> {
+        cancellation: &CancellationToken,
+    ) -> Result<ScopeBuilder<'a>, Outcome<ModuleResolveError>> {
         let Self { modules, .. } = self;
         let order = modules.owners().cloned().collect::<Vec<_>>();
         let declarations = modules
@@ -243,7 +265,7 @@ impl<'a> SymbolTables<'a> {
                 Some((owner, edges))
             })
             .collect::<Vec<_>>();
-        reject_recursive_includes(&order, &own_edges)?;
+        reject_recursive_includes(&order, &own_edges).map_err(Outcome::Failed)?;
         let mut resolver = ModuleResolver { modules: entries };
         let mut instances = Vec::new();
         {
@@ -252,7 +274,14 @@ impl<'a> SymbolTables<'a> {
                 .map(|(owner, edges)| (owner, edges.as_slice()))
                 .collect::<HashMap<_, _>>();
             for (root, _) in &own_edges {
-                expand_instances(root, &edges, &declarations, &mut resolver, &mut instances)?;
+                expand_instances(
+                    root,
+                    &edges,
+                    &declarations,
+                    &mut resolver,
+                    &mut instances,
+                    cancellation,
+                )?;
             }
         }
         let sources = own_edges
@@ -382,7 +411,8 @@ fn expand_instances(
     declarations: &HashMap<DagId, &[ast::Declaration]>,
     resolver: &mut ModuleResolver,
     instances: &mut Vec<(DagId, DagId)>,
-) -> Result<(), ModuleResolveError> {
+    cancellation: &CancellationToken,
+) -> Result<(), Outcome<ModuleResolveError>> {
     let mut open = vec![Expansion {
         base: root.clone(),
         template: root.clone(),
@@ -399,6 +429,9 @@ fn expand_instances(
             continue;
         };
         expansion.next += 1;
+        cancellation.checkpoint()?;
+        #[cfg(feature = "test-cancellation")]
+        crate::cancellation::ProgressPhase::IncludeExpansion.record();
         let instance = expansion.base.instance_child(include.instance_scope());
         let template_declarations =
             declarations
@@ -407,11 +440,11 @@ fn expand_instances(
                     owner: template.clone(),
                 })?;
         if resolver.modules.contains_key(&instance) {
-            return Err(ModuleResolveError::DuplicateModule { owner: instance });
+            return Err(ModuleResolveError::DuplicateModule { owner: instance }.into());
         }
         let (entry, errors) = collected_entry(instance.clone(), template_declarations);
         if let Some(error) = errors.into_iter().next() {
-            return Err(error);
+            return Err(error.into());
         }
         resolver.modules.insert(instance.clone(), entry);
         instances.push((instance.clone(), template.clone()));
@@ -454,8 +487,13 @@ impl ScopeBuilder<'_> {
     ///
     /// Returns the first [`ModuleResolveError`] of registering an edge
     /// (unknown, private, or wrongly categorized items, duplicate local names,
-    /// and invalid include projections), with the module whose edge failed.
-    pub fn freeze(self) -> Result<ModuleResolver, ScopeError> {
+    /// and invalid include projections), with the module whose edge failed,
+    /// or [`Outcome::Cancelled`] once `cancellation` is cancelled (observed
+    /// once per module).
+    pub fn freeze(
+        self,
+        cancellation: &CancellationToken,
+    ) -> Result<ModuleResolver, Outcome<ScopeError>> {
         let Self {
             mut resolver,
             sources,
@@ -486,22 +524,26 @@ impl ScopeBuilder<'_> {
                     }
                     continue;
                 }
-                resolver
-                    .complete_own_scope(owner, edges)
-                    .map_err(|error| ScopeError {
+                cancellation.checkpoint()?;
+                resolver.complete_own_scope(owner, edges).map_err(|error| {
+                    Outcome::Failed(ScopeError {
                         module: owner.clone(),
                         error,
-                    })?;
+                    })
+                })?;
                 open.pop();
             }
         }
         for (instance, source) in &sources {
             if let ScopeSource::InheritFrom(template) = source {
+                cancellation.checkpoint()?;
                 resolver
                     .inherit_scope(instance, template)
-                    .map_err(|error| ScopeError {
-                        module: instance.clone(),
-                        error,
+                    .map_err(|error| {
+                        Outcome::Failed(ScopeError {
+                            module: instance.clone(),
+                            error,
+                        })
                     })?;
             }
         }
@@ -535,10 +577,12 @@ impl ModuleResolver {
         for (owner, declarations) in modules {
             tables.add_module(owner, declarations)?;
         }
-        tables
-            .scopes(targets)?
-            .freeze()
-            .map_err(|ScopeError { error, .. }| error)
+        crate::outcome::without_cancellation(|cancellation| {
+            tables
+                .scopes(targets, cancellation)?
+                .freeze(cancellation)
+                .map_err(|outcome| outcome.map_failed(|ScopeError { error, .. }| error))
+        })
     }
 
     /// Register a source module's edges, in declaration order.

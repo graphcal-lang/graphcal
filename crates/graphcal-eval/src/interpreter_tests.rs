@@ -1966,7 +1966,7 @@ fn index_axis_resolves_concrete_definitions_from_checked_tir() {
     assert_eq!(axis.len(), 3);
     assert!(axis.coordinate_data().is_some());
 
-    assert!(IndexAxis::resolve(&tir, &index("Missing")).is_none());
+    assert!(IndexAxis::resolve(&tir, &index("Missing")).is_err());
 }
 
 #[test]

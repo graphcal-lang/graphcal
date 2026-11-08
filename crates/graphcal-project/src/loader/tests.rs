@@ -373,7 +373,10 @@ fn loaded_project_builds_module_resolver_for_qualified_index_variant() {
         ("src/helper/main.gcl", "import helper.lib as lib;"),
     ]);
     let project = load_project(&dir.path().join("src/helper/main.gcl"), None, &fs()).unwrap();
-    let resolver = project.build_module_resolver().unwrap();
+    let resolver = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        project.build_module_resolver(cancellation)
+    })
+    .unwrap();
     let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
 
     let resolved_variant = resolver
@@ -438,7 +441,11 @@ fn every_module_path_names_its_loaded_module_and_resolver_module() {
         ),
     ]);
     let project = load_project(&dir.path().join("src/pkg/main.gcl"), None, &fs()).unwrap();
-    let modules = loaded_module_resolver::LoadedModuleResolver::build(&project).unwrap();
+    let modules = loaded_module_resolver::LoadedModuleResolver::build(
+        &project,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap();
     let root = project.root_file();
     let targets = root
         .imports_with_targets()

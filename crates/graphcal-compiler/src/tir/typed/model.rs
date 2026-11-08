@@ -532,26 +532,50 @@ pub struct ResolvedDagDependencies {
 }
 
 /// Canonical type definitions referenced by module-aware TIR.
+///
+/// The table is shared copy-on-write: every semantic instance carries the
+/// same project-wide table, so materializing an instance costs O(1) here
+/// rather than a copy of every DAG's definitions.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
     /// Each nominal type with its fields' semantics, keyed by its own
     /// identity.
-    nominals: HashMap<ResolvedStructTypeName, ResolvedNominal>,
+    nominals: std::sync::Arc<HashMap<ResolvedStructTypeName, ResolvedNominal>>,
 }
 
 impl ResolvedTypeDefs {
-    pub(crate) fn extend_from(&mut self, other: &Self) {
-        self.nominals.extend(
-            other
-                .nominals
-                .iter()
-                .map(|(name, nominal)| (name.clone(), nominal.clone())),
-        );
+    /// Every definition of `tables`, in one table.
+    pub(crate) fn union<'a>(tables: impl IntoIterator<Item = &'a Self>) -> Self {
+        let mut union = Self::default();
+        for table in tables {
+            if union.nominals.is_empty() {
+                // Share the first non-empty table until another one adds to it.
+                union.nominals = std::sync::Arc::clone(&table.nominals);
+                continue;
+            }
+            if std::sync::Arc::ptr_eq(&union.nominals, &table.nominals) {
+                continue;
+            }
+            std::sync::Arc::make_mut(&mut union.nominals).extend(
+                table
+                    .nominals
+                    .iter()
+                    .map(|(name, nominal)| (name.clone(), nominal.clone())),
+            );
+        }
+        union
+    }
+
+    /// Whether `self` and `other` share one table.
+    #[cfg(any(test, feature = "test-identities"))]
+    #[must_use]
+    pub fn shares_table_with(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.nominals, &other.nominals)
     }
 
     /// Record one nominal type under its own identity.
     pub(crate) fn insert(&mut self, nominal: ResolvedNominal) {
-        self.nominals.insert(nominal.identity().clone(), nominal);
+        std::sync::Arc::make_mut(&mut self.nominals).insert(nominal.identity().clone(), nominal);
     }
 
     /// Whether the nominal type `identity` is recorded.

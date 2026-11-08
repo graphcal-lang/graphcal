@@ -230,9 +230,9 @@ fn collect_presented_leaves<'p>(
             "checked plot presentation index `{presented_index}` does not match runtime index `{index_name}`"
         ));
     }
-    outer.keys().iter().try_for_each(|key| {
+    outer.keys().try_for_each(|key| {
         let entry = entries
-            .get(key)
+            .get(key.as_ref())
             .ok_or_else(|| format!("checked plot presentation is missing indexed entry `{key}`"))?;
         collect_presented_leaves(entry, inner_axes, leaves)
     })
@@ -341,7 +341,7 @@ pub(super) fn align_encoding_channels(
                 .axes()
                 .iter()
                 .zip(positions)
-                .all(|(axis, position)| axis.keys() == row_axes[*position].keys());
+                .all(|(axis, position)| axis.same_keys(&row_axes[*position]));
             if keys_match {
                 Ok((*channel, data, positions))
             } else {

@@ -58,8 +58,56 @@ pub struct CancellationToken {
 
 #[cfg(feature = "test-cancellation")]
 #[derive(Debug)]
-struct DeterministicCancellation {
-    remaining_successful_checkpoints: std::sync::atomic::AtomicUsize,
+enum DeterministicCancellation {
+    /// Cancel after this many more successful checkpoints.
+    Checkpoints {
+        remaining_successful_checkpoints: std::sync::atomic::AtomicUsize,
+    },
+    /// Cancel once the creating thread has made `at` steps of `phase`.
+    Progress { phase: ProgressPhase, at: usize },
+}
+
+/// A unit of potentially exponential work that tests can watch, to cancel
+/// only once it is under way.
+#[cfg(feature = "test-cancellation")]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgressPhase {
+    /// One include instance expanded by the module resolver.
+    IncludeExpansion,
+    /// One semantic include edge instantiated.
+    Instantiation,
+}
+
+#[cfg(feature = "test-cancellation")]
+thread_local! {
+    static PROGRESS: std::cell::Cell<[usize; 2]> = const { std::cell::Cell::new([0; 2]) };
+}
+
+#[cfg(feature = "test-cancellation")]
+impl ProgressPhase {
+    const fn slot(self) -> usize {
+        match self {
+            Self::IncludeExpansion => 0,
+            Self::Instantiation => 1,
+        }
+    }
+
+    /// Steps of this phase the current thread has made so far.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn steps_on_this_thread(self) -> usize {
+        PROGRESS.with(|progress| progress.get()[self.slot()])
+    }
+
+    /// Record one step of this phase on the current thread.
+    pub(crate) fn record(self) {
+        PROGRESS.with(|progress| {
+            let mut steps = progress.get();
+            steps[self.slot()] = steps[self.slot()].saturating_add(1);
+            progress.set(steps);
+        });
+    }
 }
 
 impl CancellationToken {
@@ -83,8 +131,24 @@ impl CancellationToken {
     pub fn cancel_after_successful_checkpoints(checkpoints: usize) -> Self {
         Self {
             state: None,
-            deterministic: Some(Arc::new(DeterministicCancellation {
+            deterministic: Some(Arc::new(DeterministicCancellation::Checkpoints {
                 remaining_successful_checkpoints: std::sync::atomic::AtomicUsize::new(checkpoints),
+            })),
+        }
+    }
+
+    /// Test-only token that cancels once the current thread has made
+    /// `steps` more steps of `phase`: every checkpoint after that point
+    /// fails, so the work stops at the phase's next checkpoint.
+    #[cfg(feature = "test-cancellation")]
+    #[doc(hidden)]
+    #[must_use]
+    pub fn cancel_after_progress(phase: ProgressPhase, steps: usize) -> Self {
+        Self {
+            state: None,
+            deterministic: Some(Arc::new(DeterministicCancellation::Progress {
+                phase,
+                at: phase.steps_on_this_thread().saturating_add(steps),
             })),
         }
     }
@@ -100,14 +164,20 @@ impl CancellationToken {
 
     #[cfg(feature = "test-cancellation")]
     fn deterministic_is_cancelled(&self) -> bool {
-        self.deterministic.as_ref().is_some_and(|state| {
-            state
-                .remaining_successful_checkpoints
-                .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
-                    remaining.checked_sub(1)
-                })
-                .is_err()
-        })
+        self.deterministic
+            .as_deref()
+            .is_some_and(|state| match state {
+                DeterministicCancellation::Checkpoints {
+                    remaining_successful_checkpoints,
+                } => remaining_successful_checkpoints
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                        remaining.checked_sub(1)
+                    })
+                    .is_err(),
+                DeterministicCancellation::Progress { phase, at } => {
+                    phase.steps_on_this_thread() >= *at
+                }
+            })
     }
 
     #[cfg(not(feature = "test-cancellation"))]

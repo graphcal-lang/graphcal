@@ -216,8 +216,12 @@ fn finish_module_assembly(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<graphcal_compiler::tir::typed::CheckedTir, Outcome<PipelineError>> {
     draft
-        .instantiate(&checked_dependency_overrides(module_artifacts), src)
-        .map_err(PipelineError::from)?
+        .instantiate(
+            &checked_dependency_overrides(module_artifacts),
+            src,
+            cancellation,
+        )
+        .map_err(Outcome::map_into)?
         .check(src, cancellation)
         .map_err(Outcome::map_into)
 }

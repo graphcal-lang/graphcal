@@ -576,7 +576,7 @@ mod tests {
     use crate::runtime_value::IndexedValue;
 
     fn fin(cardinality: u64) -> IndexAxis {
-        IndexAxis::finite(FiniteIndex::try_from_u64(cardinality).unwrap()).unwrap()
+        IndexAxis::finite(FiniteIndex::try_from_u64(cardinality).unwrap())
     }
 
     fn quantity(value: f64) -> RuntimeValue {

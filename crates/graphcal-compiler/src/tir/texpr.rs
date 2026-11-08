@@ -31,7 +31,7 @@ mod tests;
 pub(crate) use assembly::{AssemblyError, NodeFacts, PendingNodes};
 pub use call_targets::{CallSlot, CallTargets};
 pub use checked_bodies::{
-    CheckedBodies, CheckedBody, DischargeError, ExecutableBodyError, TypedBodiesError,
+    AxisCache, CheckedBodies, CheckedBody, DischargeError, ExecutableBodyError, TypedBodiesError,
 };
 pub(crate) use checked_bodies::{ClaimedRoots, claim_roots};
 pub use label_dispatch::{LabelDispatch, LabelDispatchError};

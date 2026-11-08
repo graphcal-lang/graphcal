@@ -651,7 +651,7 @@ impl crate::tir::typed::InstantiatedTir {
             instances: graph,
         } = self;
         cancellation.checkpoint()?;
-        let schedules = schedules::Schedules::build(&tir, &graph, src)?;
+        let schedules = schedules::Schedules::build(&tir, &graph, src, cancellation)?;
         detect_cross_dag_cycles(&tir, src)?;
 
         // Canonical bodies are checked once. Instance trees are specialized
@@ -689,13 +689,16 @@ impl crate::tir::typed::InstantiatedTir {
         check_field_domain_constraint_targets(&tir)?;
         check_field_domain_constraint_dimensions(&tir, cancellation, &sinks)?;
         drop(sinks);
-        let canonical = inferred.try_map(|inferred| inferred.publish(&tir, src))?;
+        // Every canonical and instance body shares one set of concrete axes.
+        let axes = crate::tir::texpr::AxisCache::default();
+        let canonical = inferred.try_map(|inferred| inferred.publish(&tir, &axes, src))?;
 
         let checked = instance_bodies::instance_bodies(
             &tir,
             &graph,
             &canonical,
             &instances,
+            &axes,
             src,
             cancellation,
         )?;
@@ -748,6 +751,7 @@ impl InferredCanonical<'_> {
     fn publish(
         self,
         tir: &crate::tir::typed::UncheckedTir,
+        axes: &crate::tir::texpr::AxisCache,
         src: SourceId,
     ) -> Result<instance_bodies::CanonicalChecked, SemanticError> {
         let Self {
@@ -760,6 +764,7 @@ impl InferredCanonical<'_> {
             .publish(
                 &dag.owned_expression_roots().collect::<Vec<_>>(),
                 &|index| expression_axes::concrete_index_kind(tir, index),
+                axes,
             )
             .map_err(|error| {
                 SemanticError::internal_error(
@@ -901,9 +906,11 @@ fn check_callless_value_expr_type<'t>(
     if expected.to_symbolic() == inferred {
         observations
             .finish()
-            .publish(&[expr], &|index| {
-                expression_axes::concrete_index_kind(tir, index)
-            })
+            .publish(
+                &[expr],
+                &|index| expression_axes::concrete_index_kind(tir, index),
+                &crate::tir::texpr::AxisCache::default(),
+            )
             .map_err(|error| error.to_string())
             .and_then(|bodies| {
                 bodies

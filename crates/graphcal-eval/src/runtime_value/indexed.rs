@@ -92,7 +92,7 @@ impl<V> IndexedValue<V> {
         let cardinality = u64::try_from(entries.len()).unwrap();
         let index =
             graphcal_compiler::semantic::index_def::FiniteIndex::try_from_u64(cardinality).unwrap();
-        let axis = IndexAxis::finite(index).unwrap();
+        let axis = IndexAxis::finite(index);
         let entries = NonEmpty::try_from_vec(entries).unwrap();
         Self { axis, entries }
     }
@@ -103,7 +103,7 @@ impl<V> IndexedValue<V> {
         mut entry: impl FnMut(&IndexEntryKey, &V) -> Result<U, E>,
     ) -> Result<IndexedValue<U>, E> {
         IndexedValue::try_from_axis(self.axis.clone(), |key| {
-            entry(key.entry_key(), &self.entries.as_slice()[key.position()])
+            entry(&key.entry_key(), &self.entries.as_slice()[key.position()])
         })
     }
 
@@ -122,10 +122,9 @@ impl<V> IndexedValue<V> {
         mut entry: impl FnMut(&IndexEntryKey, V) -> Result<U, E>,
     ) -> Result<IndexedValue<U>, E> {
         let Self { axis, entries } = self;
-        let keys = axis.keys().as_slice();
-        let mut position = 0;
+        let mut position = 0_usize;
         let entries = entries.try_map(|value| {
-            let mapped = entry(&keys[position], value);
+            let mapped = entry(&axis.key_at(position), value);
             position = position.saturating_add(1);
             mapped
         })?;
@@ -164,8 +163,10 @@ impl<V> IndexedValue<V> {
     }
 
     /// Entries with their keys, in axis order.
-    pub(crate) fn iter(&self) -> impl ExactSizeIterator<Item = (&IndexEntryKey, &V)> {
-        self.axis.keys().iter().zip(self.entries.iter())
+    pub(crate) fn iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (std::borrow::Cow<'_, IndexEntryKey>, &V)> {
+        self.axis.keys().zip(self.entries.iter())
     }
 
     /// Entries in axis order (at least one).
@@ -222,7 +223,7 @@ mod tests {
     fn entries_follow_the_axis_positions() {
         let mut seen = Vec::new();
         let indexed = IndexedValue::try_from_axis(axis(), |key| {
-            seen.push((key.position(), key.entry_key().clone()));
+            seen.push((key.position(), key.entry_key().into_owned()));
             Ok::<_, ()>(key.position() * 10)
         })
         .unwrap();
@@ -232,7 +233,7 @@ mod tests {
         assert!(indexed.get(&key("D")).is_none());
         let keys = indexed
             .iter()
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| key.into_owned())
             .collect::<Vec<_>>();
         assert_eq!(keys, vec![key("A"), key("B"), key("C")]);
         assert!(indexed.axis().matches(&axis()));
@@ -314,7 +315,7 @@ mod tests {
         let named = IndexedValue::for_test(axis(), vec![1, 2, 3]);
         let b = KeyValue::for_entry(axis(), &key("B")).unwrap();
         assert_eq!(named.get_key(&b), Some(&2));
-        let fin = |n| IndexAxis::finite(FiniteIndex::try_from_u64(n).unwrap()).unwrap();
+        let fin = |n| IndexAxis::finite(FiniteIndex::try_from_u64(n).unwrap());
         assert_eq!(named.get_key(&KeyValue::at(fin(3), 1).unwrap()), None);
 
         let wide = IndexedValue::finite_for_test(vec!['a', 'b', 'c', 'd']);

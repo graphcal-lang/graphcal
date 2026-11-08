@@ -1104,3 +1104,86 @@ fn unit_names_without_a_same_named_local_still_resolve() {
             .unwrap_or_else(|error| panic!("`{body}` should lower: {error:?}"));
     }
 }
+
+/// Expression levels lowered for node `name` of `source`, and whether the
+/// lowered tree reports a diagnostic.
+fn lowering_work(source: &str, name: &str) -> (usize, bool) {
+    let owner = DagId::root_in_package("test", "main");
+    let file = desugared_source(source);
+    let inline_dags = file
+        .declarations
+        .iter()
+        .filter_map(|decl| match &decl.kind {
+            ast::DeclKind::Dag(dag) => Some((
+                owner.inline_dag_child(dag.name.value.clone()),
+                dag.body.as_slice(),
+            )),
+            _ => None,
+        });
+    let resolver = ModuleResolver::without_edges(
+        std::iter::once((owner.clone(), file.declarations.as_slice())).chain(inline_dags),
+    )
+    .unwrap();
+    let scope = GenericScope::new();
+    let time_zones = TimeZoneRegistry::bundled();
+    let mut lowerer = super::lowerer::ExprLowerer::new(ExprLoweringContext::new(
+        ModuleScope::new(&owner, &resolver, &scope),
+        &time_zones,
+    ));
+    let tree = lowerer.lower_expr(node_value(&file, name));
+    (lowerer.lowered_levels, !tree.diagnostics().is_empty())
+}
+
+/// A named way to wrap an expression in a level that fails on its own.
+type NestingCase = (&'static str, fn(&str) -> String);
+
+#[test]
+fn nested_failing_levels_are_lowered_in_linear_work() {
+    // Each wrapper fails at its own level while its child also fails. Error
+    // recovery used to lower the child again, so nesting cost 2^depth.
+    let prelude = "index I = { a, b }; \
+                   node v: Dimensionless[I] = { I#a: 1.0, I#b: 2.0 }; \
+                   dag d { param x: Dimensionless = 1.0; pub node y: Dimensionless = @x; }";
+    let wrappers: [NestingCase; 9] = [
+        ("scan binder", |inner| {
+            format!("scan({inner}, 0.0, |PI, item| item)")
+        }),
+        ("unfold binder", |inner| {
+            format!("unfold(I, {inner}, |PI, prev_i, i| 1.0)")
+        }),
+        ("match pattern", |inner| {
+            format!("match {inner} {{ PI => 1.0 }}")
+        }),
+        ("conversion unit", |inner| {
+            format!("({inner} -> no_such_unit)")
+        }),
+        ("display timezone", |inner| {
+            format!("({inner} -> \"No/Such_Zone\")")
+        }),
+        ("index argument", |inner| format!("({inner})[I#zz]")),
+        ("map key", |inner| format!("{{ I#a: {inner}, I#zz: 1.0 }}")),
+        ("inline DAG binding", |inner| {
+            format!("@d(x: {inner}, no_such_input: 1.0)::y")
+        }),
+        ("datetime timezone", |inner| {
+            format!("datetime({inner}, \"No/Such_Zone\")")
+        }),
+    ];
+    for (case, wrap) in wrappers {
+        let work = |depth: usize| {
+            let expr = (0..depth).fold("@v".to_string(), |inner, _| wrap(&inner));
+            lowering_work(
+                &format!("{prelude} node out: Dimensionless = {expr};"),
+                "out",
+            )
+        };
+        let [(shallow, _), (middle, middle_fails), (deep, deep_fails)] = [8, 9, 10].map(work);
+        assert!(middle_fails && deep_fails, "{case}: the nesting must fail");
+        assert_eq!(
+            deep - middle,
+            middle - shallow,
+            "{case}: lowering work must grow linearly with nesting depth \
+             ({shallow}, {middle}, {deep} levels at depths 8, 9, 10)"
+        );
+    }
+}
