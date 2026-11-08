@@ -1,11 +1,10 @@
-// The CLI is the imperative shell — writing to stdout/stderr is the binary's
-// whole purpose. Suppress both lints crate-wide so that library crates keep
-// the workspace-level warning while this binary doesn't need per-call-site
-// `#[expect]` blocks.
+// The CLI is the imperative shell — writing to stderr is part of the binary's
+// whole purpose, so that lint is suppressed crate-wide. Stdout is not: every
+// stdout write goes through `outln!`/`out!` (see `stdout.rs`), which handle a
+// closed pipe, so `clippy::print_stdout` stays active to catch a `println!`.
 #![expect(
     clippy::print_stderr,
-    clippy::print_stdout,
-    reason = "CLI binary; stdout/stderr are the user-facing output channels"
+    reason = "CLI binary; stderr is the user-facing diagnostic channel"
 )]
 #![expect(
     clippy::result_large_err,
@@ -21,6 +20,9 @@
 #[cfg(target_env = "musl")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[macro_use]
+mod stdout;
 
 mod deps;
 mod display;
@@ -414,7 +416,7 @@ fn main() {
     }))
     .ok();
 
-    let cli = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|error| stdout::exit_with_clap_output(&error));
     stacker::grow(COMMAND_STACK_SIZE, || run_command(cli));
 }
 
@@ -563,11 +565,11 @@ fn run_plugin_new(name: &str, dir: Option<&Path>) {
         std::fs::write(&path, &file.contents)
             .unwrap_or_else(|e| bail_with(&format!("could not write {}", path.display()), e, 2));
     }
-    println!("created plugin crate `{name}` at {}", plan.root.display());
-    println!("next steps:");
-    println!("  cd {}", plan.root.display());
-    println!("  cargo build --release --target wasm32-unknown-unknown");
-    println!("  graphcal plugin test target/wasm32-unknown-unknown/release/<name>.wasm");
+    outln!("created plugin crate `{name}` at {}", plan.root.display());
+    outln!("next steps:");
+    outln!("  cd {}", plan.root.display());
+    outln!("  cargo build --release --target wasm32-unknown-unknown");
+    outln!("  graphcal plugin test target/wasm32-unknown-unknown/release/<name>.wasm");
 }
 
 /// `graphcal plugin test`: load and validate a module (all ABI checks run
@@ -640,15 +642,15 @@ fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
             process::exit(1);
         });
 
-    println!("plugin: {}", module_path.display());
-    println!("sha256: {}", module.sha256_hex());
-    println!(
+    outln!("plugin: {}", module_path.display());
+    outln!("sha256: {}", module.sha256_hex());
+    outln!(
         "abi: version {}, {} function(s)",
         module.manifest().abi_version,
         module.functions().len()
     );
-    println!();
-    println!("{import_block}");
+    outln!();
+    outln!("{import_block}");
     eprintln!();
     eprintln!("note: adjust the import path to the module's vendored location in your project");
 
@@ -683,11 +685,11 @@ fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
         }
     };
 
-    println!();
+    outln!();
     let call_display = format!("{}({})", function.as_str(), args.join(", "));
     match module.call(&function, &abi_args) {
         Ok(raw) => match plugin::render_result(&signature, &raw) {
-            Ok(rendered) => println!("{call_display} = {rendered}"),
+            Ok(rendered) => outln!("{call_display} = {rendered}"),
             Err(e) => {
                 eprintln!("error: {call_display} returned {raw:?}: {e}");
                 process::exit(1);
@@ -704,9 +706,9 @@ fn run_deps_lock(root: Option<&Path>) {
     match deps::lock(root) {
         Ok(outcome) => {
             if outcome.changed {
-                println!("wrote {}", outcome.lockfile_path.display());
+                outln!("wrote {}", outcome.lockfile_path.display());
             } else {
-                println!("up to date: {}", outcome.lockfile_path.display());
+                outln!("up to date: {}", outcome.lockfile_path.display());
             }
         }
         Err(e) => {
@@ -942,7 +944,7 @@ fn handle_plot_output(result: &EvalResult, plot_mode: &PlotOutput) -> bool {
         PlotOutput::Json => {
             let json = graphcal_report::plot_page::render_json(&rendered)
                 .unwrap_or_else(|e| bail_with("could not render plots as JSON", e, 2));
-            println!("{json}");
+            outln!("{json}");
         }
     }
     no_displayed_plots
@@ -1038,7 +1040,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
             Ok(checked) => {
                 let todos = checked.tir().reachable_unfinished().len();
                 if todos == 0 {
-                    println!("ok: {}", file.display());
+                    outln!("ok: {}", file.display());
                 } else if deny_todo {
                     eprintln!(
                         "error: {}: {todos} unfinished declaration(s); --deny-todo requires complete formulas",
@@ -1046,7 +1048,7 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
                     );
                     error_count += 1;
                 } else {
-                    println!(
+                    outln!(
                         "ok: {} (model incomplete: {todos} unfinished declaration(s))",
                         file.display()
                     );
@@ -1103,7 +1105,7 @@ fn run_graph(
         Ok(checked) => match graphcal_project::graph_ir::project_tir(checked.tir()) {
             Ok(ir) => match format {
                 GraphFormat::Dot => {
-                    print!("{}", graphcal_project::graph_ir::dot::render(&ir, view));
+                    out!("{}", graphcal_project::graph_ir::dot::render(&ir, view));
                 }
             },
             Err(error) => {
@@ -1172,7 +1174,7 @@ fn run_view(file: &Path, project_root: Option<&Path>, instance: Option<String>) 
     match outcome {
         Ok(view) => {
             match serde_json::to_string_pretty(&view) {
-                Ok(json) => println!("{json}"),
+                Ok(json) => outln!("{json}"),
                 Err(error) => {
                     eprintln!("JSON serialization error: {error}");
                     process::exit(2);
@@ -1226,7 +1228,16 @@ fn run_format(paths: &[PathBuf], check: bool) {
     let mut unformatted_count = 0;
     let mut error_count = 0;
     for file in &targets {
-        let source = match std::fs::read_to_string(file) {
+        // The bounded regular-file read validates the opened handle, so a
+        // FIFO or device is reported instead of blocking the whole batch.
+        let read = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            RealFileSystem::default().read_to_string_bounded(
+                file,
+                ProjectIngestionPolicy::default().source_file(),
+                cancellation,
+            )
+        });
+        let source = match read {
             Ok(s) => s,
             Err(e) => {
                 // Match `run_check`'s behavior: accumulate errors across the
@@ -1249,7 +1260,7 @@ fn run_format(paths: &[PathBuf], check: bool) {
             }
             FormatStatus::Changed(formatted) => {
                 if check {
-                    println!("Would reformat: {}", file.display());
+                    outln!("Would reformat: {}", file.display());
                     unformatted_count += 1;
                 } else {
                     match replace_file_atomically_if_unchanged(
@@ -1257,7 +1268,7 @@ fn run_format(paths: &[PathBuf], check: bool) {
                         source.as_bytes(),
                         formatted.as_bytes(),
                     ) {
-                        Ok(()) => println!("Formatted: {}", file.display()),
+                        Ok(()) => outln!("Formatted: {}", file.display()),
                         Err(error) => {
                             eprintln!(
                                 "error: cannot atomically replace {}: {error}",
@@ -1309,7 +1320,7 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                 for entry in entries {
                     match entry {
                         display::FlatEntry::Error(name, reason) if !reason.has_failure() => {
-                            println!("{name:width$} = {reason}");
+                            outln!("{name:width$} = {reason}");
                         }
                         display::FlatEntry::Error(name, err) => {
                             eprintln!("{name:width$} = ERROR: {err}");
@@ -1342,9 +1353,9 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                                     Ok(displayed) => {
                                         let formatted = format_number(displayed);
                                         if let Some(label) = value.display_label(&result.render) {
-                                            println!("{name:width$} = {formatted} {label}");
+                                            outln!("{name:width$} = {formatted} {label}");
                                         } else {
-                                            println!("{name:width$} = {formatted}");
+                                            outln!("{name:width$} = {formatted}");
                                         }
                                     }
                                     Err(error) => {
@@ -1356,7 +1367,7 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                                     &result.render,
                                     graphcal_eval::eval::UnitLabel::Inline,
                                 ) {
-                                    Ok(formatted) => println!("{name:width$} = {formatted}"),
+                                    Ok(formatted) => outln!("{name:width$} = {formatted}"),
                                     Err(error) => eprintln!("{name:width$} = ERROR: {error}"),
                                 }
                             }
@@ -1365,16 +1376,16 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                 }
             }
             OutputBlock::Table(name, value) => {
-                println!();
-                println!("{}", format_indexed_table(name, value, &result.render));
+                outln!();
+                outln!("{}", format_indexed_table(name, value, &result.render));
             }
         }
     }
 
     // Print assertion results
     if !result.assertions.is_empty() {
-        println!();
-        println!("Assertions:");
+        outln!();
+        outln!("Assertions:");
         let assert_names: Vec<String> = result
             .assertions
             .iter()
@@ -1392,7 +1403,7 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
             if is_assert_failure(assert_result) {
                 eprintln!("{line}");
             } else {
-                println!("{line}");
+                outln!("{line}");
             }
         }
     }
@@ -1685,7 +1696,7 @@ fn print_json(
         output.insert("assert".to_string(), serde_json::Value::Object(assertions));
     }
 
-    println!(
+    outln!(
         "{}",
         serde_json::to_string_pretty(&serde_json::Value::Object(output))?
     );

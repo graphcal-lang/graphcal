@@ -4,17 +4,22 @@
 //! imperative shell. The shell writes those bytes to a temporary file beside
 //! the destination, synchronizes them, and only then replaces the destination.
 
-use std::fs::{self, File, Permissions};
-use std::io::{self, Read, Write};
+use std::fs::{self, Permissions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use graphcal_compiler::outcome::without_cancellation;
 use thiserror::Error;
+
+use crate::{ByteLimit, FileSystemReadError, FileSystemReader, RealFileSystem};
 
 /// Atomically create a regular file with `contents` if the destination remains
 /// absent.
 ///
-/// The temporary file is synchronized before replacement; on Unix, the parent
-/// directory is synchronized afterwards so the rename is durable.
+/// The temporary file is synchronized and then published with a no-clobber
+/// rename, so an entry created concurrently is never overwritten. On Unix the
+/// new file gets mode `0o666` masked by the umask, and the parent directory
+/// is synchronized afterwards so the rename is durable.
 ///
 /// # Errors
 ///
@@ -34,9 +39,13 @@ pub fn create_file_atomically(destination: &Path, contents: &[u8]) -> Result<(),
 /// `expected_contents`.
 ///
 /// This prevents a formatter from knowingly overwriting edits made after it
-/// read the source. Permissions are preserved, while ownership, ACLs, extended
-/// attributes, and hard-link identity are not. Symbolic links and non-regular
-/// destinations are rejected rather than followed.
+/// read the source. The comparison is repeated after the replacement is
+/// synchronized, immediately before the rename. This is best effort: portable
+/// filesystems offer no compare-and-rename, so an edit saved between that last
+/// comparison and the rename is still replaced. Permissions are preserved,
+/// while ownership, ACLs, extended attributes, and hard-link identity are not.
+/// Symbolic links and non-regular destinations are rejected rather than
+/// followed.
 ///
 /// # Errors
 ///
@@ -69,15 +78,22 @@ fn write_file_atomically_with(
     before_replace: impl FnOnce(&Path) -> io::Result<()>,
 ) -> Result<(), AtomicWriteError> {
     let directory = destination_directory(destination)?;
-    validate_destination_expectation(destination, expectation)?;
+    // Fail fast before writing anything; the authoritative checks happen at
+    // publication below.
+    let permissions = validate_destination_expectation(destination, expectation)?;
 
-    let mut temporary = tempfile::Builder::new()
-        .prefix(".graphcal-write-")
-        .tempfile_in(directory)
-        .map_err(|source| AtomicWriteError::CreateTemporary {
-            directory: directory.to_path_buf(),
-            source,
-        })?;
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".graphcal-write-");
+    if let Some(permissions) = new_file_permissions(expectation) {
+        builder.permissions(permissions);
+    }
+    let mut temporary =
+        builder
+            .tempfile_in(directory)
+            .map_err(|source| AtomicWriteError::CreateTemporary {
+                directory: directory.to_path_buf(),
+                source,
+            })?;
     temporary
         .write_all(replacement)
         .and_then(|()| temporary.flush())
@@ -85,8 +101,6 @@ fn write_file_atomically_with(
             path: temporary.path().to_path_buf(),
             source,
         })?;
-
-    let permissions = validate_destination_expectation(destination, expectation)?;
     if let Some(permissions) = permissions {
         temporary
             .as_file()
@@ -109,15 +123,55 @@ fn write_file_atomically_with(
     })?;
 
     let temporary_path = temporary.path().to_path_buf();
-    temporary
-        .persist(destination)
-        .map_err(|error| AtomicWriteError::Replace {
-            temporary: temporary_path,
-            destination: destination.to_path_buf(),
-            source: error.error,
-        })?;
+    let replace_error = |source| AtomicWriteError::Replace {
+        temporary: temporary_path.clone(),
+        destination: destination.to_path_buf(),
+        source,
+    };
+    match expectation {
+        // Creation is exact: the no-clobber rename fails atomically if any
+        // entry appeared at the destination, however late.
+        DestinationExpectation::Missing => {
+            temporary
+                .persist_noclobber(destination)
+                .map_err(|error| match error.error.kind() {
+                    io::ErrorKind::AlreadyExists => AtomicWriteError::DestinationExists {
+                        destination: destination.to_path_buf(),
+                    },
+                    _ => replace_error(error.error),
+                })?;
+        }
+        // Replacement is best effort: the expectation is re-checked after the
+        // slow `sync_all`, immediately before the rename, which leaves only
+        // the window between this comparison and the rename itself.
+        DestinationExpectation::Unchanged(_) => {
+            validate_destination_expectation(destination, expectation)?;
+            temporary
+                .persist(destination)
+                .map_err(|error| replace_error(error.error))?;
+        }
+    }
     sync_directory(directory)?;
     Ok(())
+}
+
+/// Mode of a newly created file: like any ordinary file creation,
+/// `0o666` masked by the process umask (the temporary-file default `0o600`
+/// would make e.g. a lockfile unreadable to other users of a checkout).
+/// Replacements instead copy the existing destination's permissions.
+#[cfg(unix)]
+fn new_file_permissions(expectation: DestinationExpectation<'_>) -> Option<Permissions> {
+    use std::os::unix::fs::PermissionsExt;
+    match expectation {
+        DestinationExpectation::Missing => Some(Permissions::from_mode(0o666)),
+        DestinationExpectation::Unchanged(_) => None,
+    }
+}
+
+/// Non-Unix platforms have no umask-relative mode to request.
+#[cfg(not(unix))]
+const fn new_file_permissions(_expectation: DestinationExpectation<'_>) -> Option<Permissions> {
+    None
 }
 
 fn destination_directory(destination: &Path) -> Result<&Path, AtomicWriteError> {
@@ -189,39 +243,35 @@ fn validate_unchanged_destination(
     }
 }
 
+/// Compare through the bounded regular-file read, which validates the opened
+/// handle, so a destination swapped for a FIFO cannot block the comparison
+/// and a grown file is never read past one byte beyond the expectation.
 fn destination_contents_equal(
     destination: &Path,
     expected_contents: &[u8],
 ) -> Result<bool, AtomicWriteError> {
-    let mut file = File::open(destination).map_err(|source| AtomicWriteError::ReadDestination {
-        destination: destination.to_path_buf(),
-        source,
-    })?;
-    let mut offset = 0;
-    let mut buffer = [0; 8 * 1024];
-    loop {
-        let count = file
-            .read(&mut buffer)
-            .map_err(|source| AtomicWriteError::ReadDestination {
+    let limit = ByteLimit::new(u64::try_from(expected_contents.len()).unwrap_or(u64::MAX));
+    match without_cancellation(|cancellation| {
+        RealFileSystem::default().read_bytes_bounded(destination, limit, cancellation)
+    }) {
+        Ok(current) => Ok(current == expected_contents),
+        Err(FileSystemReadError::ByteLimitExceeded { .. }) => Ok(false),
+        Err(FileSystemReadError::Io(source)) => Err(AtomicWriteError::ReadDestination {
+            destination: destination.to_path_buf(),
+            source,
+        }),
+        Err(error @ FileSystemReadError::EntryLimitExceeded { .. }) => {
+            Err(AtomicWriteError::ReadDestination {
                 destination: destination.to_path_buf(),
-                source,
-            })?;
-        if count == 0 {
-            return Ok(offset == expected_contents.len());
+                source: io::Error::other(error),
+            })
         }
-        let Some(expected) = expected_contents.get(offset..offset.saturating_add(count)) else {
-            return Ok(false);
-        };
-        if buffer[..count] != *expected {
-            return Ok(false);
-        }
-        offset += count;
     }
 }
 
 #[cfg(unix)]
 fn sync_directory(directory: &Path) -> Result<(), AtomicWriteError> {
-    File::open(directory)
+    fs::File::open(directory)
         .and_then(|file| file.sync_all())
         .map_err(|source| AtomicWriteError::SyncDirectory {
             directory: directory.to_path_buf(),
@@ -374,6 +424,78 @@ mod tests {
         assert!(matches!(error, AtomicWriteError::PrepareReplacement { .. }));
         assert_eq!(fs::read(&destination).unwrap(), b"original");
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn atomic_creation_never_overwrites_an_entry_created_before_publication() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("graphcal.lock");
+
+        let error = write_file_atomically_with(
+            &destination,
+            DestinationExpectation::Missing,
+            b"ours",
+            |_| fs::write(&destination, b"theirs"),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, AtomicWriteError::DestinationExists { .. }),
+            "{error:?}"
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"theirs");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn conditional_replacement_rechecks_after_synchronizing() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("model.gcl");
+        fs::write(&destination, b"original").unwrap();
+
+        let error = write_file_atomically_with(
+            &destination,
+            DestinationExpectation::Unchanged(b"original"),
+            b"formatted",
+            |_| fs::write(&destination, b"edit saved concurrently"),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(error, AtomicWriteError::DestinationChanged { .. }),
+            "{error:?}"
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"edit saved concurrently");
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn conditional_replacement_rejects_a_grown_destination() {
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("model.gcl");
+        fs::write(&destination, b"original plus more").unwrap();
+
+        let error = replace_file_atomically_if_unchanged(&destination, b"original", b"formatted")
+            .unwrap_err();
+
+        assert!(matches!(error, AtomicWriteError::DestinationChanged { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_creation_uses_the_umask_masked_default_mode() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        // An ordinary creation requests 0o666 and is masked by the umask.
+        let ordinary = directory.path().join("ordinary");
+        fs::File::create(&ordinary).unwrap();
+        let destination = directory.path().join("graphcal.lock");
+
+        create_file_atomically(&destination, b"lock").unwrap();
+
+        let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&destination), mode(&ordinary));
     }
 
     #[test]

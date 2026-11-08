@@ -3060,7 +3060,249 @@ fn check_rejects_type_only_import_for_constructor() {
     );
 }
 
+/// Output of a child process run under [`output_with_watchdog`].
+struct WatchedOutput {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+/// Run `command` with stdout/stderr captured to files and kill it if it is
+/// still running after `limit`.
+///
+/// The limit is a generous liveness bound for slow CI machines, not a
+/// performance assertion: it only has to separate "finishes" from "hangs or
+/// does super-linear work".
+fn output_with_watchdog(command: &mut Command, limit: std::time::Duration) -> WatchedOutput {
+    let directory = tempfile::tempdir().unwrap();
+    let stdout_path = directory.path().join("stdout");
+    let stderr_path = directory.path().join("stderr");
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(std::fs::File::create(&stdout_path).unwrap())
+        .stderr(std::fs::File::create(&stderr_path).unwrap())
+        .spawn()
+        .expect("failed to run graphcal");
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!(
+                "graphcal exceeded the {limit:?} watchdog; stderr: {}",
+                std::fs::read_to_string(&stderr_path)
+                    .unwrap_or_else(|error| format!("<unreadable: {error}>"))
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    WatchedOutput {
+        status,
+        stdout: std::fs::read_to_string(&stdout_path).unwrap(),
+        stderr: std::fs::read_to_string(&stderr_path).unwrap(),
+    }
+}
+
+/// A reader that closes stdout early (`graphcal eval … | head -1`) ends the
+/// command quietly with the conventional `SIGPIPE` status instead of a panic.
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_exits_quietly() {
+    let rocket = fixture("valid/rocket.gcl");
+    for arguments in [
+        vec!["eval", rocket.as_str()],
+        vec!["check", rocket.as_str()],
+        vec!["graph", rocket.as_str()],
+        vec!["dump", "source", rocket.as_str()],
+        vec!["model", "describe", rocket.as_str()],
+        // clap writes these itself, before any command runs.
+        vec!["--help"],
+        vec!["--version"],
+        vec!["eval", "--help"],
+    ] {
+        // The child's stdout is a pipe whose only read end is closed before
+        // the child starts, so its first write fails deterministically.
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let mut command = graphcal_bin();
+        command
+            .args(&arguments)
+            .stdin(Stdio::null())
+            .stdout(writer)
+            .stderr(Stdio::piped());
+        let child = command.spawn().expect("failed to run graphcal");
+        // Drop the parent's copy of the write end with the command.
+        drop(command);
+        let output = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+
+        assert_eq!(
+            output.status.code(),
+            Some(141),
+            "{arguments:?}\nstderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked") && !stderr.contains("Broken pipe"),
+            "{arguments:?}\nstderr: {stderr}"
+        );
+    }
+}
+
 // --- JSON parameter source tests ---
+
+#[test]
+fn deeply_nested_params_json_is_rejected_in_linear_time() {
+    // A just-under-1 MiB array nest used to cost quadratic time and memory
+    // (13 GB at 64 KiB); it must now be rejected after one linear scan.
+    let directory = tempfile::tempdir().unwrap();
+    let model = directory.path().join("m.gcl");
+    std::fs::write(
+        &model,
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;\n",
+    )
+    .unwrap();
+    let depth = 500_000;
+    let params = directory.path().join("deep.json");
+    std::fs::write(
+        &params,
+        format!("{{\"x\": {}{}}}", "[".repeat(depth), "]".repeat(depth)),
+    )
+    .unwrap();
+
+    let output = output_with_watchdog(
+        graphcal_bin()
+            .arg("eval")
+            .arg(&model)
+            .arg("--params-json-file")
+            .arg(&params),
+        std::time::Duration::from_secs(60),
+    );
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", output.stderr);
+    assert!(output.stdout.is_empty(), "stdout: {}", output.stdout);
+    assert!(
+        output
+            .stderr
+            .contains("unsupported JSON type `array` for `x`"),
+        "stderr: {}",
+        output.stderr
+    );
+}
+
+#[test]
+fn deeply_nested_params_json_objects_are_rejected_in_bounded_time() {
+    // Nested objects used to be re-parsed once per level as well; the
+    // 64-level object guard must reject them after bounded work, both just
+    // past the limit and at a depth that was quadratic before.
+    let directory = tempfile::tempdir().unwrap();
+    let model = directory.path().join("m.gcl");
+    std::fs::write(
+        &model,
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;\n",
+    )
+    .unwrap();
+    for depth in [65, 100_000] {
+        let params = directory.path().join(format!("deep-{depth}.json"));
+        std::fs::write(
+            &params,
+            format!(
+                "{{\"x\": {}1{}}}",
+                "{\"a\": ".repeat(depth),
+                "}".repeat(depth)
+            ),
+        )
+        .unwrap();
+
+        let output = output_with_watchdog(
+            graphcal_bin()
+                .arg("eval")
+                .arg(&model)
+                .arg("--params-json-file")
+                .arg(&params),
+            std::time::Duration::from_secs(60),
+        );
+
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "depth {depth}\nstderr: {}",
+            output.stderr
+        );
+        assert!(output.stdout.is_empty(), "stdout: {}", output.stdout);
+        assert!(
+            output
+                .stderr
+                .contains("is nested deeper than the limit of 64 levels"),
+            "depth {depth}\nstderr: {}",
+            output.stderr
+        );
+    }
+}
+
+/// `check`, `format --check` and `--params-json-file` reject FIFOs instead
+/// of blocking on them.
+#[cfg(unix)]
+#[test]
+fn special_file_inputs_are_rejected_without_blocking() {
+    use std::ffi::OsStr;
+
+    let directory = tempfile::tempdir().unwrap();
+    let model = directory.path().join("m.gcl");
+    std::fs::write(&model, "param x: Dimensionless = 1.0;\n").unwrap();
+    let fifo_source = directory.path().join("f.gcl");
+    let fifo_params = directory.path().join("p.json");
+    for fifo in [&fifo_source, &fifo_params] {
+        assert!(Command::new("mkfifo").arg(fifo).status().unwrap().success());
+    }
+
+    let limit = std::time::Duration::from_secs(60);
+    for (arguments, expected_code) in [
+        (vec![OsStr::new("check"), fifo_source.as_os_str()], 1),
+        (
+            vec![
+                OsStr::new("format"),
+                OsStr::new("--check"),
+                fifo_source.as_os_str(),
+            ],
+            1,
+        ),
+        (
+            vec![
+                OsStr::new("eval"),
+                model.as_os_str(),
+                OsStr::new("--params-json-file"),
+                fifo_params.as_os_str(),
+            ],
+            2,
+        ),
+    ] {
+        let mut command = graphcal_bin();
+        command.args(&arguments);
+        let output = output_with_watchdog(&mut command, limit);
+        assert_eq!(
+            output.status.code(),
+            Some(expected_code),
+            "{command:?}\nstdout: {}\nstderr: {}",
+            output.stdout,
+            output.stderr
+        );
+        // miette wraps long messages behind a `│` gutter.
+        let flat = output
+            .stderr
+            .split_whitespace()
+            .filter(|word| *word != "│")
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(
+            flat.contains("cannot read non-regular file"),
+            "{command:?}\nstderr: {}",
+            output.stderr
+        );
+    }
+}
 
 #[test]
 fn eval_with_params_json_file() {
