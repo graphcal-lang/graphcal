@@ -18,17 +18,20 @@ impl Ratio<i64> {
     /// Raise a binary64 value to this exact rational power while preserving
     /// real odd-root semantics for negative bases.
     ///
+    /// Every exponent, integer or not, goes through the same `powf` kernel,
+    /// so the result does not depend on how the exponent was written (a
+    /// literal `3` and a runtime `Int` 3 agree bit for bit). Repeated
+    /// multiplication (`powi`) is deliberately avoided: it is not correctly
+    /// rounded, can underflow falsely, and its precision is
+    /// platform-dependent. The sign of a negative base comes from the exact
+    /// numerator's parity, never from the rounded binary64 exponent.
+    ///
     /// # Errors
     ///
     /// Returns [`ExactPowerError::EvenRootOfNegative`] when a negative base
     /// has an even reduced denominator and therefore no real result.
     pub fn pow_f64(self, base: f64) -> Result<f64, ExactPowerError> {
-        if self.is_integer()
-            && let Ok(integer) = i32::try_from(self.num())
-        {
-            return Ok(base.powi(integer));
-        }
-        if base >= 0.0 {
+        if !base.is_sign_negative() {
             return Ok(base.powf(self.as_f64()));
         }
         if self.den() % 2 == 0 {
@@ -62,5 +65,39 @@ mod tests {
         let half = Ratio::<i64>::try_new(1, 2).unwrap();
         assert_eq!(half.pow_f64(-4.0), Err(ExactPowerError::EvenRootOfNegative));
         assert_eq!(Ratio::<i64>::integer(3).unwrap().pow_f64(-2.0), Ok(-8.0));
+    }
+
+    #[test]
+    fn integer_powers_match_powf_bit_for_bit() {
+        let base = 0.701_546_366_168_601_9_f64;
+        for exponent in [-7_i64, -2, -1, 0, 1, 2, 3, 4, 17, 100_000_000] {
+            let power = Ratio::<i64>::integer(exponent).unwrap();
+            #[expect(clippy::cast_precision_loss, reason = "small test exponents")]
+            let expected = base.powf(exponent as f64);
+            assert_eq!(power.pow_f64(base).unwrap().to_bits(), expected.to_bits());
+        }
+    }
+
+    #[test]
+    #[expect(
+        clippy::suboptimal_flops,
+        reason = "the reference is deliberately `powf`, the kernel every power uses"
+    )]
+    fn integer_powers_do_not_underflow_falsely() {
+        let power = Ratio::<i64>::integer(-1070).unwrap();
+        assert_eq!(power.pow_f64(2.0), Ok(2.0_f64.powf(-1070.0)));
+        assert!(power.pow_f64(2.0).unwrap() > 0.0);
+        let power = Ratio::<i64>::integer(-2).unwrap();
+        assert!(power.pow_f64(1.0e160).unwrap() > 0.0);
+    }
+
+    #[test]
+    fn negative_base_sign_follows_exact_numerator_parity() {
+        // 2^53 + 1 is odd but rounds to the even binary64 2^53.
+        let odd = Ratio::<i64>::integer((1_i64 << 53) + 1).unwrap();
+        assert_eq!(odd.pow_f64(-1.0), Ok(-1.0));
+        let even = Ratio::<i64>::integer(1_i64 << 53).unwrap();
+        assert_eq!(even.pow_f64(-1.0), Ok(1.0));
+        assert_eq!(Ratio::<i64>::integer(3).unwrap().pow_f64(-0.0), Ok(-0.0));
     }
 }

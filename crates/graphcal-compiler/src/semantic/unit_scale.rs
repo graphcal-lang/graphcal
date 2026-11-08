@@ -94,20 +94,16 @@ impl PositiveFiniteScale {
 
     /// Raise the scale to a rational power.
     ///
-    /// Integer powers use `powi` for exactness; fractional powers use `powf`,
-    /// which is well-defined because the base is positive.
+    /// Every exponent uses `powf`, which is well-defined because the base is
+    /// positive; integer exponents deliberately avoid `powi`, which is not
+    /// correctly rounded and can underflow falsely.
     ///
     /// # Errors
     ///
     /// Returns an error when the power overflows to infinity or underflows to
     /// zero.
     pub fn checked_pow(self, exp: Rational) -> Result<Self, PositiveFiniteScaleError> {
-        let powered = if exp.is_integer() {
-            self.0.powi(exp.num())
-        } else {
-            self.0.powf(f64::from(exp.num()) / f64::from(exp.den()))
-        };
-        Self::new(powered)
+        Self::new(self.0.powf(f64::from(exp.num()) / f64::from(exp.den())))
     }
 }
 
@@ -427,6 +423,17 @@ mod tests {
             scale(1000.0).checked_pow(Rational::from(-400)),
             Err(PositiveFiniteScaleError::NonPositive { value: 0.0 })
         );
+    }
+
+    #[test]
+    fn integer_scale_powers_match_powf_bit_for_bit() {
+        let base = 0.701_546_366_168_601_9;
+        for exponent in [-5, -1, 2, 3, 9] {
+            assert_eq!(
+                scale(base).checked_pow(Rational::from(exponent)),
+                Ok(scale(base.powf(f64::from(exponent))))
+            );
+        }
     }
 
     #[test]

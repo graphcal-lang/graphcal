@@ -2974,6 +2974,11 @@ path = ["interpreter_tests", "execution_frames"]
 role = "facade"
 
 [[module]]
+package = "eval"
+path = ["interpreter_tests", "numeric_kernels"]
+role = "facade"
+
+[[module]]
 package = "project"
 path = []
 role = "facade"
