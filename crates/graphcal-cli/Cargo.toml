@@ -27,6 +27,7 @@ graphcal-package = { workspace = true }
 graphcal-plugin-host.workspace = true
 graphcal-project = { workspace = true }
 graphcal-report = { workspace = true }
+indexmap.workspace = true
 miette = { workspace = true, features = ["fancy"] }
 open = { workspace = true }
 serde.workspace = true
@@ -47,7 +48,6 @@ graphcal-eval = { workspace = true, features = ["test-identities"] }
 graphcal-model-client.workspace = true
 graphcal-model-protocol = { workspace = true, features = ["arrow"] }
 graphcal-plugin-abi.workspace = true
-indexmap.workspace = true
 insta.workspace = true
 serde_json.workspace = true
 toml.workspace = true

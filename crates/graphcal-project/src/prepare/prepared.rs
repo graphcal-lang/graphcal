@@ -296,6 +296,24 @@ pub struct PreparedProject {
     output_assembly: ProjectOutputAssembly,
 }
 
+impl PreparedProject {
+    /// The named `entries` in parameter-port order, followed by the names
+    /// that name no parameter, by name. Binding a map in this order makes
+    /// the error reported for several bad bindings independent of the map's
+    /// iteration order.
+    fn in_parameter_order<'a, V>(
+        &self,
+        entries: impl IntoIterator<Item = (&'a DeclName, V)>,
+    ) -> Vec<(&'a DeclName, V)> {
+        let mut entries = entries.into_iter().collect::<Vec<_>>();
+        entries.sort_by_key(|(name, _)| {
+            let port = self.parameter_lookup.get(*name).copied();
+            (port.is_none(), port, *name)
+        });
+        entries
+    }
+}
+
 impl std::fmt::Debug for PreparedProject {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -777,7 +795,7 @@ impl<Mode: CancellationMode> ProjectCompiler<'_, HostFunctionRegistry, Mode> {
         let prepared = self.prepare()?;
         mode.run(|cancellation| {
             let mut bindings = prepared.binding_builder();
-            for (name, expression) in overrides {
+            for (name, expression) in prepared.in_parameter_order(overrides) {
                 cancellation.checkpoint()?;
                 bindings.bind_expression(name, expression)?;
             }

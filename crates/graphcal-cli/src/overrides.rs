@@ -11,6 +11,7 @@
 //! disjoint. A repeated name is an error rather than an implicit precedence
 //! rule.
 
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Read};
@@ -146,8 +147,10 @@ impl ParameterOverride {
 /// Parsed CLI bindings plus source metadata for diagnostics and report replay.
 #[derive(Debug)]
 pub struct ParsedOverrides {
-    /// Values keyed by their typed entry parameter names.
-    pub values: HashMap<DeclName, ParameterOverride>,
+    /// Values keyed by their typed entry parameter names, in command-line
+    /// order: direct `--param` values, then JSON keys in document order.
+    /// Binding in this order reports the first bad value as given.
+    pub values: IndexMap<DeclName, ParameterOverride>,
     /// Direct bindings in command-line order.
     pub direct_parameters: Vec<DirectParameterBinding>,
     /// Bulk JSON source selected for this invocation, including an empty object.
@@ -326,7 +329,7 @@ pub fn parse_overrides_with_sources(
         return Err(OverrideParseError::JsonLimitWithoutSource);
     }
 
-    let mut overrides = HashMap::new();
+    let mut overrides = IndexMap::new();
     let mut direct_parameters = Vec::new();
 
     for raw in &args.param {
@@ -340,11 +343,11 @@ pub fn parse_overrides_with_sources(
             source: Box::new(source),
         })?;
         match overrides.entry(binding.name.clone()) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
+            indexmap::map::Entry::Vacant(entry) => {
                 entry.insert(ParameterOverride::Direct(value));
                 direct_parameters.push(binding);
             }
-            std::collections::hash_map::Entry::Occupied(_) => {
+            indexmap::map::Entry::Occupied(_) => {
                 return Err(OverrideParseError::DuplicateParameterBinding { name: binding.name });
             }
         }
@@ -366,7 +369,7 @@ pub fn parse_overrides_with_sources(
             NamedSource::new(loaded.origin.diagnostic_name(), Arc::new(loaded.text));
         for (name, expression) in json_overrides {
             match overrides.entry(name.clone()) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
+                indexmap::map::Entry::Vacant(entry) => {
                     let span = parameter_spans
                         .get(&name)
                         .copied()
@@ -379,7 +382,7 @@ pub fn parse_overrides_with_sources(
                         },
                     });
                 }
-                std::collections::hash_map::Entry::Occupied(_) => {
+                indexmap::map::Entry::Occupied(_) => {
                     return Err(OverrideParseError::DuplicateParameterBinding { name });
                 }
             }
@@ -622,7 +625,7 @@ mod tests {
 
     fn parse_values(
         args: &ParameterArgs,
-    ) -> Result<HashMap<DeclName, ParameterOverride>, OverrideParseError> {
+    ) -> Result<IndexMap<DeclName, ParameterOverride>, OverrideParseError> {
         parse_overrides_with_sources(args).map(|parsed| parsed.values)
     }
 
@@ -801,6 +804,22 @@ mod tests {
         };
         let overrides = parse_values(&args).unwrap();
         assert_eq!(overrides.len(), 2);
+    }
+
+    /// Bindings are applied in this order, so the first bad value reported
+    /// is the first one given rather than a hash-order pick (PRJ-13).
+    #[test]
+    fn parameters_keep_command_line_then_json_document_order() {
+        let args = ParameterArgs {
+            param: vec!["c=1".to_string(), "a=2".to_string(), "d=3".to_string()],
+            params_json: Some(r#"{"z": "1", "b": "2", "y": "3"}"#.to_string()),
+            ..ParameterArgs::default()
+        };
+        let overrides = parse_values(&args).unwrap();
+        assert_eq!(
+            overrides.keys().map(DeclName::as_str).collect::<Vec<_>>(),
+            ["c", "a", "d", "z", "b", "y"]
+        );
     }
 
     #[test]

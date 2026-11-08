@@ -154,16 +154,16 @@ fn covered_bindings_resolve_every_port_and_target_canonically() {
     let span = Span::new(0, 0);
     let covered = CoveredStaticBindings::check(
         &ModuleInterface::new(&template),
-        HashMap::from([(
+        indexmap::IndexMap::from([(
             IndexName::expect_valid("I"),
             IndexBindingTarget::Declared(IndexName::expect_valid("Phase")),
         )]),
         HashMap::new(),
-        HashMap::from([(
+        indexmap::IndexMap::from([(
             StructTypeName::expect_valid("T"),
             StructTypeName::expect_valid("Box"),
         )]),
-        HashMap::from([(DimName::expect_valid("Q"), DimName::expect_valid("Length"))]),
+        indexmap::IndexMap::from([(DimName::expect_valid("Q"), DimName::expect_valid("Length"))]),
         src,
         span,
     )
@@ -216,13 +216,13 @@ fn a_target_the_importer_does_not_declare_is_a_user_error() {
         .register("main.gcl", std::sync::Arc::new(String::new()));
     let covered = CoveredStaticBindings::check(
         &ModuleInterface::new(&template),
-        HashMap::from([(
+        indexmap::IndexMap::from([(
             IndexName::expect_valid("I"),
             IndexBindingTarget::Declared(IndexName::expect_valid("Length")),
         )]),
         HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        indexmap::IndexMap::new(),
+        indexmap::IndexMap::new(),
         src,
         Span::new(0, 0),
     )

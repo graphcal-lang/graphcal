@@ -6,6 +6,7 @@
     reason = "project compiler pass uses the shared internal model"
 )]
 use graphcal_compiler::syntax::span::Spanned;
+use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
@@ -384,13 +385,15 @@ fn validate_include_producers(
 /// as, keyed by the dependency-side name. Index values retain a typed
 /// declared-or-structural target. The Static maps serve interface-level
 /// validation only; [`CoveredStaticBindings::resolve`] turns them into the
-/// canonical bindings an include instance carries.
+/// canonical bindings an include instance carries. The Static maps keep the
+/// authored order, so the first diagnostic about them is the first binding
+/// in source order.
 struct ClassifiedBindings {
     params: HashMap<DeclName, graphcal_compiler::desugar::desugared_ast::Expr>,
-    indexes: HashMap<IndexName, IndexBindingTarget>,
+    indexes: IndexMap<IndexName, IndexBindingTarget>,
     index_spans: HashMap<IndexName, Span>,
-    types: HashMap<StructTypeName, StructTypeName>,
-    dims: HashMap<DimName, DimName>,
+    types: IndexMap<StructTypeName, StructTypeName>,
+    dims: IndexMap<DimName, DimName>,
 }
 
 /// The Static binding resolution of one include site: each port in the
@@ -529,10 +532,10 @@ fn classify_param_bindings(
 ) -> Result<ClassifiedBindings, PipelineError> {
     let mut out = ClassifiedBindings {
         params: HashMap::new(),
-        indexes: HashMap::new(),
+        indexes: IndexMap::new(),
         index_spans: HashMap::new(),
-        types: HashMap::new(),
-        dims: HashMap::new(),
+        types: IndexMap::new(),
+        dims: IndexMap::new(),
     };
     for binding in param_bindings {
         use graphcal_compiler::syntax::ast::InputBindingCategory;
@@ -639,9 +642,9 @@ fn static_binding_composition_valid(input: StaticInterface, target: StaticInterf
 fn validate_concrete_static_binding_targets(
     importer: &ModuleInterface,
     dep: &ModuleInterface,
-    type_bindings: &HashMap<StructTypeName, StructTypeName>,
-    dim_bindings: &HashMap<DimName, DimName>,
-    index_bindings: &HashMap<IndexName, IndexBindingTarget>,
+    type_bindings: &IndexMap<StructTypeName, StructTypeName>,
+    dim_bindings: &IndexMap<DimName, DimName>,
+    index_bindings: &IndexMap<IndexName, IndexBindingTarget>,
     file_src: SourceId,
     include_span: Span,
 ) -> Result<(), PipelineError> {

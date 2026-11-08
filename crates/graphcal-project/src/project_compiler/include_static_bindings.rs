@@ -7,6 +7,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use indexmap::IndexMap;
+
 use graphcal_compiler::ir::module_interface::ModuleInterface;
 use graphcal_compiler::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use graphcal_compiler::resolved_name::{
@@ -24,14 +26,16 @@ use graphcal_compiler::syntax::type_name::StructTypeName;
 
 use crate::compile_error::PipelineError;
 
-/// One include's authored Static bindings, keyed by template-side name, that
-/// bind every required Static port of the template.
+/// One include's authored Static bindings, keyed by template-side name in
+/// authored order, that bind every required Static port of the template.
+/// Resolution visits them in that order, so the first diagnostic is the first
+/// bad binding in source order.
 #[derive(Debug)]
 pub(super) struct CoveredStaticBindings {
-    indexes: HashMap<IndexName, IndexBindingTarget>,
+    indexes: IndexMap<IndexName, IndexBindingTarget>,
     index_spans: HashMap<IndexName, Span>,
-    types: HashMap<StructTypeName, StructTypeName>,
-    dims: HashMap<DimName, DimName>,
+    types: IndexMap<StructTypeName, StructTypeName>,
+    dims: IndexMap<DimName, DimName>,
 }
 
 impl CoveredStaticBindings {
@@ -44,10 +48,10 @@ impl CoveredStaticBindings {
     /// (by kind, then name).
     pub(super) fn check(
         dep: &ModuleInterface,
-        indexes: HashMap<IndexName, IndexBindingTarget>,
+        indexes: IndexMap<IndexName, IndexBindingTarget>,
         index_spans: HashMap<IndexName, Span>,
-        types: HashMap<StructTypeName, StructTypeName>,
-        dims: HashMap<DimName, DimName>,
+        types: IndexMap<StructTypeName, StructTypeName>,
+        dims: IndexMap<DimName, DimName>,
         file_src: SourceId,
         include_span: Span,
     ) -> Result<Self, PipelineError> {
@@ -160,9 +164,9 @@ pub(super) trait StaticBindingResolution {
 /// kind, then name).
 pub(super) fn validate_required_static_bindings(
     dep: &ModuleInterface,
-    type_bindings: &HashMap<StructTypeName, StructTypeName>,
-    dim_bindings: &HashMap<DimName, DimName>,
-    index_bindings: &HashMap<IndexName, IndexBindingTarget>,
+    type_bindings: &IndexMap<StructTypeName, StructTypeName>,
+    dim_bindings: &IndexMap<DimName, DimName>,
+    index_bindings: &IndexMap<IndexName, IndexBindingTarget>,
     file_src: SourceId,
     include_span: Span,
 ) -> Result<(), PipelineError> {
