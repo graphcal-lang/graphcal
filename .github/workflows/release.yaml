@@ -330,3 +330,84 @@ jobs:
 
           # shellcheck disable=SC2086 # the flag is intentionally word-split
           gh release create "$RELEASE_TAG" --target "$RELEASE_COMMIT" $PRERELEASE_FLAG --title "$ANNOUNCEMENT_TITLE" --notes-file "$RUNNER_TEMP/notes.txt" artifacts/*
+
+  # The view at https://view.graphcal.org/ (web/view), built without secrets,
+  # on every dispatch so a dry run checks it too.
+  build-view:
+    needs:
+      - plan
+    if: ${{ github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        run: rustup toolchain install --no-self-update
+      - name: Install wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2.87.31
+        with:
+          tool: wasm-pack@0.15.0,just@1.58.0
+      - uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          version: '1.4.0'
+          node-version: '26.13.0'
+          working-directory: web/view
+          run-install: false
+          cache: false
+      - name: Install locked frontend dependencies
+        run: |
+          vp -C web/playground install --frozen-lockfile
+          vp -C web/view install --frozen-lockfile
+      - name: Lint, test and build the view
+        run: just view-build
+      - name: Upload the built view
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          # Not `artifacts-*`: the release jobs download those as release files.
+          name: view-dist
+          path: web/view/dist
+          if-no-files-found: error
+
+  # Publish the view after the release, as Cloudflare Workers static assets
+  # (web/view-deploy/wrangler.jsonc). Only this job sees the Cloudflare
+  # token, through the protected `cloudflare-view` environment.
+  deploy-view:
+    needs:
+      - plan
+      - build-view
+      - announce
+    if: ${{ needs.plan.outputs.publishing == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    environment:
+      name: cloudflare-view
+      url: https://view.graphcal.org/
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: voidzero-dev/setup-vp@v1.22.0
+        with:
+          version: '1.4.0'
+          node-version: '26.13.0'
+          working-directory: web/view-deploy
+          run-install: false
+          cache: false
+      - name: Install locked Wrangler
+        run: vp -C web/view-deploy install --frozen-lockfile
+      - name: Download the built view
+        uses: actions/download-artifact@v8.0.2
+        with:
+          name: view-dist
+          path: web/view/dist
+      - name: Deploy to view.graphcal.org
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        run: vp -C web/view-deploy exec wrangler deploy
