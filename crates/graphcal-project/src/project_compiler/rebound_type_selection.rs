@@ -82,6 +82,7 @@ pub(super) fn check_rebound_type_selection(
         )
     });
     let types = request.selected_types.iter().filter_map(|selected| {
+        let selected = &selected.original;
         template
             .declarations
             .iter()
@@ -104,7 +105,10 @@ pub(super) fn check_rebound_type_selection(
         .filter_map(|selected| {
             template
                 .resolver
-                .resolve_struct_type_path(template.owner, &NamePath::local(selected.atom().clone()))
+                .resolve_struct_type_path(
+                    template.owner,
+                    &NamePath::local(selected.original.atom().clone()),
+                )
                 .ok()
                 .map(|symbol| symbol.resolved().clone())
         })

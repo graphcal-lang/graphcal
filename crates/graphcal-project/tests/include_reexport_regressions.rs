@@ -240,3 +240,102 @@ fn reexported_assertion_is_reported_once_with_its_include_site_expectation() {
         result.assertions[0].outcome
     );
 }
+
+const TYPED_LIB: &str = "\
+pub type Reading { Reading(value: Dimensionless) }
+pub node r: Reading = Reading(value: 1.0);
+";
+
+const SHARED_SPELLING_LIB: &str = "\
+pub type mode { A, B }
+pub node mode: Dimensionless = 1.0;
+pub node pick: mode = A;
+";
+
+/// Selecting only the constructor `Reading` must not project the template's
+/// type onto the importer's unrelated type of the same spelling (PRJ-4).
+#[test]
+fn selected_constructor_does_not_rebind_a_same_named_importer_type() {
+    let (_dir, main) = package(&[
+        ("lib.gcl", TYPED_LIB),
+        (
+            "main.gcl",
+            "type Reading { Other(v: Length) }\n\
+             include p.lib()::{ r, Reading };\n\
+             node mine: Reading = Other(v: 2.0 m);\n\
+             node theirs: Dimensionless = match @r { Reading(value: x) => x };\n",
+        ),
+    ]);
+    let result = eval(&main);
+    assert_eq!(si_value(&result, "theirs"), 1.0);
+
+    // A value of the template's type is not a value of the importer's.
+    let (_dir, main) = package(&[
+        ("lib.gcl", TYPED_LIB),
+        (
+            "main.gcl",
+            "type Reading { Other(v: Length) }\n\
+             include p.lib()::{ r, Reading };\n\
+             node mine: Reading = @r;\n\
+             node len: Length = match @mine { Other(v: x) => x };\n",
+        ),
+    ]);
+    assert_eq!(code(&eval_error(&main)).as_deref(), Some("graphcal::D002"));
+}
+
+/// A `type` item selects only the type, never a value of the same spelling
+/// (PRJ-4).
+#[test]
+fn selected_type_does_not_bind_a_same_named_value() {
+    let (_dir, main) = package(&[
+        ("lib2.gcl", SHARED_SPELLING_LIB),
+        (
+            "main.gcl",
+            "include p.lib2()::{ type mode, pick };\n\
+             node x: Dimensionless = @mode;\n",
+        ),
+    ]);
+    assert_eq!(code(&eval_error(&main)).as_deref(), Some("graphcal::N002"));
+
+    // The importer may declare its own value of that spelling.
+    let (_dir, main) = package(&[
+        ("lib2.gcl", SHARED_SPELLING_LIB),
+        (
+            "main.gcl",
+            "include p.lib2()::{ type mode, pick };\n\
+             node mode: Dimensionless = 2.0;\n",
+        ),
+    ]);
+    assert_eq!(si_value(&eval(&main), "mode"), 2.0);
+}
+
+/// The V006 leakage check of a `{ pub type mode }` re-export inspects the
+/// type, not a value that shares its spelling (PRJ-4).
+#[test]
+fn reexport_leakage_check_follows_the_selected_namespace() {
+    let lib = "pub(bind) dim Q;\n\
+               param v: Q;\n\
+               pub node mode: Q = @v;\n\
+               pub type mode { A, B }\n";
+    let (_dir, main) = package(&[
+        ("lib.gcl", lib),
+        (
+            "main.gcl",
+            "dim Private = Length;\n\
+             include p.lib(dim Q: Private, v: 1.0 m)::{ pub type mode, A };\n\
+             node choice: mode = A;\n",
+        ),
+    ]);
+    eval(&main);
+
+    // Re-exporting the value itself still leaks the private dimension.
+    let (_dir, main) = package(&[
+        ("lib.gcl", lib),
+        (
+            "main.gcl",
+            "dim Private = Length;\n\
+             include p.lib(dim Q: Private, v: 1.0 m)::{ pub mode };\n",
+        ),
+    ]);
+    assert_eq!(code(&eval_error(&main)).as_deref(), Some("graphcal::V006"));
+}

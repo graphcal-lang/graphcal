@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::ir::module_interface::ModuleInterface;
+use graphcal_compiler::syntax::names::NameAtom;
 
 use super::super::include_static_bindings::{CoveredStaticBindings, StaticBindingResolution};
 use super::*;
@@ -101,7 +102,10 @@ fn unsubstituted_dependency_name_is_not_probed_in_the_importer() {
     let declarations = parse_declarations(
         "type Inner { Inner(value: Int), } node output: Inner = Inner(value: 1);",
     );
-    let reexports = HashSet::from([NameAtom::parse("output").unwrap()]);
+    let reexports = HashSet::from([ReexportedItem {
+        namespace: ImportItemNamespace::Term,
+        name: NameAtom::parse("output").unwrap(),
+    }]);
     let importer_interface =
         ModuleInterface::new(&parse_declarations("type Inner { Inner(value: Int), }"));
 

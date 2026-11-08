@@ -16,6 +16,7 @@ use crate::compile_error::PipelineError;
 
 use super::include_static_bindings::IncludeStaticBindings;
 use super::including_module::IncludingModule;
+use super::model::ReexportedItem;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::ir::static_dependencies::{
@@ -25,7 +26,6 @@ use graphcal_compiler::ir::static_substitution::{InstanceIndexBindingTarget, Sta
 use graphcal_compiler::resolved_name::ResolvedStaticName;
 use graphcal_compiler::syntax::ast::IntroducedKind;
 use graphcal_compiler::syntax::import_category::ImportItemNamespace;
-use graphcal_compiler::syntax::names::NameAtom;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReferenceSubstitution {
@@ -124,7 +124,7 @@ const fn reexported_declaration_kind(kind: IntroducedKind) -> Option<ReexportedD
 pub(super) fn check_generics_leakage(
     dep_declarations: &[graphcal_compiler::desugar::desugared_ast::Declaration],
     dep_scope: StaticScope<'_>,
-    pub_reexport_items: &HashSet<NameAtom>,
+    pub_reexport_items: &HashSet<ReexportedItem>,
     bindings: &IncludeStaticBindings,
     importer: &IncludingModule<'_>,
     include_span: Span,
@@ -141,7 +141,8 @@ pub(super) fn check_generics_leakage(
     let substitution = bindings.substitution();
 
     for decl in dep_declarations {
-        // Is this decl part of the importer's re-exported surface?
+        // Is this decl part of the importer's re-exported surface? A type is
+        // re-exported by its `type` item or by any of its constructors.
         let Some(introduced) = decl.kind.declared_name() else {
             continue;
         };
@@ -149,7 +150,12 @@ pub(super) fn check_generics_leakage(
             continue;
         };
         let decl_name = introduced.atom();
-        if !pub_reexport_items.contains(decl_name) {
+        if !decl.kind.introduced_names().any(|name| {
+            pub_reexport_items.contains(&ReexportedItem {
+                namespace: name.namespace(),
+                name: name.atom().clone(),
+            })
+        }) {
             continue;
         }
 

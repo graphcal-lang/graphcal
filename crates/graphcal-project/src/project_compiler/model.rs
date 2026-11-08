@@ -9,16 +9,41 @@ use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::resolve::collected::ImportedValueNames;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::syntax::ast::{ImportItemNamespace, Visibility};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::UnitName;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
+use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::StructTypeName;
 
-/// A selective import/include alias with explicit source and local roles.
+/// A graph value a selective include selects, by its name in the template
+/// and in the importer.
+///
+/// Only a value item is one: a `type` item or a constructor of the same
+/// spelling never aliases a value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ImportAlias {
     pub(super) original: DeclName,
     pub(super) local: DeclName,
+    /// `pub` when the importer re-exports the value.
+    pub(super) visibility: Visibility,
+}
+
+/// A type a selective include selects with a `type` item, by its name in the
+/// template and in the importer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SelectedTypeAlias {
+    pub(super) original: StructTypeName,
+    pub(super) local: StructTypeName,
+}
+
+/// One template item a selective include re-exports with `{ pub ... }`, in
+/// the namespace it is selected from.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) struct ReexportedItem {
+    pub(super) namespace: ImportItemNamespace,
+    pub(super) name: NameAtom,
 }
 
 /// One fully resolved physical file before static checking.
@@ -120,6 +145,8 @@ pub(super) struct IncludeInstanceRequest<'a> {
     pub(super) debug_scope: ModuleAliasName,
     pub(super) bindings: HashMap<DeclName, Expr>,
     pub(super) static_bindings: IncludeStaticBindings,
+    /// The graph values a selective include selects; `None` for a
+    /// module-form include, which exposes its outputs under its alias.
     pub(super) selective_names: Option<Vec<ImportAlias>>,
     pub(super) unit_projection_aliases: Vec<UnitProjectionAlias>,
     pub(super) runtime_unit_names: HashSet<UnitName>,
@@ -129,10 +156,10 @@ pub(super) struct IncludeInstanceRequest<'a> {
     pub(super) include_span: Span,
     pub(super) import_item_attributes:
         HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
-    /// Namespace-agnostic surface atoms selected with `{ pub name }`.
-    pub(super) pub_reexport_items: HashSet<graphcal_compiler::syntax::names::NameAtom>,
-    /// Template types selected with `type` items, by their template name.
-    pub(super) selected_types: Vec<graphcal_compiler::syntax::type_name::StructTypeName>,
+    /// Template items selected with `{ pub name }`.
+    pub(super) pub_reexport_items: HashSet<ReexportedItem>,
+    /// Template types selected with `type` items.
+    pub(super) selected_types: Vec<SelectedTypeAlias>,
 }
 
 /// Canonical routing metadata for one module alias.

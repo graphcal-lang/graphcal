@@ -36,7 +36,8 @@ use super::include_static_bindings::{
     CoveredStaticBindings, StaticBindingResolution, validate_required_static_bindings,
 };
 use super::model::{
-    ImportAlias, ImportContext, IncludeInstanceRequest, ProjectModuleBinding, UnitProjectionAlias,
+    ImportAlias, ImportContext, IncludeInstanceRequest, ProjectModuleBinding, ReexportedItem,
+    SelectedTypeAlias, UnitProjectionAlias,
 };
 use super::module_resolve_errors::module_resolve_compile_error;
 use super::selected_include_items::{SelectedItemKind, SelectedValueKind, exported_values};
@@ -875,6 +876,7 @@ pub(super) fn process_include<'a>(
         .exported_bindings(import_dag_id)
         .map_err(|error| module_resolve_compile_error(error, file_src))?;
     let mut surface_outputs = Vec::new();
+    let mut selected_types = Vec::new();
     let selective_names = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(names) => {
             validate_include_producers(names, file_src)?;
@@ -940,24 +942,33 @@ pub(super) fn process_include<'a>(
                         ctx.imported_names.assert_names.push((local.clone(), span));
                         assertion_aliases.insert(original.clone(), local.clone());
                     }
-                    SelectedItemKind::Value(SelectedValueKind::Const) => {
+                    SelectedItemKind::Value(kind) => {
                         surface_outputs.push(scoped.clone());
-                        ctx.imported_names.const_names.push((scoped, span));
+                        match kind {
+                            SelectedValueKind::Const => {
+                                ctx.imported_names.const_names.push((scoped, span));
+                            }
+                            SelectedValueKind::Runtime => {
+                                ctx.imported_names.param_names.push((scoped, span));
+                            }
+                        }
+                        selective.push(ImportAlias {
+                            original,
+                            local,
+                            visibility: import_item.visibility,
+                        });
                     }
-                    SelectedItemKind::Value(SelectedValueKind::Runtime) => {
-                        surface_outputs.push(scoped.clone());
-                        ctx.imported_names.param_names.push((scoped, span));
-                    }
+                    SelectedItemKind::Type => selected_types.push(SelectedTypeAlias {
+                        original: StructTypeName::classify(orig_name.atom().clone()),
+                        local: StructTypeName::classify(import_item.local_name_atom().clone()),
+                    }),
                     SelectedItemKind::Plot
                     | SelectedItemKind::ImportedConstant
                     | SelectedItemKind::Composition
                     | SelectedItemKind::Constructor
-                    | SelectedItemKind::Type
                     | SelectedItemKind::Static
                     | SelectedItemKind::Unit(_) => {}
                 }
-
-                selective.push(ImportAlias { original, local });
             }
             Some(selective)
         }
@@ -999,15 +1010,17 @@ pub(super) fn process_include<'a>(
         decl.span,
     )?;
 
-    let pub_reexport_items: HashSet<NameAtom> = match &include_decl.kind {
+    let pub_reexport_items: HashSet<ReexportedItem> = match &include_decl.kind {
         graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
             .iter()
-            .filter(|it| it.visibility.is_public())
-            .map(|it| it.name.name.atom().clone())
+            .filter(|item| item.visibility.is_public())
+            .map(|item| ReexportedItem {
+                namespace: item.namespace,
+                name: item.name.name.atom().clone(),
+            })
             .collect(),
         graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => HashSet::new(),
     };
-    let selected_types = selected_type_items(&include_decl.kind);
 
     ctx.include_instances.push(IncludeInstanceRequest {
         template: dependency,
@@ -1027,27 +1040,6 @@ pub(super) fn process_include<'a>(
         selected_types,
     });
     Ok(())
-}
-
-/// The template types a selective include selects with `type` items, by
-/// their template name.
-fn selected_type_items(
-    kind: &graphcal_compiler::desugar::desugared_ast::ImportKind,
-) -> Vec<graphcal_compiler::syntax::type_name::StructTypeName> {
-    match kind {
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Selective(items) => items
-            .iter()
-            .filter(|item| {
-                item.namespace == graphcal_compiler::syntax::ast::ImportItemNamespace::Type
-            })
-            .map(|item| {
-                graphcal_compiler::syntax::type_name::StructTypeName::classify(
-                    item.name.name.atom().clone(),
-                )
-            })
-            .collect(),
-        graphcal_compiler::desugar::desugared_ast::ImportKind::Module { .. } => Vec::new(),
-    }
 }
 
 /// Process one pure import from a dependency's compile-time artifact.

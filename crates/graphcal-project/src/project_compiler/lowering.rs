@@ -718,22 +718,20 @@ fn instance_substitution(
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
 ) -> StaticSubstitution {
     let mut substitution = request.static_bindings.substitution();
-    if let Some(aliases) = &request.selective_names {
-        for alias in aliases {
-            let source_path =
-                graphcal_compiler::syntax::names::NamePath::local(alias.original.atom().clone());
-            let target_path =
-                graphcal_compiler::syntax::names::NamePath::local(alias.local.atom().clone());
-            if let (Ok(source), Ok(target)) = (
-                module_resolver
-                    .resolve_struct_type_path(request.template.dag_id(), &source_path)
-                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
-                module_resolver
-                    .resolve_struct_type_path(importer, &target_path)
-                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
-            ) {
-                substitution.types.insert(source, target);
-            }
+    for alias in &request.selected_types {
+        let source_path =
+            graphcal_compiler::syntax::names::NamePath::local(alias.original.atom().clone());
+        let target_path =
+            graphcal_compiler::syntax::names::NamePath::local(alias.local.atom().clone());
+        if let (Ok(source), Ok(target)) = (
+            module_resolver
+                .resolve_struct_type_path(request.template.dag_id(), &source_path)
+                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
+            module_resolver
+                .resolve_struct_type_path(importer, &target_path)
+                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
+        ) {
+            substitution.types.insert(source, target);
         }
     }
     substitution
@@ -1039,7 +1037,6 @@ fn elaborate_include_instances(
             add_selective_aliases_inner(
                 &selective_alias_declarations,
                 selective,
-                &instance.pub_reexport_items,
                 &instance.instance_scope,
                 &AliasResolutionOwners {
                     r#type: &dep_resolution_owner,
@@ -1234,7 +1231,7 @@ struct AliasResolutionOwners<'a> {
 }
 
 /// Add `local_name = @scope::orig_name` aliases (const or graph) for each
-/// selected item.
+/// selected value.
 ///
 /// The alias keeps the template declaration's annotation, resolved in the
 /// template's scope: names it references (such as a dimension defined over a
@@ -1247,7 +1244,6 @@ struct AliasResolutionOwners<'a> {
 fn add_selective_aliases_inner(
     declarations: &HashMap<DeclName, graphcal_compiler::ir::model::IncludeAliasDeclaration>,
     selective: &[ImportAlias],
-    public_originals: &HashSet<graphcal_compiler::syntax::names::NameAtom>,
     prefix: &ScopeSegment,
     owners: &AliasResolutionOwners<'_>,
     import_span: Span,
@@ -1275,7 +1271,7 @@ fn add_selective_aliases_inner(
             import_span,
         );
 
-        if public_originals.contains(orig_name.atom()) {
+        if alias.visibility.is_public() {
             unfrozen.export_term_alias(local_name.clone());
         }
         if declaration.is_const {
