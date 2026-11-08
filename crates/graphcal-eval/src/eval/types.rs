@@ -179,6 +179,35 @@ impl Value {
         }
     }
 
+    /// Number of nested indexed axes: 0 for a non-indexed value, 1 for one
+    /// axis, and so on. An indexed value has one element type, so its first
+    /// entry stands for every entry; an empty axis counts as one.
+    #[must_use]
+    pub fn index_depth(&self) -> usize {
+        match self {
+            Self::Indexed { entries, .. } => entries
+                .values()
+                .next()
+                .map_or(1, |entry| entry.index_depth().saturating_add(1)),
+            _ => 0,
+        }
+    }
+
+    /// Whether a display shows this value as a grid over its index axes: two
+    /// or more axes whose leaves are single cells. A leaf struct with fields
+    /// has no single cell, so such a value is listed entry by entry.
+    #[must_use]
+    pub fn displays_as_grid(&self) -> bool {
+        fn leaf(value: &Value) -> &Value {
+            match value {
+                Value::Indexed { entries, .. } => entries.values().next().map_or(value, leaf),
+                _ => value,
+            }
+        }
+        self.index_depth() >= 2
+            && !matches!(leaf(self), Self::Struct { fields, .. } if !fields.is_empty())
+    }
+
     /// Display label for an indexed entry key.
     ///
     /// This is an I/O helper: it renders optional coordinate-index labels and falls

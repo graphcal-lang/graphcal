@@ -1704,6 +1704,35 @@ fn eval_heterogeneous_table_units_are_never_misrepresented_by_one_caption() {
 }
 
 #[test]
+fn eval_lists_every_field_of_multi_axis_struct_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_temp_file(
+        dir.path(),
+        "grid-struct.gcl",
+        "pub type Pt { Pt(x: Length, y: Length) }\n\
+         node grid: Pt[Fin(2), Fin(2)] = for i: Fin(2) { for j: Fin(2) { Pt(x: 3.0 m, y: 4.0 m) } };\n",
+    );
+
+    let output = graphcal_bin()
+        .args(["eval", source.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("grid[#1][#0].x = 3 m"), "{stdout}");
+    assert!(stdout.contains("grid[#1][#0].y = 4 m"), "{stdout}");
+    assert!(
+        !stdout.contains("Pt"),
+        "a cell must not stand for a whole struct: {stdout}"
+    );
+}
+
+#[test]
 fn eval_indexed_json_output() {
     let output = graphcal_bin()
         .args(["eval", &fixture("valid/indexed.gcl"), "--format", "json"])
