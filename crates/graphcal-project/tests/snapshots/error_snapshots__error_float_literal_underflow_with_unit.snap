@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+invalid number literal
+    Diagnostic severity: error
+Begin snippet for underflow.gcl starting at line 1, column 1
+
+snippet line 1: node tiny: Length = 2.5e-330 m;
+    label at line 1, columns 21 to 28: floating-point literal is too small and underflows to zero
+diagnostic help: quantities are binary64 values whose smallest nonzero magnitude is about 4.9e-324; write `0.0` if zero is intended
+diagnostic code: graphcal::P003
