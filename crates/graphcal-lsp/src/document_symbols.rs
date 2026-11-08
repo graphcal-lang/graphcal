@@ -58,7 +58,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
         };
 
         symbols.push(DocumentSymbol {
-            name: def.name.clone(),
+            name: def.label(key).into_owned(),
             detail: def.type_description.clone(),
             kind,
             tags: None,
