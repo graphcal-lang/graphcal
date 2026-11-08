@@ -106,14 +106,20 @@ fn validate_rename_target(
 }
 
 /// Validate a rename and return the current name's range and placeholder.
+///
+/// `Ok(None)` means there is nothing renameable at the cursor; `Err` is an
+/// explicit refusal whose reason the client shows to the user, instead of a
+/// generic "this element can't be renamed".
 pub fn prepare_rename(
     analysis: &AnalysisResult,
     uri: &Url,
     offset: usize,
-) -> Option<PrepareRenameResponse> {
-    let resolved = resolve_symbol_at(analysis, offset)?;
-    if !validate_rename_target(analysis, uri, &resolved).unwrap_or(false) {
-        return None;
+) -> Result<Option<PrepareRenameResponse>, RenameRefusal> {
+    let Some(resolved) = resolve_symbol_at(analysis, offset) else {
+        return Ok(None);
+    };
+    if !validate_rename_target(analysis, uri, &resolved)? {
+        return Ok(None);
     }
 
     let def = resolved_definition(&resolved);
@@ -126,10 +132,10 @@ pub fn prepare_rename(
         .unwrap_or(&def.name)
         .to_string();
 
-    Some(PrepareRenameResponse::RangeWithPlaceholder {
+    Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
         range: LineIndex::new(&analysis.source).span_to_range(span),
         placeholder,
-    })
+    }))
 }
 
 /// Why a rename request was explicitly refused.
@@ -461,7 +467,7 @@ node y: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
                 "{refusal:?}"
             );
             assert!(refusal.to_string().contains("`demo::lerp`"), "{refusal}");
-            assert!(prepare_rename(&analysis, &uri, cursor).is_none());
+            assert_eq!(prepare_rename(&analysis, &uri, cursor), Err(refusal));
         }
     }
 
@@ -711,7 +717,7 @@ figure f = { plots: [p] };
             let offset = source.find(builtin).unwrap();
             let result = prepare_rename(&analysis, &uri, offset);
             assert!(
-                result.is_none(),
+                matches!(result, Ok(None)),
                 "builtin `{builtin}` should not be renameable"
             );
         }
@@ -777,7 +783,10 @@ figure f = { plots: [p] };
 
         let cursor = main_text.find("@y").unwrap() + 1;
         for cursor in [cursor, main_text.find("{y}").unwrap() + 1] {
-            assert!(prepare_rename(&analysis, &main_uri, cursor).is_none());
+            assert!(matches!(
+                prepare_rename(&analysis, &main_uri, cursor),
+                Err(RenameRefusal::IncompleteProjectIndex { .. })
+            ));
             assert!(matches!(
                 rename(&analysis, &main_uri, cursor, "renamed"),
                 Err(RenameRefusal::IncompleteProjectIndex { .. })
@@ -833,7 +842,10 @@ figure f = { plots: [p] };
             rename(&analysis, &main_uri, cursor, "tripled"),
             Err(RenameRefusal::IncompleteProjectIndex { .. })
         ));
-        assert!(prepare_rename(&analysis, &main_uri, cursor).is_none());
+        assert!(matches!(
+            prepare_rename(&analysis, &main_uri, cursor),
+            Err(RenameRefusal::IncompleteProjectIndex { .. })
+        ));
     }
 
     #[test]
@@ -881,7 +893,10 @@ figure f = { plots: [p] };
             .expect("project references");
         assert_eq!(references.len(), 11);
         let alias_cursor = main_text.rfind("through_a +").unwrap();
-        assert!(prepare_rename(&analysis, &main_uri, alias_cursor).is_none());
+        assert!(matches!(
+            prepare_rename(&analysis, &main_uri, alias_cursor),
+            Err(RenameRefusal::IncompleteProjectIndex { .. })
+        ));
         assert!(matches!(
             rename(&analysis, &main_uri, alias_cursor, "surprise"),
             Err(RenameRefusal::IncompleteProjectIndex { .. })

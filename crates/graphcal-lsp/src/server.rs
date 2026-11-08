@@ -1046,6 +1046,12 @@ fn merged_diagnostics_for(
         .collect()
 }
 
+/// An explicit rename refusal as the descriptive JSON-RPC error clients show
+/// to the user; a `null` answer would read as "nothing to rename here".
+fn rename_refusal_error(refusal: crate::rename::RenameRefusal) -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error::invalid_params(refusal.to_string())
+}
+
 fn workspace_edit_matches_open_snapshots(
     edit: &WorkspaceEdit,
     project: &ProjectSymbolIndex,
@@ -1523,9 +1529,7 @@ impl LanguageServer for Backend {
             // An explicit refusal (invalid identifier, name collision) is a
             // descriptive error the client shows to the user — silently
             // returning null would suggest "nothing to rename here".
-            Some(Err(refusal)) => Err(tower_lsp::jsonrpc::Error::invalid_params(
-                refusal.to_string(),
-            )),
+            Some(Err(refusal)) => Err(rename_refusal_error(refusal)),
         }
     }
 
@@ -1536,16 +1540,21 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let position = params.position;
         let current_text = self.current_text(&uri).await;
-        self.with_current_analysis(&uri.clone(), move |current| {
-            let analysis = current.get();
-            let current_text = current_text.as_ref()?;
-            if current_text.as_str() != analysis.source.as_str() {
-                return None;
-            }
-            let offset = position_to_byte_offset(current_text, position);
-            crate::rename::prepare_rename(analysis, &uri, offset)
-        })
-        .await
+        let outcome = self
+            .with_current_analysis(&uri.clone(), move |current| {
+                let analysis = current.get();
+                let current_text = current_text.as_ref()?;
+                if current_text.as_str() != analysis.source.as_str() {
+                    return None;
+                }
+                let offset = position_to_byte_offset(current_text, position);
+                Some(crate::rename::prepare_rename(analysis, &uri, offset))
+            })
+            .await?;
+        match outcome {
+            None => Ok(None),
+            Some(response) => response.map_err(rename_refusal_error),
+        }
     }
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {

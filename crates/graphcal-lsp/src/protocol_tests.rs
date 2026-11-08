@@ -30,6 +30,24 @@ async fn request(service: &mut LspService<Backend>, method: &'static str, params
     body.unwrap_or_else(|error| panic!("{method} failed: {error}"))
 }
 
+/// The JSON-RPC error `method` answers with; panics on a successful answer.
+async fn request_error(
+    service: &mut LspService<Backend>,
+    method: &'static str,
+    params: Value,
+) -> tower_lsp::jsonrpc::Error {
+    let response = service
+        .ready()
+        .await
+        .expect("service ready")
+        .call(Request::build(method).params(params).id(1).finish())
+        .await
+        .expect("service call")
+        .expect("request response");
+    let (_, body) = response.into_parts();
+    body.expect_err("expected a JSON-RPC error")
+}
+
 async fn notify(service: &mut LspService<Backend>, method: &'static str, params: Value) {
     let response = service
         .ready()
@@ -1390,4 +1408,52 @@ async fn view_model_request_serves_the_analyzed_document() {
     )
     .await;
     assert_eq!(unknown, Value::Null);
+}
+
+const EXTERN_SOURCE: &str = "\
+import plugin \"graphcal:demo\" as demo {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+}
+node y: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
+";
+
+/// LSP-12: an explicit refusal reaches the user as an error with its reason,
+/// both from `prepareRename` and from `rename`, rather than a bare `null`.
+#[tokio::test]
+async fn rename_refusals_reach_the_client_with_their_reason() {
+    let (mut service, mut socket) = service();
+    initialize(&mut service, json!({})).await;
+    let uri = Url::parse("untitled:extern.gcl").unwrap();
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&uri, 1, EXTERN_SOURCE),
+    )
+    .await;
+    let diagnostics = next_diagnostics(&mut socket, &uri).await;
+    assert_eq!(diagnostics, json!([]));
+
+    let cursor = position_params(&uri, 1, 8);
+    let error = request_error(&mut service, "textDocument/prepareRename", cursor.clone()).await;
+    assert_eq!(error.code, tower_lsp::jsonrpc::ErrorCode::InvalidParams);
+    assert!(
+        error
+            .message
+            .contains("cannot rename extern function `demo::lerp`"),
+        "{error:?}"
+    );
+
+    let mut rename = cursor;
+    rename["newName"] = json!("blend");
+    let error = request_error(&mut service, "textDocument/rename", rename).await;
+    assert!(error.message.contains("`demo::lerp`"), "{error:?}");
+
+    // Nothing renameable is still a plain `null`.
+    let blank = request(
+        &mut service,
+        "textDocument/prepareRename",
+        position_params(&uri, 3, 22),
+    )
+    .await;
+    assert!(blank.is_null(), "{blank}");
 }
