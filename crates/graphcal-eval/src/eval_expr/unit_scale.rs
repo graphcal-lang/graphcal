@@ -41,16 +41,26 @@ fn unit_scale_error(
     session.runtime_error(RuntimeFailure::UnitScale { context, error }, span)
 }
 
-/// Apply a unit scale to a literal value and validate that the SI value is finite.
+/// Apply a unit scale to a literal value: the SI value must be finite, and a
+/// nonzero literal must not underflow to zero.
 pub(super) fn checked_unit_scaled_value(
     value: f64,
     scale: PositiveFiniteScale,
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, SemanticError> {
-    numeric::finite_quantity(value * scale.get(), "quantity literal value")
+    let context = "quantity literal value";
+    let value =
+        numeric::finite_quantity(value, context).map_err(|err| ctx.runtime_error(err, span))?;
+    scale
+        .to_si(value)
         .map(RuntimeValue::Quantity)
-        .map_err(|err| ctx.runtime_error(err, span))
+        .map_err(|error| {
+            ctx.runtime_error(
+                numeric::QuantityValidationError::from_arithmetic(error, context),
+                span,
+            )
+        })
 }
 
 /// Evaluate the scale expression of a dynamic unit in the scope of the DAG

@@ -461,8 +461,7 @@ impl<P: ConstPosition> ConstReal<P> {
             ConstRealKind::Builtin(constant) => FiniteQuantity::try_new(constant.value())
                 .map_err(|_| arithmetic(FiniteArithmeticError::Infinite)),
             ConstRealKind::Quantity { value, unit, .. } => {
-                FiniteQuantity::try_new(value.get() * unit.scale.get())
-                    .map_err(|_| arithmetic(FiniteArithmeticError::Infinite))
+                unit.scale.to_si(*value).map_err(arithmetic)
             }
             ConstRealKind::FromInt {
                 conversion,

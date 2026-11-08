@@ -165,3 +165,19 @@ node product_large_first: Dimensionless = product(@large_first);
         assert!((find_value(&result, name) - 1.0).abs() <= 4.0 * f64::EPSILON);
     }
 }
+
+#[test]
+fn a_quantity_literal_that_underflows_in_its_unit_scale_is_an_error() {
+    assert_eval_failed(
+        "const unit tiny: Length = 1.0e-300 m;\nnode a: Length = 1.0e-30 tiny;",
+        "a",
+        "quantity literal value underflowed to zero",
+    );
+    let result = compile_and_eval(
+        "const unit tiny: Length = 1.0e-300 m;\nnode zero: Length = 0.0 tiny;\nnode small: Length = 1.0e-20 tiny;",
+    )
+    .unwrap();
+    assert_eq!(find_value(&result, "zero"), 0.0);
+    assert!(find_value(&result, "small") > 0.0);
+}
+
