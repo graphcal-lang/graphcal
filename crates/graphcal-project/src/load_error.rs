@@ -115,7 +115,7 @@ pub enum LoadError {
     #[diagnostic(
         code(graphcal::M038),
         help(
-            "this file has a `graphcal.toml` above it but lives outside the package namespace (`<source_dir>/<package>.gcl` or under `<source_dir>/<package>/`), so `graphcal.lock` cannot pin its plugins. Move the file into the package namespace directory, then run `graphcal deps lock` to pin the plugin."
+            "this file has a `graphcal.toml` above it but lives outside the package namespace (`<source_dir>/<package>.gcl` or under `<source_dir>/<package>/`; a symlinked module counts where it really lives), so `graphcal.lock` cannot pin its plugins. Move the file into the package namespace directory, then run `graphcal deps lock` to pin the plugin."
         )
     )]
     WasmPluginOutsidePackageNamespace {

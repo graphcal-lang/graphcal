@@ -80,20 +80,25 @@ fn wasm_plugin_paths(
         .filter(|path| path.source_kind() == PluginSourceKind::WasmModule)
 }
 
-/// Reject every wasm plugin import of a loose script under a manifest.
+/// Reject every wasm plugin import declared by a loaded file that
+/// `in_namespace` places outside its package namespace.
 ///
-/// Plugin trust rests on `graphcal.lock`, which pins only the package's own
-/// sources. A file that has a `graphcal.toml` above it but lives outside the
-/// package namespace is not covered by those pins, so it cannot load plugin
-/// binaries at all (it would otherwise run them unreviewed).
-fn reject_wasm_plugins_outside_package_namespace(
-    files: &DependencyOrdered<LoadedFile<module_path::ModuleTarget>>,
+/// Plugin trust rests on `graphcal.lock`, which covers the package's own
+/// namespace. A file under a manifest whose canonical path lies outside the
+/// namespace (a loose script, or a module file reached through an in-root
+/// symlink that leaves `<source_dir>/<package>/`) cannot load plugin
+/// binaries at all. The check runs before any plugin bytes are read.
+fn reject_wasm_plugins_outside_package_namespace<'a>(
+    files: impl IntoIterator<Item = &'a LoadedFile<module_path::ModuleTarget>>,
     sources: &SourceRegistry,
+    mut in_namespace: impl FnMut(&LoadedFile<module_path::ModuleTarget>) -> bool,
 ) -> Result<(), CompileError> {
     use graphcal_compiler::syntax::plugin::PluginSourceKind;
 
     files
-        .iter()
+        .into_iter()
+        .filter(|file| wasm_plugin_paths(&file.ast).next().is_some())
+        .filter(|file| !in_namespace(file))
         .find_map(|file| {
             file.ast
                 .plugin_imports()
@@ -656,8 +661,19 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     cancellation.checkpoint()?;
     let (files, sources) = build_loaded_files(snapshot)?;
     cancellation.checkpoint()?;
-    if outside_package_namespace {
-        reject_wasm_plugins_outside_package_namespace(&files, &sources)?;
+    match manifest.as_ref() {
+        // A loose script: none of its files is in the package namespace.
+        None if outside_package_namespace => {
+            reject_wasm_plugins_outside_package_namespace(&files, &sources, |_| false)?;
+        }
+        // An ad-hoc file with no manifest loads plugins unpinned.
+        None => {}
+        Some(package_manifest) => {
+            reject_wasm_plugins_outside_package_namespace(&files, &sources, |file| {
+                root_in_package_namespace(&project_root, &file.path, package_manifest, fs)
+                    == NamespaceMembership::Exact
+            })?;
+        }
     }
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
@@ -789,6 +805,17 @@ fn load_locked_package_project<F: FileSystemReader>(
         let (package_root, reader) = context
             .authority_for(package)
             .map_err(loader_manifest_error)?;
+        let manifest = context.graph.manifest(package).ok_or_else(|| {
+            loader_manifest_error(PackageAuthorityError::MissingPackage(package.clone()))
+        })?;
+        reject_wasm_plugins_outside_package_namespace(
+            files.iter().filter(|file| file.dag_id.package() == &owner),
+            &sources,
+            |file| {
+                root_in_package_namespace(package_root, &file.path, manifest, reader)
+                    == NamespaceMembership::Exact
+            },
+        )?;
         let mut package_plugins = read_wasm_plugins(
             files
                 .iter()
@@ -1393,7 +1420,7 @@ enum NamespaceMembership {
 /// Whether `root_canonical` is the package's single-file module
 /// (`<source_dir>/<pkg>.gcl`) or lives under the package namespace directory
 /// (`<source_dir>/<pkg>/...`).
-fn root_in_package_namespace<F: FileSystemReader>(
+fn root_in_package_namespace<F: FileSystemReader + ?Sized>(
     project_root: &Path,
     root_canonical: &Path,
     manifest: &PackageManifest,
