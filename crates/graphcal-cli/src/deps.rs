@@ -388,12 +388,12 @@ fn resolve_plugin_pins(
             let file = path.join_to(root);
             match fs.entry_kind(&file) {
                 Ok(FileSystemEntryKind::File) => {}
-                Ok(
-                    FileSystemEntryKind::Directory
-                    | FileSystemEntryKind::Symlink
-                    | FileSystemEntryKind::Other,
-                ) => {
-                    return Err(DepsError::UnsupportedSourceEntry { path: file });
+                // The loader refuses symlinked plugin artifacts too.
+                Ok(FileSystemEntryKind::Symlink) => {
+                    return Err(DepsError::PluginSymlink { path: file });
+                }
+                Ok(FileSystemEntryKind::Directory | FileSystemEntryKind::Other) => {
+                    return Err(DepsError::NotARegularFile { path: file });
                 }
                 Err(source) => {
                     return Err(DepsError::PluginFileUnreadable {
@@ -408,6 +408,15 @@ fn resolve_plugin_pins(
         .collect()
 }
 
+/// Collect the root package's `.gcl` files under the loader's symlink policy.
+///
+/// The loader reads the root package through a filesystem rooted at the
+/// project, which follows a symbolic link whenever it resolves inside the
+/// project root. Scanning follows exactly those links, so every file another
+/// command can load is scanned for plugin imports; a link the loader cannot
+/// follow is an error that says so. Files and directories are identified by
+/// their canonical path, so a target reached twice is read once and a
+/// directory link cycle terminates.
 fn collect_gcl_files_bounded(
     fs: &dyn FileSystemReader,
     root: &Path,
@@ -416,18 +425,15 @@ fn collect_gcl_files_bounded(
     if !fs.exists(root) {
         return Ok(Vec::new());
     }
-    if fs.entry_kind(root).map_err(|source| DepsError::Metadata {
-        path: root.to_path_buf(),
-        source,
-    })? != FileSystemEntryKind::Directory
-    {
-        return Err(DepsError::UnsupportedSourceEntry {
+    let (canonical_root, FileSystemEntryKind::Directory) = resolve_root_entry(fs, root)? else {
+        return Err(DepsError::SourceDirNotDirectory {
             path: root.to_path_buf(),
         });
-    }
+    };
 
-    let mut files = Vec::new();
-    let mut pending = vec![root.to_path_buf()];
+    let mut files = BTreeSet::new();
+    let mut visited = BTreeSet::from([canonical_root.clone()]);
+    let mut pending = vec![canonical_root];
     while let Some(directory) = pending.pop() {
         let mut names = graphcal_compiler::outcome::without_cancellation(|cancellation| {
             fs.read_directory_bounded(
@@ -451,25 +457,70 @@ fn collect_gcl_files_bounded(
         for name in names.into_iter().rev() {
             let path = directory.join(name);
             budget.account_entry(&path)?;
-            match fs.entry_kind(&path).map_err(|source| DepsError::Metadata {
-                path: path.clone(),
-                source,
-            })? {
-                FileSystemEntryKind::Directory => pending.push(path),
-                FileSystemEntryKind::File
-                    if path.extension() == Some(std::ffi::OsStr::new("gcl")) =>
-                {
-                    files.push(path);
+            let is_gcl = path.extension() == Some(std::ffi::OsStr::new("gcl"));
+            match resolve_root_entry(fs, &path)? {
+                (canonical, FileSystemEntryKind::Directory) => {
+                    if visited.insert(canonical.clone()) {
+                        pending.push(canonical);
+                    }
                 }
-                FileSystemEntryKind::File => {}
-                FileSystemEntryKind::Symlink | FileSystemEntryKind::Other => {
-                    return Err(DepsError::UnsupportedSourceEntry { path });
+                (canonical, FileSystemEntryKind::File) if is_gcl => {
+                    files.insert(canonical);
+                }
+                (_, FileSystemEntryKind::File) => {}
+                (_, FileSystemEntryKind::Symlink | FileSystemEntryKind::Other) => {
+                    return Err(DepsError::SpecialSourceEntry { path });
                 }
             }
         }
     }
-    files.sort();
-    Ok(files)
+    Ok(files.into_iter().collect())
+}
+
+/// Canonical path and kind of a root-package entry, following a symbolic link
+/// only when it resolves inside the project root.
+fn resolve_root_entry(
+    fs: &dyn FileSystemReader,
+    path: &Path,
+) -> Result<(PathBuf, FileSystemEntryKind), DepsError> {
+    let metadata = |path: &Path| {
+        fs.entry_kind(path).map_err(|source| DepsError::Metadata {
+            path: path.to_path_buf(),
+            source,
+        })
+    };
+    match metadata(path)? {
+        FileSystemEntryKind::Other => Err(DepsError::SpecialSourceEntry {
+            path: path.to_path_buf(),
+        }),
+        FileSystemEntryKind::Symlink => {
+            let canonical =
+                fs.canonicalize(path)
+                    .map_err(|source| DepsError::RootSymlinkUnresolved {
+                        path: path.to_path_buf(),
+                        source,
+                    })?;
+            match metadata(&canonical)? {
+                kind @ (FileSystemEntryKind::File | FileSystemEntryKind::Directory) => {
+                    Ok((canonical, kind))
+                }
+                FileSystemEntryKind::Symlink | FileSystemEntryKind::Other => {
+                    Err(DepsError::SpecialSourceEntry {
+                        path: path.to_path_buf(),
+                    })
+                }
+            }
+        }
+        kind @ (FileSystemEntryKind::File | FileSystemEntryKind::Directory) => {
+            let canonical = fs
+                .canonicalize(path)
+                .map_err(|source| DepsError::Canonicalize {
+                    path: path.to_path_buf(),
+                    source,
+                })?;
+            Ok((canonical, kind))
+        }
+    }
 }
 
 fn ensure_lock_graph_loadable(graph: &PackageGraph) -> Result<(), DepsError> {
@@ -1254,7 +1305,7 @@ fn read_manifest(
             FileSystemEntryKind::Directory
             | FileSystemEntryKind::Symlink
             | FileSystemEntryKind::Other,
-        ) => return Err(DepsError::UnsupportedSourceEntry { path }),
+        ) => return Err(DepsError::NotARegularFile { path }),
         Err(source) => {
             return Err(DepsError::Metadata { path, source });
         }
@@ -1434,9 +1485,33 @@ pub enum DepsError {
         publish: std::io::Error,
         rollback: std::io::Error,
     },
-    /// Unsupported file type in source hash input.
-    #[error("unsupported source entry `{}`", path.display())]
-    UnsupportedSourceEntry { path: PathBuf },
+    /// A manifest or plugin artifact is not a regular file.
+    #[error("`{}` must be a regular file", path.display())]
+    NotARegularFile { path: PathBuf },
+    /// The root package's source directory is not a directory.
+    #[error("package source directory `{}` is not a directory", path.display())]
+    SourceDirNotDirectory { path: PathBuf },
+    /// A plugin artifact is a symbolic link.
+    #[error(
+        "plugin artifact `{}` is a symbolic link; plugins are pinned and loaded only from regular files",
+        path.display()
+    )]
+    PluginSymlink { path: PathBuf },
+    /// A socket, device, FIFO, or similar entry in the root package sources.
+    #[error(
+        "`{}` is not a regular file, directory, or symbolic link to one; package sources cannot contain special files",
+        path.display()
+    )]
+    SpecialSourceEntry { path: PathBuf },
+    /// A root-package symbolic link the loader cannot follow either.
+    #[error(
+        "symbolic link `{}` does not resolve to an entry inside the project root ({source}); Graphcal follows symbolic links in the root package only when they stay inside the project root",
+        path.display()
+    )]
+    RootSymlinkUnresolved {
+        path: PathBuf,
+        source: std::io::Error,
+    },
     /// Manifest parse failed.
     #[error("invalid manifest `{}`: {source}", path.display())]
     Manifest {
@@ -2004,9 +2079,65 @@ import plugin "plugins/linked.wasm" as linked {
 
         assert!(matches!(
             resolve_plugin_pins(&root, &source_dir, &mut budget),
-            Err(DepsError::UnsupportedSourceEntry { path })
+            Err(DepsError::PluginSymlink { path })
                 if path.ends_with("plugins/linked.wasm")
         ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// CLI-16: `deps lock` follows root-package symlinks exactly when the
+    /// loader does, so a symlinked module's plugin imports are pinned.
+    #[cfg(unix)]
+    #[test]
+    fn plugin_scan_follows_root_symlinks_that_stay_inside_the_project() {
+        let root = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src/app")).unwrap();
+        std::fs::create_dir_all(root.join("shared")).unwrap();
+        std::fs::create_dir_all(root.join("plugins")).unwrap();
+        std::fs::write(
+            root.join("shared/lib.gcl"),
+            "import plugin \"plugins/demo.wasm\" as demo {\n    fn f(x: Dimensionless) -> Dimensionless;\n}\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("plugins/demo.wasm"), b"bytes").unwrap();
+        std::os::unix::fs::symlink("../../shared/lib.gcl", root.join("src/app/lib.gcl")).unwrap();
+        std::os::unix::fs::symlink("../../shared", root.join("src/app/shared")).unwrap();
+        // A directory cycle must terminate.
+        std::os::unix::fs::symlink("..", root.join("src/app/loop")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+
+        let pins = resolve_plugin_pins(&root, &source_dir, &mut PackageIngestionBudget::default())
+            .unwrap();
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].path().to_string(), "plugins/demo.wasm");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn plugin_scan_explains_root_symlinks_that_escape_the_project() {
+        let root = unique_temp_dir();
+        let outside = unique_temp_dir();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("lib.gcl"), "node x: Dimensionless = 1.0;\n").unwrap();
+        std::os::unix::fs::symlink(outside.join("lib.gcl"), root.join("src/lib.gcl")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let source_dir = PackageSourceDirectory::new("src").unwrap();
+
+        let error = resolve_plugin_pins(&root, &source_dir, &mut PackageIngestionBudget::default())
+            .unwrap_err();
+        assert!(
+            matches!(&error, DepsError::RootSymlinkUnresolved { path, .. } if path.ends_with("src/lib.gcl")),
+            "{error:?}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("only when they stay inside the project root")
+        );
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&outside);
     }
