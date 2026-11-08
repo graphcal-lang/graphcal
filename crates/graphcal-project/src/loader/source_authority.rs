@@ -30,6 +30,7 @@ use super::source_snapshot::{
     ResolveFailure, ResolvedFile, SourceKey, SourceSnapshot,
 };
 use crate::compile_error::CompileError;
+use crate::load_error::LoadError;
 
 /// Read capability and semantic identity of one package's source tree.
 pub(super) struct SourceTree<'a> {
@@ -179,10 +180,10 @@ fn read_source_file(
                 LoaderReadError::Filesystem(filesystem) if is_not_found(&filesystem) => {
                     io_not_found(path)
                 }
-                other => loader_manifest_error(format!(
-                    "could not read source `{}`: {other}",
-                    path.display()
-                )),
+                other => CompileError::Load(LoadError::SourceReadFailed {
+                    path: path.to_path_buf(),
+                    reason: other.to_string(),
+                }),
             })
         })?;
     ParsedFile::parse(

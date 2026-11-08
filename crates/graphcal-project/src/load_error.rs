@@ -157,6 +157,15 @@ pub enum LoadError {
         #[label("not a dependency of `{package}`")]
         span: SourceSpan,
     },
+
+    /// An existing source file that could not be read. `reason` is host text
+    /// (an OS error or the exhausted loader budget).
+    #[error("could not read source file `{}`: {reason}", path.display())]
+    #[diagnostic(
+        code(graphcal::M039),
+        help("Graphcal source files must be readable regular `.gcl` files within the loader's resource limits")
+    )]
+    SourceReadFailed { path: PathBuf, reason: String },
 }
 
 impl LoadError {
@@ -168,7 +177,8 @@ impl LoadError {
             Self::FileNotFound { .. }
             | Self::InvalidSourcePath { .. }
             | Self::CircularImport { .. }
-            | Self::ManifestError { .. } => None,
+            | Self::ManifestError { .. }
+            | Self::SourceReadFailed { .. } => None,
             Self::ImportFileNotFound { src, .. }
             | Self::ImportOutsideRoot { src, .. }
             | Self::PackageNameMismatch { src, .. }
@@ -208,6 +218,13 @@ mod tests {
                     message: "bad".to_owned(),
                 },
                 "graphcal::M015",
+            ),
+            (
+                LoadError::SourceReadFailed {
+                    path: PathBuf::from("main.gcl"),
+                    reason: "cannot read non-regular file".to_owned(),
+                },
+                "graphcal::M039",
             ),
         ] {
             assert_eq!(

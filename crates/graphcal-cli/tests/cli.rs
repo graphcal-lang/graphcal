@@ -3453,15 +3453,15 @@ fn special_file_inputs_are_rejected_without_blocking() {
             output.stdout,
             output.stderr
         );
-        // miette wraps long messages behind a `│` gutter.
+        // miette wraps long messages behind a `│` gutter, possibly right
+        // after a hyphen, so compare without whitespace.
         let flat = output
             .stderr
             .split_whitespace()
             .filter(|word| *word != "│")
-            .collect::<Vec<_>>()
-            .join(" ");
+            .collect::<String>();
         assert!(
-            flat.contains("cannot read non-regular file"),
+            flat.contains("cannotreadnon-regularfile"),
             "{command:?}\nstderr: {}",
             output.stderr
         );
