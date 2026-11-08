@@ -463,6 +463,62 @@ node y: Dimensionless = @inner()::a;
     assert!((value_for(&result, "y").si_value().unwrap().get() - 0.25).abs() < 1e-12);
 }
 
+/// EV-11: the built-in demo plugin registers real signatures, so a
+/// declaration with the wrong dimensional shape fails W005 instead of being
+/// trusted as-is (`inverse` declared `D -> D` used to return `0.25 m`).
+#[test]
+fn demo_plugin_declarations_are_verified_against_its_signatures() {
+    let registry = graphcal_eval::host_fns::demo_registry();
+    let check = |source: &str| {
+        let project =
+            graphcal_project::loader::LoadedProject::from_source(source, "demo.gcl").unwrap();
+        graphcal_project::project_compiler::ProjectCompiler::new(&project)
+            .host_fns(&registry)
+            .eval(&HashMap::new())
+            .map(|_| ())
+    };
+
+    let err = check(
+        r#"
+import plugin "graphcal:demo" as demo {
+    fn inverse<D: Dim>(x: D) -> D;
+}
+node y: Length = demo::inverse(4.0 m);
+"#,
+    )
+    .unwrap_err();
+    let CompileError::Eval(RenderedSemanticError {
+        error:
+            SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Plugin(PluginError::ExternSignatureMismatch { name, .. }),
+                ..
+            }),
+        ..
+    }) = err
+    else {
+        panic!("expected ExternSignatureMismatch, got {err:?}");
+    };
+    assert_eq!(name.as_str(), "inverse");
+
+    // Every documented declaration matches; binder and parameter names may
+    // differ from the registered ones.
+    check(
+        r#"
+type DvRange { DvRange(min: Velocity, max: Velocity) }
+import plugin "graphcal:demo" as demo {
+    fn lerp<T: Dim>(lo: T, hi: T, frac: Dimensionless) -> T;
+    fn inverse<D: Dim>(x: D) -> D^-1;
+    fn geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2);
+    fn normalize<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I];
+    fn matrix_transpose<D: Dim, I: Index, J: Index>(xs: D[I, J]) -> D[J, I];
+    fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;
+}
+node y: Length^-1 = demo::inverse(4.0 m);
+"#,
+    )
+    .unwrap();
+}
+
 #[test]
 fn plugin_paths_may_not_leave_the_project_root() {
     let dir = tempfile::tempdir().unwrap();

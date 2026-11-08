@@ -184,21 +184,19 @@ pub enum PluginRegistrationError {
 /// runtime host code.
 #[derive(Debug, Clone, Default)]
 pub struct HostFunctionMetadata {
-    signatures: HashMap<ExternFnKey, Option<FunctionSignature>>,
+    signatures: HashMap<ExternFnKey, FunctionSignature>,
     failed_plugins: HashMap<PluginIdentity, PluginRegistrationError>,
 }
 
 impl HostFunctionMetadata {
-    /// Whether an implementation is expected to exist for `key` at runtime.
-    #[must_use]
-    pub fn contains(&self, key: &ExternFnKey) -> bool {
-        self.signatures.contains_key(key)
-    }
-
-    /// Manifest-provided signature for a plugin-backed implementation.
+    /// The signature the implementation registered for `key`, or `None`
+    /// when no implementation exists for it.
+    ///
+    /// Every registered function carries one, so a declaration is always
+    /// verified against what the host provides and is never trusted as-is.
     #[must_use]
     pub fn provided_signature(&self, key: &ExternFnKey) -> Option<&FunctionSignature> {
-        self.signatures.get(key).and_then(Option::as_ref)
+        self.signatures.get(key)
     }
 
     /// Plugin registration failure captured by the embedding shell.
@@ -237,39 +235,13 @@ impl HostFunctionRegistry {
         Self::default()
     }
 
-    /// Register a host-native closure for one extern function, with no
-    /// provided signature (the declaration is trusted).
+    /// Register a closure for one extern function together with the
+    /// signature it implements (a plugin's manifest signature, or the
+    /// embedder's own for host-native functions); the pipeline verifies
+    /// every declaration against it.
     ///
     /// Re-registering the same `(plugin, name)` replaces the previous
     /// closure — the embedder owns the registry contents.
-    fn register(
-        &mut self,
-        plugin: PluginPath,
-        name: FnName,
-        function: impl Fn(&[HostArgument]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
-    ) {
-        let key = ExternFnKey {
-            plugin: PluginIdentity::Host(plugin),
-            name,
-        };
-        self.metadata.signatures.insert(key.clone(), None);
-        self.fns.insert(key, Arc::new(function));
-    }
-
-    /// Test-only: register a trusted host-native closure with no provided
-    /// signature, as the built-in demo registry does.
-    #[cfg(feature = "test-internals")]
-    pub fn register_for_test(
-        &mut self,
-        plugin: PluginPath,
-        name: FnName,
-        function: impl Fn(&[HostArgument]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
-    ) {
-        self.register(plugin, name, function);
-    }
-
-    /// Register a plugin-backed closure together with the signature its
-    /// manifest declares; the pipeline verifies declarations against it.
     pub fn register_with_signature(
         &mut self,
         plugin: PluginIdentity,
@@ -278,9 +250,7 @@ impl HostFunctionRegistry {
         function: impl Fn(&[HostArgument]) -> Result<HostFnValue, HostFnError> + Send + Sync + 'static,
     ) {
         let key = ExternFnKey { plugin, name };
-        self.metadata
-            .signatures
-            .insert(key.clone(), Some(signature));
+        self.metadata.signatures.insert(key.clone(), signature);
         self.fns.insert(key, Arc::new(function));
     }
 
@@ -318,7 +288,9 @@ const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 ///
 /// The default embedders provide one well-known demo plugin (path
 /// `DEMO_PLUGIN_PATH`) to prove the extern path end-to-end without a
-/// `.wasm` module:
+/// `.wasm` module. Each function is registered with exactly this signature
+/// (see [`demo_signatures`]), so a declaration with a different dimensional
+/// shape fails W005 like any manifest-backed plugin:
 ///
 /// ```gcl
 /// import plugin "graphcal:demo" as demo {
@@ -329,6 +301,194 @@ const DEMO_PLUGIN_PATH: &str = "graphcal:demo";
 ///     fn dv_range<I: Index>(xs: Velocity[I]) -> DvRange;
 /// }
 /// ```
+/// The signatures the demo plugin implements, as the manifest of a real
+/// plugin would declare them.
+mod demo_signatures {
+    use graphcal_compiler::dimension::{BaseDimId, Dimension, PreludeBaseDimension, Rational};
+    use graphcal_compiler::function_signature::{
+        DimMonomial, FunctionSignature, NamedFunctionParam, NamedParamKind, NamedResultKind,
+        ScalarValueKind, SignatureError, StructFieldKind, StructShape, StructShapeField,
+    };
+    use graphcal_compiler::ratio::RatioError;
+    use graphcal_compiler::syntax::dimension::DimVarName;
+    use graphcal_compiler::syntax::function_name::FnParamName;
+    use graphcal_compiler::syntax::index_name::IndexVarName;
+    use graphcal_compiler::syntax::non_empty::NonEmpty;
+    use graphcal_compiler::syntax::type_name::FieldName;
+
+    /// Why a built-in demo signature could not be built (a bug in this
+    /// module, surfaced as a plugin registration failure, never a panic).
+    #[derive(Debug, thiserror::Error)]
+    pub(super) enum DemoSignatureError {
+        #[error("invalid demo signature: {0}")]
+        Signature(#[from] SignatureError),
+        #[error("invalid demo dimension: {0}")]
+        Dimension(#[from] RatioError),
+    }
+
+    fn dim(name: &str) -> DimVarName {
+        DimVarName::expect_valid(name)
+    }
+
+    fn index(name: &str) -> IndexVarName {
+        IndexVarName::expect_valid(name)
+    }
+
+    fn param(name: &str, kind: NamedParamKind) -> NamedFunctionParam {
+        NamedFunctionParam {
+            name: FnParamName::expect_valid(name),
+            kind,
+        }
+    }
+
+    fn var(name: &str) -> ScalarValueKind<DimVarName> {
+        ScalarValueKind::Quantity(DimMonomial::var(dim(name)))
+    }
+
+    const fn scalar(kind: ScalarValueKind<DimVarName>) -> NamedParamKind {
+        NamedParamKind::Scalar(kind)
+    }
+
+    fn indexed(element: ScalarValueKind<DimVarName>, first: &str, rest: &[&str]) -> NamedParamKind {
+        NamedParamKind::Indexed {
+            element,
+            indexes: NonEmpty::new(index(first), rest.iter().map(|name| index(name)).collect()),
+        }
+    }
+
+    fn monomial(factors: &[(&str, Rational)]) -> Result<DimMonomial<DimVarName>, SignatureError> {
+        Ok(DimMonomial::try_new(
+            factors.iter().map(|(name, power)| (dim(name), *power)),
+            Dimension::dimensionless(),
+        )?)
+    }
+
+    fn velocity() -> Result<Dimension, RatioError> {
+        let base = |dimension| Dimension::base(BaseDimId::Prelude(dimension));
+        base(PreludeBaseDimension::Length).checked_div(&base(PreludeBaseDimension::Time))
+    }
+
+    fn signature(
+        dims: &[&str],
+        indexes: &[&str],
+        params: Vec<NamedFunctionParam>,
+        result: NamedResultKind,
+    ) -> Result<FunctionSignature, SignatureError> {
+        FunctionSignature::try_new(
+            dims.iter().map(|name| dim(name)).collect(),
+            indexes.iter().map(|name| index(name)).collect(),
+            params,
+            result,
+        )
+    }
+
+    /// Every demo function's signature.
+    pub(super) struct DemoSignatures {
+        pub(super) lerp: FunctionSignature,
+        pub(super) inverse: FunctionSignature,
+        pub(super) geometric_mean: FunctionSignature,
+        pub(super) normalize: FunctionSignature,
+        pub(super) matrix_transpose: FunctionSignature,
+        pub(super) dv_range: FunctionSignature,
+    }
+
+    impl DemoSignatures {
+        pub(super) fn try_new() -> Result<Self, DemoSignatureError> {
+            Ok(Self {
+                lerp: lerp()?,
+                inverse: inverse()?,
+                geometric_mean: geometric_mean()?,
+                normalize: normalize()?,
+                matrix_transpose: matrix_transpose()?,
+                dv_range: dv_range()?,
+            })
+        }
+    }
+
+    /// `lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D`
+    fn lerp() -> Result<FunctionSignature, DemoSignatureError> {
+        Ok(signature(
+            &["D"],
+            &[],
+            vec![
+                param("a", scalar(var("D"))),
+                param("b", scalar(var("D"))),
+                param("t", NamedParamKind::dimensionless()),
+            ],
+            scalar(var("D")).into(),
+        )?)
+    }
+
+    /// `inverse<D: Dim>(x: D) -> D^-1`
+    fn inverse() -> Result<FunctionSignature, DemoSignatureError> {
+        Ok(signature(
+            &["D"],
+            &[],
+            vec![param("x", scalar(var("D")))],
+            NamedParamKind::quantity_monomial(monomial(&[("D", -Rational::ONE)])?).into(),
+        )?)
+    }
+
+    /// `geometric_mean<D1: Dim, D2: Dim>(x: D1, y: D2) -> D1^(1/2) * D2^(1/2)`
+    fn geometric_mean() -> Result<FunctionSignature, DemoSignatureError> {
+        let mean = monomial(&[("D1", Rational::HALF), ("D2", Rational::HALF)])?;
+        Ok(signature(
+            &["D1", "D2"],
+            &[],
+            vec![param("x", scalar(var("D1"))), param("y", scalar(var("D2")))],
+            NamedParamKind::quantity_monomial(mean).into(),
+        )?)
+    }
+
+    /// `normalize<D: Dim, I: Index>(xs: D[I]) -> Dimensionless[I]`
+    fn normalize() -> Result<FunctionSignature, DemoSignatureError> {
+        Ok(signature(
+            &["D"],
+            &["I"],
+            vec![param("xs", indexed(var("D"), "I", &[]))],
+            indexed(
+                ScalarValueKind::Quantity(DimMonomial::dimensionless()),
+                "I",
+                &[],
+            )
+            .into(),
+        )?)
+    }
+
+    /// `matrix_transpose<D: Dim, I: Index, J: Index>(xs: D[I, J]) -> D[J, I]`
+    fn matrix_transpose() -> Result<FunctionSignature, DemoSignatureError> {
+        Ok(signature(
+            &["D"],
+            &["I", "J"],
+            vec![param("xs", indexed(var("D"), "I", &["J"]))],
+            indexed(var("D"), "J", &["I"]).into(),
+        )?)
+    }
+
+    /// `dv_range<I: Index>(xs: Velocity[I]) -> { min: Velocity, max: Velocity }`
+    fn dv_range() -> Result<FunctionSignature, DemoSignatureError> {
+        let velocity = velocity()?;
+        let field = |name: &str| StructShapeField {
+            name: FieldName::expect_valid(name),
+            kind: StructFieldKind::Quantity(velocity.clone()),
+        };
+        let shape = StructShape::try_new(vec![field("min"), field("max")])?;
+        Ok(signature(
+            &[],
+            &["I"],
+            vec![param(
+                "xs",
+                indexed(
+                    ScalarValueKind::Quantity(DimMonomial::fixed(velocity.clone())),
+                    "I",
+                    &[],
+                ),
+            )],
+            NamedResultKind::Struct(shape),
+        )?)
+    }
+}
+
 /// The quantity argument at `position`.
 fn quantity_argument(args: &[HostArgument], position: usize) -> Result<f64, HostFnError> {
     match args.get(position) {
@@ -420,29 +580,59 @@ fn demo_normalize(args: &[HostArgument]) -> Result<HostFnValue, HostFnError> {
 
 #[must_use]
 pub fn demo_registry() -> HostFunctionRegistry {
-    let plugin = PluginPath::new(DEMO_PLUGIN_PATH);
+    let plugin = PluginIdentity::Host(PluginPath::new(DEMO_PLUGIN_PATH));
     let mut registry = HostFunctionRegistry::new();
-    registry.register(plugin.clone(), FnName::expect_valid("lerp"), demo_lerp);
-    registry.register(plugin.clone(), FnName::expect_valid("inverse"), |args| {
-        let x = quantity_argument(args, 0)?;
-        if x == 0.0 {
-            return Err(HostFnError::new("division by zero"));
-        }
-        Ok(HostFnValue::F64(x.recip()))
-    });
-    registry.register(
+    match demo_signatures::DemoSignatures::try_new() {
+        Ok(signatures) => register_demo_functions(&mut registry, &plugin, signatures),
+        Err(error) => registry.record_plugin_failure(
+            plugin,
+            PluginRegistrationError::LoadFailed {
+                reason: error.to_string(),
+            },
+        ),
+    }
+    registry
+}
+
+fn register_demo_functions(
+    registry: &mut HostFunctionRegistry,
+    plugin: &PluginIdentity,
+    signatures: demo_signatures::DemoSignatures,
+) {
+    registry.register_with_signature(
+        plugin.clone(),
+        FnName::expect_valid("lerp"),
+        signatures.lerp,
+        demo_lerp,
+    );
+    registry.register_with_signature(
+        plugin.clone(),
+        FnName::expect_valid("inverse"),
+        signatures.inverse,
+        |args| {
+            let x = quantity_argument(args, 0)?;
+            if x == 0.0 {
+                return Err(HostFnError::new("division by zero"));
+            }
+            Ok(HostFnValue::F64(x.recip()))
+        },
+    );
+    registry.register_with_signature(
         plugin.clone(),
         FnName::expect_valid("geometric_mean"),
+        signatures.geometric_mean,
         demo_geometric_mean,
     );
-    registry.register(
+    registry.register_with_signature(
         plugin.clone(),
         FnName::expect_valid("normalize"),
+        signatures.normalize,
         demo_normalize,
     );
-    registry.register(
+    registry.register_with_signature(
         plugin.clone(),
         FnName::expect_valid("matrix_transpose"),
+        signatures.matrix_transpose,
         |args| {
             let (shape, matrix) = quantity_array_argument(args, 0)?;
             let matrix = matrix.as_slice();
@@ -472,17 +662,21 @@ pub fn demo_registry() -> HostFunctionRegistry {
             )?))
         },
     );
-    registry.register(plugin, FnName::expect_valid("dv_range"), |args| {
-        let (_, xs) = quantity_array_argument(args, 0)?;
-        let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
-        for x in &xs {
-            min = min.min(*x);
-            max = max.max(*x);
-        }
-        // Struct results cross as one f64 slot per field, in field order.
-        Ok(HostFnValue::Record(vec![min, max]))
-    });
-    registry
+    registry.register_with_signature(
+        plugin.clone(),
+        FnName::expect_valid("dv_range"),
+        signatures.dv_range,
+        |args| {
+            let (_, xs) = quantity_array_argument(args, 0)?;
+            let (mut min, mut max) = (f64::INFINITY, f64::NEG_INFINITY);
+            for x in &xs {
+                min = min.min(*x);
+                max = max.max(*x);
+            }
+            // Struct results cross as one f64 slot per field, in field order.
+            Ok(HostFnValue::Record(vec![min, max]))
+        },
+    );
 }
 
 #[cfg(test)]
@@ -530,7 +724,7 @@ mod tests {
             "dv_range",
         ] {
             assert!(
-                registry.metadata().contains(&key(name)),
+                registry.metadata().provided_signature(&key(name)).is_some(),
                 "missing demo fn `{name}`"
             );
         }

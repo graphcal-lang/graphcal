@@ -454,10 +454,13 @@ let result = ProjectCompiler::new(&project)
     .eval(&overrides)?;
 ```
 
-Native registry entries carry no manifest, so their declarations are
-trusted as-is — appropriate for embedder-controlled functions. The CLI
+Every registry entry carries a signature: a Wasm plugin's comes from its
+manifest, and a native entry registers its own. A declaration is always
+checked against it (W005), so no declaration is trusted as-is. The CLI
 and language server inject the built-in demo plugin (`"graphcal:demo"`:
 `lerp`, `inverse`, `geometric_mean`, `normalize`, `matrix_transpose`,
 `dv_range`) so extern
 declarations — including array and struct-returning ones — can be
-exercised without any plugin file.
+exercised without any plugin file. A demo declaration whose dimensional
+shape differs from the demo's own signature (for example
+`fn inverse<D: Dim>(x: D) -> D;` instead of `-> D^-1`) fails with W005.

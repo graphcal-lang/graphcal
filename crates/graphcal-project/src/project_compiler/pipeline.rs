@@ -326,10 +326,11 @@ pub(super) fn check_hir_project<Mode>(
 ///    host must have registered the module (its recorded failure is
 ///    reported otherwise).
 /// 2. The registry must provide the function (`MissingHostFunction`, W003).
-/// 3. When the registry entry carries a manifest-provided signature, the
-///    declared signature must be structurally equivalent to it (W005) —
-///    this is the "declaration verified against the embedded manifest"
-///    guarantee of the plugin design (#25).
+/// 3. The declared signature must be structurally equivalent to the one
+///    the registry entry provides (W005). Every entry carries one (a wasm
+///    manifest's, or a native function's own), so no declaration is
+///    trusted as-is — the "declaration verified against the embedded
+///    manifest" guarantee of the plugin design (#25).
 fn verify_host_functions(
     plugins: &HashMap<
         graphcal_compiler::plugin_identity::PluginIdentity,
@@ -352,7 +353,7 @@ fn verify_host_functions(
         ) {
             verify_wasm_plugin(plugins, function, src, host_metadata)?;
         }
-        if !host_metadata.contains(key) {
+        let Some(provided) = host_metadata.provided_signature(key) else {
             return Err(PipelineError::Semantic(SemanticError::located(
                 src,
                 function.name_span,
@@ -362,10 +363,8 @@ fn verify_host_functions(
                 },
             ))
             .into());
-        }
-        if let Some(provided) = host_metadata.provided_signature(key)
-            && !function.signature.structurally_equivalent(provided)
-        {
+        };
+        if !function.signature.structurally_equivalent(provided) {
             let format_dim = |dim: &graphcal_compiler::dimension::Dimension| {
                 tir.registry().dimensions.format_dimension(dim)
             };

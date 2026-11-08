@@ -246,4 +246,4 @@ let result = ProjectCompiler::new(&project)
     .eval(&overrides)?;
 ```
 
-ネイティブのレジストリエントリーにはマニフェストがないため、その宣言はそのまま信頼されます。これは埋め込み側が管理する関数に適した扱いです。CLI と言語サーバーは組み込みのデモプラグイン（`"graphcal:demo"`: `lerp`、`inverse`、`geometric_mean`、`normalize`、`matrix_transpose`、`dv_range`）を注入するため、配列や struct を返すものを含め、プラグインファイルなしで extern 宣言を試せます。
+レジストリーのエントリーはすべてシグネチャーを持ちます。Wasm プラグインのシグネチャーはマニフェストから取り、ネイティブのエントリーは自身のシグネチャーを登録します。宣言は常にこのシグネチャーと照合されるため（W005）、宣言がそのまま信頼されることはありません。CLI と言語サーバーは組み込みのデモプラグイン（`"graphcal:demo"`: `lerp`、`inverse`、`geometric_mean`、`normalize`、`matrix_transpose`、`dv_range`）を注入するため、配列や struct を返すものを含め、プラグインファイルなしで extern 宣言を試せます。デモ関数の宣言でも、次元の形がデモ自身のシグネチャーと異なれば（例: `-> D^-1` ではなく `fn inverse<D: Dim>(x: D) -> D;`）W005 で失敗します。
