@@ -5738,6 +5738,41 @@ fn eval_plot_json_suppresses_normal_eval_output_even_with_json_format() {
     );
 }
 
+/// CLI-5: `--plot json` reserves stdout for the figure array, but failing
+/// nodes and assertions must still explain the non-zero exit on stderr.
+#[test]
+fn eval_plot_json_reports_failures_on_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("failing.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B };\n\
+         node y: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };\n\
+         plot curve = { mark: bar, encode: { x: for s: Step { s }, y: for s: Step { @y[s] } } };\n\
+         assert never = 1.0 > 2.0;\n\
+         node bad: Dimensionless = 1.0 / 0.0;\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let _json = parse_plot_json_stdout(&stdout);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("bad = ERROR: division by zero"),
+        "expected the failing node on stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("never  FAIL"),
+        "expected the failing assertion on stderr: {stderr}"
+    );
+}
+
 #[test]
 fn eval_plot_scatter_json() {
     let output = graphcal_bin()

@@ -845,7 +845,11 @@ fn handle_eval(
     match outcome {
         Ok(result) => {
             let plot_json_only = matches!(plot_output, Some(PlotOutput::Json));
-            if !plot_json_only {
+            if plot_json_only {
+                // stdout carries only the figure array, so the failures that
+                // explain a non-zero exit must still reach stderr.
+                report_eval_failures(&result, output_view);
+            } else {
                 match format {
                     OutputFormat::Text => print_text(&result, output_view),
                     OutputFormat::Json => {
@@ -1415,6 +1419,52 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                 outln!("{line}");
             }
         }
+    }
+}
+
+/// Write every failing value and every failing or blocked assertion to
+/// stderr, in the same line format as text output.
+///
+/// Used when stdout is reserved for another payload (`--plot json`), so a
+/// non-zero exit is never left unexplained.
+fn report_eval_failures(result: &EvalResult, output_view: EvalOutputView) {
+    let failed_values: Vec<(String, &OutputUnavailable)> = result
+        .output_values(output_view)
+        .filter_map(|entry| match &entry.outcome {
+            Err(reason) if reason.has_failure() => Some((entry.name.to_string(), reason)),
+            Ok(_) | Err(_) => None,
+        })
+        .collect();
+    let width = failed_values
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or(0);
+    for (name, reason) in &failed_values {
+        eprintln!("{name:width$} = ERROR: {reason}");
+    }
+
+    let failed_assertions: Vec<(String, &graphcal_eval::eval::EvalAssertion)> = result
+        .assertions
+        .iter()
+        .filter(|assertion| is_assert_failure(&assertion.outcome))
+        .map(|assertion| (assertion.name.to_string(), assertion))
+        .collect();
+    let width = failed_assertions
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or(0);
+    for (name, assertion) in &failed_assertions {
+        eprintln!(
+            "{}",
+            format_assertion_line(
+                name,
+                &assertion.outcome,
+                width,
+                result.assumes_map.get(&assertion.name),
+            )
+        );
     }
 }
 
