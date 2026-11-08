@@ -72,3 +72,56 @@ fn own_line_doc_comment_after_lone_cr_documents_the_next_declaration() {
         "node a: Dimensionless = 1.0;\n\n/// doc for b\nnode b: Dimensionless = 2.0;\n"
     );
 }
+
+// ---------------------------------------------------------------------------
+// FE-5: an end-of-line comment after a construct stays after it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn comment_after_call_stays_after_the_declaration() {
+    let source = "param gm: Dimensionless = 2.0;\n\
+                  param r: Dimensionless = 1.0;\n\
+                  node v: Dimensionless = sqrt(@gm / @r); // circular orbit speed\n\
+                  node w: Dimensionless = @v * 2.0; // doubled\n";
+    assert_eq!(format_stable(source), source);
+}
+
+#[test]
+fn comment_after_map_literal_stays_after_the_declaration() {
+    let source = "pub index I = { A, B };\n\
+                  param v: Dimensionless[I] = { I#A: 1.0, I#B: 2.0 }; // calibration from 2024 test\n";
+    assert_eq!(
+        format_stable(source),
+        "pub index I = { A, B };\n\
+         param v: Dimensionless[I] = {\n    I#A: 1.0,\n    I#B: 2.0,\n}; // calibration from 2024 test\n"
+    );
+}
+
+#[test]
+fn comment_after_match_stays_after_the_declaration() {
+    let source = "index I = { A, B };\n\
+                  param k: Key<I> = I#A;\n\
+                  node x: Dimensionless = match @k { I#A => 1.0, I#B => 2.0 }; // pick\n";
+    let formatted = format_stable(source);
+    assert!(
+        formatted.contains("    I#B => 2.0,\n}; // pick\n"),
+        "comment moved into the match: {formatted}"
+    );
+}
+
+#[test]
+fn comment_after_dag_body_stays_after_the_dag() {
+    let source = "dag d { param a: Dimensionless; } // the dag\n";
+    assert_eq!(
+        format_stable(source),
+        "dag d {\n    param a: Dimensionless;\n} // the dag\n"
+    );
+}
+
+#[test]
+fn comment_inside_index_brackets_stays_inside() {
+    let source = "index I = { A, B };\n\
+                  param v: Dimensionless[I] = {\n    I#A: 1.0,\n    I#B: 2.0,\n};\n\
+                  node x: Dimensionless = @v[ // which\n I#A] + 1.0;\n";
+    assert_eq!(format_stable(source), source);
+}

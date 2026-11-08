@@ -21,6 +21,10 @@ pub struct Formatter<'src> {
     /// Set by [`Self::request_verbatim`] while a region is being formatted;
     /// consumed by the enclosing [`Self::format_or_verbatim`].
     verbatim_requested: bool,
+    /// End offset of the innermost construct being formatted (see
+    /// [`Self::within`]): a trailing comment drained inside it must start
+    /// before this offset.
+    construct_end: usize,
 }
 
 impl<'src> Formatter<'src> {
@@ -30,6 +34,7 @@ impl<'src> Formatter<'src> {
             metadata,
             next_comment: 0,
             verbatim_requested: false,
+            construct_end: usize::MAX,
         }
     }
 
@@ -109,6 +114,10 @@ impl<'src> Formatter<'src> {
     /// Drain a trailing comment on the same line as `line_end_offset`.
     /// Returns the comment text (with leading space) or `None` when there
     /// isn't one.
+    ///
+    /// Only a comment inside the innermost construct being formatted (see
+    /// [`Self::within`]) qualifies: in `f(x); // note` the comment follows the
+    /// call, not its argument `x`, so the argument must not take it.
     pub fn drain_trailing_comment(&mut self, line_end_offset: usize) -> Option<RcDoc<'static>> {
         let comment = self.metadata.comments().get(self.next_comment)?;
         // A trailing comment must be on the same line — its offset must be
@@ -116,7 +125,7 @@ impl<'src> Formatter<'src> {
         // lone CR). The boundary is inclusive: a comment starting exactly at
         // `line_end_offset` (no whitespace between the node and `//`) is still
         // trailing.
-        if comment.span.offset() >= line_end_offset {
+        if comment.span.offset() >= line_end_offset && comment.span.offset() < self.construct_end {
             let between =
                 &self.source[line_end_offset..comment.span.offset().min(self.source.len())];
             if line_endings(between).next().is_none() {
@@ -179,6 +188,7 @@ impl<'src> Formatter<'src> {
             metadata: self.metadata,
             next_comment,
             verbatim_requested: false,
+            construct_end: self.construct_end,
         };
         let rendered = render(&mut fork);
         self.verbatim_requested |= fork.verbatim_requested;
@@ -191,6 +201,17 @@ impl<'src> Formatter<'src> {
     /// original source instead of the formatted doc.
     pub const fn request_verbatim(&mut self) {
         self.verbatim_requested = true;
+    }
+
+    /// Run `render` with `span` as the innermost construct being formatted,
+    /// so trailing-comment drains inside it cannot take a comment that
+    /// follows the construct.
+    pub fn within<T>(&mut self, span: Span, render: impl FnOnce(&mut Self) -> T) -> T {
+        let end = (span.offset() + span.len()).min(self.construct_end);
+        let outer = std::mem::replace(&mut self.construct_end, end);
+        let rendered = render(self);
+        self.construct_end = outer;
+        rendered
     }
 
     /// Format the source region `span` with `format`, falling back to the
@@ -209,7 +230,7 @@ impl<'src> Formatter<'src> {
         let end = span.offset() + span.len();
         let comment_snapshot = self.next_comment;
         let outer_request = std::mem::replace(&mut self.verbatim_requested, false);
-        let formatted = format(self);
+        let formatted = self.within(span, format);
         let verbatim_requested = std::mem::replace(&mut self.verbatim_requested, outer_request);
         if verbatim_requested || self.has_comment_before(end) {
             self.next_comment = comment_snapshot;
