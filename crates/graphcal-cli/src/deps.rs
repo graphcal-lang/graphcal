@@ -761,11 +761,17 @@ fn checkout_git_commit(
     let commit = repo.find_commit(commit_id)?;
     let tree_id = commit.tree_id()?.detach();
     let mut index = repo.index_from_tree(&tree_id)?;
+    reject_case_fold_collisions(
+        index
+            .entries()
+            .iter()
+            .map(|entry| entry.path(&index).as_ref()),
+    )?;
     let mut checkout_options =
         repo.checkout_options(gix::worktree::stack::state::attributes::Source::IdMapping)?;
     checkout_options.destination_is_initially_empty = true;
 
-    gix::worktree::state::checkout(
+    let outcome = gix::worktree::state::checkout(
         &mut index,
         workdir,
         repo.objects.clone().into_arc()?,
@@ -774,8 +780,181 @@ fn checkout_git_commit(
         &AtomicBool::new(false),
         checkout_options,
     )?;
+    reject_incomplete_checkout(&outcome)?;
     index.write(gix::index::write::Options::default())?;
     Ok(())
+}
+
+/// A commit tree whose checkout would not reproduce it on every host.
+#[derive(Debug, Error)]
+pub enum CheckoutIntegrityError {
+    /// Two tree paths (or path prefixes) differ only in letter case. A
+    /// case-insensitive filesystem keeps only one of them, so the locked tree
+    /// would depend on the host that ran `deps lock`.
+    #[error(
+        "the commit contains paths that differ only in letter case, which cannot be checked out faithfully on case-insensitive filesystems: {}",
+        render_path_pairs(.0)
+    )]
+    CaseFoldCollision(Vec<(String, String)>),
+    /// The checkout skipped or failed some paths, so the materialized tree is
+    /// not the commit's tree.
+    #[error("the checkout did not reproduce the commit's tree: {}", render_problems(.0))]
+    Incomplete(Vec<CheckoutProblem>),
+}
+
+/// One path the checkout did not write faithfully.
+#[derive(Debug)]
+pub struct CheckoutProblem {
+    path: String,
+    kind: CheckoutProblemKind,
+}
+
+#[derive(Debug)]
+enum CheckoutProblemKind {
+    /// The path collided with an entry already written (case folding or
+    /// Unicode normalization on the host filesystem).
+    Collision(std::io::ErrorKind),
+    /// Writing the path failed.
+    Error(String),
+    /// A filter process reported a path it was never given.
+    DelayedUnknown,
+    /// A filter process never returned a path it was given.
+    DelayedUnprocessed,
+}
+
+impl std::fmt::Display for CheckoutProblem {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.kind {
+            CheckoutProblemKind::Collision(kind) => {
+                write!(
+                    formatter,
+                    "`{}` collided with another path ({kind})",
+                    self.path
+                )
+            }
+            CheckoutProblemKind::Error(message) => {
+                write!(formatter, "`{}` could not be written: {message}", self.path)
+            }
+            CheckoutProblemKind::DelayedUnknown => write!(
+                formatter,
+                "`{}` was reported by a filter process that never received it",
+                self.path
+            ),
+            CheckoutProblemKind::DelayedUnprocessed => {
+                write!(
+                    formatter,
+                    "`{}` was never returned by a filter process",
+                    self.path
+                )
+            }
+        }
+    }
+}
+
+fn render_path_pairs(pairs: &[(String, String)]) -> String {
+    pairs
+        .iter()
+        .map(|(first, second)| format!("`{first}` and `{second}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn render_problems(problems: &[CheckoutProblem]) -> String {
+    problems
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Reject tree paths whose lowercase spellings coincide, comparing every
+/// directory prefix too: `Lib/a.gcl` and `lib/b.gcl` merge into one directory
+/// on a case-insensitive filesystem even though no file collides.
+///
+/// This runs before checkout so the outcome is the same on every host.
+/// Unicode-normalization collisions (macOS NFD) are not detected here; the
+/// checkout's own collision report covers them on the hosts where they occur.
+fn reject_case_fold_collisions<'a>(
+    paths: impl IntoIterator<Item = &'a [u8]>,
+) -> Result<(), CheckoutIntegrityError> {
+    let mut spellings = BTreeMap::<String, String>::new();
+    let mut collisions = BTreeSet::new();
+    for path in paths {
+        let path = String::from_utf8_lossy(path);
+        let prefixes = path
+            .match_indices('/')
+            .map(|(end, _)| &path[..end])
+            .chain(std::iter::once(path.as_ref()));
+        for prefix in prefixes {
+            match spellings.entry(prefix.to_lowercase()) {
+                std::collections::btree_map::Entry::Vacant(slot) => {
+                    slot.insert(prefix.to_string());
+                }
+                std::collections::btree_map::Entry::Occupied(existing)
+                    if existing.get() != prefix =>
+                {
+                    let (first, second) = if existing.get().as_str() < prefix {
+                        (existing.get().clone(), prefix.to_string())
+                    } else {
+                        (prefix.to_string(), existing.get().clone())
+                    };
+                    collisions.insert((first, second));
+                }
+                std::collections::btree_map::Entry::Occupied(_) => {}
+            }
+        }
+    }
+    if collisions.is_empty() {
+        Ok(())
+    } else {
+        Err(CheckoutIntegrityError::CaseFoldCollision(
+            collisions.into_iter().collect(),
+        ))
+    }
+}
+
+/// Reject a checkout that reported anything it did not write faithfully.
+/// gix returns these as data rather than as an error, so ignoring them would
+/// lock a partial tree.
+fn reject_incomplete_checkout(
+    outcome: &gix::worktree::state::checkout::Outcome,
+) -> Result<(), CheckoutIntegrityError> {
+    let lossy = |path: &gix::bstr::BString| String::from_utf8_lossy(path.as_ref()).into_owned();
+    let problems = outcome
+        .collisions
+        .iter()
+        .map(|collision| CheckoutProblem {
+            path: lossy(&collision.path),
+            kind: CheckoutProblemKind::Collision(collision.error_kind),
+        })
+        .chain(outcome.errors.iter().map(|record| CheckoutProblem {
+            path: lossy(&record.path),
+            kind: CheckoutProblemKind::Error(record.error.to_string()),
+        }))
+        .chain(
+            outcome
+                .delayed_paths_unknown
+                .iter()
+                .map(|path| CheckoutProblem {
+                    path: lossy(path),
+                    kind: CheckoutProblemKind::DelayedUnknown,
+                }),
+        )
+        .chain(
+            outcome
+                .delayed_paths_unprocessed
+                .iter()
+                .map(|path| CheckoutProblem {
+                    path: lossy(path),
+                    kind: CheckoutProblemKind::DelayedUnprocessed,
+                }),
+        )
+        .collect::<Vec<_>>();
+    if problems.is_empty() {
+        Ok(())
+    } else {
+        Err(CheckoutIntegrityError::Incomplete(problems))
+    }
 }
 
 fn git_materialize_error(
@@ -1391,6 +1570,50 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
             "graphcal-deps-test-{}-{nanos}-{sequence}",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn case_fold_collisions_are_rejected_for_files_and_directory_prefixes() {
+        let accept = [b"src/lib.gcl".as_slice(), b"src/main.gcl", b"README.md"];
+        assert!(reject_case_fold_collisions(accept).is_ok());
+
+        let files = [b"src/kernel.wasm".as_slice(), b"src/KERNEL.wasm"];
+        assert!(matches!(
+            reject_case_fold_collisions(files),
+            Err(CheckoutIntegrityError::CaseFoldCollision(pairs))
+                if pairs == [("src/KERNEL.wasm".to_string(), "src/kernel.wasm".to_string())]
+        ));
+
+        let directories = [b"Lib/a.gcl".as_slice(), b"lib/b.gcl"];
+        let error = reject_case_fold_collisions(directories).unwrap_err();
+        assert!(matches!(
+            &error,
+            CheckoutIntegrityError::CaseFoldCollision(pairs)
+                if pairs == &[("Lib".to_string(), "lib".to_string())]
+        ));
+        assert!(error.to_string().contains("`Lib` and `lib`"), "{error}");
+    }
+
+    #[test]
+    fn incomplete_checkouts_name_every_skipped_path() {
+        use gix::worktree::state::checkout::{Collision, Outcome};
+
+        assert!(reject_incomplete_checkout(&Outcome::default()).is_ok());
+
+        let outcome = Outcome {
+            collisions: vec![Collision {
+                path: "src/KERNEL.wasm".into(),
+                error_kind: std::io::ErrorKind::AlreadyExists,
+            }],
+            delayed_paths_unknown: vec!["unknown.gcl".into()],
+            delayed_paths_unprocessed: vec!["pending.gcl".into()],
+            ..Outcome::default()
+        };
+        let error = reject_incomplete_checkout(&outcome).unwrap_err();
+        let message = error.to_string();
+        for path in ["src/KERNEL.wasm", "unknown.gcl", "pending.gcl"] {
+            assert!(message.contains(&format!("`{path}`")), "{message}");
+        }
     }
 
     #[test]

@@ -569,6 +569,71 @@ fn deps_lock_rejects_a_corrupt_previous_lock_instead_of_dropping_its_pins() {
     }
 }
 
+/// CLI-6: a commit whose paths differ only in case cannot be checked out
+/// faithfully on case-insensitive filesystems, so `deps lock` rejects it on
+/// every host instead of locking whichever spelling survived. The colliding
+/// tree is built directly from objects, so the test also runs on macOS.
+#[cfg(unix)]
+#[test]
+fn deps_lock_rejects_commits_with_case_fold_colliding_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let repo = gix::open(&dep_repo).unwrap();
+    let base_tree = write_tree_object(&repo, &dep_repo);
+    let mut tree: gix::objs::Tree = repo.find_tree(base_tree).unwrap().decode().unwrap().into();
+    tree.entries.push(gix::objs::tree::Entry {
+        mode: gix::objs::tree::EntryKind::Blob.into(),
+        filename: "GRAPHCAL.toml".into(),
+        oid: repo
+            .write_blob(b"[package]\nname = \"shadow\"\n")
+            .unwrap()
+            .detach(),
+    });
+    tree.entries.sort();
+    let tree_id = repo.write_object(tree).unwrap().detach();
+    let parent = repo.head_id().unwrap().detach();
+    let signature =
+        gix::actor::SignatureRef::from_bytes(b"Graphcal Test <graphcal@example.invalid> 0 +0000")
+            .unwrap();
+    let rev = repo
+        .commit_as(
+            signature,
+            signature,
+            "HEAD",
+            "case collision",
+            tree_id,
+            [parent],
+        )
+        .unwrap()
+        .detach()
+        .to_hex()
+        .to_string();
+    let project = dir.path().join("mission");
+    write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\nunits = {{ git = \"{}\", rev = \"{rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ one };\nnode two: Dimensionless = @one;\n",
+    );
+
+    let output = run_deps_lock(&project, &dir.path().join("cache"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains("differ only in letter case")
+            && stderr.contains("`GRAPHCAL.toml` and `graphcal.toml`"),
+        "stderr: {stderr}"
+    );
+    assert!(!project.join("graphcal.lock").exists());
+}
+
 /// A minimal LSP client driving `graphcal lsp` over stdio.
 #[cfg(unix)]
 struct LspSession {
