@@ -2,7 +2,8 @@
 //!
 //! Each label kind is its own type so a variant name cannot stand in for a
 //! port name. Labels carry no hidden structure; they are only required to be
-//! non-empty and free of control characters.
+//! non-empty and free of control characters. A unit spelling is also free of
+//! surrounding whitespace, because it is compared exactly.
 
 use std::fmt;
 
@@ -16,6 +17,8 @@ pub enum LabelError {
     Empty { kind: &'static str },
     #[error("{kind} `{label}` contains a control character")]
     ControlCharacter { kind: &'static str, label: String },
+    #[error("{kind} `{label}` has leading or trailing whitespace")]
+    SurroundingWhitespace { kind: &'static str, label: String },
 }
 
 fn validate(kind: &'static str, label: String) -> Result<String, LabelError> {
@@ -28,8 +31,22 @@ fn validate(kind: &'static str, label: String) -> Result<String, LabelError> {
     }
 }
 
+/// [`validate`], also rejecting leading and trailing whitespace: a spelling
+/// compared exactly must not differ from its trimmed form unnoticed.
+fn validate_trimmed(kind: &'static str, label: String) -> Result<String, LabelError> {
+    let label = validate(kind, label)?;
+    if label.trim() == label {
+        Ok(label)
+    } else {
+        Err(LabelError::SurroundingWhitespace { kind, label })
+    }
+}
+
 macro_rules! label_type {
     ($(#[$meta:meta])* $name:ident, $kind:literal) => {
+        label_type!($(#[$meta])* $name, $kind, validate);
+    };
+    ($(#[$meta:meta])* $name:ident, $kind:literal, $validate:ident) => {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(try_from = "String", into = "String")]
@@ -41,9 +58,9 @@ macro_rules! label_type {
             /// # Errors
             ///
             /// Returns [`LabelError`] for an empty label or one containing a
-            /// control character.
+            /// control character (see the module documentation).
             pub fn new(label: impl Into<String>) -> Result<Self, LabelError> {
-                validate($kind, label.into()).map(Self)
+                $validate($kind, label.into()).map(Self)
             }
 
             /// The label text.
@@ -114,9 +131,11 @@ label_type!(
 label_type!(
     /// The source spelling of a unit expression, such as `kg*m/s^2`.
     ///
-    /// The spelling is compared exactly; it is never normalized.
+    /// The spelling is compared exactly; it is never normalized, and it has
+    /// no leading or trailing whitespace.
     UnitSpelling,
-    "unit spelling"
+    "unit spelling",
+    validate_trimmed
 );
 
 #[cfg(test)]
@@ -134,6 +153,21 @@ mod tests {
             Err(LabelError::ControlCharacter { .. })
         ));
         assert_eq!(PortName::new("load").unwrap().as_str(), "load");
+    }
+
+    #[test]
+    fn unit_spellings_reject_surrounding_whitespace() {
+        for spelling in [" km", "km ", " km "] {
+            assert!(
+                matches!(
+                    UnitSpelling::new(spelling),
+                    Err(LabelError::SurroundingWhitespace { .. })
+                ),
+                "{spelling:?}"
+            );
+            assert!(serde_json::from_value::<UnitSpelling>(spelling.into()).is_err());
+        }
+        assert_eq!(UnitSpelling::new("kg * m").unwrap().as_str(), "kg * m");
     }
 
     #[test]

@@ -35,13 +35,16 @@ pub struct UnitChoiceArgument {
 
 /// Parse a `--unit NAME=UNIT` argument; the unit itself is resolved against
 /// the model later.
+///
+/// Neither side is trimmed: a unit spelling is compared exactly, so one with
+/// surrounding whitespace is rejected rather than silently normalized.
 pub fn parse_unit_choice(argument: &str) -> Result<UnitChoiceArgument, String> {
     let (port, unit) = argument
         .split_once('=')
         .ok_or_else(|| format!("expected NAME=UNIT, got `{argument}`"))?;
     Ok(UnitChoiceArgument {
-        port: PortName::new(port.trim()).map_err(|error| error.to_string())?,
-        unit: UnitSpelling::new(unit.trim()).map_err(|error| error.to_string())?,
+        port: PortName::new(port).map_err(|error| error.to_string())?,
+        unit: UnitSpelling::new(unit).map_err(|error| error.to_string())?,
     })
 }
 

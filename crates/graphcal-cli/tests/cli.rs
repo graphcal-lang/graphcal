@@ -8077,10 +8077,25 @@ fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
 }
 
 #[test]
+fn model_unit_rejects_spellings_with_surrounding_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let output = graphcal_bin()
+        .args(["model", "unit"])
+        .arg(&model)
+        .args(["--", " km "])
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty(), "a rejected unit prints nothing");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("leading or trailing whitespace"));
+}
+
+#[test]
 fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
-    let cases: [(&[&str], &str); 5] = [
+    let cases: [(&[&str], &str); 6] = [
         (
             &[
                 "--input",
@@ -8094,6 +8109,20 @@ fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
                 "--skip-fingerprint-check",
             ],
             "cannot carry port `load`",
+        ),
+        (
+            &[
+                "--input",
+                "load",
+                "--input",
+                "mode",
+                "--output",
+                "failure",
+                "--unit",
+                "load= kN",
+                "--skip-fingerprint-check",
+            ],
+            "leading or trailing whitespace",
         ),
         (
             &[
