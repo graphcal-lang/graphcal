@@ -6,7 +6,7 @@ function rules(): Map<string, Map<string, string>> {
   const text = readFileSync(new URL("../public/_headers", import.meta.url), "utf8");
   const out = new Map<string, Map<string, string>>();
   let current: Map<string, string> | null = null;
-  for (const line of text.split("\n")) {
+  for (const line of text.split(/\r?\n/)) {
     if (line.trim() === "" || line.startsWith("#")) continue;
     if (!line.startsWith(" ")) {
       current = new Map();
@@ -43,6 +43,6 @@ describe("_headers", () => {
 
   test("lines stay within Cloudflare's limit", () => {
     const text = readFileSync(new URL("../public/_headers", import.meta.url), "utf8");
-    for (const line of text.split("\n")) expect(line.length).toBeLessThanOrEqual(2000);
+    for (const line of text.split(/\r?\n/)) expect(line.length).toBeLessThanOrEqual(2000);
   });
 });
