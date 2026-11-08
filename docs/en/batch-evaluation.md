@@ -213,28 +213,44 @@ Every request row produces exactly one outcome, in request order:
 | Input out of domain | A value lies outside its parameter's `min`/`max` | None |
 | Evaluation error | Any other runtime failure, such as a division by zero | None |
 
-Malformed streams, a request schema that differs from the session, NaN or
-infinite values, and keys outside their index are protocol errors: the server stops
-with exit code `1` instead of reporting a row.
+Malformed streams, a request schema that differs from the session, an empty
+request batch, NaN or infinite values, and keys outside their index are
+protocol errors: the server stops with exit code `1` instead of reporting a
+row.
 
 ## Writing another client
 
 Clients in other languages talk to `graphcal model serve` directly:
 
 1. Run `graphcal model describe` and select ports.
-2. Start `graphcal model serve` with `--input`, `--output`, any `--unit`
-   choices, and `--expect-fingerprint`.
-3. Read the result-stream schema from stdout before writing to stdin. Its
+2. Run `graphcal model serve` with `--input`, `--output`, any `--unit`
+   choices, `--expect-fingerprint`, and `--print-request-schema`. It prints
+   the exact request-stream schema as an Arrow IPC stream without batches and
+   exits. Build every request batch with this schema (in pyarrow,
+   `pa.ipc.open_stream(stdout).schema`) instead of reconstructing it.
+3. Start `graphcal model serve` with the same arguments but without
+   `--print-request-schema`.
+4. Read the result-stream schema from stdout before writing to stdin. Its
    schema-level metadata lists `si_scales`: the size of each chosen unit in
    the canonical SI unit. The request schema carries the same metadata, and
    its domains are converted into the chosen units.
-4. Write one request stream on stdin. For each request batch, read one result
+5. Write one request stream on stdin. For each request batch, read one result
    batch.
-5. Close the request stream; the server finishes the result stream and exits
+6. Close the request stream; the server finishes the result stream and exits
    with code `0`.
 
 Schemas carry one `graphcal` metadata key whose value is JSON. The request
 stream has one non-nullable field per varied parameter, in declaration order.
+The server accepts a request schema only if it equals the printed one, with
+metadata compared as JSON values:
+
+- the schema metadata holds `protocol_version`, `interface_fingerprint`,
+  `"stream": "request"`, and `si_scales` when a unit is chosen;
+- each field's metadata holds `"role": "input"`, its `wire` type, and its
+  `domain` (`null` without one), with bounds as binary64 numbers;
+- every child is non-nullable: a `FixedSizeList` has one non-nullable child
+  named `item`, unlike the nullable default of most Arrow libraries.
+
 The result stream has two struct fields:
 
 | Field | Children |

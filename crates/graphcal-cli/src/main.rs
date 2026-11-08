@@ -252,6 +252,10 @@ enum ModelCommands {
         /// this many seconds; by default a request evaluates until it finishes
         #[arg(long, value_name = "SECONDS", value_parser = model::parse_request_timeout)]
         request_timeout: Option<std::time::Duration>,
+        /// Print the session's request-stream schema as an Arrow IPC stream
+        /// without batches on stdout and exit, instead of serving
+        #[arg(long, conflicts_with = "request_timeout")]
+        print_request_schema: bool,
         /// Values of unvaried params, used instead of their defaults in every
         /// row; stdin is not available as a JSON source
         #[command(flatten)]
@@ -751,6 +755,7 @@ fn run_model_command(command: ModelCommands) {
             expect_fingerprint,
             skip_fingerprint_check: _,
             request_timeout,
+            print_request_schema,
             parameters,
             root,
         } => {
@@ -779,10 +784,14 @@ fn run_model_command(command: ModelCommands) {
                     fixed: &overrides,
                 },
                 &fingerprint,
-                request_timeout.map_or(
-                    graphcal_model_server::RequestDeadline::Unbounded,
-                    graphcal_model_server::RequestDeadline::After,
-                ),
+                if print_request_schema {
+                    model::ServeMode::PrintRequestSchema
+                } else {
+                    model::ServeMode::Serve(request_timeout.map_or(
+                        graphcal_model_server::RequestDeadline::Unbounded,
+                        graphcal_model_server::RequestDeadline::After,
+                    ))
+                },
                 root.as_deref(),
             );
         }
@@ -793,10 +802,10 @@ fn run_model_serve(
     file: &Path,
     selection: &model::SessionSelection<'_>,
     fingerprint: &model::FingerprintCheck,
-    deadline: graphcal_model_server::RequestDeadline,
+    mode: model::ServeMode,
     root: Option<&Path>,
 ) {
-    if let Err(error) = model::serve(file, selection, fingerprint, deadline, root) {
+    if let Err(error) = model::serve(file, selection, fingerprint, mode, root) {
         let code = error.exit_code();
         match error {
             model::ModelServeError::Compile(error) => {

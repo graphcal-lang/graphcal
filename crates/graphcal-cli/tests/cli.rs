@@ -8321,6 +8321,50 @@ fn variant_position(
 }
 
 #[test]
+fn model_serve_prints_the_exact_request_schema() {
+    use arrow_ipc::reader::StreamReader;
+    use graphcal_model_protocol::arrow::request_schema;
+    use graphcal_model_protocol::{PortName, SessionSpec};
+
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let document = describe_batch_model(&model);
+    let output = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args([
+            "--input",
+            "mode",
+            "--input",
+            "load",
+            "--output",
+            "failure",
+            "--print-request-schema",
+        ])
+        .arg("--expect-fingerprint")
+        .arg(document.interface_fingerprint().to_string())
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reader = StreamReader::try_new(std::io::Cursor::new(output.stdout), None).unwrap();
+    let printed = reader.schema();
+    assert_eq!(reader.count(), 0, "the stream holds only the schema");
+    let name = |name: &str| PortName::new(name).unwrap();
+    let session = document
+        .interface()
+        .configure(
+            &SessionSpec::new(vec![name("load"), name("mode")], vec![name("failure")]),
+            graphcal_model_protocol::CanonicalUnitsOnly,
+        )
+        .unwrap();
+    assert_eq!(printed.as_ref(), request_schema(&session).as_ref());
+}
+
+#[test]
 fn model_serve_subprocess_answers_request_batches() {
     use std::io::Read as _;
     use std::process::Stdio;

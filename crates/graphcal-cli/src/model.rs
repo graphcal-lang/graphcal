@@ -112,7 +112,18 @@ pub struct SessionSelection<'a> {
     pub fixed: &'a ParsedOverrides,
 }
 
-/// Prepare and serve one session of the model over stdin and stdout.
+/// What `serve` does with a configured session.
+#[derive(Debug, Clone, Copy)]
+pub enum ServeMode {
+    /// Serve request batches until stdin closes, bounding each request by
+    /// the deadline.
+    Serve(graphcal_model_server::RequestDeadline),
+    /// Print the session's request-stream schema and exit.
+    PrintRequestSchema,
+}
+
+/// Prepare one session of the model and serve it over stdin and stdout, or
+/// print its request-stream schema (see [`ServeMode`]).
 ///
 /// Setup errors occur before any stdout bytes. A [`ModelServeError::Serve`]
 /// may occur after the result-stream schema has been written.
@@ -120,7 +131,7 @@ pub fn serve(
     file: &Path,
     selection: &SessionSelection<'_>,
     fingerprint: &FingerprintCheck,
-    deadline: graphcal_model_server::RequestDeadline,
+    mode: ServeMode,
     root: Option<&Path>,
 ) -> Result<(), ModelServeError> {
     let names = |names: &[String]| {
@@ -160,8 +171,15 @@ pub fn serve(
         value.bind(name, &mut fixed)?;
     }
     let session = prepared.model_session_with(Arc::new(schema), fixed.into_fixed())?;
-    graphcal_model_server::serve_stdio(&prepared, &session, deadline)
-        .map_err(ModelServeError::Serve)
+    match mode {
+        ServeMode::Serve(deadline) => {
+            graphcal_model_server::serve_stdio(&prepared, &session, deadline)
+        }
+        ServeMode::PrintRequestSchema => {
+            graphcal_model_server::write_request_schema_stdio(&session)
+        }
+    }
+    .map_err(ModelServeError::Serve)
 }
 
 fn prepare(file: &Path, root: Option<&Path>) -> Result<PreparedProject, ModelServeError> {
