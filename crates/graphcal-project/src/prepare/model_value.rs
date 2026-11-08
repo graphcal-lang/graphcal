@@ -68,8 +68,11 @@ pub(super) enum ValueCodec {
 pub(super) enum ValueCodecError {
     #[error("index `{index}` of a model port has no axis")]
     MissingAxis { index: IndexTypeRef },
-    #[error("key index `{index}` of a model port has no wire axis: {reason}")]
-    KeyAxis { index: IndexTypeRef, reason: String },
+    #[error("key index `{index}` of a model port has no wire axis: {message}")]
+    KeyAxis {
+        index: IndexTypeRef,
+        message: String,
+    },
     #[error("type `{identity}` has no model definition")]
     MissingDefinition { identity: StructTypeRef },
     #[error("type `{identity}` has another constructor list than its model definition")]
@@ -118,10 +121,10 @@ impl PreparedProject {
             ModelValueSchema::Datetime(time_scale) => ValueCodec::Datetime(*time_scale),
             ModelValueSchema::Key(index) => ValueCodec::Key {
                 axis: axis(index.identity())?,
-                key: KeyType::new(axis_wire(index)?.map_err(|reason| {
+                key: KeyType::new(axis_wire(index)?.map_err(|unsupported| {
                     ValueCodecError::KeyAxis {
                         index: index.identity().clone(),
-                        reason,
+                        message: unsupported.message,
                     }
                 })?),
             },

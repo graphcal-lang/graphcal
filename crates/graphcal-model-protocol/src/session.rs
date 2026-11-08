@@ -599,10 +599,10 @@ impl ModelInterface {
                         si_scale,
                     });
                 }
-                PortWire::Unsupported { reason } => {
+                PortWire::Unsupported { message, .. } => {
                     return Err(SessionError::UnsupportedInput {
                         name: parameter.name().clone(),
-                        reason: reason.clone(),
+                        reason: message.clone(),
                     });
                 }
             }
@@ -622,10 +622,10 @@ impl ModelInterface {
                         si_scale,
                     });
                 }
-                PortWire::Unsupported { reason } => {
+                PortWire::Unsupported { message, .. } => {
                     return Err(SessionError::UnsupportedOutput {
                         name: output.name().clone(),
-                        reason: reason.clone(),
+                        reason: message.clone(),
                     });
                 }
             }

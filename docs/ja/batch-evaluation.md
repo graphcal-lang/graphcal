@@ -38,7 +38,7 @@ graphcal model describe reliability.gcl
 
 ```json
 {
-  "protocol_version": 2,
+  "protocol_version": 3,
   "graphcal_version": "0.0.1-alpha.37",
   "interface_fingerprint": "sha256:…",
   "interface": {
@@ -46,7 +46,15 @@ graphcal model describe reliability.gcl
       {
         "name": "load",
         "graphcal_type": "Force",
-        "wire": { "kind": "quantity", "dimension": { "Length": 1, "Mass": 1, "Time": -2 }, "unit": "m*kg/s^2" },
+        "wire": {
+          "kind": "quantity",
+          "dimension": [
+            { "base": { "kind": "prelude", "name": "Length" }, "exponent": 1 },
+            { "base": { "kind": "prelude", "name": "Mass" }, "exponent": 1 },
+            { "base": { "kind": "prelude", "name": "Time" }, "exponent": -2 }
+          ],
+          "unit": "m*kg/s^2"
+        },
         "domain": { "kind": "quantity", "min": 0.0, "max": 10000.0 },
         "has_default": false
       },
@@ -57,7 +65,8 @@ graphcal model describe reliability.gcl
 }
 ```
 
-- `wire` は値の受け渡し方です（下の表を参照）。プロトコルで運べない型も一覧には載り、`"kind": "unsupported"` と理由が付きます。黙って除外されることはありません。
+- `wire` は値の受け渡し方です（下の表を参照）。プロトコルで運べない型も一覧には載り、`"kind": "unsupported"` に理由のコード `reason` と説明文 `message` が付きます。黙って除外されることはありません。
+- `dimension` は基本次元とその指数の一覧です。プレリュードの基本次元は `name` で表します。モデルが宣言した基本次元は、キーやインデックス付きの値のインデックスと同じく、import パスに書く `package`、`module` パス、`name` で表します。ファイルの置き場所は現れません。
 - `unit` はそのポートの SI の基準単位です。セッションでそのポートに別の単位を選ばない限り、値はこの単位でやりとりします（後述）。
 - `domain` も同じ単位で表されます。インデックス付きのパラメータでは、すべての要素を制約します。値域外の値は、その行だけを失敗させます。
 
@@ -71,7 +80,7 @@ graphcal model describe reliability.gcl
 | `T[I]` | `indexed` | `I` の要素ごとに1つの `T`。宣言順に並ぶ |
 | 構造体型・共用体型 | `algebraic` | 1つのコンストラクタとそのフィールド |
 
-- `interface_fingerprint` はこのインターフェースを識別します。式を変えても指紋は変わりませんが、ポートの追加・削除・型の変更では変わります。
+- `interface_fingerprint` はこのインターフェースを識別します。式、ファイルの置き場所、サポートされないポートの `message` を変えても指紋は変わりませんが、ポートの追加・削除・型の変更では変わります。
 
 ## 2. セッションを開始する { #2-start-a-session }
 
@@ -189,13 +198,13 @@ include plant.reliability(load: @load, cycles: 80_000, mode: Mode#Degraded)
 
 - スキーマのメタデータには `protocol_version`、`interface_fingerprint`、`"stream": "request"` が入り、単位を選んだときは `si_scales` も入る。
 - 各フィールドのメタデータには `"role": "input"`、その `wire` 型、`domain`（値域がなければ `null`）が入る。値域の境界は binary64 の数値で書く。
-- 子フィールドはどれも null を許さない。`FixedSizeList` の子は `item` という名前の null を許さないフィールド1つで、多くの Arrow ライブラリの既定である null を許すリストとは異なる。
+- 共用体のコンストラクタごとの struct とそのフィールドを除き、子フィールドはどれも null を許さない。`FixedSizeList` の子は `item` という名前の null を許さないフィールド1つで、多くの Arrow ライブラリの既定である null を許すリストとは異なる。
 
 結果ストリームには2つの struct フィールドがあります。
 
 | フィールド | 子フィールド |
 |------------|--------------|
-| `outputs` | 読み出す出力ごとに null を許すフィールドが宣言順に並ぶ。失敗した行でだけ null になる |
+| `outputs` | 読み出す出力ごとに null を許すフィールドが宣言順に並ぶ。失敗した行でだけ null になり、null の値の子フィールドもすべて null になる |
 | `outcome` | `status`（`UInt8`：`0` 成功、`1` アサーション不成立、`2` 値域外の入力、`3` 評価エラー）、`subject`（不成立のアサーション名またはパラメータ名）、`message` |
 
 物理量と日時は `Float64`、`Int` は `Int64`、`Bool` は `Boolean` です。名前付きインデックスのキーは `Dictionary<Int32, Utf8>` で、辞書のコードではなく辞書の値で解決されます。`Fin(N)` のキーは `UInt32` の位置です。座標インデックスのキーは SI の `Float64` 座標で、インデックスの座標のどれかと厳密に一致しなければなりません。複素数は `re` と `im` の struct、インデックス付きの値は軸の要素ごとに1項目を持つ `FixedSizeList` です。構造体型はそのフィールドの struct です。共用体は `constructor` キーと `variants` struct からなる struct で、`variants` はコンストラクタごとに null を許す子フィールドを持ち、その行のコンストラクタの子だけが null になりません。

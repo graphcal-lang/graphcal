@@ -9,6 +9,7 @@ use crate::axis::{Axis, KeyRef};
 use crate::datetime_type::DatetimeType;
 use crate::dimension::Dimension;
 use crate::label::{ConstructorName, FieldName, TypeName, UnitSpelling};
+use crate::unsupported_reason::UnsupportedReason;
 
 /// A real quantity: its dimension and the unit its values are expressed in.
 ///
@@ -483,8 +484,11 @@ pub enum PortWire {
     Supported(WireType),
     /// The protocol cannot carry the port's type.
     Unsupported {
-        /// Why the type cannot be carried.
-        reason: String,
+        /// Why the type cannot be carried, as a stable code.
+        reason: UnsupportedReason,
+        /// A human-readable explanation; not part of the interface
+        /// fingerprint.
+        message: String,
     },
 }
 
@@ -512,14 +516,17 @@ enum WireRepr {
     Datetime(DatetimeType),
     Indexed(IndexedType),
     Algebraic(AlgebraicType),
-    Unsupported { reason: String },
+    Unsupported {
+        reason: UnsupportedReason,
+        message: String,
+    },
 }
 
 /// A port marked unsupported where a supported wire type is required.
 #[derive(Debug, Error)]
-#[error("expected a supported wire type, found an unsupported port: {reason}")]
+#[error("expected a supported wire type, found an unsupported port: {message}")]
 pub struct UnsupportedWire {
-    reason: String,
+    message: String,
 }
 
 impl TryFrom<WireRepr> for WireType {
@@ -528,7 +535,7 @@ impl TryFrom<WireRepr> for WireType {
     fn try_from(repr: WireRepr) -> Result<Self, Self::Error> {
         match PortWire::from(repr) {
             PortWire::Supported(wire) => Ok(wire),
-            PortWire::Unsupported { reason } => Err(UnsupportedWire { reason }),
+            PortWire::Unsupported { message, .. } => Err(UnsupportedWire { message }),
         }
     }
 }
@@ -550,7 +557,7 @@ impl From<WireRepr> for PortWire {
             WireRepr::Datetime(datetime) => Self::Supported(WireType::Datetime(datetime)),
             WireRepr::Indexed(indexed) => Self::Supported(WireType::Indexed(indexed)),
             WireRepr::Algebraic(algebraic) => Self::Supported(WireType::Algebraic(algebraic)),
-            WireRepr::Unsupported { reason } => Self::Unsupported { reason },
+            WireRepr::Unsupported { reason, message } => Self::Unsupported { reason, message },
         }
     }
 }
@@ -566,7 +573,7 @@ impl From<PortWire> for WireRepr {
             PortWire::Supported(WireType::Datetime(datetime)) => Self::Datetime(datetime),
             PortWire::Supported(WireType::Indexed(indexed)) => Self::Indexed(indexed),
             PortWire::Supported(WireType::Algebraic(algebraic)) => Self::Algebraic(algebraic),
-            PortWire::Unsupported { reason } => Self::Unsupported { reason },
+            PortWire::Unsupported { reason, message } => Self::Unsupported { reason, message },
         }
     }
 }
@@ -575,8 +582,7 @@ impl From<PortWire> for WireRepr {
 mod tests {
     use super::*;
     use crate::axis::AxisKind;
-    use crate::dimension::Exponent;
-    use crate::label::{BaseDimensionName, IndexName, VariantName};
+    use crate::label::VariantName;
 
     fn variant(name: &str) -> VariantName {
         VariantName::new(name).unwrap()
@@ -584,10 +590,7 @@ mod tests {
 
     #[test]
     fn dimensioned_quantities_name_their_unit() {
-        let length = Dimension::from_iter([(
-            BaseDimensionName::new("Length").unwrap(),
-            Exponent::new(1, 1).unwrap(),
-        )]);
+        let length = crate::dimension::tests::base_dimension("Length");
         assert_eq!(
             QuantityType::new(length, None),
             Err(QuantityTypeError::MissingUnit)
@@ -597,12 +600,10 @@ mod tests {
 
     #[test]
     fn key_types_select_axis_entries_and_serialize_their_axis() {
-        let axis = Axis::new(
-            IndexName::new("Mode").unwrap(),
-            AxisKind::Named {
-                variants: vec![variant("B"), variant("A")],
-            },
-        )
+        let axis = Axis::new(AxisKind::Named {
+            index: crate::axis::tests::declared_index("Mode"),
+            variants: vec![variant("B"), variant("A")],
+        })
         .unwrap();
         let key = KeyType::new(axis);
         let a = variant("A");
@@ -614,7 +615,7 @@ mod tests {
         let json = serde_json::to_string(&WireType::Key(key.clone())).unwrap();
         assert_eq!(
             json,
-            r#"{"kind":"key","axis":{"kind":"named","index":"Mode","variants":["B","A"]}}"#
+            r#"{"kind":"key","axis":{"kind":"named","index":{"package":"model","module":[],"name":"Mode"},"variants":["B","A"]}}"#
         );
         assert_eq!(
             serde_json::from_str::<WireType>(&json).unwrap(),
@@ -622,7 +623,7 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<WireType>(
-                r#"{"kind":"key","axis":{"kind":"finite","index":"Fin(2)","size":2},"extra":1}"#
+                r#"{"kind":"key","axis":{"kind":"finite","size":2},"extra":1}"#
             )
             .is_err(),
             "unknown fields are rejected"
@@ -632,18 +633,24 @@ mod tests {
     #[test]
     fn port_wire_json_is_one_tagged_object() {
         let unsupported = PortWire::Unsupported {
-            reason: "indexed".to_owned(),
+            reason: UnsupportedReason::NoCanonicalUnit,
+            message: "no unit".to_owned(),
         };
         let json = serde_json::to_string(&unsupported).unwrap();
-        assert_eq!(json, r#"{"kind":"unsupported","reason":"indexed"}"#);
+        assert_eq!(
+            json,
+            r#"{"kind":"unsupported","reason":"no_canonical_unit","message":"no unit"}"#
+        );
         assert_eq!(
             serde_json::from_str::<PortWire>(&json).unwrap(),
             unsupported
         );
 
         let quantity: PortWire =
-            serde_json::from_str(r#"{"kind":"quantity","dimension":{"Length":1},"unit":"m"}"#)
-                .unwrap();
+            serde_json::from_str(
+                r#"{"kind":"quantity","dimension":[{"base":{"kind":"prelude","name":"Length"},"exponent":1}],"unit":"m"}"#,
+            )
+            .unwrap();
         assert!(matches!(quantity.supported(), Some(WireType::Quantity(_))));
         assert!(
             serde_json::from_str::<PortWire>(r#"{"kind":"int","extra":1}"#).is_err(),
@@ -654,7 +661,10 @@ mod tests {
             r#"{"kind":"int"}"#
         );
         assert!(
-            serde_json::from_str::<WireType>(r#"{"kind":"unsupported","reason":"x"}"#).is_err(),
+            serde_json::from_str::<WireType>(
+                r#"{"kind":"unsupported","reason":"invalid_axis","message":"x"}"#
+            )
+            .is_err(),
             "a wire type is always supported"
         );
     }

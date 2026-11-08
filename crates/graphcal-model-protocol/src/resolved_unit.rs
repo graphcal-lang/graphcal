@@ -96,14 +96,9 @@ pub enum UnitConversionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dimension::Exponent;
-    use crate::label::BaseDimensionName;
 
     fn time() -> Dimension {
-        Dimension::from_iter([(
-            BaseDimensionName::new("Time").unwrap(),
-            Exponent::new(1, 1).unwrap(),
-        )])
+        crate::dimension::tests::base_dimension("Time")
     }
 
     #[test]
@@ -145,7 +140,7 @@ mod tests {
         let json = serde_json::to_string(&hour).unwrap();
         assert_eq!(
             json,
-            r#"{"unit":"h","dimension":{"Time":1},"si_scale":3600.0}"#
+            r#"{"unit":"h","dimension":[{"base":{"kind":"prelude","name":"Time"},"exponent":1}],"si_scale":3600.0}"#
         );
         assert_eq!(serde_json::from_str::<ResolvedUnit>(&json).unwrap(), hour);
     }

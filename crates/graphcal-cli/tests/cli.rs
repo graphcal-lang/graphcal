@@ -8061,7 +8061,10 @@ fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
         .expect("failed to run graphcal");
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["protocol_version"], 2);
+    assert_eq!(
+        json["protocol_version"],
+        graphcal_model_protocol::PROTOCOL_VERSION
+    );
     assert!(
         json["interface_fingerprint"]
             .as_str()

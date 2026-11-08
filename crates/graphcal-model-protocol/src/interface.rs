@@ -271,6 +271,36 @@ impl ModelInterface {
             .iter()
             .find(|output| output.name.as_str() == name)
     }
+
+    /// This interface with the human-readable message of every unsupported
+    /// port cleared, so a fingerprint covers only the reason codes.
+    pub(crate) fn without_unsupported_messages(&self) -> Self {
+        let clear = |wire: &PortWire| match wire {
+            PortWire::Supported(_) => wire.clone(),
+            PortWire::Unsupported { reason, .. } => PortWire::Unsupported {
+                reason: *reason,
+                message: String::new(),
+            },
+        };
+        Self {
+            parameters: self
+                .parameters
+                .iter()
+                .map(|parameter| ParameterDescription {
+                    wire: clear(&parameter.wire),
+                    ..parameter.clone()
+                })
+                .collect(),
+            outputs: self
+                .outputs
+                .iter()
+                .map(|output| OutputDescription {
+                    wire: clear(&output.wire),
+                    ..output.clone()
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -301,10 +331,9 @@ impl From<ModelInterface> for InterfaceRepr {
 pub mod tests {
     use super::*;
     use crate::axis::{Axis, AxisKind};
-    use crate::dimension::{Dimension, Exponent};
     use crate::domain::Bounds;
     use crate::finite::FiniteF64;
-    use crate::label::{BaseDimensionName, IndexName, UnitSpelling, VariantName};
+    use crate::label::{UnitSpelling, VariantName};
     use crate::wire_type::{KeyType, QuantityType};
 
     pub fn name(name: &str) -> PortName {
@@ -314,10 +343,7 @@ pub mod tests {
     pub fn length() -> WireType {
         WireType::Quantity(
             QuantityType::new(
-                Dimension::from_iter([(
-                    BaseDimensionName::new("Length").unwrap(),
-                    Exponent::new(1, 1).unwrap(),
-                )]),
+                crate::dimension::tests::base_dimension("Length"),
                 Some(UnitSpelling::new("m").unwrap()),
             )
             .unwrap(),
@@ -326,17 +352,23 @@ pub mod tests {
 
     pub fn mode() -> WireType {
         WireType::Key(KeyType::new(
-            Axis::new(
-                IndexName::new("Mode").unwrap(),
-                AxisKind::Named {
-                    variants: vec![
-                        VariantName::new("A").unwrap(),
-                        VariantName::new("B").unwrap(),
-                    ],
-                },
-            )
+            Axis::new(AxisKind::Named {
+                index: crate::axis::tests::declared_index("Mode"),
+                variants: vec![
+                    VariantName::new("A").unwrap(),
+                    VariantName::new("B").unwrap(),
+                ],
+            })
             .unwrap(),
         ))
+    }
+
+    /// An unsupported port.
+    pub fn unsupported() -> PortWire {
+        PortWire::Unsupported {
+            reason: crate::unsupported_reason::UnsupportedReason::NoCanonicalUnit,
+            message: "dimension `Money` has no canonical unit".to_owned(),
+        }
     }
 
     /// `load: Length(0..10 m)`, `count: Int = 1`, `mode: Key<Mode>`,
@@ -375,9 +407,7 @@ pub mod tests {
                 ParameterDescription::new(
                     name("history"),
                     "Length[Step]",
-                    PortWire::Unsupported {
-                        reason: "indexed values are not supported".to_owned(),
-                    },
+                    unsupported(),
                     None,
                     true,
                 )
@@ -390,13 +420,7 @@ pub mod tests {
                     PortWire::Supported(WireType::Bool),
                 ),
                 OutputDescription::new(name("margin"), "Length", PortWire::Supported(length())),
-                OutputDescription::new(
-                    name("series"),
-                    "Length[Step]",
-                    PortWire::Unsupported {
-                        reason: "indexed values are not supported".to_owned(),
-                    },
-                ),
+                OutputDescription::new(name("series"), "Length[Step]", unsupported()),
             ],
         )
         .unwrap()

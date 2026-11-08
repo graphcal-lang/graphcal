@@ -7,7 +7,7 @@ use arrow_schema::ArrowError;
 use thiserror::Error;
 
 use super::schema::output_fields;
-use super::value_array::{ValueDecodeError, decode, encode, key_array, with_placeholders};
+use super::value_array::{Presence, ValueDecodeError, decode, encode, key_array};
 use crate::batch::{OutputColumn, OutputValues, OutputValuesBuilder, OutputValuesError};
 use crate::finite::FiniteF64;
 use crate::label::PortName;
@@ -75,15 +75,16 @@ impl OutputValues {
                         values.iter().map(|value| value.map(FiniteF64::get)),
                     )),
                     (OutputColumn::Complex(values), wire) => {
-                        let (values, valid) = with_placeholders(
-                            wire,
-                            values.iter().map(|value| value.map(Value::Complex)),
-                        );
-                        encode(wire, &values, Some(&valid))?
+                        let values = values
+                            .iter()
+                            .map(|value| value.map(Value::Complex))
+                            .collect::<Vec<_>>();
+                        let rows = values.iter().map(Option::as_ref).collect::<Vec<_>>();
+                        encode(wire, &rows, Presence::Nullable)?
                     }
                     (OutputColumn::Structured(values), wire) => {
-                        let (values, valid) = with_placeholders(wire, values.iter().cloned());
-                        encode(wire, &values, Some(&valid))?
+                        let rows = values.iter().map(Option::as_ref).collect::<Vec<_>>();
+                        encode(wire, &rows, Presence::Nullable)?
                     }
                 })
             })
@@ -205,7 +206,7 @@ fn decode_output(
         | WireType::Key(_)
         | WireType::Indexed(_)
         | WireType::Algebraic(_) => {
-            decode(wire, array).map_err(|source| OutputDecodeError::Value {
+            decode(wire, array, Presence::Nullable).map_err(|source| OutputDecodeError::Value {
                 output: output.clone(),
                 source,
             })?

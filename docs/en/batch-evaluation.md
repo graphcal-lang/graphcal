@@ -43,7 +43,7 @@ node:
 
 ```json
 {
-  "protocol_version": 2,
+  "protocol_version": 3,
   "graphcal_version": "0.0.1-alpha.37",
   "interface_fingerprint": "sha256:…",
   "interface": {
@@ -51,7 +51,15 @@ node:
       {
         "name": "load",
         "graphcal_type": "Force",
-        "wire": { "kind": "quantity", "dimension": { "Length": 1, "Mass": 1, "Time": -2 }, "unit": "m*kg/s^2" },
+        "wire": {
+          "kind": "quantity",
+          "dimension": [
+            { "base": { "kind": "prelude", "name": "Length" }, "exponent": 1 },
+            { "base": { "kind": "prelude", "name": "Mass" }, "exponent": 1 },
+            { "base": { "kind": "prelude", "name": "Time" }, "exponent": -2 }
+          ],
+          "unit": "m*kg/s^2"
+        },
         "domain": { "kind": "quantity", "min": 0.0, "max": 10000.0 },
         "has_default": false
       },
@@ -63,8 +71,12 @@ node:
 ```
 
 - `wire` is how values travel (see the table below). A type the protocol
-  cannot carry is listed with `"kind": "unsupported"` and a reason, never
-  silently omitted.
+  cannot carry is listed with `"kind": "unsupported"`, a `reason` code, and a
+  `message`, never silently omitted.
+- A `dimension` lists its base dimensions with their exponents. A prelude
+  base dimension is named by `name`; one the model declares, like the index
+  of a key or an indexed value, by the `package`, `module` path, and `name`
+  you write on an import path. File locations never appear.
 - `unit` is the port's canonical SI unit. Values travel in it unless a
   session chooses another unit for the port (see below).
 - `domain` is in the same unit. It bounds every element of an indexed
@@ -80,8 +92,9 @@ node:
 | `T[I]` | `indexed` | One `T` per entry of `I`, in declaration order |
 | Struct or union type | `algebraic` | One constructor and its fields |
 
-- `interface_fingerprint` identifies this interface. Formulas may change
-  without changing it; adding, removing, or retyping a port changes it.
+- `interface_fingerprint` identifies this interface. Formulas, file
+  locations, and the `message` of an unsupported port may change without
+  changing it; adding, removing, or retyping a port changes it.
 
 ## 2. Start a session
 
@@ -248,14 +261,15 @@ metadata compared as JSON values:
   `"stream": "request"`, and `si_scales` when a unit is chosen;
 - each field's metadata holds `"role": "input"`, its `wire` type, and its
   `domain` (`null` without one), with bounds as binary64 numbers;
-- every child is non-nullable: a `FixedSizeList` has one non-nullable child
-  named `item`, unlike the nullable default of most Arrow libraries.
+- every child is non-nullable, except a union's constructor structs and
+  their fields: a `FixedSizeList` has one non-nullable child named `item`,
+  unlike the nullable default of most Arrow libraries.
 
 The result stream has two struct fields:
 
 | Field | Children |
 |-------|----------|
-| `outputs` | One nullable field per read output, in declaration order; null exactly in failed rows |
+| `outputs` | One nullable field per read output, in declaration order; null exactly in failed rows, and so is every child of a null value |
 | `outcome` | `status` (`UInt8`: `0` success, `1` assertion failed, `2` input out of domain, `3` evaluation error), `subject` (the failed assertion or parameter), `message` |
 
 Quantities and datetimes are `Float64`, `Int` is `Int64`, and `Bool` is

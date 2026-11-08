@@ -19,6 +19,7 @@ pub mod arrow;
 mod axis;
 mod batch;
 mod datetime_type;
+mod declared_name;
 mod describe;
 mod dimension;
 mod domain;
@@ -30,6 +31,7 @@ mod outcome;
 mod resolved_unit;
 mod session;
 mod unit_scale;
+mod unsupported_reason;
 mod value;
 mod version;
 mod wire_type;
@@ -40,8 +42,9 @@ pub use batch::{
     RequestBatchError, ResultBatch, ResultBatchBuilder, RowValues,
 };
 pub use datetime_type::{DatetimeType, TimeScale};
+pub use declared_name::DeclaredName;
 pub use describe::{DescribeDocument, DescribeDocumentError};
-pub use dimension::{Dimension, Exponent, ExponentError};
+pub use dimension::{BaseDimension, Dimension, DuplicateBaseDimension, Exponent, ExponentError};
 pub use domain::{Bounds, BoundsError, Domain};
 pub use fingerprint::{InterfaceFingerprint, InterfaceFingerprintError};
 pub use finite::{FiniteF64, NonFiniteError};
@@ -49,8 +52,8 @@ pub use interface::{
     InterfaceError, ModelInterface, OutputDescription, ParameterDescription, ParameterError,
 };
 pub use label::{
-    BaseDimensionName, ConstructorName, FieldName, IndexName, LabelError, PortName, TypeName,
-    UnitSpelling, VariantName,
+    BaseDimensionName, ConstructorName, FieldName, IndexName, LabelError, ModuleName, PackageName,
+    PortName, TypeName, UnitSpelling, VariantName,
 };
 pub use outcome::{RowFailure, RowOutcome, RowStatus, UnknownRowStatus};
 pub use resolved_unit::{ResolvedUnit, UnitConversionError};
@@ -59,6 +62,7 @@ pub use session::{
     SessionSchema, SessionSpec, UnitChoice, UnitResolver,
 };
 pub use unit_scale::{SiScale, SiScaleError};
+pub use unsupported_reason::UnsupportedReason;
 pub use value::{ComplexValue, Value, ValueRef};
 pub use version::PROTOCOL_VERSION;
 pub use wire_type::{

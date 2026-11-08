@@ -9,7 +9,9 @@ use arrow_schema::ArrowError;
 use thiserror::Error;
 
 use super::schema::{input_fields, request_schema};
-use super::value_array::{ValueDecodeError, decode, decode_key_positions, encode, key_array};
+use super::value_array::{
+    Presence, ValueDecodeError, decode, decode_key_positions, encode, key_array,
+};
 use crate::batch::{InputColumn, RequestBatch, RequestBatchError};
 use crate::finite::FiniteF64;
 use crate::label::PortName;
@@ -85,16 +87,23 @@ impl RequestBatch {
                     (InputColumn::Datetime(values), _) => Arc::new(Float64Array::from_iter_values(
                         values.iter().map(|value| value.get()),
                     )),
-                    (InputColumn::Complex(values), wire) => encode(
-                        wire,
-                        &values
+                    (InputColumn::Complex(values), wire) => {
+                        let values = values
                             .iter()
                             .copied()
                             .map(Value::Complex)
-                            .collect::<Vec<_>>(),
-                        None,
+                            .collect::<Vec<_>>();
+                        encode(
+                            wire,
+                            &values.iter().map(Some).collect::<Vec<_>>(),
+                            Presence::Always,
+                        )?
+                    }
+                    (InputColumn::Structured(values), wire) => encode(
+                        wire,
+                        &values.iter().map(Some).collect::<Vec<_>>(),
+                        Presence::Always,
                     )?,
-                    (InputColumn::Structured(values), wire) => encode(wire, values, None)?,
                 })
             })
             .collect()
@@ -263,7 +272,7 @@ fn all_values(
     wire: &WireType,
     array: &dyn Array,
 ) -> Result<Vec<Value>, RequestDecodeError> {
-    decode(wire, array)
+    decode(wire, array, Presence::Always)
         .map_err(|source| RequestDecodeError::Value {
             input: input.clone(),
             source,

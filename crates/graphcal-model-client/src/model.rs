@@ -161,9 +161,10 @@ impl Model {
 
 fn port_detail<K: Kind>(name: &PortName, wire: &PortWire) -> Result<K::Detail, ClientError> {
     match wire {
-        PortWire::Unsupported { reason } => Err(ClientError::UnsupportedPort {
+        PortWire::Unsupported { reason, message } => Err(ClientError::UnsupportedPort {
             name: name.clone(),
-            reason: reason.clone(),
+            reason: *reason,
+            message: message.clone(),
         }),
         PortWire::Supported(wire) => K::detail(wire).ok_or_else(|| ClientError::KindMismatch {
             name: name.clone(),

@@ -98,7 +98,19 @@ label_type!(
     "port name"
 );
 label_type!(
-    /// The name of a categorical index.
+    /// The name of the package that declares a dimension or an index: the
+    /// first segment of the module path that names its module.
+    PackageName,
+    "package name"
+);
+label_type!(
+    /// One segment of a module path below its package, such as `units` in
+    /// `rocket.units`.
+    ModuleName,
+    "module name"
+);
+label_type!(
+    /// The declared name of a categorical index.
     IndexName,
     "index name"
 );
@@ -108,7 +120,7 @@ label_type!(
     "variant name"
 );
 label_type!(
-    /// The name of a base dimension, such as `Length`.
+    /// The declared name of a base dimension, such as `Length`.
     BaseDimensionName,
     "base dimension name"
 );
