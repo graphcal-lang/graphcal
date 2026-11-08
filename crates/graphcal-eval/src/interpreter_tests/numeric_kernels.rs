@@ -78,3 +78,28 @@ fn integer_literal_power_still_reports_a_genuine_underflow() {
         "power operation underflowed to zero",
     );
 }
+
+#[test]
+fn int_power_of_a_unit_magnitude_base_accepts_a_huge_exponent() {
+    let result = compile_and_eval(
+        r"
+param minus: Int = -1;
+param identity: Int = 1;
+param nothing: Int = 0;
+node one: Int = @identity ^ 5000000000;
+node minus_one: Int = @minus ^ 5000000001;
+node plus_one: Int = @minus ^ 5000000000;
+node zero: Int = @nothing ^ 5000000000;
+",
+    )
+    .unwrap();
+    assert_eq!(super::find_int_value(&result, "one"), 1);
+    assert_eq!(super::find_int_value(&result, "minus_one"), -1);
+    assert_eq!(super::find_int_value(&result, "plus_one"), 1);
+    assert_eq!(super::find_int_value(&result, "zero"), 0);
+    assert_eval_failed(
+        "param two: Int = 2;\nnode huge: Int = @two ^ 5000000000;",
+        "huge",
+        "integer arithmetic overflow",
+    );
+}

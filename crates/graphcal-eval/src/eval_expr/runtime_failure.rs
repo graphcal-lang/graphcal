@@ -109,8 +109,6 @@ pub(super) enum IntegerFailure {
     NegationOverflow,
     #[error("integer exponent must be non-negative")]
     NegativeExponent,
-    #[error("integer exponent too large")]
-    ExponentTooLarge,
 }
 
 impl From<IntArithError> for IntegerFailure {
@@ -120,7 +118,6 @@ impl From<IntArithError> for IntegerFailure {
             IntArithError::Overflow => Self::Overflow,
             IntArithError::NegationOverflow => Self::NegationOverflow,
             IntArithError::NegativeExponent => Self::NegativeExponent,
-            IntArithError::ExponentTooLarge => Self::ExponentTooLarge,
         }
     }
 }

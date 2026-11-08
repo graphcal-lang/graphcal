@@ -24,9 +24,6 @@ pub enum IntArithError {
     /// The exponent of an `Int` power is negative.
     #[error("integer exponent must be non-negative")]
     NegativeExponent,
-    /// The exponent of an `Int` power does not fit in `u32`.
-    #[error("integer exponent too large")]
-    ExponentTooLarge,
 }
 
 /// Apply a binary `Int` operator.
@@ -77,15 +74,20 @@ pub const fn negate(value: i64) -> Result<i64, IntArithError> {
 ///
 /// # Errors
 ///
-/// Returns [`IntArithError::NegativeExponent`] for a negative exponent,
-/// [`IntArithError::ExponentTooLarge`] for one beyond `u32`, and
+/// Returns [`IntArithError::NegativeExponent`] for a negative exponent and
 /// [`IntArithError::Overflow`] when the power does not fit in `i64`.
 pub fn power(base: i64, exponent: i64) -> Result<i64, IntArithError> {
     if exponent < 0 {
         return Err(IntArithError::NegativeExponent);
     }
-    let exponent = u32::try_from(exponent).map_err(|_| IntArithError::ExponentTooLarge)?;
-    base.checked_pow(exponent).ok_or(IntArithError::Overflow)
+    match (base, u32::try_from(exponent)) {
+        (_, Ok(exponent)) => base.checked_pow(exponent).ok_or(IntArithError::Overflow),
+        // Only the bases 0, 1 and -1 stay in range for an exponent beyond
+        // `u32`; every other base overflows `i64` long before that.
+        (0 | 1, Err(_)) => Ok(base),
+        (-1, Err(_)) => Ok(if exponent % 2 == 0 { 1 } else { -1 }),
+        (_, Err(_)) => Err(IntArithError::Overflow),
+    }
 }
 
 #[cfg(test)]
@@ -126,8 +128,20 @@ mod tests {
         assert_eq!(power(2, -1), Err(IntArithError::NegativeExponent));
         assert_eq!(
             power(2, i64::from(u32::MAX) + 1),
-            Err(IntArithError::ExponentTooLarge)
+            Err(IntArithError::Overflow)
         );
         assert_eq!(power(2, 63), Err(IntArithError::Overflow));
+    }
+
+    #[test]
+    fn unit_magnitude_bases_accept_exponents_beyond_u32() {
+        let huge = 5_000_000_000;
+        assert_eq!(power(0, huge), Ok(0));
+        assert_eq!(power(1, huge), Ok(1));
+        assert_eq!(power(-1, huge), Ok(1));
+        assert_eq!(power(-1, huge + 1), Ok(-1));
+        assert_eq!(power(1, i64::MAX), Ok(1));
+        assert_eq!(power(-1, i64::MAX), Ok(-1));
+        assert_eq!(power(-2, huge), Err(IntArithError::Overflow));
     }
 }
