@@ -160,6 +160,33 @@ impl ScheduleUnit {
     }
 }
 
+/// A state of scheduling that the grouping rules rule out, so that only a
+/// bug in Graphcal reaches it: reported as an internal error, never as a
+/// diagnostic of the program.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum SchedulingBug {
+    #[error(
+        "contracting the accepted recurrence groups left a cycle through {}",
+        declaration_list(.0)
+    )]
+    ContractedCycle(Vec<ResolvedDeclName>),
+    #[error(
+        "recurrence group member `{0}` has another owner, but no read leaves the callable's own members"
+    )]
+    MixedOwnersWithoutCrossingRead(DeclName),
+    #[error("stuck recurrence group member `{0}` reads no stuck member at the same step")]
+    StuckWithoutStuckRead(DeclName),
+}
+
+/// Render declarations for an internal-error message.
+fn declaration_list(declarations: &[ResolvedDeclName]) -> String {
+    declarations
+        .iter()
+        .map(|declaration| format!("`{declaration}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Why one cyclic component of a runtime schedule is not an accepted
 /// recurrence group.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,6 +201,8 @@ pub(crate) enum ComponentRejection {
         span: Span,
         reason: crate::semantic_error::graph::RecurrenceRejection,
     },
+    /// Checking the component reached a state only a bug reaches.
+    Bug(SchedulingBug),
 }
 
 /// Why a callable's params and nodes cannot be scheduled.
@@ -189,6 +218,8 @@ pub(crate) enum ScheduleRejection {
         span: Span,
         reason: crate::semantic_error::graph::RecurrenceRejection,
     },
+    /// Scheduling reached a state only a bug reaches.
+    Bug(SchedulingBug),
 }
 
 /// Runtime evaluation schedule of one callable DAG and every semantic
@@ -382,6 +413,7 @@ fn order_units<'a>(
             Some(ComponentRejection::Recurrence { name, span, reason }) => {
                 ScheduleRejection::Recurrence { name, span, reason }
             }
+            Some(ComponentRejection::Bug(bug)) => ScheduleRejection::Bug(bug),
             Some(ComponentRejection::PlainCycle) | None => ScheduleRejection::Cycle(cycle),
         });
     }
@@ -404,28 +436,23 @@ fn order_units<'a>(
             }
         }
     }
-    // Contracting the accepted groups leaves no cycle; a cycle here would be
-    // reported at a declaration of each unit on it.
-    let declaration_of = |unit: UnitKey| match unit {
-        UnitKey::Declaration(declaration) => nodes
-            .iter()
-            .find(|node| node.identity == declaration)
-            .cloned(),
-        UnitKey::Group(group) => plans
-            .get(group)
-            .and_then(|plan| plan.members().first())
-            .and_then(|member| {
-                nodes
-                    .iter()
-                    .find(|node| &node.identity == member.declaration())
-            })
-            .cloned(),
-    };
+    // Contracting the accepted groups leaves no cycle: every cyclic
+    // component was accepted as a group above.
     let order = units.into_topo_order().map_err(|cycle| {
-        let fallback = nodes[0].clone();
-        ScheduleRejection::Cycle(
-            cycle.map(|unit| declaration_of(unit).unwrap_or_else(|| fallback.clone())),
-        )
+        ScheduleRejection::Bug(SchedulingBug::ContractedCycle(
+            cycle
+                .into_path()
+                .into_iter()
+                .flat_map(|unit| match unit {
+                    UnitKey::Declaration(declaration) => vec![declaration],
+                    UnitKey::Group(group) => plans[group]
+                        .members()
+                        .iter()
+                        .map(|member| member.declaration().clone())
+                        .collect(),
+                })
+                .collect(),
+        ))
     })?;
     Ok(order.map(|unit| match unit {
         UnitKey::Declaration(declaration) => ScheduleUnit::Declaration(declaration),

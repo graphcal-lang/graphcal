@@ -287,3 +287,47 @@ fn acceptance_does_not_depend_on_declaration_order() {
         check_group(&swapped, &main_dag()).map(|plan| names(&plan)),
     );
 }
+
+/// TIR-12 (#2265): mixed owners with no read leaving the callable's own
+/// members contradict the component being a cycle. That is a bug, never a
+/// rejection blaming the group's own member.
+#[test]
+fn mixed_owners_without_a_crossing_read_are_a_bug() {
+    let facts = GroupFacts {
+        members: vec![
+            member("action", Definition::ForOver(step_axis())),
+            member_in(dag("lib.gcl"), "state", Definition::UnfoldOver(step_axis())),
+        ],
+        reads: vec![read(1, 0, PREVIOUS_KEY)],
+    };
+    assert_eq!(
+        check_group(&facts, &main_dag()).unwrap_err(),
+        ComponentRejection::Bug(SchedulingBug::MixedOwnersWithoutCrossingRead(
+            DeclName::expect_valid("action")
+        ))
+    );
+}
+
+#[test]
+fn mixed_owners_outside_the_callable_are_a_plain_cycle() {
+    let facts = GroupFacts {
+        members: vec![
+            member_in(dag("a.gcl"), "action", Definition::ForOver(step_axis())),
+            member_in(dag("b.gcl"), "state", Definition::UnfoldOver(step_axis())),
+        ],
+        reads: vec![read(0, 1, STEP_KEY), read(1, 0, PREVIOUS_KEY)],
+    };
+    assert_eq!(
+        check_group(&facts, &main_dag()).unwrap_err(),
+        ComponentRejection::PlainCycle
+    );
+}
+
+#[test]
+fn same_step_cycles_are_extracted_from_the_walk() {
+    // 0 -> 1 -> 2 -> 1: the cycle is the repeated part.
+    let targets = |member: usize| [1, 2, 1].get(member).copied().into_iter();
+    assert_eq!(extract_cycle(0, &[0, 1, 2], &targets), Ok(vec![1, 2]));
+    // A member reading no stuck member is a bug in placing the members.
+    assert_eq!(extract_cycle(0, &[0, 1], &targets), Err(1));
+}
