@@ -1851,9 +1851,11 @@ fn wasm_plugin_trust_regimes_for_ad_hoc_and_package_files() {
     );
 }
 
+#[cfg(unix)]
 const ESCAPING_PLUGIN_SOURCE: &str = "import plugin \"plugins/p.wasm\" as p {\nfn value() -> Dimensionless;\n}\npub node x: Dimensionless = p::value();";
 
 /// The M038 diagnostic of a load whose plugin import lives in `loose.gcl`.
+#[cfg(unix)]
 fn assert_m038_in_loose_file(error: &CompileError) {
     match error {
         CompileError::Load(LoadError::WasmPluginOutsidePackageNamespace {
