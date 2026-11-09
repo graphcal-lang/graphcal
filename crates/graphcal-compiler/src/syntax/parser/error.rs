@@ -130,6 +130,8 @@ pub enum InvalidNumberReason {
     Integer(ParseIntError),
     /// The float literal is infinite.
     NonFiniteFloat,
+    /// A float literal with a nonzero significand that rounds to zero.
+    UnderflowingFloat,
     /// An integer literal followed by a unit.
     IntegerWithUnits {
         /// Source spelling of the literal, without `_` separators.
@@ -177,6 +179,9 @@ impl fmt::Display for InvalidNumberReason {
             Self::Float(error) => error.fmt(f),
             Self::Integer(error) => error.fmt(f),
             Self::NonFiniteFloat => f.write_str("floating-point literal must be finite"),
+            Self::UnderflowingFloat => {
+                f.write_str("floating-point literal is too small and underflows to zero")
+            }
             Self::IntegerWithUnits { literal } => write!(
                 f,
                 "integer literal cannot have units; write `{literal}.0` instead"
@@ -446,6 +451,13 @@ impl DiagnosticKind for ParseErrorKind {
             Self::SliceAxisMismatch { expected, .. } => {
                 Some(format!("expected slice axis `{expected}`"))
             }
+            Self::InvalidNumber {
+                reason: InvalidNumberReason::UnderflowingFloat,
+            } => Some(
+                "quantities are binary64 values whose smallest nonzero magnitude is about \
+                 4.9e-324; write `0.0` if zero is intended"
+                    .to_string(),
+            ),
             Self::InvalidNumber { .. } | Self::TableRowLengthMismatch { .. } => None,
             Self::InvalidDomainBoundKey { .. } => {
                 Some("valid domain constraint keys are `min` and `max`".to_string())
@@ -541,6 +553,10 @@ mod tests {
             (
                 InvalidNumberReason::NonFiniteFloat,
                 "floating-point literal must be finite",
+            ),
+            (
+                InvalidNumberReason::UnderflowingFloat,
+                "floating-point literal is too small and underflows to zero",
             ),
             (
                 InvalidNumberReason::IntegerWithUnits {

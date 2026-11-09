@@ -1,5 +1,6 @@
 mod aggregations;
 mod arithmetic;
+mod binary_scale;
 mod complex;
 mod context;
 mod conversions;
@@ -15,6 +16,8 @@ mod linear_algebra_lu;
 pub mod numeric;
 mod operations;
 mod presentation;
+mod product_sum;
+mod range_safe_product;
 mod runtime_failure;
 mod unit_scale;
 

@@ -2011,6 +2011,8 @@ node copied: Int[Fin(4), Fin(4)] = for row: Fin(4), column: Fin(4) {
     );
 }
 
+mod numeric_kernels;
+
 /// The shared execution frame of DAG bodies.
 #[cfg(test)]
 mod execution_frames {

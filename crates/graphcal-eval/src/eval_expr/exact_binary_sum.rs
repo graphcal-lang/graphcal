@@ -1,9 +1,10 @@
-//! Exact sums of finite binary64 values.
+//! Exact sums of finite binary64 values and of their pairwise products.
 //!
 //! Every finite `f64` is an integer multiple of a power of two, so a sum of
-//! them is exactly `scaled * 2^exponent` for an integer `scaled`. Adding a
-//! value only shifts and adds integers: nothing is rounded and no gcd is taken
-//! per term. The total is reduced to a rational once, when it is read.
+//! them (or of products of two of them) is exactly `scaled * 2^exponent` for
+//! an integer `scaled`. Adding a term only shifts and adds integers: nothing
+//! is rounded and no gcd is taken per term. The total is reduced to a
+//! rational once, when it is read.
 
 use std::num::NonZeroUsize;
 
@@ -58,18 +59,37 @@ impl ExactBinarySum {
     }
 
     /// Add `value` exactly.
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "arbitrary-precision integers cannot overflow, and the shifts are differences of binary64 exponents, within [0, 2045]"
-    )]
     pub(super) fn add(&mut self, value: FiniteQuantity) {
-        let Some(Binary {
+        if let Some(Binary {
             significand,
             exponent,
         }) = Binary::of(value)
-        else {
-            return;
-        };
+        {
+            self.add_scaled(BigInt::from(significand), exponent);
+        }
+    }
+
+    /// Add the exact product `lhs * rhs`, which may lie far outside the
+    /// binary64 range.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "two significands of at most 53 bits multiply within i128, and two binary64 exponents add within i32"
+    )]
+    pub(super) fn add_product(&mut self, lhs: FiniteQuantity, rhs: FiniteQuantity) {
+        if let (Some(lhs), Some(rhs)) = (Binary::of(lhs), Binary::of(rhs)) {
+            self.add_scaled(
+                BigInt::from(i128::from(lhs.significand) * i128::from(rhs.significand)),
+                lhs.exponent + rhs.exponent,
+            );
+        }
+    }
+
+    /// Add `significand * 2^exponent` exactly.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "arbitrary-precision integers cannot overflow, and the shifts are differences of (sums of) binary64 exponents, within [0, 4100]"
+    )]
+    fn add_scaled(&mut self, significand: BigInt, exponent: i32) {
         let unit = match self.exponent {
             Some(unit) if unit <= exponent => unit,
             Some(unit) => {
@@ -80,7 +100,7 @@ impl ExactBinarySum {
             None => exponent,
         };
         self.exponent = Some(unit);
-        self.scaled += BigInt::from(significand) << (exponent - unit).unsigned_abs();
+        self.scaled += significand << (exponent - unit).unsigned_abs();
     }
 
     /// The exact total as a reduced rational.
@@ -171,7 +191,34 @@ mod tests {
         assert_eq!(total(&[f64::MAX, -f64::MAX]), BigRational::zero());
     }
 
+    #[test]
+    fn products_outside_the_binary64_range_are_exact() {
+        let mut sum = ExactBinarySum::new();
+        sum.add_product(finite(f64::MAX), finite(f64::MAX));
+        sum.add_product(finite(f64::from_bits(1)), finite(f64::from_bits(1)));
+        sum.add_product(finite(0.0), finite(3.0));
+        let max = BigRational::from_float(f64::MAX).unwrap();
+        let tiny = BigRational::from_float(f64::from_bits(1)).unwrap();
+        assert_eq!(sum.total(), &max * &max + &tiny * &tiny);
+    }
+
     proptest! {
+        #[test]
+        fn products_match_rational_multiplication(
+            lhs in any::<f64>().prop_filter("finite", |value| value.is_finite()),
+            rhs in any::<f64>().prop_filter("finite", |value| value.is_finite()),
+        ) {
+            let mut sum = ExactBinarySum::new();
+            sum.add_product(finite(lhs), finite(rhs));
+            #[expect(
+                clippy::arithmetic_side_effects,
+                reason = "arbitrary-precision rationals cannot overflow"
+            )]
+            let expected =
+                BigRational::from_float(lhs).unwrap() * BigRational::from_float(rhs).unwrap();
+            prop_assert_eq!(sum.total(), expected);
+        }
+
         #[test]
         fn matches_per_term_rational_addition(
             values in proptest::collection::vec(

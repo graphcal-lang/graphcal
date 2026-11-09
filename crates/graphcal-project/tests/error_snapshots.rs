@@ -67,6 +67,17 @@ fn error_duplicate_name() {
 }
 
 #[test]
+fn error_float_literal_underflow() {
+    for (name, source) in [
+        ("dimensionless", "node tiny: Dimensionless = 1e-400;\n"),
+        ("with_unit", "node tiny: Length = 2.5e-330 m;\n"),
+    ] {
+        let rendered = render_error(source, "underflow.gcl");
+        insta::assert_snapshot!(format!("error_float_literal_underflow_{name}"), rendered);
+    }
+}
+
+#[test]
 fn error_unit_name_is_local() {
     let source = include_str!("../../../tests/fixtures/invalid/unit_name_is_local.gcl");
     let rendered = render_error(source, "unit_name_is_local.gcl");

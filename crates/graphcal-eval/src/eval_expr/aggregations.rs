@@ -17,6 +17,7 @@ use thiserror::Error;
 use super::exact_binary_sum::ExactBinarySum;
 use super::kernel_checkpoint::KernelCheckpoint;
 use super::numeric;
+use super::range_safe_product::RangeSafeProduct;
 
 /// Error produced by pure aggregation evaluation.
 #[derive(Debug, Error)]
@@ -95,33 +96,42 @@ pub(super) fn extremum_key(
     })
 }
 
+/// Sum the exact binary64 inputs, rounding only the final total.
+///
+/// The total is correctly rounded and therefore independent of the entry
+/// order: reordering the labels of an `index` never changes a `sum()`, and an
+/// intermediate total beyond the binary64 range does not reject a
+/// representable result. It shares its accumulator with [`aggregate_mean`].
 fn aggregate_sum(
     entries: &[FiniteQuantity],
     control: &mut KernelCheckpoint<'_>,
 ) -> Result<FiniteQuantity, AggregationStop> {
-    // The raw total may overflow midway and still be reported once at the end.
-    let total = entries.iter().try_fold(0.0_f64, |acc, value| {
+    let mut sum = ExactBinarySum::new();
+    for entry in entries {
         control.step()?;
-        Ok::<_, Cancelled>(acc + value.get())
-    })?;
-    numeric::computed_finite_quantity(total, "sum()").map_err(quantity_error)
+        sum.add(*entry);
+    }
+    numeric::rounded_rational(&sum.total(), "sum()").map_err(quantity_error)
 }
 
+/// Multiply the entries, validating only the final product (see
+/// [`RangeSafeProduct`]): success or failure is independent of the entry
+/// order, though the last bits may not be.
 fn aggregate_product(
     entries: &[FiniteQuantity],
     control: &mut KernelCheckpoint<'_>,
 ) -> Result<FiniteQuantity, AggregationStop> {
-    entries
-        .iter()
-        .try_fold(FiniteQuantity::ONE, |product, value| {
-            control.step()?;
-            product.checked_mul(*value).map_err(|error| {
-                quantity_error(numeric::QuantityValidationError::from_arithmetic(
-                    error,
-                    "product()",
-                ))
-            })
-        })
+    let mut product = RangeSafeProduct::new();
+    for entry in entries {
+        control.step()?;
+        product.multiply(*entry);
+    }
+    product.finish().map_err(|error| {
+        quantity_error(numeric::QuantityValidationError::from_arithmetic(
+            error,
+            "product()",
+        ))
+    })
 }
 
 fn aggregate_root_sum_square(
@@ -326,6 +336,54 @@ mod tests {
             aggregate(ValueAggregation::Product, &[f64::MAX, 2.0]),
             Err(Failure::Error(AggregationError::Quantity(
                 numeric::QuantityValidationError::InfiniteResult { .. }
+            )))
+        ));
+    }
+
+    fn quantity_bits(kind: ValueAggregation, values: &[f64]) -> u64 {
+        let RuntimeValue::Quantity(value) = aggregate(kind, values).unwrap() else {
+            panic!("{kind:?} must return a quantity");
+        };
+        value.get().to_bits()
+    }
+
+    #[test]
+    fn sum_is_correctly_rounded_in_every_order() {
+        for values in [
+            [1.0e308, 1.0e308, -1.0e308],
+            [1.0e308, -1.0e308, 1.0e308],
+            [-1.0e308, 1.0e308, 1.0e308],
+        ] {
+            assert_eq!(
+                quantity_bits(ValueAggregation::Sum, &values),
+                1.0e308_f64.to_bits()
+            );
+        }
+        // Naive left-to-right summation gives 0.0 here.
+        assert_eq!(
+            quantity_bits(ValueAggregation::Sum, &[1.0, 1.0e100, 1.0, -1.0e100]),
+            2.0_f64.to_bits()
+        );
+    }
+
+    #[test]
+    fn product_success_is_independent_of_the_order() {
+        for values in [
+            [1.0e-200, 1.0e-200, 1.0e200, 1.0e200],
+            [1.0e200, 1.0e200, 1.0e-200, 1.0e-200],
+            [1.0e-200, 1.0e200, 1.0e-200, 1.0e200],
+        ] {
+            let RuntimeValue::Quantity(value) =
+                aggregate(ValueAggregation::Product, &values).unwrap()
+            else {
+                panic!("product must return a quantity");
+            };
+            assert!((value.get() - 1.0).abs() <= 4.0 * f64::EPSILON);
+        }
+        assert!(matches!(
+            aggregate(ValueAggregation::Product, &[1.0e-200, 1.0e-200]),
+            Err(Failure::Error(AggregationError::Quantity(
+                numeric::QuantityValidationError::UnderflowToZero { .. }
             )))
         ));
     }

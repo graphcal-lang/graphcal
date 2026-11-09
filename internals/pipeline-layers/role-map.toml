@@ -2305,6 +2305,16 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["eval_expr", "binary_scale"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "binary_scale", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["eval_expr", "coordinate_search"]
 role = "interpreter"
 
@@ -2321,6 +2331,26 @@ role = "interpreter"
 [[module]]
 package = "eval"
 path = ["eval_expr", "exact_binary_sum", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "product_sum"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "product_sum", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "range_safe_product"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "range_safe_product", "tests"]
 role = "interpreter"
 
 [[module]]
@@ -2971,6 +3001,11 @@ role = "facade"
 [[module]]
 package = "eval"
 path = ["interpreter_tests", "execution_frames"]
+role = "facade"
+
+[[module]]
+package = "eval"
+path = ["interpreter_tests", "numeric_kernels"]
 role = "facade"
 
 [[module]]

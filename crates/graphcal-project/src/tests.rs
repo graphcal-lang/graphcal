@@ -5554,6 +5554,18 @@ fn eval_nonzero_multiplication_underflow_is_an_error() {
 }
 
 #[test]
+fn constant_quantity_literal_underflow_is_a_compile_error() {
+    for source in [
+        "const unit tiny: Length = 1.0e-300 m;\nconst node c: Length = 1.0e-30 tiny;",
+        "const unit tiny: Length = 1.0e-300 m;\nindex R = range(0.0 m, 1.0e-30 tiny, step: 1.0e-30 tiny);\nnode n: Int = count(for r: R { coord(r) });",
+    ] {
+        let error = compile_and_eval(source).unwrap_err();
+        let rendered = format!("{error} {error:?}");
+        assert!(rendered.contains("Underflow"), "{source}: {rendered}");
+    }
+}
+
+#[test]
 fn eval_int_division_by_zero() {
     assert_node_error(
         "param x: Int = 10;\nnode y: Int = div_trunc(@x, 0);",

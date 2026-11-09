@@ -153,18 +153,32 @@ impl<'src> Parser<'src> {
     }
 
     /// Parse a finite `f64` literal from already-normalized token text.
+    ///
+    /// A literal whose significand has a nonzero digit must not round to
+    /// zero: `1e-400` is rejected rather than silently read as `0`, just as
+    /// `1e400` is rejected rather than read as infinity.
     fn parse_finite_f64_literal(text: &str, span: Span) -> Result<f64, ParseError> {
         let value: f64 = text
             .parse()
             .map_err(|error| Self::invalid_number(InvalidNumberReason::Float(error), span))?;
-        if value.is_finite() {
-            Ok(value)
-        } else {
-            Err(Self::invalid_number(
+        if !value.is_finite() {
+            return Err(Self::invalid_number(
                 InvalidNumberReason::NonFiniteFloat,
                 span,
-            ))
+            ));
         }
+        let significand = text.split(['e', 'E']).next().unwrap_or(text);
+        if value == 0.0
+            && significand
+                .bytes()
+                .any(|digit| matches!(digit, b'1'..=b'9'))
+        {
+            return Err(Self::invalid_number(
+                InvalidNumberReason::UnderflowingFloat,
+                span,
+            ));
+        }
+        Ok(value)
     }
 
     /// Parse a single expression from the source string.
