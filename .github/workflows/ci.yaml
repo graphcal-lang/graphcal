@@ -83,9 +83,12 @@ jobs:
 
       - uses: $/.github/actions/report-engine-tools
 
+      # Hawk defaults to a target directory under $TMPDIR; keep it under
+      # `target/` so the cache volume reuses the instrumented dependency builds.
       - name: Check closed-world public surface
         run: >-
           cargo hawk check -D warnings
+          --target-dir target/hawk
           --exclude-crate graphcal_compiler
           --exclude-crate graphcal_eval
           --exclude-crate graphcal_io
