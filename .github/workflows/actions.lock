@@ -20,6 +20,7 @@ workflows:
         - 'hustcer/setup-nu@v3.27'
         - 'j178/prek-action@v3.1.0'
         - 'leanprover/lean-action@v1.6.2'
+        - 'namespacelabs/nscloud-cache-action@v1.7.0'
         - 'swatinem/rust-cache@v2.9.3'
         - 'taiki-e/install-action@v2.87.31'
     '.github/workflows/docs.yaml':
@@ -166,6 +167,11 @@ dependencies:
         repo_id: 795738301
         uses:
             - 'actions/cache@caa296126883cff596d87d8935842f9db880ef25'
+    'namespacelabs/nscloud-cache-action@v1.7.0':
+        ref: 'v1.7.0'
+        commit: 'sha1-1124a6f3ce44e5cf84cc22111530961f4d2a15f9'
+        owner_id: 90391633
+        repo_id: 661707400
     'peter-evans/create-pull-request@v8.1.1':
         ref: 'v8.1.1'
         commit: 'sha1-5f6978faf089d4d20b00c7766989d076bb2fc7f1'

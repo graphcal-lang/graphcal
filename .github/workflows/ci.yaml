@@ -12,9 +12,12 @@ env:
 permissions:
   contents: read
 
+# The Rust-heavy jobs run on Namespace runner profiles, which attach a cache
+# volume that only `main` may update. Runs inside forked repositories have no
+# access to them and fall back to GitHub-hosted runners.
 jobs:
   checks:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
     env:
       CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
     steps:
@@ -26,6 +29,13 @@ jobs:
         run: rustup toolchain install --no-self-update
 
       - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - uses: $/.github/actions/report-engine-tools
 
@@ -50,7 +60,7 @@ jobs:
         run: git diff --exit-code
 
   public-surface:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -58,6 +68,12 @@ jobs:
 
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - uses: taiki-e/install-action@v2.87.31
         with:
@@ -106,7 +122,7 @@ jobs:
         run: cargo deny --locked check --hide-inclusion-graph
 
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -119,6 +135,13 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - uses: $/.github/actions/report-engine-tools
 
@@ -126,7 +149,7 @@ jobs:
         run: cargo test --workspace
 
   formal:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -151,6 +174,13 @@ jobs:
         run: rustup toolchain install --no-self-update
 
       - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - name: Compare Rust V002 with the exhaustive Lean oracle
         env:
@@ -167,7 +197,7 @@ jobs:
           template_closure_matches_lean_oracle -- --ignored
 
   qa-corpus:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
     timeout-minutes: 30
     env:
       UV_VERSION: "0.12.x"
@@ -191,6 +221,13 @@ jobs:
         run: rustup toolchain install --no-self-update
 
       - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - uses: $/.github/actions/report-engine-tools
 
@@ -227,7 +264,7 @@ jobs:
           if-no-files-found: ignore
 
   windows:
-    runs-on: windows-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-windows-2022' || 'windows-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -240,8 +277,15 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
         with:
           key: windows
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - uses: $/.github/actions/report-engine-tools
 
@@ -252,7 +296,7 @@ jobs:
         run: cargo test --workspace --no-fail-fast
 
   wasm:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
     env:
       CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
     steps:
@@ -267,6 +311,13 @@ jobs:
         run: rustup target add wasm32-unknown-unknown
 
       - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - uses: taiki-e/install-action@v2.87.31
         with:
@@ -309,7 +360,7 @@ jobs:
         run: git diff --exit-code
 
   coverage:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -319,6 +370,13 @@ jobs:
         run: rustup toolchain install --no-self-update
 
       - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2.87.31
@@ -343,7 +401,7 @@ jobs:
           fail_ci_if_error: true
 
   msrv:
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -351,6 +409,12 @@ jobs:
 
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - uses: taiki-e/install-action@v2.87.31
         with:
