@@ -79,6 +79,11 @@ impl Schedules {
                     span,
                     GraphError::RejectedRecurrence { name, reason },
                 ),
+                ScheduleRejection::Bug(bug) => SemanticError::internal_error(
+                    bug.to_string(),
+                    src,
+                    crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+                ),
             })
             .map_err(Outcome::Failed)
         })?;

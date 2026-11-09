@@ -1,7 +1,7 @@
 //! Shared frame mechanics. Expression interpretation and result reporting are adapters.
 
 use crate::constant_pools::RuntimeValueMap;
-use crate::domain_check::check_domain_constraint;
+use crate::domain_check::{DomainViolation, check_domain_constraint};
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval::types::{NodeUnavailable, RuntimeUnavailable};
 use crate::execution_plan::{
@@ -369,10 +369,10 @@ impl<'a> ExecutionFrame<'a> {
         source: SourceId,
         span: Span,
     ) -> Result<(), SemanticError> {
-        if let Some(error) = Self::domain_violation(&value, domain, source, span) {
+        if let Some(failure) = Self::domain_violation(&value, domain) {
             self.values.remove(key);
             self.presented.remove(key);
-            return self.failure(key, error);
+            return self.failure(key, Self::violation_error(failure, source, span));
         }
         self.store(key, value);
         Ok(())
@@ -404,16 +404,21 @@ impl<'a> ExecutionFrame<'a> {
         self.bind(key, domain, value, source, span)
     }
 
-    /// The domain violation of `value`, as the diagnostic `bind` reports.
+    /// The domain violation of `value`, if any.
     fn domain_violation(
         value: &EvaluatedRuntimeValue,
         domain: Option<&ResolvedDomainConstraint>,
+    ) -> Option<Failure<DomainViolation>> {
+        check_domain_constraint(&value.value(), domain?).err()
+    }
+
+    /// The diagnostic of a domain violation of the value declared at `span`.
+    fn violation_error(
+        failure: Failure<DomainViolation>,
         source: SourceId,
         span: Span,
-    ) -> Option<SemanticError> {
-        let constraint = domain?;
-        let failure = check_domain_constraint(&value.value(), constraint).err()?;
-        Some(match failure {
+    ) -> SemanticError {
+        match failure {
             Failure::Error(violation) => SemanticError::located(
                 source,
                 span,
@@ -422,7 +427,7 @@ impl<'a> ExecutionFrame<'a> {
                 ),
             ),
             Failure::Invariant(invariant) => invariant.into_internal_error(source),
-        })
+        }
     }
 
     /// Run every unit of the callable that is not already bound, in order.
@@ -708,17 +713,21 @@ impl<'a> ExecutionFrame<'a> {
                 );
                 let failure = match result {
                     Ok(value) => {
-                        match Self::domain_violation(
-                            &value,
-                            steps[position].declaration().domain(),
-                            source,
-                            span,
-                        ) {
+                        match Self::domain_violation(&value, steps[position].declaration().domain())
+                        {
                             None => {
                                 slots.set(position, step, ElementSlot::Computed(value));
                                 continue;
                             }
-                            Some(error) => error,
+                            // The member's value is indexed by the group's
+                            // axis: its element at `at` violates the domain.
+                            Some(failure) => Self::violation_error(
+                                failure.map_error(|violation| {
+                                    violation.at_entry(at.entry_key().into_owned())
+                                }),
+                                source,
+                                span,
+                            ),
                         }
                     }
                     Err(Outcome::Cancelled) => return Err(Outcome::Cancelled.into()),

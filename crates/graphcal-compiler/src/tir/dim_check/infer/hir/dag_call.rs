@@ -27,13 +27,13 @@ impl Infer<'_> {
         output_name: &crate::syntax::decl_name::DeclName,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
+        // Resolution reports an inline call of an undeclared dag (G008), so
+        // a checked call names a dag of the program.
         let dag_tir = self.env.tir.dag(&target.value).ok_or_else(|| {
-            SemanticError::located(
+            SemanticError::internal_error(
+                format!("inline call target `{}` has no checked dag", target.value),
                 self.env.src,
-                target.span,
-                GraphError::UnknownDag {
-                    name: target.value.clone(),
-                },
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(target.span),
             )
         })?;
 

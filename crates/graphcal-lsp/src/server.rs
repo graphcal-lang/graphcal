@@ -2893,6 +2893,24 @@ param mass: Mass;
     }
 
     #[test]
+    fn library_file_with_required_type_port_has_no_diagnostics() {
+        // TIR-2 (#2265): a root declaration mentioning a required type port
+        // used to report an internal error (X001).
+        let text = "\
+pub(bind) type T;
+pub type Box { Box(v: T) }
+param b: T;
+param boxed: Box;
+";
+        let analysis = run_analysis(&untitled_uri(), text, &[], test_plugin_host());
+        assert!(
+            analysis.has_no_diagnostics(),
+            "library file should have no diagnostics, got: {:?}",
+            analysis.diagnostics
+        );
+    }
+
+    #[test]
     fn executable_file_with_dim_mismatch_still_reports_diagnostic() {
         // Not a library (no required params/indexes) — real dim errors must still
         // surface, i.e., the library bypass must not swallow genuine diagnostics.

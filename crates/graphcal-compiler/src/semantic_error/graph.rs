@@ -90,8 +90,6 @@ pub enum GraphError {
         name: DeclName,
         reason: RecurrenceRejection,
     },
-    #[error("unknown dag `{name}`")]
-    UnknownDag { name: DagId },
     #[error("unknown param `{name}` in DAG call to `{dag_name}`")]
     UnknownDagParam { name: DeclName, dag_name: DagId },
     #[error(
@@ -128,7 +126,6 @@ impl DiagnosticKind for GraphError {
         match self {
             Self::DagCallInCompileTime { .. } => "graphcal::G007",
             Self::CyclicDependency { .. } | Self::RejectedRecurrence { .. } => "graphcal::G001",
-            Self::UnknownDag { .. } => "graphcal::G002",
             Self::UnknownDagParam { .. } => "graphcal::G003",
             Self::MissingDagBindings { .. } => "graphcal::G004",
             Self::UnknownDagOutput { .. } => "graphcal::G005",
@@ -146,7 +143,6 @@ impl DiagnosticKind for GraphError {
             }
             Self::CyclicDependency { .. } => Some("involved in cycle".to_owned()),
             Self::RejectedRecurrence { reason, .. } => Some(reason.label()),
-            Self::UnknownDag { .. } => Some("unknown dag".to_owned()),
             Self::UnknownDagParam { dag_name, .. } => Some(format!("not a param in `{dag_name}`")),
             Self::MissingDagBindings { .. } => Some("missing binding(s)".to_owned()),
             Self::UnknownDagOutput { dag_name, .. } => {
@@ -165,7 +161,6 @@ impl DiagnosticKind for GraphError {
             Self::DagCallInCompileTime { .. } => Some("a DAG call is an anonymous runtime include; call it from a `node`, `param` default, assertion, or visualization expression instead".to_owned()),
             Self::CyclicDependency { .. } => Some("declarations cannot form dependency cycles".to_owned()),
             Self::RejectedRecurrence { reason, .. } => Some(reason.help()),
-            Self::UnknownDag { .. } => Some("the inline call references a dag that is not declared in this file".to_owned()),
             Self::UnknownDagParam { .. } => Some("the binding name must match a `param` declared in the called DAG".to_owned()),
             Self::MissingDagBindings { .. } => Some("every required `param` declared in the DAG must be bound at each `include` or call site".to_owned()),
             Self::UnknownDagOutput { .. } => Some("the projection after `)::` must name a param input port, an explicitly exported node, or a public include-output alias in the called DAG".to_owned()),
@@ -181,7 +176,6 @@ impl DiagnosticKind for GraphError {
             Self::DagCallInCompileTime { .. }
             | Self::CyclicDependency { .. }
             | Self::RejectedRecurrence { .. }
-            | Self::UnknownDag { .. }
             | Self::UnknownDagParam { .. }
             | Self::MissingDagBindings { .. }
             | Self::UnknownDagOutput { .. }

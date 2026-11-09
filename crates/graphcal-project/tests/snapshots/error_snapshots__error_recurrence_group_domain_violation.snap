@@ -1,0 +1,5 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+at #0: below minimum (-0.3)

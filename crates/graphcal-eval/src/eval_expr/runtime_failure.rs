@@ -9,7 +9,6 @@
 use graphcal_compiler::builtin::ScalarFn;
 use graphcal_compiler::hir::expr::ExternFnRef;
 use graphcal_compiler::ratio::ExactPowerError;
-use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 use graphcal_compiler::semantic::scalar_function::BuiltinEvalError;
 use graphcal_compiler::semantic::unit_scale::PositiveFiniteScaleError;
@@ -67,8 +66,6 @@ pub(super) enum RuntimeFailure {
     Aggregation(#[from] AggregationError),
     #[error(transparent)]
     LinearAlgebra(#[from] LinearAlgebraError),
-    #[error(transparent)]
-    Unbound(#[from] UnboundReference),
     #[error("fin_key: {position} out of bounds for {axis}")]
     FinKeyOutOfBounds { position: i64, axis: IndexTypeRef },
     #[error("{}: no coordinate of `{axis}` is {} the target", search.kind().as_str(), relation(*search))]
@@ -76,8 +73,6 @@ pub(super) enum RuntimeFailure {
         search: CoordinateSearch,
         axis: IndexTypeRef,
     },
-    #[error("unfold requires a coordinate index, but `{0}` is not coordinate-valued")]
-    UnfoldWithoutCoordinates(IndexTypeRef),
     #[error("field `{constructor}.{field}` {violation}")]
     FieldConstraint {
         constructor: ConstructorName,
@@ -138,17 +133,6 @@ impl std::fmt::Display for UnitScaleContext {
             Self::Compound => "compound unit scale",
         })
     }
-}
-
-/// A reference whose value is not bound where it is read.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub(super) enum UnboundReference {
-    #[error("undefined constant `{0}`")]
-    Constant(ResolvedDeclName),
-    #[error("undefined local variable")]
-    Local,
-    #[error("undefined graph reference `@{0}`")]
-    GraphRef(ResolvedDeclName),
 }
 
 /// Why a plugin function call failed.

@@ -9,7 +9,7 @@
         "action": {
           "error": {
             "kind": "eval_failed",
-            "message": "below minimum (-0.3)"
+            "message": "at #0: below minimum (-0.3)"
           }
         },
         "state": {

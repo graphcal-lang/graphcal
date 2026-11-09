@@ -1744,6 +1744,61 @@ fn include_requires_every_required_static_input_category() {
     }
 }
 
+/// TIR-2 (#2265): a file module whose root declarations mention its own
+/// required type port is a valid library. Checking it alone, and including it
+/// with the port bound, must succeed; evaluating it as the entry DAG reports
+/// the unbound port (I010), never an internal error.
+#[test]
+fn file_root_declarations_may_mention_a_required_type_port() {
+    let (_directory, root) = write_pipeline_project(
+        &[
+            (
+                "lib.gcl",
+                "pub(bind) type T;\nparam b: T;\npub node out: T = @b;",
+            ),
+            (
+                "boxed.gcl",
+                "pub(bind) type T;\npub type Box { Box(v: T) }\nparam b: Box;",
+            ),
+            (
+                "main.gcl",
+                "pub type Outer { Leaf }\n\
+                 include pipeline.lib(type T: Outer, b: Leaf) as inst;\n\
+                 node o: Outer = @inst::out;",
+            ),
+        ],
+        "main.gcl",
+    );
+    let libraries = [
+        root.with_file_name("lib.gcl"),
+        root.with_file_name("boxed.gcl"),
+    ];
+    for file in libraries.iter().chain([&root]) {
+        let project = crate::loader::load_project(file, None, &fs()).unwrap();
+        ProjectCompiler::new(&project)
+            .check()
+            .unwrap_or_else(|error| panic!("{} must check: {error}", file.display()));
+    }
+    let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
+    assert!(
+        result
+            .nodes()
+            .any(|(name, value)| name.to_string() == "o" && value.is_ok())
+    );
+
+    for library in &libraries {
+        let error = compile_and_eval_project(library, &HashMap::new(), None, &fs()).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(IndexError::RequiredStaticInputNotBound { kind: graphcal_compiler::static_interface::StaticInputKind::Type, name }), .. }), .. })
+                    if name.as_str() == "T"
+            ),
+            "{error:?}"
+        );
+    }
+}
+
 #[test]
 fn fixed_static_declarations_are_not_binding_ports() {
     let (_directory, root) = write_pipeline_project(

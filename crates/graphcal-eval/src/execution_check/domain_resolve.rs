@@ -305,6 +305,20 @@ fn collect_concrete_nominal_applications(
                     collect_concrete_nominal_applications(type_arg, tir, src, applications)?;
                 }
             }
+            // A required type the module leaves unbound (`pub(bind) type T;`)
+            // has no constructors, so it carries no field constraints; an
+            // include binds it to a concrete type checked where it is bound.
+            if tir
+                .struct_type_def(identity.resolved())
+                .is_some_and(|definition| {
+                    matches!(
+                        definition.kind(),
+                        graphcal_compiler::hir::nominal::NominalTypeKind::Required
+                    )
+                })
+            {
+                return Ok(());
+            }
             let application = ConcreteNominalApplication {
                 identity: identity.clone(),
                 generic_args: generic_args.clone(),

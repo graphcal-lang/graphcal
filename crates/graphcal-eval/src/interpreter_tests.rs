@@ -454,6 +454,104 @@ fn assert_negative_runtime_tolerance_expression_errors() {
     }
 }
 
+/// Evaluate the only assertion of `source` with `operand` standing in for
+/// every operand evaluation.
+fn evaluate_with(
+    source: &str,
+    mut operand: impl FnMut() -> Result<
+        crate::runtime_value::RuntimeValue,
+        graphcal_compiler::outcome::Outcome<SemanticError>,
+    >,
+) -> Result<
+    crate::eval::types::AssertResult<graphcal_compiler::resolved_name::ResolvedDeclName>,
+    crate::assertion_eval::Aborted,
+> {
+    let (tir, _, _) = crate::test_tir::checked_tir_from_source(source).unwrap();
+    let (unit, body) = tir
+        .declaration_bodies(graphcal_compiler::tir::typed::dag_position::DagPosition::ROOT)
+        .find_map(|unit| match unit.kind() {
+            graphcal_compiler::tir::typed::BodyKind::Assert(body) => Some((unit, body)),
+            _ => None,
+        })
+        .unwrap();
+    crate::assertion_eval::evaluate_assert_with_expected_fail(
+        body.map(|entry| &*entry.body),
+        unit.expected_fail(),
+        &mut |_| operand(),
+    )
+}
+
+const CONDITION: &str = "assert holds = 1.0 > 0.0;";
+const TOLERANCE: &str = "assert near = 1.0 m ~= 1.0 m +/- 0.1 m;";
+const PER_VARIANT: &str = "index Mode = { A, B };\n\
+    #[expected_fail(Mode#A)]\n\
+    assert holds = for m: Mode { 1.0 > 0.0 };";
+
+/// EV-9 (#2265): a bug inside an assertion aborts the run as an internal
+/// error instead of becoming an assertion error of the program.
+#[test]
+fn bugs_inside_assertions_abort_instead_of_erroring_the_assertion() {
+    for source in [CONDITION, TOLERANCE, PER_VARIANT] {
+        let src = graphcal_compiler::source_registry::SourceRegistry::new()
+            .register("main.gcl", std::sync::Arc::new(String::new()));
+        let internal = evaluate_with(source, || {
+            Err(graphcal_compiler::outcome::Outcome::Failed(
+                SemanticError::internal_error(
+                    "broken",
+                    src,
+                    graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+                ),
+            ))
+        });
+        assert!(
+            matches!(internal, Err(crate::assertion_eval::Aborted::Internal(ref error)) if error.message() == "broken"),
+            "{source}: {internal:?}"
+        );
+        let wrong_shape = evaluate_with(source, || Ok(crate::runtime_value::RuntimeValue::Int(1)));
+        assert!(
+            matches!(
+                wrong_shape,
+                Err(crate::assertion_eval::Aborted::Invariant(_))
+            ),
+            "{source}: {wrong_shape:?}"
+        );
+        assert!(matches!(
+            evaluate_with(source, || Err(
+                graphcal_compiler::outcome::Outcome::Cancelled
+            )),
+            Err(crate::assertion_eval::Aborted::Cancelled)
+        ));
+    }
+}
+
+/// A user-facing runtime failure of an operand.
+#[derive(Debug, thiserror::Error)]
+#[error("division by zero")]
+struct DivisionByZero;
+
+#[test]
+fn program_errors_inside_assertions_stay_assertion_errors() {
+    let src = graphcal_compiler::source_registry::SourceRegistry::new()
+        .register("main.gcl", std::sync::Arc::new(String::new()));
+    let result = evaluate_with(CONDITION, || {
+        Err(graphcal_compiler::outcome::Outcome::Failed(
+            SemanticError::located(
+                src,
+                graphcal_compiler::syntax::span::Span::new(0, 0),
+                graphcal_compiler::semantic_error::evaluation::EvaluationError::Runtime(
+                    graphcal_compiler::semantic_error::evaluation::EvaluatorFailure::new(
+                        DivisionByZero,
+                    ),
+                ),
+            ),
+        ))
+    });
+    assert!(
+        matches!(result, Ok(AssertResult::Error { ref message }) if message.contains("division by zero")),
+        "{result:?}"
+    );
+}
+
 #[test]
 fn assert_on_failed_dependency_reports_dependency_failure() {
     // #814: an assertion referencing a failed node reports the dependency
@@ -2175,4 +2273,54 @@ mod execution_frames {
         impl<T: ?Sized + std::ops::DerefMut> ReadOnlyUnlessMutable<Mutable> for T {}
         let _ = <crate::eval_expr::EvalSession<'static> as ReadOnlyUnlessMutable<_>>::probe;
     };
+}
+
+/// EV-16 (#2265): a reference the checker bound but the evaluator finds
+/// unbound is an evaluator bug, reported as an internal error rather than as
+/// a runtime failure of the program.
+#[test]
+fn unbound_references_are_internal_errors() {
+    let (tir, src, sources) = crate::test_tir::checked_tir_from_source(
+        "index Phase = { Burn, Coast };\n\
+         node picked: Key<Phase>[Phase] = for p: Phase { p };",
+    )
+    .unwrap();
+    let ctx = crate::eval_expr::EvalSession::provisional_constants(
+        &tir,
+        src,
+        &sources,
+        graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    );
+    let key = tir
+        .root()
+        .body_for_test()
+        .bound_decl_identity(&graphcal_compiler::syntax::module_name::ScopedName::local(
+            graphcal_compiler::syntax::decl_name::DeclName::expect_valid("picked"),
+        ))
+        .unwrap()
+        .clone();
+    let expression = tir
+        .declaration_body(&key)
+        .unwrap()
+        .runtime_expression()
+        .unwrap();
+    let executable = expression.executable().unwrap();
+    let values = crate::eval_expr::RuntimeValueMap::new();
+    // The body of the comprehension, evaluated without its binding.
+    let graphcal_compiler::tir::typed::scoped_node::NodeKind::For { body, .. } =
+        executable.root().kind()
+    else {
+        panic!("`picked` is a for-comprehension");
+    };
+    let locals = crate::eval_expr::HirLocalValueMap::root();
+    let unbound_local =
+        crate::eval_expr::eval_subtree_for_test(body, &values, &locals, &ctx).unwrap_err();
+    assert!(
+        matches!(
+            &unbound_local,
+            graphcal_compiler::outcome::Outcome::Failed(SemanticError::Internal(internal))
+                if internal.message().contains("local variable is not bound")
+        ),
+        "{unbound_local:?}"
+    );
 }
