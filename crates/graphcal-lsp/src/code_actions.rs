@@ -38,8 +38,9 @@ pub fn code_actions(
     let mut actions = Vec::new();
 
     let uri = &params.text_document.uri;
+    let published = analysis.diagnostics.get(uri).map_or(&[][..], Vec::as_slice);
     for diag in &params.context.diagnostics {
-        match RepairData::of(diag) {
+        match RepairData::recover(diag, published) {
             Some(RepairData::ExactExponent { replacement }) => {
                 actions.push(make_exact_power_action(diag, uri, replacement));
             }
@@ -179,7 +180,7 @@ fn make_add_visibility_action(
     item: &str,
     visibility: AddedVisibility,
 ) -> Option<CodeActionOrCommand> {
-    let definition = analysis.symbol_table.unique_definition_named(item)?;
+    let definition = visibility_target(diag, analysis, source, item)?;
     let (target, new_text) = match declaration_head(source, definition.decl_span)? {
         // `pub index I;` becomes `pub(bind) index I;`.
         DeclarationHead::Visibility(prefix) => (prefix, visibility.marker().to_string()),
@@ -265,6 +266,30 @@ fn selection_list_start(source: &str, include: Span) -> Option<usize> {
         previous = Some(token);
     }
     None
+}
+
+/// The declaration of `item` a visibility fix edits: the only one spelled
+/// so, or, when independent scopes each declare one, the one the
+/// diagnostic's range lies in (V002 points at the declaration itself).
+fn visibility_target<'a>(
+    diag: &Diagnostic,
+    analysis: &'a AnalysisResult,
+    source: &str,
+    item: &str,
+) -> Option<&'a crate::symbol_table::DefinitionInfo> {
+    let candidates = analysis.symbol_table.declarations_named(item);
+    match candidates.as_slice() {
+        [only] => Some(*only),
+        many => {
+            let at = crate::convert::position_to_byte_offset(source, diag.range.start);
+            let mut containing = many.iter().filter(|definition| {
+                definition.decl_span.offset() <= at
+                    && at < definition.decl_span.offset() + definition.decl_span.len()
+            });
+            let found = containing.next()?;
+            containing.next().is_none().then_some(*found)
+        }
+    }
 }
 
 /// What a declaration starts with once its attributes are skipped.
@@ -403,6 +428,52 @@ mod tests {
         };
         let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
         crate::test_edits::apply_text_edits(source, edits)
+    }
+
+    /// A V002 in one of two DAGs that each declare `Phase` edits the
+    /// declaration the diagnostic points at.
+    #[test]
+    fn v002_picks_the_declaration_its_range_points_at() {
+        let source = "\
+dag stage_one {
+    pub(bind) index Phase;
+    param x: Dimensionless[Phase];
+}
+dag stage_two {
+    index Phase;
+    param y: Dimensionless[Phase];
+}
+";
+        let updated = apply_first_quick_fix(source, "graphcal::V002");
+        assert!(
+            updated.contains("dag stage_two {\n    pub(bind) index Phase;"),
+            "{updated}"
+        );
+        let uri = Url::parse("untitled:fix.gcl").unwrap();
+        let checked = crate::analysis_pipeline::run_analysis_for_test(&uri, &updated);
+        assert!(
+            checked.has_no_diagnostics(),
+            "{updated}: {:?}",
+            checked.diagnostics
+        );
+    }
+
+    /// A client without diagnostic-data support sends V002 back without its
+    /// payload; the fix is recovered from the published diagnostic.
+    #[test]
+    fn repair_is_recovered_when_the_client_drops_diagnostic_data() {
+        let source = "node a: Dimensionless = 1.0; index Phase;\n";
+        let uri = Url::parse("untitled:fix.gcl").unwrap();
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
+        let mut returned = analysis.diagnostics[&uri][0].clone();
+        assert!(returned.data.is_some());
+        returned.data = None;
+        let actions = code_actions(&make_params(&uri, vec![returned]), &analysis, source)
+            .expect("a recovered quick fix");
+        let CodeActionOrCommand::CodeAction(action) = &actions[0] else {
+            panic!("expected CodeAction");
+        };
+        assert_eq!(action.title, "Add `pub(bind)` to `Phase`");
     }
 
     /// #2285: V008's fix selects the missing type, and the program compiles.

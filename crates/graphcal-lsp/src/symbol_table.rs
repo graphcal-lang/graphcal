@@ -1355,23 +1355,27 @@ impl SymbolTable {
             .collect()
     }
 
-    pub fn unique_definition_named(&self, name: &str) -> Option<&DefinitionInfo> {
-        let mut matches = self.definitions.values().filter(|definition| {
-            definition.name == name
-                && !definition.name_span.is_empty()
-                && !matches!(
-                    definition.category,
-                    SymbolCategory::Constructor
-                        | SymbolCategory::Field
-                        | SymbolCategory::GenericParam
-                        | SymbolCategory::LocalVar
-                        | SymbolCategory::BuiltinFn
-                        | SymbolCategory::BuiltinConst
-                        | SymbolCategory::ExternFn
-                )
-        });
-        let definition = matches.next()?;
-        matches.next().is_none().then_some(definition)
+    /// Every source declaration spelled `name`, across all of the file's
+    /// scopes (independent DAGs may each declare one), excluding members,
+    /// locals and built-ins.
+    pub fn declarations_named(&self, name: &str) -> Vec<&DefinitionInfo> {
+        self.definitions
+            .values()
+            .filter(|definition| {
+                definition.name == name
+                    && !definition.name_span.is_empty()
+                    && !matches!(
+                        definition.category,
+                        SymbolCategory::Constructor
+                            | SymbolCategory::Field
+                            | SymbolCategory::GenericParam
+                            | SymbolCategory::LocalVar
+                            | SymbolCategory::BuiltinFn
+                            | SymbolCategory::BuiltinConst
+                            | SymbolCategory::ExternFn
+                    )
+            })
+            .collect()
     }
 }
 

@@ -96,6 +96,19 @@ impl RepairData {
     pub fn of(diagnostic: &Diagnostic) -> Option<Self> {
         serde_json::from_value(diagnostic.data.clone()?).ok()
     }
+
+    /// The repair of a diagnostic the client sent back, recovered from the
+    /// one `published` diagnostic with the same code and range when the
+    /// client dropped `data` (it does not support diagnostic data).
+    pub fn recover(diagnostic: &Diagnostic, published: &[Diagnostic]) -> Option<Self> {
+        Self::of(diagnostic).or_else(|| {
+            let mut matching = published.iter().filter(|candidate| {
+                candidate.code == diagnostic.code && candidate.range == diagnostic.range
+            });
+            let only = matching.next()?;
+            matching.next().is_none().then(|| Self::of(only)).flatten()
+        })
+    }
 }
 
 #[cfg(test)]
@@ -139,5 +152,33 @@ mod tests {
             }))
         );
         assert_eq!(RepairData::of(&Diagnostic::default()), None);
+    }
+
+    #[test]
+    fn a_repair_is_recovered_only_from_one_matching_published_diagnostic() {
+        let repair = RepairData::ExactExponent {
+            replacement: "(1/4)".to_string(),
+        };
+        let code = Some(tower_lsp::lsp_types::NumberOrString::String(
+            "graphcal::D020".to_string(),
+        ));
+        let published = Diagnostic {
+            code: code.clone(),
+            data: repair.to_value(),
+            ..Default::default()
+        };
+        let returned = Diagnostic {
+            code,
+            ..Default::default()
+        };
+        assert_eq!(
+            RepairData::recover(&returned, std::slice::from_ref(&published)),
+            Some(repair)
+        );
+        assert_eq!(
+            RepairData::recover(&returned, &[published.clone(), published]),
+            None
+        );
+        assert_eq!(RepairData::recover(&returned, &[]), None);
     }
 }
