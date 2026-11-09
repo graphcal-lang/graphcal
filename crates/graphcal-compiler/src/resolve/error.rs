@@ -229,6 +229,28 @@ pub enum ModuleResolveError {
     },
 }
 
+impl ModuleResolveError {
+    /// Report a failed item lookup in an include's `instance` against the
+    /// `template` the include names in source: the instance is an internal
+    /// identity with no source spelling.
+    #[must_use]
+    pub(super) fn reported_in_template(mut self, instance: &DagId, template: &DagId) -> Self {
+        match &mut self {
+            Self::UnknownName { owner, .. }
+            | Self::WrongImportCategory { owner, .. }
+            | Self::IncludeItemNotProjectable { owner, .. }
+            | Self::PrivateName { owner, .. }
+            | Self::PrivateImportItem { owner, .. }
+                if owner == instance =>
+            {
+                *owner = template.clone();
+            }
+            _ => {}
+        }
+        self
+    }
+}
+
 /// A cancellable resolver stage that fails with a [`ModuleResolveError`]
 /// reports it as [`Outcome::Failed`](crate::outcome::Outcome::Failed).
 impl From<ModuleResolveError> for crate::outcome::Outcome<ModuleResolveError> {

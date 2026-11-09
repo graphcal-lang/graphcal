@@ -53,11 +53,21 @@ pub(super) fn module_resolve_compile_error(
     err: ModuleResolveError,
     src: SourceId,
 ) -> PipelineError {
+    module_resolve_compile_error_at(err, src, src.whole_span())
+}
+
+/// [`module_resolve_compile_error`] for a failure of the source construct at
+/// `site`, where an error that carries no span of its own is anchored.
+pub(super) fn module_resolve_compile_error_at(
+    err: ModuleResolveError,
+    src: SourceId,
+    site: Span,
+) -> PipelineError {
     match err {
         ModuleResolveError::PrivateName { owner, name, .. } => {
             PipelineError::Semantic(SemanticError::located(
                 src,
-                src.whole_span(),
+                site,
                 VisibilityError::ImportPrivateItem {
                     name,
                     file_path: DagReference::Dag(owner),
@@ -145,7 +155,7 @@ pub(super) fn module_resolve_compile_error(
         ),
         other => PipelineError::Semantic(SemanticError::located(
             src,
-            src.whole_span(),
+            site,
             ModuleError::resolution(other),
         )),
     }

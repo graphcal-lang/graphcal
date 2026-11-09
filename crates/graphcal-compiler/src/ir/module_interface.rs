@@ -298,11 +298,12 @@ impl ModuleInterface {
                 }
             }
             DeclKind::Include(include) => match &include.kind {
-                // Selected include items re-export instance outputs, which
-                // always live in the Term namespace.
+                // A `pub` selected include item re-exports its projection in
+                // the namespace it was selected from, exactly as a `pub`
+                // selective import does.
                 ImportKind::Selective(items) => {
                     for item in items.iter().filter(|item| item.visibility.is_public()) {
-                        self.insert_reexport(ImportItemNamespace::Term, item.local_name_atom());
+                        self.insert_reexport(item.namespace, item.local_name_atom());
                     }
                 }
                 ImportKind::Module { .. } => {}
@@ -665,6 +666,32 @@ mod tests {
             interface.exposure(&atom("helper"), ImportItemNamespace::Term),
             None
         );
+    }
+
+    #[test]
+    fn include_reexports_keep_the_namespace_they_were_selected_from() {
+        let interface = interface(
+            "include pkg.lib()::{ pub dim Foo, pub type W, pub index Q, pub unit ft, pub out };\n",
+        );
+        for (name, namespace) in [
+            ("Foo", ImportItemNamespace::Dimension),
+            ("W", ImportItemNamespace::Type),
+            ("Q", ImportItemNamespace::Index),
+            ("ft", ImportItemNamespace::Unit),
+            ("out", ImportItemNamespace::Term),
+        ] {
+            assert_eq!(
+                interface
+                    .namespaces_of(&atom(name))
+                    .expect("re-exported item")
+                    .as_slice(),
+                &[namespace],
+                "{name} must be re-exported only in its selected namespace"
+            );
+        }
+        let surface = interface.external_surface();
+        assert!(surface.is_static_explicit_export(&atom("Foo")));
+        assert!(!surface.is_explicit_export(&DeclName::expect_valid("Foo")));
     }
 
     #[test]

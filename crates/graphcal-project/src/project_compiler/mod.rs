@@ -18,6 +18,7 @@ mod model;
 mod module_resolve_errors;
 mod pipeline;
 mod rebound_type_selection;
+mod selected_include_items;
 
 mod session;
 mod template;

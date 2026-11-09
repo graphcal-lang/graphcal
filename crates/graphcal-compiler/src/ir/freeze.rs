@@ -139,13 +139,24 @@ impl UnfrozenIR {
                 instance_templates: &instance_templates,
             },
         );
+        // The overlay binds this DAG's own lexical names. An expression this
+        // DAG holds in another module's scope (a selective include alias's
+        // annotation, written in the template) resolves through that
+        // module's scope alone, never through this DAG's names.
+        let overlay_for = |resolution_owner: &crate::dag_id::DagId| {
+            if resolution_owner == owner {
+                overlay
+            } else {
+                crate::hir::expr_lower::context::BindingOverlay::None
+            }
+        };
         let lower_in = |expr: &Expr, resolution_owner: &crate::dag_id::DagId| {
             let scope =
                 crate::hir::lower::ModuleScope::new(resolution_owner, resolver, &generic_scope);
             let expr_ctx = crate::hir::expr_lower::context::ExprLoweringContext::with_overlay(
                 scope,
                 &time_zones,
-                overlay,
+                overlay_for(resolution_owner),
             );
             crate::hir::expr_lower::lower::lower_expr(expr, expr_ctx)
                 .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_semantic(&err, src))
@@ -163,7 +174,7 @@ impl UnfrozenIR {
                 crate::hir::expr_lower::context::ExprLoweringContext::with_overlay(
                     scope,
                     &time_zones,
-                    overlay,
+                    overlay_for(&expr.resolution_owner),
                 )
                 .allowing_todo_holes(),
             )
@@ -306,7 +317,7 @@ impl UnfrozenIR {
                                     &generic_scope,
                                 ),
                                 &time_zones,
-                                overlay,
+                                overlay_for(&entry.body.resolution_owner),
                             ),
                         )
                         .map_err(|err| {

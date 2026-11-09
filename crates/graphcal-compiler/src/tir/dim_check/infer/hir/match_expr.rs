@@ -164,15 +164,16 @@ impl Infer<'_> {
                     .map_err(Outcome::Failed)
             }
             CheckedType::Struct(type_name, scrutinee_type_args) => {
-                let nominal = nominal_for_inferred(type_name, self.env.dag).ok_or_else(|| {
-                    SemanticError::located(
-                        self.env.src,
-                        scrutinee.span,
-                        StructError::UnknownStructType {
-                            name: UnknownStructTypeName::Checked(type_name.clone()),
-                        },
-                    )
-                })?;
+                let nominal = nominal_for_inferred(type_name, self.env.dag, self.env.tir)
+                    .ok_or_else(|| {
+                        SemanticError::located(
+                            self.env.src,
+                            scrutinee.span,
+                            StructError::UnknownStructType {
+                                name: UnknownStructTypeName::Checked(type_name.clone()),
+                            },
+                        )
+                    })?;
                 let mut covered = std::collections::HashSet::new();
                 let mut arm_types = Vec::new();
                 for arm in arms {

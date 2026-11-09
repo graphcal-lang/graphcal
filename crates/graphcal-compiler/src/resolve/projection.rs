@@ -172,9 +172,27 @@ impl ModuleResolver {
                         continue;
                     }
                     let selected = match binding_path {
-                        Some(path) => self
-                            .resolve_dimension_path(owner, &path)?
-                            .rebind(visibility, local_span),
+                        // A dimension port may be bound to a prelude
+                        // dimension, which no module declares. A target that
+                        // names no dimension at all keeps the port's own
+                        // identity here: the include's binding check rejects
+                        // it at the include.
+                        Some(path) => match self.resolve_dimension_path(owner, &path) {
+                            Ok(symbol) => symbol.rebind(visibility, local_span),
+                            Err(error) => {
+                                match super::prelude::prelude_type_scope()
+                                    .resolve_dimension_path(&path)
+                                {
+                                    Some(prelude) => {
+                                        Symbol::new(prelude, visibility, local_span, ())
+                                    }
+                                    None => self
+                                        .template_export::<DimNameNamespace>(template, source)
+                                        .map_err(|_| error)?
+                                        .rebind(visibility, local_span),
+                                }
+                            }
+                        },
                         None => self
                             .template_export::<DimNameNamespace>(template, source)?
                             .rebind(visibility, local_span),

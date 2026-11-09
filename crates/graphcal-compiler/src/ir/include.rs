@@ -78,6 +78,35 @@ impl UnfrozenIR {
             })
     }
 
+    /// Resolve an exposed assertion name to its canonical template
+    /// declaration: an assertion of the template's own, or one the template
+    /// selects from one of its own instances.
+    #[must_use]
+    pub fn assertion_projection_target(&self, name: &DeclName) -> Option<LocalDecl> {
+        self.decls
+            .iter()
+            .find_map(|decl| match decl {
+                Decl::Assert(entry) if entry.name() == name => {
+                    Some(LocalDecl::new(entry.identity()))
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                self.semantic_instances.iter().find_map(|instance| {
+                    instance
+                        .assertion_projections
+                        .iter()
+                        .find(|projection| projection.exposure.selected() == Some(name))
+                        .map(|projection| {
+                            LocalDecl::new(instance_declaration(
+                                instance.instance.id(),
+                                projection.target.leaf().clone(),
+                            ))
+                        })
+                })
+            })
+    }
+
     /// Names of assertions authored by this reusable DAG template.
     #[must_use]
     pub fn assertion_names(&self) -> Vec<DeclName> {

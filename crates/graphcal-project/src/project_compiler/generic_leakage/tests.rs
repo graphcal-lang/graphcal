@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::ir::module_interface::ModuleInterface;
+use graphcal_compiler::syntax::names::NameAtom;
 
 use super::super::include_static_bindings::{CoveredStaticBindings, StaticBindingResolution};
 use super::*;
@@ -58,6 +59,7 @@ impl StaticBindingResolution for NothingBound {
         &self,
         port: &graphcal_compiler::syntax::type_name::StructTypeName,
         _: &graphcal_compiler::syntax::type_name::StructTypeName,
+        _: Span,
     ) -> Result<
         (
             graphcal_compiler::resolved_name::ResolvedStructTypeName,
@@ -72,6 +74,7 @@ impl StaticBindingResolution for NothingBound {
         &self,
         port: &graphcal_compiler::syntax::dimension::DimName,
         _: &graphcal_compiler::syntax::dimension::DimName,
+        _: Span,
     ) -> Result<
         (
             graphcal_compiler::resolved_name::ResolvedDimName,
@@ -101,7 +104,10 @@ fn unsubstituted_dependency_name_is_not_probed_in_the_importer() {
     let declarations = parse_declarations(
         "type Inner { Inner(value: Int), } node output: Inner = Inner(value: 1);",
     );
-    let reexports = HashSet::from([NameAtom::parse("output").unwrap()]);
+    let reexports = HashSet::from([ReexportedItem {
+        namespace: ImportItemNamespace::Term,
+        name: NameAtom::parse("output").unwrap(),
+    }]);
     let importer_interface =
         ModuleInterface::new(&parse_declarations("type Inner { Inner(value: Int), }"));
 

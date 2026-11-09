@@ -2819,6 +2819,16 @@ role = "checking"
 
 [[module]]
 package = "project"
+path = ["project_compiler", "selected_include_items"]
+role = "checking"
+
+[[module]]
+package = "project"
+path = ["project_compiler", "selected_include_items", "tests"]
+role = "checking"
+
+[[module]]
+package = "project"
 path = ["project_compiler", "hir_project"]
 role = "checking"
 

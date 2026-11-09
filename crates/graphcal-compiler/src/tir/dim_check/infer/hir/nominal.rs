@@ -44,15 +44,16 @@ impl Infer<'_> {
                 span: field.span,
             },
         )?;
-        let nominal = nominal_for_inferred(type_name, self.env.dag).ok_or_else(|| {
-            SemanticError::located(
-                self.env.src,
-                inner.span,
-                StructError::UnknownStructType {
-                    name: UnknownStructTypeName::Checked(type_name.clone()),
-                },
-            )
-        })?;
+        let nominal =
+            nominal_for_inferred(type_name, self.env.dag, self.env.tir).ok_or_else(|| {
+                SemanticError::located(
+                    self.env.src,
+                    inner.span,
+                    StructError::UnknownStructType {
+                        name: UnknownStructTypeName::Checked(type_name.clone()),
+                    },
+                )
+            })?;
         let member = nominal.record_member().ok_or_else(|| {
             let detail = if nominal.definition().is_required() {
                 FieldlessOperand::RequiredType(type_name.clone())
