@@ -31,6 +31,12 @@
       minimumReleaseAge: null,
     },
     {
+      description: "Hold num-bigint at 0.4 until num-rational supports 0.5 (rust-num/num-rational#157)",
+      matchManagers: ["cargo"],
+      matchPackageNames: ["num-bigint"],
+      allowedVersions: "<0.5",
+    },
+    {
       matchManagers: ["rust-toolchain"],
       matchDepTypes: ["toolchain"],
       addLabels: ["rust", "ci"],
