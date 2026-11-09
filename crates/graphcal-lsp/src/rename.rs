@@ -1,21 +1,18 @@
 //! textDocument/rename and textDocument/prepareRename handlers.
 
-use std::collections::HashMap;
-
 use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 
 use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
+use crate::project_symbols::ProjectOccurrence;
+use crate::rename_check::{CompileErrorReport, PlannedRename, RenameCheck, RenameCheckFailure};
 use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
-use crate::symbol_identity::{ExternFunctionId, FieldId, GenericParamId, IndexVariantId};
+use crate::symbol_identity::ExternFunctionId;
 use crate::symbol_table::SymbolKey;
-use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::dimension::{DimName, UnitName};
-use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
+use graphcal_compiler::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
+use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::token::SourceIdentifier;
-use graphcal_compiler::syntax::type_name::{
-    ConstructorName, FieldName, GenericParamName, StructTypeName,
-};
+use graphcal_compiler::syntax::type_name::record_constructor_name;
 
 /// Check whether a name is a valid Graphcal identifier.
 ///
@@ -106,14 +103,20 @@ fn validate_rename_target(
 }
 
 /// Validate a rename and return the current name's range and placeholder.
+///
+/// `Ok(None)` means there is nothing renameable at the cursor; `Err` is an
+/// explicit refusal whose reason the client shows to the user, instead of a
+/// generic "this element can't be renamed".
 pub fn prepare_rename(
     analysis: &AnalysisResult,
     uri: &Url,
     offset: usize,
-) -> Option<PrepareRenameResponse> {
-    let resolved = resolve_symbol_at(analysis, offset)?;
-    if !validate_rename_target(analysis, uri, &resolved).unwrap_or(false) {
-        return None;
+) -> Result<Option<PrepareRenameResponse>, RenameRefusal> {
+    let Some(resolved) = resolve_symbol_at(analysis, offset) else {
+        return Ok(None);
+    };
+    if !validate_rename_target(analysis, uri, &resolved)? {
+        return Ok(None);
     }
 
     let def = resolved_definition(&resolved);
@@ -126,10 +129,10 @@ pub fn prepare_rename(
         .unwrap_or(&def.name)
         .to_string();
 
-    Some(PrepareRenameResponse::RangeWithPlaceholder {
+    Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
         range: LineIndex::new(&analysis.source).span_to_range(span),
         placeholder,
-    })
+    }))
 }
 
 /// Why a rename request was explicitly refused.
@@ -141,9 +144,18 @@ pub fn prepare_rename(
 pub enum RenameRefusal {
     /// The new name is not a lexable identifier (or is a hard keyword).
     InvalidIdentifier { new_name: String },
-    /// The new name collides with a visible declaration in the same
-    /// namespace, which would compile to a duplicate-name error (N001).
-    NameCollision { new_name: String },
+    /// The renamed program raises a compile error the original did not
+    /// (a reserved built-in name, a duplicate, a shadowed term, …); `error`
+    /// is the compiler's message.
+    WouldNotCompile {
+        new_name: String,
+        error: CompileErrorReport,
+    },
+    /// The project already fails to compile, which hides any error the
+    /// rename would add.
+    ProjectDoesNotCompile { name: String },
+    /// A reference would silently resolve to a different definition.
+    WouldChangeResolution { new_name: String },
     /// Transitive project loading did not produce a complete occurrence set.
     IncompleteProjectIndex { name: String },
     /// A tolerant occurrence has the right namespace/spelling but no unique ID.
@@ -162,9 +174,16 @@ impl std::fmt::Display for RenameRefusal {
             Self::InvalidIdentifier { new_name } => {
                 write!(f, "`{new_name}` is not a valid graphcal identifier")
             }
-            Self::NameCollision { new_name } => write!(
+            Self::WouldNotCompile { new_name, error } => {
+                write!(f, "cannot rename to `{new_name}`: {error}")
+            }
+            Self::ProjectDoesNotCompile { name } => write!(
                 f,
-                "cannot rename to `{new_name}`: a declaration with that name is already in scope"
+                "cannot safely rename `{name}` while the project has compile errors; fix them first"
+            ),
+            Self::WouldChangeResolution { new_name } => write!(
+                f,
+                "cannot rename to `{new_name}`: a reference would then resolve to a different declaration"
             ),
             Self::IncompleteProjectIndex { name } => write!(
                 f,
@@ -191,90 +210,55 @@ impl std::fmt::Display for RenameRefusal {
     }
 }
 
-/// The key the renamed symbol would occupy: the same key shape with the
-/// leaf name replaced. Used to probe the symbol table for collisions in
-/// the renamed symbol's own namespace/scope.
-fn key_with_new_name(key: &SymbolKey, new_name: &str) -> Option<SymbolKey> {
-    Some(match key {
-        SymbolKey::Declaration(name) => {
-            SymbolKey::Declaration(name.with_leaf(DeclName::expect_valid(new_name)))
-        }
-        SymbolKey::Dimension(name) => {
-            SymbolKey::Dimension(name.with_leaf(DimName::expect_valid(new_name)))
-        }
-        SymbolKey::Unit(name) => SymbolKey::Unit(name.with_leaf(UnitName::expect_valid(new_name))),
-        SymbolKey::StructType(name) => {
-            SymbolKey::StructType(name.with_leaf(StructTypeName::expect_valid(new_name)))
-        }
-        SymbolKey::Constructor(name) => {
-            SymbolKey::Constructor(name.with_leaf(ConstructorName::expect_valid(new_name)))
-        }
-        SymbolKey::Index(name) => {
-            SymbolKey::Index(name.with_leaf(IndexName::expect_valid(new_name)))
-        }
-        SymbolKey::IndexVariant(variant) => SymbolKey::IndexVariant(IndexVariantId::new(
-            variant.index().clone(),
-            IndexVariantName::expect_valid(new_name),
-        )),
-        SymbolKey::Field(field) => SymbolKey::Field(FieldId::new(
-            field.owner().clone(),
-            FieldName::expect_valid(new_name),
-        )),
-        SymbolKey::GenericParam(parameter) => SymbolKey::GenericParam(GenericParamId::new(
-            parameter.owner().clone(),
-            GenericParamName::expect_valid(new_name),
-        )),
-        SymbolKey::Local(_)
-        | SymbolKey::ExternFunction(_)
-        | SymbolKey::BuiltinFunction(_)
-        | SymbolKey::BuiltinConstant(_)
-        | SymbolKey::TimeScale(_) => return None,
-    })
-}
-
-/// True when `new_name` collides with a visible declaration in the renamed
-/// symbol's namespace/scope. Builtins (`PI`, `sqrt`, unit names) are not
-/// collisions: the compiler allows shadowing them.
-fn collides_with_existing(analysis: &AnalysisResult, key: &SymbolKey, new_name: &str) -> bool {
-    if matches!(key, SymbolKey::Local(_)) {
-        return analysis.symbol_table.local_rename_collides(key, new_name);
-    }
-    let Some(candidate) = key_with_new_name(key, new_name) else {
-        return false;
-    };
-    if let Some(existing) = analysis.symbol_table.definitions.get(&candidate)
-        && !existing.is_builtin()
-    {
-        return true;
-    }
-    let top_level_namespace = matches!(
-        candidate,
-        SymbolKey::Declaration(_)
-            | SymbolKey::Dimension(_)
-            | SymbolKey::Unit(_)
-            | SymbolKey::StructType(_)
-            | SymbolKey::Constructor(_)
-            | SymbolKey::Index(_)
-    );
-    top_level_namespace
-        && analysis.imported_bindings.iter().any(|binding| {
-            binding.spelling().is_local()
-                && binding.spelling().leaf().as_str() == new_name
-                && candidate.same_namespace(binding.target())
-        })
-}
-
 /// Perform the rename, returning a workspace edit.
 ///
-/// `Ok(None)` means there is nothing renameable at the cursor (the client
-/// sees a plain `null`); `Err` is an explicit refusal with a reason the
-/// client should show to the user.
+/// The planned edit is offered only after [`RenameCheck`] re-checked the
+/// edited project, so the compiler's own naming rules decide what is
+/// accepted. `Ok(None)` means there is nothing renameable at the cursor (the
+/// client sees a plain `null`); `Err` is an explicit refusal with a reason
+/// the client should show to the user.
 pub fn rename(
     analysis: &AnalysisResult,
     uri: &Url,
     offset: usize,
     new_name: &str,
+    check: &RenameCheck<'_>,
 ) -> Result<Option<WorkspaceEdit>, RenameRefusal> {
+    let Some((plan, old_name)) = plan_rename(analysis, uri, offset, new_name)? else {
+        return Ok(None);
+    };
+    match check.check(analysis, uri, &plan) {
+        Ok(()) => {}
+        Err(RenameCheckFailure::Cancelled) => return Ok(None),
+        Err(RenameCheckFailure::NewCompileError(error)) => {
+            return Err(RenameRefusal::WouldNotCompile {
+                new_name: new_name.to_string(),
+                error,
+            });
+        }
+        Err(RenameCheckFailure::OriginalDoesNotCompile) => {
+            return Err(RenameRefusal::ProjectDoesNotCompile { name: old_name });
+        }
+        Err(RenameCheckFailure::ChangedResolution) => {
+            return Err(RenameRefusal::WouldChangeResolution {
+                new_name: new_name.to_string(),
+            });
+        }
+        Err(RenameCheckFailure::MissingSource) => {
+            return Err(RenameRefusal::IncompleteProjectIndex { name: old_name });
+        }
+    }
+    Ok(Some(workspace_edit(analysis, uri, &plan)))
+}
+
+/// Every occurrence the rename at `offset` respells, before any check of the
+/// edited program, with the symbol's current name.
+fn plan_rename(
+    analysis: &AnalysisResult,
+    uri: &Url,
+    offset: usize,
+    new_name: &str,
+) -> Result<Option<(PlannedRename, String)>, RenameRefusal> {
     if !is_valid_identifier(new_name) {
         return Err(RenameRefusal::InvalidIdentifier {
             new_name: new_name.to_string(),
@@ -288,149 +272,198 @@ pub fn rename(
         return Ok(None);
     }
     let definition = resolved_definition(&resolved);
-    // Renaming to the symbol's current name is a no-op, not a collision.
+    // Renaming to the symbol's current name is a no-op.
     if definition.name == new_name {
         return Ok(None);
     }
-    let renamed_target = key_with_new_name(&resolved.key, new_name);
-    let collides = match (analysis.project_symbols.complete(), renamed_target.as_ref()) {
-        (Some(project), Some(renamed_target)) => {
-            project.collides_with(&resolved.key, renamed_target, new_name)
-        }
-        _ => collides_with_existing(analysis, &resolved.key, new_name),
-    };
-    if collides {
-        return Err(RenameRefusal::NameCollision {
-            new_name: new_name.to_string(),
-        });
-    }
 
-    let changes: HashMap<Url, Vec<TextEdit>> =
-        if let Some(project) = analysis.project_symbols.complete() {
-            let mut changes = HashMap::new();
-            let mut lines = project.line_indexes();
-            for occurrence in reference_lookup_keys(&resolved.key)
+    let targets: Vec<SymbolKey> = rename_unit(analysis, &resolved.key)
+        .iter()
+        .flat_map(reference_lookup_keys)
+        .collect();
+    let table = &analysis.symbol_table;
+    let occurrences: Vec<(Url, Span)> = analysis.project_symbols.complete().map_or_else(
+        || {
+            targets
+                .iter()
+                .flat_map(|key| {
+                    table
+                        .find_all_references(key)
+                        .into_iter()
+                        .map(|reference| reference.span)
+                        .chain(
+                            table
+                                .definitions
+                                .get(key)
+                                .filter(|definition| !definition.name_span.is_empty())
+                                .map(|definition| definition.name_span),
+                        )
+                })
+                .map(|span| (uri.clone(), span))
+                .collect()
+        },
+        |project| {
+            targets
                 .iter()
                 .flat_map(|target| project.rename_occurrences(target))
-            {
-                let Some(range) = lines.range(&occurrence) else {
-                    return Err(RenameRefusal::IncompleteProjectIndex {
-                        name: definition.name.clone(),
-                    });
-                };
-                changes
-                    .entry(occurrence.uri)
-                    .or_insert_with(Vec::new)
-                    .push(TextEdit {
-                        range,
-                        new_text: new_name.to_string(),
-                    });
-            }
-            changes
-        } else {
-            let lines = LineIndex::new(&analysis.source);
-            let mut spans: Vec<_> = reference_lookup_keys(&resolved.key)
+                .map(|occurrence| (occurrence.uri, occurrence.span))
+                .collect()
+        },
+    );
+    let plan = PlannedRename::new(new_name, occurrences);
+    Ok((!plan.is_empty()).then(|| (plan, definition.name.clone())))
+}
+
+/// The identities one rename respells together.
+///
+/// A record type `type T { T(..) }` and its sole constructor share one
+/// spelling by the language's record rule: renaming either alone turns the
+/// record into a union (S007). Both are declared together in the renamed
+/// symbol's own file.
+fn rename_unit(analysis: &AnalysisResult, key: &SymbolKey) -> Vec<SymbolKey> {
+    let table = &analysis.symbol_table;
+    let record_constructor = |nominal: &ResolvedStructTypeName| {
+        nominal.constructor(record_constructor_name(nominal.leaf()))
+    };
+    let record = match key {
+        SymbolKey::StructType(nominal) => Some((nominal.clone(), record_constructor(nominal))),
+        SymbolKey::Constructor(constructor) => {
+            table
+                .definitions
+                .keys()
+                .find_map(|candidate| match candidate {
+                    SymbolKey::StructType(nominal)
+                        if record_constructor(nominal) == *constructor =>
+                    {
+                        Some((nominal.clone(), constructor.clone()))
+                    }
+                    _ => None,
+                })
+        }
+        _ => None,
+    };
+    let counterpart = record
+        .filter(|(nominal, constructor)| is_record(table, nominal, constructor))
+        .map(|(nominal, constructor)| match key {
+            SymbolKey::StructType(_) => SymbolKey::Constructor(constructor),
+            _ => SymbolKey::StructType(nominal),
+        });
+    std::iter::once(key.clone()).chain(counterpart).collect()
+}
+
+/// Whether `constructor` is the only constructor `nominal` declares.
+fn is_record(
+    table: &crate::symbol_table::SymbolTable,
+    nominal: &ResolvedStructTypeName,
+    constructor: &ResolvedConstructorName,
+) -> bool {
+    let Some(body) = table
+        .definitions
+        .get(&SymbolKey::StructType(nominal.clone()))
+        .map(|definition| definition.decl_span)
+    else {
+        return false;
+    };
+    let mut constructors = table.definitions.iter().filter(|(candidate, definition)| {
+        matches!(candidate, SymbolKey::Constructor(other) if other.owner() == nominal.owner())
+            && body.offset() <= definition.decl_span.offset()
+            && definition.decl_span.offset() + definition.decl_span.len()
+                <= body.offset() + body.len()
+    });
+    matches!(
+        (constructors.next(), constructors.next()),
+        (Some((SymbolKey::Constructor(only), _)), None) if only == constructor
+    )
+}
+
+/// The client edit of a checked plan, in the analysed documents' coordinates.
+fn workspace_edit(analysis: &AnalysisResult, uri: &Url, plan: &PlannedRename) -> WorkspaceEdit {
+    let root_lines = LineIndex::new(&analysis.source);
+    let mut project_lines = analysis
+        .project_symbols
+        .complete()
+        .map(crate::project_symbols::ProjectSymbolIndex::line_indexes);
+    let changes = plan
+        .occurrences()
+        .iter()
+        .map(|(document, spans)| {
+            let edits = spans
                 .iter()
-                .flat_map(|key| analysis.symbol_table.find_all_references(key))
-                .map(|reference| reference.span)
-                .chain((!definition.name_span.is_empty()).then_some(definition.name_span))
-                .collect();
-            let mut seen = std::collections::HashSet::new();
-            spans.retain(|span| seen.insert((span.offset(), span.len())));
-            HashMap::from([(
-                uri.clone(),
-                spans
-                    .into_iter()
-                    .map(|span| TextEdit {
-                        range: lines.span_to_range(span),
-                        new_text: new_name.to_string(),
+                .filter_map(|span| {
+                    let range = match project_lines.as_mut() {
+                        Some(lines) => lines.range(&ProjectOccurrence {
+                            uri: document.clone(),
+                            span: *span,
+                        })?,
+                        None if document == uri => root_lines.span_to_range(*span),
+                        None => return None,
+                    };
+                    Some(TextEdit {
+                        range,
+                        new_text: plan.new_name().to_string(),
                     })
-                    .collect(),
-            )])
-        };
-
-    if changes.values().all(Vec::is_empty) {
-        return Ok(None);
-    }
-
-    Ok(Some(WorkspaceEdit {
+                })
+                .collect();
+            (document.clone(), edits)
+        })
+        .collect();
+    WorkspaceEdit {
         changes: Some(changes),
         document_changes: None,
         change_annotations: None,
-    }))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
-    use crate::fn_signatures::build_fn_signatures;
-    use crate::symbol_table;
 
-    /// Build a minimal `AnalysisResult` from source text.
+    /// The real analysis of a standalone (untitled) buffer.
     fn analysis_from_source(source: &str) -> AnalysisResult {
-        let raw_ast = graphcal_compiler::syntax::parser::Parser::new(source)
-            .parse_file()
-            .unwrap();
-        let desugared = graphcal_compiler::desugar::desugared_ast::File::from(raw_ast);
-        let ast = desugared;
-        let symbol_table = symbol_table::build_for_buffer(&ast, source);
-        let project_table = symbol_table::build_for_buffer(&ast, source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
-        let source = Arc::new(source.to_string());
-        let project_symbols = crate::project_symbols::ProjectSymbols::Complete(
-            crate::project_symbols::ProjectSymbolIndex::standalone(
-                uri.clone(),
-                [crate::project_symbols::ProjectDocumentSymbols::new(
-                    uri,
-                    Arc::clone(&source),
-                    project_table,
-                    Vec::new(),
-                )],
-            ),
+        crate::analysis_pipeline::run_analysis_for_test(&test_uri(), source)
+    }
+
+    fn test_uri() -> Url {
+        Url::parse("untitled:test.gcl").unwrap()
+    }
+
+    /// [`super::rename`] with the re-check analysing no other open buffers.
+    fn rename(
+        analysis: &AnalysisResult,
+        uri: &Url,
+        offset: usize,
+        new_name: &str,
+    ) -> Result<Option<WorkspaceEdit>, RenameRefusal> {
+        let cancellation = graphcal_compiler::cancellation::CancellationToken::unbounded();
+        let check = RenameCheck::new(
+            Vec::new(),
+            crate::analysis_pipeline::test_plugin_host(),
+            &cancellation,
         );
-        AnalysisResult {
-            inputs: crate::workspace_revision::AnalysisInputs::untracked_for_test(
-                crate::workspace_revision::DocumentIdentity::virtual_uri(
-                    Url::parse("file:///test.gcl").unwrap(),
-                ),
-            ),
-            source,
-            symbol_table,
-            project_symbols,
-            imported_definitions: HashMap::new(),
-            imported_bindings: Vec::new(),
-            import_surfaces: HashMap::new(),
-            diagnostics: Arc::new(HashMap::new()),
-            eval_values: HashMap::new(),
-            view: None,
-            fn_signatures: build_fn_signatures(),
-            extern_fn_signatures: HashMap::new(),
-            import_links: Vec::new(),
-            buffer_parsed: true,
+        super::rename(analysis, uri, offset, new_name, &check)
+    }
+
+    fn compiler_code(code: &str) -> tower_lsp::lsp_types::NumberOrString {
+        tower_lsp::lsp_types::NumberOrString::String(code.to_string())
+    }
+
+    /// The rename was refused because the compiler rejects the edited program
+    /// with diagnostic `code`.
+    #[track_caller]
+    fn assert_refused_by_compiler(
+        result: Result<Option<WorkspaceEdit>, RenameRefusal>,
+        code: &str,
+    ) {
+        match result {
+            Err(RenameRefusal::WouldNotCompile { error, .. }) => {
+                assert_eq!(error.code, Some(compiler_code(code)), "{error}");
+            }
+            other => panic!("expected a {code} refusal, got {other:?}"),
         }
     }
 
     fn apply_edits(source: &str, edits: &[TextEdit]) -> String {
-        let mut edits: Vec<_> = edits
-            .iter()
-            .map(|edit| {
-                (
-                    crate::convert::position_to_byte_offset(source, edit.range.start),
-                    crate::convert::position_to_byte_offset(source, edit.range.end),
-                    edit.new_text.as_str(),
-                )
-            })
-            .collect();
-        edits.sort_unstable_by_key(|edit| std::cmp::Reverse(edit.0));
-        edits.into_iter().fold(
-            source.to_string(),
-            |mut output, (start, end, replacement)| {
-                output.replace_range(start..end, replacement);
-                output
-            },
-        )
+        crate::test_edits::apply_text_edits(source, edits)
     }
 
     /// LSP-6: an extern function's name is fixed by its plugin, so renaming
@@ -445,7 +478,7 @@ import plugin "graphcal:demo" as demo {
 node y: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
 "#;
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
         for cursor in [
             source.find("fn lerp").unwrap() + "fn ".len(),
             source.find("demo::lerp(").unwrap() + "demo::".len(),
@@ -461,7 +494,7 @@ node y: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
                 "{refusal:?}"
             );
             assert!(refusal.to_string().contains("`demo::lerp`"), "{refusal}");
-            assert!(prepare_rename(&analysis, &uri, cursor).is_none());
+            assert_eq!(prepare_rename(&analysis, &uri, cursor), Err(refusal));
         }
     }
 
@@ -472,35 +505,32 @@ index Step = range(0.0 s, 1.0 s, step: 1.0 s);
 node y: Dimensionless[Step] = unfold(
     Step,
     0.0,
-    |prev_y, prev_t, t| prev_y + (t - prev_t) / 1.0 s
+    |prev_y, prev_t, t| prev_y + 1.0
 );
 ";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
         let cursor = source.find("prev_y").unwrap();
         let edit = rename(&analysis, &uri, cursor, "previous")
             .unwrap()
             .expect("expression local should be renameable");
 
         assert_eq!(edit.changes.unwrap()[&uri].len(), 2);
-        assert!(matches!(
-            rename(&analysis, &uri, cursor, "t"),
-            Err(RenameRefusal::NameCollision { .. })
-        ));
+        assert_refused_by_compiler(rename(&analysis, &uri, cursor, "t"), "graphcal::N033");
     }
 
     #[test]
     fn rename_field_access_isolated_by_owning_constructor() {
         let source = r"
-type Item { Item(mass: Dimensionless), }
-type Other { Other(mass: Dimensionless), }
+pub type Item { Item(mass: Dimensionless), }
+pub type Other { Other(mass: Dimensionless), }
 param item: Item = Item(mass: 1.0);
 param other: Other = Other(mass: 2.0);
 node item_mass: Dimensionless = @item.mass;
 node other_mass: Dimensionless = @other.mass;
 ";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
         let definition = source.find("Item(mass").unwrap() + "Item(".len();
         let edit = rename(&analysis, &uri, definition, "weight")
             .unwrap()
@@ -531,20 +561,20 @@ node other_mass: Dimensionless = @other.mass;
     #[test]
     fn rename_covers_nested_dag_include_and_composition_occurrences() {
         let source = r"
-param outer: Dimensionless = 2.0;
+param seed: Dimensionless = 2.0;
 dag d {
     param inner: Dimensionless;
-    node doubled: Dimensionless = @inner * 2.0;
+    pub node doubled: Dimensionless = @inner * 2.0;
 }
-include d(inner: @outer)::{ doubled as result };
-plot p = { mark: point, encode: { x: @outer } };
+include d(inner: @seed)::{ doubled as result };
+plot p = { mark: point, encode: { x: @seed } };
 figure f = { plots: [p] };
 ";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         for (needle, new_name, expected_edits) in [
-            ("param outer", "outside", 3),
+            ("param seed", "outside", 3),
             ("param inner", "inside", 3),
             ("node doubled", "twice", 2),
             ("plot p", "chart", 2),
@@ -567,7 +597,7 @@ figure f = { plots: [p] };
                       pub const unit scale: Length = 1.0 m;\n\
                       node value: Length = @scale * 1.0 scale;";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         let const_use = source.find("= @scale *").unwrap() + 3;
         let const_edit = rename(&analysis, &uri, const_use, "factor")
@@ -590,14 +620,14 @@ figure f = { plots: [p] };
 
     #[test]
     fn local_rename_rejects_overlap_and_preserves_independent_scopes() {
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
         let source = "node grid: Int[Fin(2), Fin(3)] = for row: Fin(2) { for col: Fin(3) { to_int(row) * 10 + to_int(col) } };";
         let analysis = analysis_from_source(source);
         for (old, new) in [("row", "col"), ("col", "row")] {
-            assert!(matches!(
+            assert_refused_by_compiler(
                 rename(&analysis, &uri, source.find(old).unwrap(), new),
-                Err(RenameRefusal::NameCollision { .. })
-            ));
+                "graphcal::N033",
+            );
         }
         let source = "node first: Int[Fin(2)] = for row: Fin(2) { to_int(row) }; node other_values: Int[Fin(2)] = for col: Fin(2) { to_int(col) };";
         let analysis = analysis_from_source(source);
@@ -617,7 +647,7 @@ figure f = { plots: [p] };
 
     #[test]
     fn local_rename_checks_match_payload_and_scan_lambda_scopes() {
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
         for (source, old, new) in [
             (
                 "node samples: Dimensionless[Fin(2)] = for i: Fin(2) { 1.0 }; node totals: Dimensionless[Fin(2)] = scan(@samples, 0.0, |acc, val| acc + val);",
@@ -631,10 +661,10 @@ figure f = { plots: [p] };
             ),
         ] {
             let analysis = analysis_from_source(source);
-            assert!(matches!(
+            assert_refused_by_compiler(
                 rename(&analysis, &uri, source.find(old).unwrap(), new),
-                Err(RenameRefusal::NameCollision { .. })
-            ));
+                "graphcal::N033",
+            );
         }
         let source = "type Choice { A(x: Int), B(x: Int), } node chosen: Choice = A(x: 1); node total: Int = match @chosen { A(x: left) => left, B(x: right) => right };";
         let analysis = analysis_from_source(source);
@@ -652,7 +682,7 @@ figure f = { plots: [p] };
     fn rename_param_from_definition() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         // Cursor on "x" in "param x"
         let offset = source.find("x:").unwrap();
@@ -676,7 +706,7 @@ figure f = { plots: [p] };
                       Sized(values: Dimensionless[Fin(N)]),\n\
                       }";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
         let offset = source.find("N: Nat").unwrap();
 
         let result = rename(&analysis, &uri, offset, "Size").unwrap().unwrap();
@@ -690,7 +720,7 @@ figure f = { plots: [p] };
     fn rename_param_from_reference() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x + 1.0;";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         // Cursor on "x" in "@x" — offset of the ident after @
         let at_x = source.find("@x").unwrap() + 1;
@@ -705,13 +735,13 @@ figure f = { plots: [p] };
         let source = "node lower: Dimensionless = least(1.0, 2.0);\n\
                       node reduced: Dimensionless = minimum(1.0);";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         for builtin in ["least", "minimum"] {
             let offset = source.find(builtin).unwrap();
             let result = prepare_rename(&analysis, &uri, offset);
             assert!(
-                result.is_none(),
+                matches!(result, Ok(None)),
                 "builtin `{builtin}` should not be renameable"
             );
         }
@@ -721,7 +751,7 @@ figure f = { plots: [p] };
     fn rename_invalid_name_rejected() {
         let source = "param x: Dimensionless = 1.0;";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         let offset = source.find("x:").unwrap();
         for bad in ["", "123bad", "has space"] {
@@ -777,7 +807,10 @@ figure f = { plots: [p] };
 
         let cursor = main_text.find("@y").unwrap() + 1;
         for cursor in [cursor, main_text.find("{y}").unwrap() + 1] {
-            assert!(prepare_rename(&analysis, &main_uri, cursor).is_none());
+            assert!(matches!(
+                prepare_rename(&analysis, &main_uri, cursor),
+                Err(RenameRefusal::IncompleteProjectIndex { .. })
+            ));
             assert!(matches!(
                 rename(&analysis, &main_uri, cursor, "renamed"),
                 Err(RenameRefusal::IncompleteProjectIndex { .. })
@@ -787,11 +820,9 @@ figure f = { plots: [p] };
         // Issue #829: renaming a local declaration to the name of an
         // imported symbol collides as well — both would be visible.
         let z_cursor = main_text.find("node z").unwrap() + "node ".len();
-        assert_eq!(
+        assert_refused_by_compiler(
             rename(&analysis, &main_uri, z_cursor, "y"),
-            Err(RenameRefusal::NameCollision {
-                new_name: "y".to_string()
-            })
+            "graphcal::N001",
         );
     }
 
@@ -833,7 +864,10 @@ figure f = { plots: [p] };
             rename(&analysis, &main_uri, cursor, "tripled"),
             Err(RenameRefusal::IncompleteProjectIndex { .. })
         ));
-        assert!(prepare_rename(&analysis, &main_uri, cursor).is_none());
+        assert!(matches!(
+            prepare_rename(&analysis, &main_uri, cursor),
+            Err(RenameRefusal::IncompleteProjectIndex { .. })
+        ));
     }
 
     #[test]
@@ -881,7 +915,10 @@ figure f = { plots: [p] };
             .expect("project references");
         assert_eq!(references.len(), 11);
         let alias_cursor = main_text.rfind("through_a +").unwrap();
-        assert!(prepare_rename(&analysis, &main_uri, alias_cursor).is_none());
+        assert!(matches!(
+            prepare_rename(&analysis, &main_uri, alias_cursor),
+            Err(RenameRefusal::IncompleteProjectIndex { .. })
+        ));
         assert!(matches!(
             rename(&analysis, &main_uri, alias_cursor, "surprise"),
             Err(RenameRefusal::IncompleteProjectIndex { .. })
@@ -900,7 +937,7 @@ figure f = { plots: [p] };
         // renaming a param to `node` produced unparsable code.
         let source = "param x: Dimensionless = 1.0;";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         let offset = source.find("x:").unwrap();
         for keyword in ["node", "param", "index", "true"] {
@@ -915,16 +952,18 @@ figure f = { plots: [p] };
     fn rename_to_contextual_keyword_is_allowed() {
         let source = "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
         let offset = source.find("x:").unwrap();
 
-        for name in [
-            "scan", "unfold", "range", "linspace", "step", "points", "Fin",
-        ] {
+        for name in ["range", "linspace", "step", "points", "Fin"] {
             let edit = rename(&analysis, &uri, offset, name)
                 .unwrap_or_else(|error| panic!("rename to `{name}` failed: {error}"))
                 .expect("rename should produce a workspace edit");
             assert_eq!(edit.changes.unwrap()[&uri].len(), 2);
+        }
+        // These lex as identifiers but are reserved built-in Term names.
+        for name in ["scan", "unfold"] {
+            assert_refused_by_compiler(rename(&analysis, &uri, offset, name), "graphcal::N009");
         }
     }
 
@@ -939,7 +978,7 @@ param s: Status = Idle;
 node t: Dimensionless = match @s { Idle => 1.0, Active => 2.0 };
 ";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
         let original = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
         assert!(
             original.has_no_diagnostics(),
@@ -998,19 +1037,137 @@ node momentum: Force * Time = @mass * @velocity;
 node kinetic: Energy = 0.5 * @mass * @velocity ^ 2;
 ";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         let offset = source.find("momentum").unwrap();
-        assert_eq!(
+        assert_refused_by_compiler(
             rename(&analysis, &uri, offset, "velocity"),
-            Err(RenameRefusal::NameCollision {
-                new_name: "velocity".to_string()
-            })
+            "graphcal::N001",
         );
-        // Builtins may be shadowed, so renaming to `PI` is allowed.
-        assert!(
-            rename(&analysis, &uri, offset, "PI").is_ok_and(|edit| edit.is_some()),
-            "renaming to a builtin name must stay allowed (shadowing compiles)"
+        // LSP-5: a built-in spelling is reserved (N009), so renaming to `PI`
+        // is refused with the compiler's reason instead of producing an edit
+        // that does not compile.
+        assert_refused_by_compiler(rename(&analysis, &uri, offset, "PI"), "graphcal::N009");
+    }
+
+    /// LSP-5: the compiler's naming rules decide which renames are offered.
+    /// Each case compiles before the rename and would fail after it.
+    #[test]
+    fn rename_refuses_names_the_compiler_rejects() {
+        let uri = test_uri();
+        for (source, needle, new_name, code) in [
+            // Dimensions, indexes and types share one Static universe.
+            (
+                "dim Foo = Length;\nindex Bar = { A };\nnode q: Foo = 1.0 m;\n",
+                "Foo",
+                "Bar",
+                "graphcal::N001",
+            ),
+            (
+                "index Foo = { A };\ntype Bar { B }\nnode q: Dimensionless[Foo] = for f: Foo { 1.0 };\n",
+                "Foo",
+                "Bar",
+                "graphcal::N001",
+            ),
+            // Declarations and constructors share the Term universe.
+            (
+                "type Status { Idle, Active }\nnode Busy: Dimensionless = 1.0;\nnode s: Status = Idle;\n",
+                "Idle",
+                "Busy",
+                "graphcal::N001",
+            ),
+            (
+                "dag d { node x: Dimensionless = 1.0; }\nnode e: Dimensionless = 2.0;\n",
+                "e:",
+                "d",
+                "graphcal::N001",
+            ),
+            // A local may not shadow a visible term.
+            (
+                "type Status { Idle, Active }\nnode t: Status[Fin(2)] = for i: Fin(2) { Idle };\n",
+                "i:",
+                "Idle",
+                "graphcal::N034",
+            ),
+            (
+                "node total: Dimensionless = 1.0;\nnode t: Int[Fin(2)] = for i: Fin(2) { to_int(i) };\n",
+                "i:",
+                "total",
+                "graphcal::N034",
+            ),
+            // Built-in spellings are reserved.
+            (
+                "node area: Dimensionless = 1.0;\n",
+                "area",
+                "sqrt",
+                "graphcal::N009",
+            ),
+        ] {
+            let analysis = analysis_from_source(source);
+            assert!(
+                analysis.has_no_diagnostics(),
+                "{source}: {:?}",
+                analysis.diagnostics
+            );
+            assert_refused_by_compiler(
+                rename(&analysis, &uri, source.find(needle).unwrap(), new_name),
+                code,
+            );
+        }
+    }
+
+    /// LSP-8: an attribute's `Index#Label` is an occurrence of both the
+    /// index and its label, so renaming either keeps the program compiling.
+    #[test]
+    fn rename_updates_expected_fail_index_labels() {
+        let source = "\
+index Mode = { Normal, Eco, Boost };
+node power_use: Dimensionless[Mode] = for m: Mode { 1.0 };
+node power_gen: Dimensionless[Mode] = table[Mode] { Normal: 2.0; Eco: 2.0; Boost: 0.5; };
+#[expected_fail(Mode#Boost)]
+assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
+";
+        let analysis = analysis_from_source(source);
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        let uri = test_uri();
+        for (needle, old, new) in [("Boost }", "Boost", "Surge"), ("Mode =", "Mode", "Regime")] {
+            let edit = rename(&analysis, &uri, source.find(needle).unwrap(), new)
+                .unwrap()
+                .expect("renameable");
+            let updated = apply_edits(source, &edit.changes.unwrap()[&uri]);
+            assert!(!updated.contains(old), "{updated}");
+            let checked = analysis_from_source(&updated);
+            assert!(
+                checked.has_no_diagnostics(),
+                "{updated}: {:?}",
+                checked.diagnostics
+            );
+        }
+        let attribute_label = source.find("Mode#Boost").unwrap() + "Mode#".len();
+        let references = crate::references::references(&analysis, &uri, attribute_label, true)
+            .expect("label references");
+        assert_eq!(references.len(), 3, "{references:?}");
+    }
+
+    /// An earlier duplicate keeps the project failing with N001 both before
+    /// and after a rename that adds another duplicate, so the re-check could
+    /// not see it: renames are refused until the project compiles.
+    #[test]
+    fn rename_is_refused_while_the_project_does_not_compile() {
+        let source = "\
+node dup: Dimensionless = 1.0;
+node dup: Dimensionless = 2.0;
+param velocity: Velocity = 50.0 m/s;
+node momentum: Dimensionless = 1.0;
+";
+        let analysis = analysis_from_source(source);
+        assert!(!analysis.has_no_diagnostics());
+        let offset = source.find("momentum").unwrap();
+        assert_eq!(
+            rename(&analysis, &test_uri(), offset, "velocity"),
+            Err(RenameRefusal::ProjectDoesNotCompile {
+                name: "momentum".to_string()
+            })
         );
     }
 
@@ -1020,21 +1177,17 @@ node kinetic: Energy = 0.5 * @mass * @velocity ^ 2;
     #[test]
     fn rename_variant_collision_is_scoped_to_its_index() {
         let source = "\
-index Season = { Winter, Summer };
+pub index Season = { Winter, Summer };
 index Hemisphere = { North, Winter };
-node pick: Season = Season#Summer;
+param weights: Dimensionless[Season] = { Season#Winter: 1.0, Season#Summer: 2.0 };
+node pick: Dimensionless = @weights[Season#Summer];
 ";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         // `Summer` → `Winter` collides with its sibling.
         let offset = source.find("Summer }").unwrap();
-        assert_eq!(
-            rename(&analysis, &uri, offset, "Winter"),
-            Err(RenameRefusal::NameCollision {
-                new_name: "Winter".to_string()
-            })
-        );
+        assert_refused_by_compiler(rename(&analysis, &uri, offset, "Winter"), "graphcal::N001");
         // `North` → `Summer` is fine: `Summer` only exists under `Season`.
         let offset = source.find("North").unwrap();
         assert!(
@@ -1057,7 +1210,7 @@ param dv: Velocity[Maneuver] = table[Maneuver] {
 node total: Velocity = @dv[Maneuver#Departure];
 ";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
 
         // Cursor on the `Departure` variant declaration.
         let offset = source.find("Departure").unwrap();
@@ -1089,8 +1242,8 @@ node total: Velocity = @dv[Maneuver#Departure];
     #[test]
     fn rename_index_updates_multi_decl_axis_and_contextual_headers() {
         let source = "\
-index Component = { A };
-index Mode = { Safe, Nominal };
+pub index Component = { A };
+pub index Mode = { Safe, Nominal };
 param scalar: Dimensionless[Component],
 param enabled: Bool[Component, Mode]
     = table[Component, (_, Mode)] {
@@ -1099,7 +1252,7 @@ param enabled: Bool[Component, Mode]
     };
 ";
         let analysis = analysis_from_source(source);
-        let uri = Url::parse("file:///test.gcl").unwrap();
+        let uri = test_uri();
         let offset = source.find("Mode =").unwrap();
         let result = rename(&analysis, &uri, offset, "State").unwrap().unwrap();
         let file_edits = &result.changes.unwrap()[&uri];
@@ -1156,5 +1309,140 @@ param enabled: Bool[Component, Mode]
         assert!(!is_valid_identifier("_private"));
         assert!(!is_valid_identifier("node"));
         assert!(!is_valid_identifier("true"));
+    }
+
+    /// A record type and its sole constructor share one spelling, so renaming
+    /// either renames both; a union's constructor is renamed alone.
+    #[test]
+    fn rename_keeps_record_type_and_constructor_together() {
+        let source = "\
+type Item { Item(mass: Mass) }
+type Mode { Mode, Other }
+node item: Item = Item(mass: 1.0 kg);
+node mass: Mass = @item.mass;
+node mode: Mode = Mode;
+";
+        let analysis = analysis_from_source(source);
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        let uri = test_uri();
+        for (cursor, expected) in [
+            (source.find("Item {").unwrap(), 4),
+            (source.find("Item(mass").unwrap(), 4),
+            (source.find("Mode {").unwrap(), 2),
+        ] {
+            let edit = rename(&analysis, &uri, cursor, "Renamed")
+                .unwrap()
+                .expect("renameable");
+            let edits = &edit.changes.unwrap()[&uri];
+            assert_eq!(edits.len(), expected, "{edits:?}");
+            let updated = apply_edits(source, edits);
+            assert!(
+                analysis_from_source(&updated).has_no_diagnostics(),
+                "{updated}"
+            );
+        }
+    }
+
+    /// The input name and value of an include's static binding
+    /// (`index T: Step`) are occurrences of the template's port and of the
+    /// bound index.
+    #[test]
+    fn rename_updates_include_static_bindings() {
+        let source = "\
+index Step = { A, B };
+dag scaled {
+    pub(bind) index T;
+    pub node ys: Dimensionless[T] = for t: T { 1.0 };
+}
+include scaled(index T: Step)::{ ys };
+";
+        let analysis = analysis_from_source(source);
+        assert!(analysis.has_no_diagnostics(), "{:?}", analysis.diagnostics);
+        let uri = test_uri();
+        for (cursor, expected) in [
+            (source.find("Step =").unwrap(), 2),
+            (source.find("index T;").unwrap() + "index ".len(), 4),
+        ] {
+            let edit = rename(&analysis, &uri, cursor, "Renamed")
+                .unwrap()
+                .expect("renameable");
+            let edits = &edit.changes.unwrap()[&uri];
+            assert_eq!(edits.len(), expected, "{edits:?}");
+            let updated = apply_edits(source, edits);
+            assert!(
+                analysis_from_source(&updated).has_no_diagnostics(),
+                "{updated}"
+            );
+        }
+    }
+
+    /// LSP-20: renaming one declaration of each kind in every standalone
+    /// valid fixture to a fresh name is accepted, and the edited program
+    /// still checks cleanly. A missed occurrence would make the re-check
+    /// refuse the rename, so this exercises occurrence completeness.
+    #[test]
+    fn fresh_renames_of_valid_fixtures_are_accepted_and_compile() {
+        let fixtures =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/valid");
+        let mut files: Vec<_> = std::fs::read_dir(&fixtures)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "gcl"))
+            .collect();
+        files.sort();
+        let uri = test_uri();
+        let mut renamed = 0usize;
+        let mut failures = Vec::new();
+        for path in files {
+            let source = std::fs::read_to_string(&path).unwrap();
+            let analysis = analysis_from_source(&source);
+            if !analysis.has_no_diagnostics() {
+                continue;
+            }
+            let mut seen = std::collections::HashSet::new();
+            let mut definitions: Vec<_> = analysis
+                .symbol_table
+                .definitions
+                .iter()
+                .filter(|(key, definition)| {
+                    definition.is_navigable() && !matches!(key, SymbolKey::ExternFunction(_))
+                })
+                .map(|(_, definition)| definition)
+                .collect();
+            definitions.sort_by_key(|definition| definition.name_span.offset());
+            for definition in definitions {
+                if !seen.insert(std::mem::discriminant(&definition.category)) {
+                    continue;
+                }
+                let new_name = format!("{}_renamed", definition.name);
+                match rename(&analysis, &uri, definition.name_span.offset(), &new_name) {
+                    Ok(Some(edit)) => {
+                        let updated = apply_edits(&source, &edit.changes.unwrap()[&uri]);
+                        let checked = analysis_from_source(&updated);
+                        if checked.has_no_diagnostics() {
+                            renamed += 1;
+                        } else {
+                            failures.push(format!(
+                                "{}: `{}` -> `{new_name}` broke: {:?}",
+                                path.display(),
+                                definition.name,
+                                checked.diagnostics
+                            ));
+                        }
+                    }
+                    // A field of a record a plugin returns is part of the
+                    // plugin's signature, which no rename can change.
+                    Err(RenameRefusal::WouldNotCompile { error, .. })
+                        if error.code == Some(compiler_code("graphcal::W005")) => {}
+                    other => failures.push(format!(
+                        "{}: `{}` -> `{new_name}`: {other:?}",
+                        path.display(),
+                        definition.name
+                    )),
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+        assert!(renamed > 100, "only {renamed} renames were exercised");
     }
 }

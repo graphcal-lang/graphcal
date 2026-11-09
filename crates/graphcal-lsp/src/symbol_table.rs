@@ -19,10 +19,13 @@ use graphcal_compiler::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedName, ResolvedStructTypeName,
     ResolvedUnitName,
 };
+use graphcal_compiler::syntax::ast::InputBindingCategory;
 use graphcal_compiler::syntax::attribute::AttributeName;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::names::{NameAtom, NameDef, NamePath};
 use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::type_name::GenericParamName;
 
 use graphcal_compiler::builtin::{BuiltinConst, BuiltinFn};
@@ -169,6 +172,31 @@ impl<'a> HirRefCollector<'a> {
         }
     }
 
+    /// Record an attribute's `Index#Label` (`#[expected_fail(Mode#Boost)]`):
+    /// the index path and, when it names a variant of that index, the label.
+    fn attribute_label(
+        &self,
+        index: &Spanned<NamePath>,
+        label: &Spanned<IndexVariantName>,
+        table: &mut SymbolTable,
+    ) {
+        match self
+            .resolver
+            .resolve_index_variant_parts(self.dag_id, &index.value, &label.value)
+        {
+            Ok(variant) => {
+                Self::reference(table, label.span, Self::variant_key(&variant));
+                Self::reference(table, index.span, SymbolKey::Index(variant.index().clone()));
+            }
+            Err(_) => table.references.push(ReferenceInfo {
+                span: index.span,
+                target: ReferenceTarget::Unresolved(UnresolvedSymbol::Index(
+                    SourceSymbolPath::from_name_path(&index.value),
+                )),
+            }),
+        }
+    }
+
     fn variant_key(variant: &graphcal_compiler::resolved_name::ResolvedIndexVariant) -> SymbolKey {
         SymbolKey::IndexVariant(IndexVariantId::from_resolved(variant))
     }
@@ -251,6 +279,17 @@ impl<'a> HirRefCollector<'a> {
                     *span,
                 )
             }
+            // A removed built-in (#2246) resolves to nothing either; it only
+            // has a dedicated diagnostic.
+            hir::ExprLowerError::RemovedBuiltinFunction { function, span } => {
+                let Ok(name) = NameAtom::parse(function.as_str()) else {
+                    return;
+                };
+                (
+                    UnresolvedSymbol::Function(SourceSymbolPath::local(name)),
+                    *span,
+                )
+            }
             hir::ExprLowerError::ModuleResolve {
                 source: ModuleResolveError::UnknownName { name, .. },
                 span,
@@ -269,7 +308,6 @@ impl<'a> HirRefCollector<'a> {
     fn define_local(
         &mut self,
         local: &hir::expr::LocalDef,
-        scope: Span,
         detail: String,
         table: &mut SymbolTable,
     ) {
@@ -291,7 +329,6 @@ impl<'a> HirRefCollector<'a> {
                 visibility: None,
             },
         );
-        table.local_scopes.insert(key.clone(), scope);
         self.locals.insert(local.id, key);
     }
 
@@ -501,7 +538,7 @@ impl<'a> HirRefCollector<'a> {
                             format!("loop variable over Fin({})", nat_expr_label(cardinality))
                         }
                     };
-                    self.define_local(&binding.local, body.span, detail, table);
+                    self.define_local(&binding.local, detail, table);
                 }
                 self.walk(body, table);
             }
@@ -530,8 +567,8 @@ impl<'a> HirRefCollector<'a> {
             } => {
                 self.walk(source, table);
                 self.walk(init, table);
-                self.define_local(acc, body.span, "scan accumulator".into(), table);
-                self.define_local(val, body.span, "scan value".into(), table);
+                self.define_local(acc, "scan accumulator".into(), table);
+                self.define_local(val, "scan value".into(), table);
                 self.walk(body, table);
             }
             hir::expr::ExprKind::Unfold {
@@ -544,19 +581,16 @@ impl<'a> HirRefCollector<'a> {
                 self.walk(init, table);
                 self.define_local(
                     &recurrence.previous_state,
-                    body.span,
                     "unfold previous state".into(),
                     table,
                 );
                 self.define_local(
                     &recurrence.previous_index,
-                    body.span,
                     "unfold previous index".into(),
                     table,
                 );
                 self.define_local(
                     &recurrence.current_index,
-                    body.span,
                     "unfold current index".into(),
                     table,
                 );
@@ -596,7 +630,6 @@ impl<'a> HirRefCollector<'a> {
                                         );
                                         self.define_local(
                                             local,
-                                            arm.body.span,
                                             format!("bound from {}", constructor.value),
                                             table,
                                         );
@@ -996,8 +1029,6 @@ pub struct SymbolTable {
     /// Populated alongside `definitions` so that `find_definition_key` is O(1)
     /// instead of a linear reverse scan.
     name_span_to_key: HashMap<usize, SymbolKey>,
-    /// Exact lexical body where each comprehension/lambda/payload binder is visible.
-    local_scopes: HashMap<SymbolKey, Span>,
     /// Definition name-spans sorted by offset, each paired with the entry's
     /// `SymbolKey` (refcounted — shared with [`Self::inlay_hint_entries`] so
     /// the keys are allocated once at finalize time). Used by
@@ -1031,33 +1062,9 @@ impl SymbolTable {
             definition_conflicts: Vec::new(),
             references: Vec::new(),
             name_span_to_key: HashMap::new(),
-            local_scopes: HashMap::new(),
             defs_by_name_span: Vec::new(),
             inlay_hint_entries: Vec::new(),
         }
-    }
-
-    /// Overlapping lexical scopes cannot reuse a binding spelling. Disjoint
-    /// bodies (including separate match arms) may do so safely.
-    pub(crate) fn local_rename_collides(&self, key: &SymbolKey, name: &str) -> bool {
-        let Some(scope) = self.local_scopes.get(key) else {
-            return true;
-        };
-        self.local_scopes.iter().any(|(other, other_scope)| {
-            other != key
-                && scope.offset() < other_scope.offset().saturating_add(other_scope.len())
-                && other_scope.offset() < scope.offset().saturating_add(scope.len())
-                && self
-                    .definitions
-                    .get(other)
-                    .is_some_and(|definition| definition.name == name)
-        }) || self.references.iter().any(|reference| {
-            reference.span.offset() >= scope.offset()
-                && reference.span.offset() < scope.offset().saturating_add(scope.len())
-                && matches!(&reference.target,
-                    ReferenceTarget::Resolved(target @ (SymbolKey::BuiltinConstant(_) | SymbolKey::TimeScale(_)))
-                    if target.leaf_name() == name)
-        })
     }
 
     pub(crate) const fn owner(&self) -> &DagId {
@@ -1348,23 +1355,27 @@ impl SymbolTable {
             .collect()
     }
 
-    pub fn unique_definition_named(&self, name: &str) -> Option<&DefinitionInfo> {
-        let mut matches = self.definitions.values().filter(|definition| {
-            definition.name == name
-                && !definition.name_span.is_empty()
-                && !matches!(
-                    definition.category,
-                    SymbolCategory::Constructor
-                        | SymbolCategory::Field
-                        | SymbolCategory::GenericParam
-                        | SymbolCategory::LocalVar
-                        | SymbolCategory::BuiltinFn
-                        | SymbolCategory::BuiltinConst
-                        | SymbolCategory::ExternFn
-                )
-        });
-        let definition = matches.next()?;
-        matches.next().is_none().then_some(definition)
+    /// Every source declaration spelled `name`, across all of the file's
+    /// scopes (independent DAGs may each declare one), excluding members,
+    /// locals and built-ins.
+    pub fn declarations_named(&self, name: &str) -> Vec<&DefinitionInfo> {
+        self.definitions
+            .values()
+            .filter(|definition| {
+                definition.name == name
+                    && !definition.name_span.is_empty()
+                    && !matches!(
+                        definition.category,
+                        SymbolCategory::Constructor
+                            | SymbolCategory::Field
+                            | SymbolCategory::GenericParam
+                            | SymbolCategory::LocalVar
+                            | SymbolCategory::BuiltinFn
+                            | SymbolCategory::BuiltinConst
+                            | SymbolCategory::ExternFn
+                    )
+            })
+            .collect()
     }
 }
 
@@ -1620,12 +1631,18 @@ fn collect_attribute_refs(
                     collect_argument(element, table, refs);
                 }
             }
-            AttributeArg::IndexLabel { .. } | AttributeArg::FinitePosition { .. } => {}
+            AttributeArg::IndexLabel { index, label, .. } => {
+                refs.attribute_label(index, label, table);
+            }
+            AttributeArg::FinitePosition { .. } => {}
         }
     }
 
     for attribute in attributes {
-        if attribute.name.name.as_str().parse::<AttributeName>() == Ok(AttributeName::Assumes) {
+        if matches!(
+            attribute.name.name.as_str().parse::<AttributeName>(),
+            Ok(AttributeName::Assumes | AttributeName::ExpectedFail)
+        ) {
             for argument in &attribute.args {
                 collect_argument(argument, table, refs);
             }
@@ -2160,10 +2177,31 @@ fn collect_include_decl(
                 .map(SymbolRef::into_resolved)
         };
         for binding in &include.param_bindings {
-            if let Some(declaration) = template_decl(binding.name.name.atom()) {
+            let input = NamePath::local(binding.name.name.atom().clone());
+            let input_target = match binding.category {
+                InputBindingCategory::Unmarked => {
+                    template_decl(binding.name.name.atom()).map(SymbolKey::Declaration)
+                }
+                InputBindingCategory::Index => refs
+                    .resolver
+                    .resolve_index_path(target, &input)
+                    .ok()
+                    .map(|index| SymbolKey::Index(index.into_resolved())),
+                InputBindingCategory::Dimension => refs
+                    .resolver
+                    .resolve_dimension_path(target, &input)
+                    .ok()
+                    .map(|dimension| SymbolKey::Dimension(dimension.into_resolved())),
+                InputBindingCategory::Type => refs
+                    .resolver
+                    .resolve_struct_type_path(target, &input)
+                    .ok()
+                    .map(|nominal| SymbolKey::StructType(nominal.into_resolved())),
+            };
+            if let Some(input_target) = input_target {
                 table.references.push(ReferenceInfo {
                     span: binding.name.span,
-                    target: SymbolKey::Declaration(declaration).into(),
+                    target: input_target.into(),
                 });
             }
         }
@@ -2196,7 +2234,47 @@ fn collect_include_decl(
         }
     }
     for binding in &include.param_bindings {
-        refs.collect_body(&binding.value, table);
+        collect_binding_value_refs(binding, table, refs);
+    }
+}
+
+/// References in an include binding's value: an expression for a value
+/// input, and a name of the bound category for a static input
+/// (`index T: Step`, `dim D: Length`, `type T: Item`).
+fn collect_binding_value_refs(
+    binding: &graphcal_compiler::syntax::ast::ParamBinding<
+        graphcal_compiler::syntax::phase::Desugared,
+    >,
+    table: &mut SymbolTable,
+    refs: &mut HirRefCollector<'_>,
+) {
+    use graphcal_compiler::syntax::ast::{ExprKind, IndexExpr, UnresolvedRef};
+    let unresolved: fn(SourceSymbolPath) -> UnresolvedSymbol = match binding.category {
+        InputBindingCategory::Unmarked => {
+            refs.collect_body(&binding.value, table);
+            return;
+        }
+        InputBindingCategory::Index => {
+            if let Some(IndexExpr::Name(path)) = binding.value.index_binding_arg() {
+                table.references.push(ReferenceInfo {
+                    span: path.span,
+                    target: ReferenceTarget::Unresolved(UnresolvedSymbol::Index(
+                        SourceSymbolPath::from_name_path(&path.value),
+                    )),
+                });
+            }
+            return;
+        }
+        InputBindingCategory::Dimension => UnresolvedSymbol::Dimension,
+        InputBindingCategory::Type => UnresolvedSymbol::StructType,
+    };
+    if let ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) = &binding.value.kind {
+        table.references.push(ReferenceInfo {
+            span: binding.value.span,
+            target: ReferenceTarget::Unresolved(unresolved(SourceSymbolPath::from_name_path(
+                &path.to_name_path(),
+            ))),
+        });
     }
 }
 
@@ -3129,6 +3207,32 @@ node total: Velocity = @dv[Maneuver#Departure];
         definition_key(&table, SymbolCategory::Node, "b");
         let offset = source.find("@a").unwrap() + 1;
         assert_eq!(reference_key(&table, offset), Some(a));
+    }
+
+    /// #2290: a call to a removed built-in is an unresolved function
+    /// reference, like a call to an unknown function, and its arguments keep
+    /// their references.
+    #[test]
+    fn removed_builtin_call_is_an_unresolved_function_reference() {
+        let source = "param t: Datetime = datetime(\"2026-01-01T00:00:00Z\");\n\
+                      node jd: Dimensionless = to_jd(@t);";
+        let table = table_for(source);
+        let reference = table
+            .find_reference_at(source.find("to_jd").unwrap())
+            .expect("a reference at the removed built-in");
+        assert!(
+            matches!(
+                &reference.target,
+                ReferenceTarget::Unresolved(UnresolvedSymbol::Function(path))
+                    if path.leaf().as_str() == "to_jd"
+            ),
+            "{reference:?}"
+        );
+        let t = definition_key(&table, SymbolCategory::Param, "t");
+        assert_eq!(
+            reference_key(&table, source.find("@t").unwrap() + 1),
+            Some(t)
+        );
     }
 
     #[test]

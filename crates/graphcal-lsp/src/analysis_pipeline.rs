@@ -20,7 +20,7 @@ use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::LoadedProject;
 use graphcal_project::project_compiler::{CheckedProject, ProjectCompiler};
 
-use crate::analysis::{AnalysisResult, ResolvedImportLink};
+use crate::analysis::{AnalysisResult, ProjectCheck, ResolvedImportLink};
 use crate::file_identity::{DocumentUris, file_identity};
 use crate::fn_signatures::{build_extern_fn_signatures, build_fn_signatures};
 use crate::imported_definitions::{collect_import_surfaces, collect_imported_definitions};
@@ -72,6 +72,25 @@ pub enum ViewModelDemand {
     Project,
 }
 
+/// Whether an analysis evaluates a checked, runnable document.
+///
+/// Editor analyses evaluate to show values and runtime diagnostics. A check of
+/// a candidate edit only needs the compiler's verdict and the symbol index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvaluationDemand {
+    /// Evaluate a runnable document after it checks.
+    Evaluate,
+    /// Stop after checking.
+    Skip,
+}
+
+/// What one analysis pass produces beyond the checked symbol index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnalysisDemand {
+    pub view: ViewModelDemand,
+    pub evaluation: EvaluationDemand,
+}
+
 /// Transient output of one analysis pass.
 pub struct AnalysisRun {
     pub analysis: AnalysisResult,
@@ -81,6 +100,7 @@ pub struct AnalysisRun {
 /// Snapshot of another open editor buffer, overlaid onto the filesystem
 /// during analysis so cross-file diagnostics, goto-definition targets, and
 /// hover reflect what the user actually sees instead of stale disk content.
+#[derive(Clone)]
 pub struct OpenBuffer {
     /// The URI the editor opened the buffer under.
     uri: Url,
@@ -95,6 +115,11 @@ impl OpenBuffer {
     pub fn new(uri: Url, text: Arc<String>) -> Option<Self> {
         let path = uri.to_file_path().ok()?;
         Some(Self { uri, path, text })
+    }
+
+    /// The URI the editor opened the buffer under.
+    pub const fn uri(&self) -> &Url {
+        &self.uri
     }
 }
 
@@ -121,16 +146,33 @@ impl ProjectBuild {
     }
 }
 
+/// The source name a buffer analysed on its own is registered under.
+///
+/// A standalone source's name also names its module, which must end in
+/// `.gcl`; an untitled buffer the client marked as Graphcal by its language
+/// identifier (`untitled:Untitled-1`) has no such suffix, so it gets one.
+fn standalone_source_name(uri: &Url) -> std::borrow::Cow<'_, str> {
+    // The module path is case-sensitive: `.GCL` does not name a module.
+    if std::path::Path::new(uri.as_str())
+        .extension()
+        .is_some_and(|extension| extension == "gcl")
+    {
+        std::borrow::Cow::Borrowed(uri.as_str())
+    } else {
+        std::borrow::Cow::Owned(format!("{uri}.gcl"))
+    }
+}
+
 pub fn build_project(
     uri: &Url,
     text: &str,
     open_buffers: &[OpenBuffer],
     cancellation: &CancellationToken,
 ) -> ProjectBuild {
-    let name = uri.as_str();
     let Ok(path) = uri.to_file_path() else {
+        let name = standalone_source_name(uri);
         return ProjectBuild {
-            project: LoadedProject::from_source_with_cancellation(text, name, cancellation)
+            project: LoadedProject::from_source_with_cancellation(text, &name, cancellation)
                 .map_err(|outcome| outcome.map_failed(Box::new)),
             filesystem_inputs: HashSet::new(),
         };
@@ -269,7 +311,10 @@ pub(crate) fn run_analysis_run(
         open_buffers,
         plugin_host,
         &input_snapshot,
-        ViewModelDemand::Project,
+        AnalysisDemand {
+            view: ViewModelDemand::Project,
+            evaluation: EvaluationDemand::Evaluate,
+        },
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .expect("an unbounded analysis cannot be cancelled")
@@ -299,9 +344,10 @@ pub fn run_analysis_with_cancellation(
     open_buffers: &[OpenBuffer],
     plugin_host: &graphcal_plugin_host::PluginHost,
     input_snapshot: &AnalysisInputSnapshot,
-    view: ViewModelDemand,
+    demand: AnalysisDemand,
     cancellation: &CancellationToken,
 ) -> std::result::Result<AnalysisRun, Cancelled> {
+    let AnalysisDemand { view, evaluation } = demand;
     cancellation.checkpoint()?;
     // Stage 1: Build project (parse + load imports).
     // If this fails, no AST is available for the multi-file pipeline. Fall
@@ -323,8 +369,11 @@ pub fn run_analysis_with_cancellation(
             // diagnostics-only fallback and `store_analysis` retains the
             // previous symbol state (#834).
             let (symbol_table, buffer_parsed, degradations) =
-                match LoadedProject::from_source_with_cancellation(text, uri.as_str(), cancellation)
-                {
+                match LoadedProject::from_source_with_cancellation(
+                    text,
+                    &standalone_source_name(uri),
+                    cancellation,
+                ) {
                     Ok(single) => (
                         symbol_table::build_for_buffer(single.root_file().ast(), text),
                         true,
@@ -356,6 +405,7 @@ pub fn run_analysis_with_cancellation(
                     extern_fn_signatures: HashMap::new(),
                     import_links: Vec::new(),
                     buffer_parsed,
+                    check: ProjectCheck::Failed,
                 },
                 degradations,
             });
@@ -425,25 +475,26 @@ pub fn run_analysis_with_cancellation(
                 }
             };
             cancellation.checkpoint()?;
-            let (mut diagnostics, eval_values) =
-                if checked.is_library() && tir.default_runnable_dags().next().is_none() {
-                    (HashMap::new(), HashMap::new())
-                } else {
-                    let evaluated = run_eval_from_checked(
-                        checked,
-                        &documents,
-                        text,
-                        &symbol_table,
-                        &host_fns,
-                        cancellation,
-                    )?;
-                    if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
-                        // A value its display unit cannot show is shown in SI, and
-                        // its node says why.
-                        projection.attach_evaluation(result);
-                    }
-                    (evaluated.diagnostics, evaluated.values)
-                };
+            let (mut diagnostics, eval_values) = if evaluation == EvaluationDemand::Skip
+                || (checked.is_library() && tir.default_runnable_dags().next().is_none())
+            {
+                (HashMap::new(), HashMap::new())
+            } else {
+                let evaluated = run_eval_from_checked(
+                    checked,
+                    &documents,
+                    text,
+                    &symbol_table,
+                    &host_fns,
+                    cancellation,
+                )?;
+                if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
+                    // A value its display unit cannot show is shown in SI, and
+                    // its node says why.
+                    projection.attach_evaluation(result);
+                }
+                (evaluated.diagnostics, evaluated.values)
+            };
             cancellation.checkpoint()?;
             diagnostics.entry(uri.clone()).or_default().extend(todos);
             let view = view.map(graphcal_project::view_model::ViewProjections::into_models);
@@ -464,6 +515,7 @@ pub fn run_analysis_with_cancellation(
                     extern_fn_signatures,
                     import_links,
                     buffer_parsed: true,
+                    check: ProjectCheck::Passed,
                 },
                 degradations,
             })
@@ -512,6 +564,7 @@ pub fn run_analysis_with_cancellation(
                     extern_fn_signatures: HashMap::new(),
                     import_links,
                     buffer_parsed: true,
+                    check: ProjectCheck::Failed,
                 },
                 degradations,
             })
@@ -775,7 +828,10 @@ mod view_tests {
             &[],
             test_plugin_host(),
             &input_snapshot,
-            ViewModelDemand::Skip,
+            AnalysisDemand {
+                view: ViewModelDemand::Skip,
+                evaluation: EvaluationDemand::Evaluate,
+            },
             &CancellationToken::unbounded(),
         )
         .unwrap();

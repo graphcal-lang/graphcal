@@ -27,7 +27,8 @@ use tower_lsp::{Client, ClientSocket, LanguageServer, LspService, Server};
 use crate::analysis::AnalysisResult;
 use crate::analysis_generations::AnalysisGenerations;
 use crate::analysis_pipeline::{
-    AnalysisRun, OpenBuffer, ViewModelDemand, run_analysis_with_cancellation,
+    AnalysisDemand, AnalysisRun, EvaluationDemand, OpenBuffer, ViewModelDemand,
+    run_analysis_with_cancellation,
 };
 use crate::analysis_schedule_state::AnalysisScheduleState;
 use crate::client_capabilities::{ClientFeatureSupport, DocumentSymbolShape, WorkspaceEditShape};
@@ -36,6 +37,7 @@ use crate::feature_worker::{FeatureWorkError, run_feature};
 use crate::file_identity::{document_identity, file_identity};
 use crate::formatting_scheduler::{FormattingScheduler, FormattingTaskError};
 use crate::project_symbols::ProjectSymbolIndex;
+use crate::rename_check::RenameCheck;
 use crate::workspace_revision::{
     AnalysisFreshness, AnalysisInputSnapshot, CurrentRevisions, DependencyGraph, DocumentIdentity,
     DocumentRevision, RevisionClock, RevisionExhausted,
@@ -402,10 +404,19 @@ impl Backend {
         });
     }
 
-    fn is_graphcal_file(uri: &Url) -> bool {
-        std::path::Path::new(uri.path())
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("gcl"))
+    /// Whether a document the client opens is Graphcal: its language
+    /// identifier says so, or its path ends in `.gcl`. An untitled buffer
+    /// has no suffix, so the language identifier is all that marks it.
+    fn opens_as_graphcal(uri: &Url, language_id: &str) -> bool {
+        language_id.eq_ignore_ascii_case("graphcal")
+            || std::path::Path::new(uri.path())
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("gcl"))
+    }
+
+    /// Whether `uri` is a document opened as Graphcal and not yet closed.
+    async fn is_open_graphcal_document(&self, uri: &Url) -> bool {
+        self.latest_text.read().await.contains_key(uri)
     }
 
     /// The cached analysis of `uri` when `accept` admits it against the
@@ -448,6 +459,21 @@ impl Backend {
             return Ok(None);
         };
         feature_response(run_feature(move |_| f(CurrentAnalysis(analysis))).await)
+    }
+
+    /// [`Self::with_current_analysis`] for work that is long enough to
+    /// observe the request's cancellation.
+    async fn with_current_analysis_cancellable<F, R>(&self, uri: &Url, f: F) -> Result<Option<R>>
+    where
+        F: FnOnce(CurrentAnalysis, &CancellationToken) -> Option<R> + Send + 'static,
+        R: Send + 'static,
+    {
+        let Some((analysis, _)) = self.cached_analysis(uri, is_current_analysis).await else {
+            return Ok(None);
+        };
+        feature_response(
+            run_feature(move |cancellation| f(CurrentAnalysis(analysis), cancellation)).await,
+        )
     }
 
     /// Apply a coordinate-free candidate feature when dependencies are still
@@ -612,10 +638,6 @@ impl Backend {
     /// The analysis runs on its own task: a notification handler that awaited
     /// it would hold one of tower-lsp's few handler slots for the whole pass.
     async fn record_and_analyze(&self, uri: Url, text: Arc<String>, version: Option<i32>) {
-        if !Self::is_graphcal_file(&uri) {
-            return;
-        }
-
         self.analysis_scheduler.open_document(&uri);
         let recorded = match self
             .record_latest_text(&uri, Arc::clone(&text), version)
@@ -865,7 +887,10 @@ async fn analyze_store_publish_once(
             &open_buffers,
             &worker_plugin_host,
             &input_snapshot,
-            view,
+            AnalysisDemand {
+                view,
+                evaluation: EvaluationDemand::Evaluate,
+            },
             &cancellation,
         )
     });
@@ -1044,6 +1069,12 @@ fn merged_diagnostics_for(
             (target.clone(), merged)
         })
         .collect()
+}
+
+/// An explicit rename refusal as the descriptive JSON-RPC error clients show
+/// to the user; a `null` answer would read as "nothing to rename here".
+fn rename_refusal_error(refusal: &crate::rename::RenameRefusal) -> tower_lsp::jsonrpc::Error {
+    tower_lsp::jsonrpc::Error::invalid_params(refusal.to_string())
 }
 
 fn workspace_edit_matches_open_snapshots(
@@ -1249,6 +1280,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
+        if !Self::opens_as_graphcal(&params.text_document.uri, &params.text_document.language_id) {
+            return;
+        }
         self.record_and_analyze(
             params.text_document.uri,
             Arc::new(params.text_document.text),
@@ -1262,7 +1296,7 @@ impl LanguageServer for Backend {
             return;
         };
         let uri = params.text_document.uri;
-        if !Self::is_graphcal_file(&uri) {
+        if !self.is_open_graphcal_document(&uri).await {
             return;
         }
         let text = Arc::new(change.text);
@@ -1292,6 +1326,12 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        if !self
+            .is_open_graphcal_document(&params.text_document.uri)
+            .await
+        {
+            return;
+        }
         if let Some(text) = params.text {
             self.record_and_analyze(params.text_document.uri, Arc::new(text), None)
                 .await;
@@ -1490,15 +1530,24 @@ impl LanguageServer for Backend {
         let current_text = self.current_text(&uri).await;
         let snapshots = self.latest_text.read().await.clone();
         let workspace_edit_shape = self.client_features().workspace_edit_shape;
+        let plugin_host = Arc::clone(&self.plugin_host);
         let outcome = self
-            .with_current_analysis(&uri.clone(), move |current| {
+            .with_current_analysis_cancellable(&uri.clone(), move |current, cancellation| {
                 let analysis = current.get();
                 let current_text = current_text.as_ref()?;
                 if current_text.as_str() != analysis.source.as_str() {
                     return None;
                 }
                 let offset = position_to_byte_offset(current_text, position);
-                let result = crate::rename::rename(analysis, &uri, offset, &new_name);
+                let open_buffers = snapshots
+                    .iter()
+                    .filter(|(open_uri, _)| **open_uri != uri)
+                    .filter_map(|(open_uri, snapshot)| {
+                        OpenBuffer::new(open_uri.clone(), Arc::clone(&snapshot.text))
+                    })
+                    .collect();
+                let check = RenameCheck::new(open_buffers, &plugin_host, cancellation);
+                let result = crate::rename::rename(analysis, &uri, offset, &new_name, &check);
                 Some(match result {
                     Ok(Some(edit)) => {
                         if let Some(project) = analysis.project_symbols.complete()
@@ -1523,9 +1572,7 @@ impl LanguageServer for Backend {
             // An explicit refusal (invalid identifier, name collision) is a
             // descriptive error the client shows to the user — silently
             // returning null would suggest "nothing to rename here".
-            Some(Err(refusal)) => Err(tower_lsp::jsonrpc::Error::invalid_params(
-                refusal.to_string(),
-            )),
+            Some(Err(refusal)) => Err(rename_refusal_error(&refusal)),
         }
     }
 
@@ -1536,16 +1583,20 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let position = params.position;
         let current_text = self.current_text(&uri).await;
-        self.with_current_analysis(&uri.clone(), move |current| {
-            let analysis = current.get();
-            let current_text = current_text.as_ref()?;
-            if current_text.as_str() != analysis.source.as_str() {
-                return None;
-            }
-            let offset = position_to_byte_offset(current_text, position);
-            crate::rename::prepare_rename(analysis, &uri, offset)
+        let outcome = self
+            .with_current_analysis(&uri.clone(), move |current| {
+                let analysis = current.get();
+                let current_text = current_text.as_ref()?;
+                if current_text.as_str() != analysis.source.as_str() {
+                    return None;
+                }
+                let offset = position_to_byte_offset(current_text, position);
+                Some(crate::rename::prepare_rename(analysis, &uri, offset))
+            })
+            .await?;
+        outcome.map_or(Ok(None), |response| {
+            response.map_err(|refusal| rename_refusal_error(&refusal))
         })
-        .await
     }
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
@@ -3642,6 +3693,7 @@ node bad: Mass = mass + length;
             extern_fn_signatures: HashMap::new(),
             import_links: Vec::new(),
             buffer_parsed: true,
+            check: crate::analysis::ProjectCheck::Passed,
         })
     }
 
@@ -3994,10 +4046,13 @@ node momentum: Force * Time = @mass * @velocity;
         );
         let analyze = |overlay: &[OpenBuffer], input: &AnalysisInputSnapshot| {
             let unbounded = CancellationToken::unbounded();
+            let demand = AnalysisDemand {
+                view: ViewModelDemand::Skip,
+                evaluation: EvaluationDemand::Evaluate,
+            };
             let host = test_plugin_host();
-            let view = ViewModelDemand::Skip;
             run_analysis_with_cancellation(
-                &main_uri, &main_text, overlay, host, input, view, &unbounded,
+                &main_uri, &main_text, overlay, host, input, demand, &unbounded,
             )
             .unwrap()
             .analysis

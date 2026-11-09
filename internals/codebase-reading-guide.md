@@ -978,6 +978,7 @@ The LSP consumes compiler/evaluator APIs and adds editor-facing analysis:
 | `goto_definition.rs`        | Go to definition                                  |
 | `references.rs`             | Find references                                   |
 | `rename.rs`                 | Rename                                            |
+| `rename_check.rs`           | Compiler re-check of a planned rename             |
 | `inlay_hints.rs`            | Computed value hints                              |
 | `formatting.rs`             | Pure formatting-to-edit adapter                   |
 | `formatting_scheduler.rs`   | Size, concurrency, cancellation, and timeout shell |
@@ -985,6 +986,7 @@ The LSP consumes compiler/evaluator APIs and adds editor-facing analysis:
 | `document_links.rs`         | Import/include links                              |
 | `signature_help.rs`         | Function signatures                               |
 | `code_actions.rs`           | Quick fixes                                       |
+| `repair_data.rs`            | Typed quick-fix payloads in diagnostic data       |
 | `cursor_context.rs`         | Cursor-sensitive context                          |
 | `resolve.rs` / `convert.rs` | Shared resolution and protocol conversion helpers |
 
@@ -2285,90 +2287,93 @@ figure, static or live, is themed.
 578. `crates/graphcal-lsp/src/cancel_on_drop.rs`
 579. `crates/graphcal-lsp/src/formatting_scheduler.rs`
 580. `crates/graphcal-lsp/src/feature_worker.rs`
-581. `crates/graphcal-cli/src/lib.rs`
-582. `crates/graphcal-compiler/src/semantic_error/tests.rs`
-583. `crates/graphcal-project/src/tests.rs`
-584. `crates/graphcal-project/src/graph_ir/mod.rs`
-585. `crates/graphcal-project/src/graph_ir/dot.rs`
-586. `crates/graphcal-project/src/tests/checked_expressions.rs`
-587. `crates/graphcal-project/src/tests/presentation_evidence.rs`
-588. `crates/graphcal-project/src/view_model/project.rs`
-589. `crates/graphcal-project/src/view_model/mod.rs`
-590. `crates/graphcal-project/src/view_model/tests.rs`
-591. `crates/graphcal-wasm/src/prepared.rs`
-592. `crates/graphcal-wasm/src/lib.rs`
-593. `crates/graphcal-lsp/src/diagnostics.rs`
-594. `crates/graphcal-lsp/src/code_actions.rs`
-595. `crates/graphcal-lsp/src/analysis_pipeline.rs`
-596. `crates/graphcal-lsp/src/completion.rs`
-597. `crates/graphcal-lsp/src/rename.rs`
-598. `crates/graphcal-lsp/src/server.rs`
-599. `crates/graphcal-lsp/src/protocol_tests.rs`
-600. `crates/graphcal-cli/src/display.rs`
-601. `crates/graphcal-cli/src/format.rs`
-602. `crates/graphcal-cli/src/json_input.rs`
-603. `crates/graphcal-cli/src/overrides.rs`
-604. `crates/graphcal-cli/src/main.rs`
-605. `crates/graphcal-cli/src/report.rs`
-606. `crates/graphcal-cli/src/model.rs`
-607. `crates/graphcal-cli/src/dump.rs`
-608. `crates/graphcal-cli/src/deps.rs`
-609. Build-time shell (explicit path modules, curated beyond the heuristic):
+581. `crates/graphcal-lsp/src/repair_data.rs`
+582. `crates/graphcal-lsp/src/test_edits.rs`
+583. `crates/graphcal-cli/src/lib.rs`
+584. `crates/graphcal-compiler/src/semantic_error/tests.rs`
+585. `crates/graphcal-project/src/tests.rs`
+586. `crates/graphcal-project/src/graph_ir/mod.rs`
+587. `crates/graphcal-project/src/graph_ir/dot.rs`
+588. `crates/graphcal-project/src/tests/checked_expressions.rs`
+589. `crates/graphcal-project/src/tests/presentation_evidence.rs`
+590. `crates/graphcal-project/src/view_model/project.rs`
+591. `crates/graphcal-project/src/view_model/mod.rs`
+592. `crates/graphcal-project/src/view_model/tests.rs`
+593. `crates/graphcal-wasm/src/prepared.rs`
+594. `crates/graphcal-wasm/src/lib.rs`
+595. `crates/graphcal-lsp/src/diagnostics.rs`
+596. `crates/graphcal-lsp/src/code_actions.rs`
+597. `crates/graphcal-lsp/src/analysis_pipeline.rs`
+598. `crates/graphcal-lsp/src/completion.rs`
+599. `crates/graphcal-lsp/src/rename_check.rs`
+600. `crates/graphcal-lsp/src/rename.rs`
+601. `crates/graphcal-lsp/src/server.rs`
+602. `crates/graphcal-lsp/src/protocol_tests.rs`
+603. `crates/graphcal-cli/src/display.rs`
+604. `crates/graphcal-cli/src/format.rs`
+605. `crates/graphcal-cli/src/json_input.rs`
+606. `crates/graphcal-cli/src/overrides.rs`
+607. `crates/graphcal-cli/src/main.rs`
+608. `crates/graphcal-cli/src/report.rs`
+609. `crates/graphcal-cli/src/model.rs`
+610. `crates/graphcal-cli/src/dump.rs`
+611. `crates/graphcal-cli/src/deps.rs`
+612. Build-time shell (explicit path modules, curated beyond the heuristic):
      `crates/graphcal-cli/build_support/bundle.rs` →
      `crates/graphcal-cli/build_support/engine.rs` →
      `crates/graphcal-cli/build.rs` →
      `crates/graphcal-cli/examples/export_report_engine.rs`
-610. `crates/graphcal-cli/src/plugin.rs`
-611. `crates/graphcal-cli/src/stdout.rs`
-612. `crates/graphcal-ast-derive/tests/format_equivalent.rs`
-613. `crates/graphcal-ast-derive/tests/phase_lift.rs`
-614. `crates/graphcal-plugin/tests/expansion.rs`
-615. `crates/graphcal-plugin/tests/prelude_drift.rs`
-616. `crates/graphcal-plugin/tests/abi_memory.rs`
-617. `crates/graphcal-project/tests/chunk5_regressions.rs`
-618. `crates/graphcal-project/tests/chunk6_regressions.rs`
-619. `crates/graphcal-project/tests/declaration_order.rs`
-620. `crates/graphcal-project/tests/edge_case_bugs.rs`
-621. `crates/graphcal-project/tests/error_snapshots.rs`
-622. `crates/graphcal-project/tests/generated_projects.rs`
-623. `crates/graphcal-project/tests/host_fn_results.rs`
-624. `crates/graphcal-project/tests/namespace_formal_conformance.rs`
-625. `crates/graphcal-project/tests/phase0_regressions.rs`
-626. `crates/graphcal-project/tests/phase1_regressions.rs`
-627. `crates/graphcal-project/tests/phase4_regressions.rs`
-628. `crates/graphcal-project/tests/static_definition_regressions.rs`
-629. `crates/graphcal-project/tests/todo.rs`
-630. `crates/graphcal-project/tests/dag_body_import_regressions.rs`
-631. `crates/graphcal-project/tests/constructor_constraint_regressions.rs`
-632. `crates/graphcal-project/tests/diagnostic_codes.rs`
-633. `crates/graphcal-project/tests/same_file_references.rs`
-634. `crates/graphcal-project/tests/external_surface_formal_conformance.rs`
-635. `crates/graphcal-project/tests/include_projection_regressions.rs`
-636. `crates/graphcal-project/tests/datetime_contract.rs`
-637. `crates/graphcal-project/tests/loader_case_insensitive.rs`
-638. `crates/graphcal-project/tests/loader_filesystem_rules.rs`
-639. `crates/graphcal-project/tests/include_reexport_regressions.rs`
-640. `crates/graphcal-project/tests/binding_error_order.rs`
-641. `crates/graphcal-project/tests/include_selection_order.rs`
-642. `crates/graphcal-report/tests/report.rs`
-643. `crates/graphcal-wasm/tests/tutorial_examples.rs`
-644. `crates/graphcal-wasm/tests/wasm_runtime.rs`
-645. `crates/graphcal-wasm/tests/wasm_presentation.rs`
-646. `crates/graphcal-wasm/tests/playground_examples.rs`
-647. `crates/graphcal-wasm/tests/playground_experiments.rs`
-648. `crates/graphcal-plugin-host/tests/runtime.rs`
-649. `crates/graphcal-plugin-host/tests/project_eval.rs`
-650. `crates/graphcal-fmt/tests/todo.rs`
-651. `crates/graphcal-fmt/tests/format_tests.rs`
-652. `crates/graphcal-cli/tests/todo.rs`
-653. `crates/graphcal-cli/tests/cli.rs`
-654. `crates/graphcal-cli/tests/plugin_cmd.rs`
-655. `crates/graphcal-cli/tests/plugin_e2e.rs`
-656. `crates/graphcal-cli/tests/dump.rs`
-657. `crates/graphcal-cli/tests/presentation.rs`
-658. `crates/graphcal-cli/tests/report_engine.rs`
-659. `crates/graphcal-cli/tests/output_golden.rs`
-660. `crates/graphcal-cli/tests/view.rs`
-661. `crates/graphcal-cli/tests/model_client.rs`
+613. `crates/graphcal-cli/src/plugin.rs`
+614. `crates/graphcal-cli/src/stdout.rs`
+615. `crates/graphcal-ast-derive/tests/format_equivalent.rs`
+616. `crates/graphcal-ast-derive/tests/phase_lift.rs`
+617. `crates/graphcal-plugin/tests/expansion.rs`
+618. `crates/graphcal-plugin/tests/prelude_drift.rs`
+619. `crates/graphcal-plugin/tests/abi_memory.rs`
+620. `crates/graphcal-project/tests/chunk5_regressions.rs`
+621. `crates/graphcal-project/tests/chunk6_regressions.rs`
+622. `crates/graphcal-project/tests/declaration_order.rs`
+623. `crates/graphcal-project/tests/edge_case_bugs.rs`
+624. `crates/graphcal-project/tests/error_snapshots.rs`
+625. `crates/graphcal-project/tests/generated_projects.rs`
+626. `crates/graphcal-project/tests/host_fn_results.rs`
+627. `crates/graphcal-project/tests/namespace_formal_conformance.rs`
+628. `crates/graphcal-project/tests/phase0_regressions.rs`
+629. `crates/graphcal-project/tests/phase1_regressions.rs`
+630. `crates/graphcal-project/tests/phase4_regressions.rs`
+631. `crates/graphcal-project/tests/static_definition_regressions.rs`
+632. `crates/graphcal-project/tests/todo.rs`
+633. `crates/graphcal-project/tests/dag_body_import_regressions.rs`
+634. `crates/graphcal-project/tests/constructor_constraint_regressions.rs`
+635. `crates/graphcal-project/tests/diagnostic_codes.rs`
+636. `crates/graphcal-project/tests/same_file_references.rs`
+637. `crates/graphcal-project/tests/external_surface_formal_conformance.rs`
+638. `crates/graphcal-project/tests/include_projection_regressions.rs`
+639. `crates/graphcal-project/tests/datetime_contract.rs`
+640. `crates/graphcal-project/tests/loader_case_insensitive.rs`
+641. `crates/graphcal-project/tests/loader_filesystem_rules.rs`
+642. `crates/graphcal-project/tests/include_reexport_regressions.rs`
+643. `crates/graphcal-project/tests/binding_error_order.rs`
+644. `crates/graphcal-project/tests/include_selection_order.rs`
+645. `crates/graphcal-report/tests/report.rs`
+646. `crates/graphcal-wasm/tests/tutorial_examples.rs`
+647. `crates/graphcal-wasm/tests/wasm_runtime.rs`
+648. `crates/graphcal-wasm/tests/wasm_presentation.rs`
+649. `crates/graphcal-wasm/tests/playground_examples.rs`
+650. `crates/graphcal-wasm/tests/playground_experiments.rs`
+651. `crates/graphcal-plugin-host/tests/runtime.rs`
+652. `crates/graphcal-plugin-host/tests/project_eval.rs`
+653. `crates/graphcal-fmt/tests/todo.rs`
+654. `crates/graphcal-fmt/tests/format_tests.rs`
+655. `crates/graphcal-cli/tests/todo.rs`
+656. `crates/graphcal-cli/tests/cli.rs`
+657. `crates/graphcal-cli/tests/plugin_cmd.rs`
+658. `crates/graphcal-cli/tests/plugin_e2e.rs`
+659. `crates/graphcal-cli/tests/dump.rs`
+660. `crates/graphcal-cli/tests/presentation.rs`
+661. `crates/graphcal-cli/tests/report_engine.rs`
+662. `crates/graphcal-cli/tests/output_golden.rs`
+663. `crates/graphcal-cli/tests/view.rs`
+664. `crates/graphcal-cli/tests/model_client.rs`
 
 <!-- END generated by `./internals/reading-order.py --write-guide` -->

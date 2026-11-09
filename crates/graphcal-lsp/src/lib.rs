@@ -33,11 +33,15 @@ mod project_symbols;
 mod protocol_tests;
 mod references;
 mod rename;
+mod rename_check;
+mod repair_data;
 mod resolve;
 pub mod server;
 mod signature_help;
 mod symbol_identity;
 mod symbol_table;
+#[cfg(test)]
+mod test_edits;
 mod value_format;
 mod workspace_revision;
 

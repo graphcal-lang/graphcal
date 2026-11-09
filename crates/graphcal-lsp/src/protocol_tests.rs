@@ -11,7 +11,7 @@ use tower_lsp::{LspService, lsp_types::Url};
 use crate::server::{Backend, service};
 
 const SOURCE: &str = "\
-index Phase;
+pub(bind) index Phase;
 node thrust: Dimensionless = 1.0;
 node doubled: Dimensionless = @thrust * 2.0;
 node root: Dimensionless = sqrt(4.0);
@@ -28,6 +28,24 @@ async fn request(service: &mut LspService<Backend>, method: &'static str, params
         .expect("request response");
     let (_, body) = response.into_parts();
     body.unwrap_or_else(|error| panic!("{method} failed: {error}"))
+}
+
+/// The JSON-RPC error `method` answers with; panics on a successful answer.
+async fn request_error(
+    service: &mut LspService<Backend>,
+    method: &'static str,
+    params: Value,
+) -> tower_lsp::jsonrpc::Error {
+    let response = service
+        .ready()
+        .await
+        .expect("service ready")
+        .call(Request::build(method).params(params).id(1).finish())
+        .await
+        .expect("service call")
+        .expect("request response");
+    let (_, body) = response.into_parts();
+    body.expect_err("expected a JSON-RPC error")
 }
 
 async fn notify(service: &mut LspService<Backend>, method: &'static str, params: Value) {
@@ -306,7 +324,8 @@ fn code_action_params(uri: &Url, only: &str) -> Value {
                     "end": { "line": 0, "character": 5 }
                 },
                 "message": "required index must be public",
-                "code": "graphcal::V002"
+                "code": "graphcal::V002",
+                "data": { "kind": "add_visibility", "item": "Phase", "visibility": "bindable" }
             }],
             "only": [only]
         }
@@ -802,7 +821,6 @@ async fn assert_imported_factor_features(
 }
 
 /// The codes of a published diagnostic list.
-#[cfg(unix)]
 fn diagnostic_codes(diagnostics: &Value) -> Vec<String> {
     diagnostics
         .as_array()
@@ -1390,4 +1408,102 @@ async fn view_model_request_serves_the_analyzed_document() {
     )
     .await;
     assert_eq!(unknown, Value::Null);
+}
+
+const EXTERN_SOURCE: &str = "\
+import plugin \"graphcal:demo\" as demo {
+    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+}
+node y: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
+";
+
+/// LSP-12: an explicit refusal reaches the user as an error with its reason,
+/// both from `prepareRename` and from `rename`, rather than a bare `null`.
+#[tokio::test]
+async fn rename_refusals_reach_the_client_with_their_reason() {
+    let (mut service, mut socket) = service();
+    initialize(&mut service, json!({})).await;
+    let uri = Url::parse("untitled:extern.gcl").unwrap();
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&uri, 1, EXTERN_SOURCE),
+    )
+    .await;
+    let diagnostics = next_diagnostics(&mut socket, &uri).await;
+    assert_eq!(diagnostics, json!([]));
+
+    let cursor = position_params(&uri, 1, 8);
+    let error = request_error(&mut service, "textDocument/prepareRename", cursor.clone()).await;
+    assert_eq!(error.code, tower_lsp::jsonrpc::ErrorCode::InvalidParams);
+    assert!(
+        error
+            .message
+            .contains("cannot rename extern function `demo::lerp`"),
+        "{error:?}"
+    );
+
+    let mut rename = cursor;
+    rename["newName"] = json!("blend");
+    let error = request_error(&mut service, "textDocument/rename", rename).await;
+    assert!(error.message.contains("`demo::lerp`"), "{error:?}");
+
+    // Nothing renameable is still a plain `null`.
+    let blank = request(
+        &mut service,
+        "textDocument/prepareRename",
+        position_params(&uri, 3, 22),
+    )
+    .await;
+    assert!(blank.is_null(), "{blank}");
+}
+
+/// LSP-19: an untitled buffer has no `.gcl` suffix; its `languageId` alone
+/// marks it as Graphcal, and its later changes are analysed too. A buffer
+/// opened under another language stays ignored.
+#[tokio::test]
+async fn untitled_buffers_are_recognized_by_language_id() {
+    let (mut service, mut socket) = service();
+    initialize(&mut service, json!({})).await;
+    let other = Url::parse("untitled:Untitled-2").unwrap();
+    let mut plain = open_params(&other, 1, "node broken: Dimensionless =");
+    plain["textDocument"]["languageId"] = json!("plaintext");
+    notify(&mut service, "textDocument/didOpen", plain).await;
+
+    let uri = Url::parse("untitled:Untitled-1").unwrap();
+    notify(
+        &mut service,
+        "textDocument/didOpen",
+        open_params(&uri, 1, "node broken: Dimensionless = @missing;"),
+    )
+    .await;
+    // The first publication is for the Graphcal buffer: the plaintext one
+    // was never analysed.
+    let params = loop {
+        let message = timeout(Duration::from_secs(5), socket.next())
+            .await
+            .expect("publish diagnostics timeout")
+            .expect("client socket closed");
+        if message.method() == "textDocument/publishDiagnostics" {
+            break message.params().expect("diagnostic params").clone();
+        }
+    };
+    assert_eq!(params["uri"], json!(uri));
+    assert_eq!(
+        diagnostic_codes(&params["diagnostics"]),
+        ["graphcal::N002"],
+        "{}",
+        params["diagnostics"]
+    );
+
+    notify(
+        &mut service,
+        "textDocument/didChange",
+        json!({
+            "textDocument": { "uri": uri, "version": 2 },
+            "contentChanges": [{ "text": "node fixed: Dimensionless = 1.0;" }]
+        }),
+    )
+    .await;
+    assert_eq!(next_diagnostics(&mut socket, &uri).await, json!([]));
 }
