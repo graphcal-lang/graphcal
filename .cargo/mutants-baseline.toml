@@ -348,10 +348,10 @@ function = "ValidatedLockfile<'_>::bind_manifests"
 genre = "BinaryOperator"
 replacement = "||"
 span = { start = { line = 86, column = 25 }, end = { line = 86, column = 27 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-package/src/lib.rs"
@@ -359,10 +359,10 @@ function = "ValidatedLockfile<'_>::bind_manifests"
 genre = "BinaryOperator"
 replacement = "||"
 span = { start = { line = 87, column = 25 }, end = { line = 87, column = 27 } }
-status = "resolved"
+status = "obsolete"
 review = "unreviewed"
 rationale = ""
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-package/src/lib.rs"
@@ -370,10 +370,10 @@ function = "ValidatedLockfile<'_>::bind_manifests"
 genre = "MatchArmGuard"
 replacement = "true"
 span = { start = { line = 85, column = 26 }, end = { line = 87, column = 51 } }
-status = "resolved"
+status = "obsolete"
 review = "reviewed"
 rationale = "Package acceptance and error behavior is not directly distinguished by existing tests."
-resolution = "unviable"
+resolution = "not-generated"
 
 [[finding]]
 file = "crates/graphcal-package/src/lib.rs"
