@@ -12,12 +12,14 @@ env:
 permissions:
   contents: read
 
-# The Rust-heavy jobs run on Namespace runner profiles, which attach a cache
-# volume that only `main` may update. Runs inside forked repositories have no
-# access to them and fall back to GitHub-hosted runners.
+# The Rust-heavy jobs run on Namespace runner profiles with a cache volume that
+# only `main` may update. Each job sets its own cache tag: jobs sharing a tag
+# overwrite each other's cache (last successful job wins). Runs inside forked
+# repositories have no access to the profiles and fall back to GitHub-hosted
+# runners.
 jobs:
   checks:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-checks' || 'ubuntu-latest' }}
     env:
       CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
     steps:
@@ -60,7 +62,7 @@ jobs:
         run: git diff --exit-code
 
   public-surface:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-public-surface' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -122,7 +124,7 @@ jobs:
         run: cargo deny --locked check --hide-inclusion-graph
 
   test:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-test' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -149,7 +151,7 @@ jobs:
         run: cargo test --workspace
 
   formal:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-formal' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -197,7 +199,7 @@ jobs:
           template_closure_matches_lean_oracle -- --ignored
 
   qa-corpus:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-qa-corpus' || 'ubuntu-latest' }}
     timeout-minutes: 30
     env:
       UV_VERSION: "0.12.x"
@@ -264,7 +266,7 @@ jobs:
           if-no-files-found: ignore
 
   windows:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-windows-2022' || 'windows-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-windows-2022;overrides.cache-tag=graphcal-ci-windows' || 'windows-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -296,7 +298,7 @@ jobs:
         run: cargo test --workspace --no-fail-fast
 
   wasm:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-wasm' || 'ubuntu-latest' }}
     env:
       CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
     steps:
@@ -360,7 +362,7 @@ jobs:
         run: git diff --exit-code
 
   coverage:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-coverage' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -401,7 +403,7 @@ jobs:
           fail_ci_if_error: true
 
   msrv:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-msrv' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:

@@ -20,24 +20,31 @@ env:
 jobs:
   fuzz:
     name: fuzz (${{ matrix.target }})
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-4x8-ubuntu-2604' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && format('namespace-profile-4x8-ubuntu-2604;overrides.cache-tag=graphcal-fuzz-{0}', matrix.cache_tag) || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: parser
+            cache_tag: parser
             max_len: 65536
           - target: formatter
+            cache_tag: formatter
             max_len: 65536
           - target: package_manifest
+            cache_tag: package-manifest
             max_len: 65536
           - target: package_lockfile
+            cache_tag: package-lockfile
             max_len: 131072
           - target: plugin_manifest
+            cache_tag: plugin-manifest
             max_len: 262144
           - target: plugin_section
+            cache_tag: plugin-section
             max_len: 524288
           - target: generated_project
+            cache_tag: generated-project
             max_len: 4096
     env:
       FUZZ_TARGET: ${{ matrix.target }}
