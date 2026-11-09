@@ -365,7 +365,7 @@ jobs:
         run: git diff --exit-code
 
   coverage:
-    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-coverage' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-16x32-ubuntu-2604;overrides.cache-tag=graphcal-ci-coverage' || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
