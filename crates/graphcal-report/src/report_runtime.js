@@ -62,6 +62,8 @@
   else document.body.appendChild(statusChip);
   // `stale` means the visible results no longer match the inputs on screen.
   function setStatus(text, state, stale) {
+    // Once the engine is gone, only its final error describes the page.
+    if (halted && state !== "error") return;
     statusChip.textContent = text;
     statusChip.title = text;
     statusChip.className = "hydration-status" + (state ? " hydration-status--" + state : "");
@@ -130,7 +132,7 @@
     var waiting = 0;
     controls.forEach(function (control) { if (control.isDirty()) waiting += 1; });
     applyAll.hidden = autoRun;
-    applyAll.disabled = waiting === 0;
+    applyAll.disabled = halted || waiting === 0;
     applyAll.textContent = waiting > 1 ? "Apply " + waiting + " edits" : "Apply edits";
   }
   var inputToolbar = element("div", "input-toolbar");
@@ -194,14 +196,24 @@
     return "";
   }
 
+  // The engine is gone for good: stop evaluating and say which results stay.
+  var halted = false;
   function fatal(message) {
-    setStatus("Interactive mode unavailable", "error");
+    halted = true;
+    // Nothing can evaluate any more, so nothing may be edited or submitted:
+    // an accepted edit would otherwise stay pending forever.
+    controls.forEach(function (control) { control.disable(); });
+    autoRunToggle.disabled = true;
+    applyAll.disabled = true;
+    resetButton.disabled = true;
+    var shown = hasApplied ? "the last results the engine produced" : "the as-published baseline";
+    setStatus("Interactive mode unavailable", "error", hasApplied && inputsDiffer());
     var main = document.querySelector("main");
     if (!main) return;
     var notice = element(
       "p",
       "error-chip",
-      "Interactive mode unavailable: " + message + " — the page shows the as-published baseline.",
+      "Interactive mode unavailable: " + message + " — the page shows " + shown + ".",
     );
     main.insertBefore(notice, main.firstChild);
   }
@@ -551,6 +563,18 @@
     var pendingRevision = 0;
     var submittedRequest = null;
     var autoRunTimer = null;
+    // The editor state a reset or default submission replaced, restored when
+    // that submission is not accepted, so the editor keeps matching the
+    // accepted binding.
+    var replacedState = null;
+    function replaceForSubmission() {
+      replacedState = {
+        draft: cloneStructured(draft),
+        startingDraft: cloneStructured(startingDraft),
+        dirty: dirty,
+        sourceChanged: sourceChanged,
+      };
+    }
 
     var control = {
       name: port.name,
@@ -600,6 +624,7 @@
         if (!pending || submittedRequest !== id) return;
         control.currentBinding = pendingBinding;
         pending = false;
+        replacedState = null;
         if (pendingDraft) startingDraft = cloneStructured(pendingDraft);
         dirty = revision !== pendingRevision;
         sourceChanged = false;
@@ -609,14 +634,36 @@
       },
       rejectPending: function (id) {
         if (!pending || submittedRequest !== id) return;
+        control.abandonPending();
+      },
+      // The engine will never answer the submission (it failed or was
+      // replaced): keep the draft for editing, bind the accepted value.
+      abandonPending: function () {
+        if (!pending) return;
         pending = false;
         pendingDraft = null;
         submittedRequest = null;
+        var replaced = replacedState;
+        replacedState = null;
+        if (replaced && revision === pendingRevision) {
+          draft = replaced.draft;
+          startingDraft = replaced.startingDraft;
+          dirty = replaced.dirty;
+          sourceChanged = replaced.sourceChanged;
+          render();
+          return;
+        }
+        // Newer edits stay in the editor, compared with the accepted value.
+        if (replaced) startingDraft = replaced.startingDraft;
         updateDraftStatus();
       },
+      // Whether the inputs on screen differ from the ones the visible results
+      // were evaluated with.
+      hasUnappliedInput: function () { return dirty || pending; },
       stageBaseline: function () {
         if (autoRunTimer) clearTimeout(autoRunTimer);
         autoRunTimer = null;
+        replaceForSubmission();
         pending = true;
         pendingBinding = initialBinding;
         pendingDraft = null;
@@ -645,6 +692,15 @@
         updateDraftStatus();
       },
       isDirty: function () { return dirty && !pending; },
+      disable: function () {
+        if (autoRunTimer) clearTimeout(autoRunTimer);
+        autoRunTimer = null;
+        control.abandonPending();
+        if (!holder.querySelectorAll) return;
+        holder.querySelectorAll("input, select, textarea, button").forEach(function (node) {
+          node.disabled = true;
+        });
+      },
       submitIfDirty: function () { if (dirty && !pending) submitDraft(true); },
     };
 
@@ -676,6 +732,7 @@
       }, AUTO_RUN_DELAY_MS);
     }
     function editDraft() {
+      if (halted) return;
       revision += 1;
       dirty = true;
       sourceChanged = false;
@@ -705,6 +762,7 @@
       "Each run overrides the whole parameter, including unchanged fields.",
     ));
     function submitDraft(reportIncomplete) {
+      if (halted) return;
       var incomplete = incompleteDraft(draft, []);
       if (incomplete) {
         if (reportIncomplete) control.setError(incomplete.message, incomplete.path);
@@ -714,6 +772,7 @@
       }
       if (autoRunTimer) clearTimeout(autoRunTimer);
       autoRunTimer = null;
+      replacedState = null;
       pending = true;
       pendingDraft = cloneStructured(draft);
       pendingRevision = revision;
@@ -738,8 +797,10 @@
       var clear = element("button", "control-clear", "Use default");
       clear.type = "button";
       clear.addEventListener("click", function () {
+        if (halted) return;
         if (autoRunTimer) clearTimeout(autoRunTimer);
         autoRunTimer = null;
+        replaceForSubmission();
         pending = true;
         pendingBinding = null;
         pendingDraft = null;
@@ -782,6 +843,7 @@
     }
     if (workspace) workspace.refresh(true);
     resetButton.addEventListener("click", function () {
+      if (halted) return;
       controls.forEach(function (control) {
         control.setError("");
         control.stageBaseline();
@@ -1049,12 +1111,21 @@
         else state.view = result.view;
       }).catch(function (error) {
         fail("rendering failed: " + String(error));
-        if (figureStates.get(name) === state) setStatus("Up to date; a chart failed to render", "warn");
+        // Only a current, settled result is up to date; otherwise the status
+        // already says what is pending.
+        if (figureStates.get(name) === state && !inputsDiffer() && !evaluationPending()) {
+          setStatus("Up to date; a chart failed to render", "warn");
+        }
       });
     });
   }
 
+  // Plot and call notices have sections of their own; this one carries only
+  // what the static report lists as presentation diagnostics.
   function patchNotices(evaluation) {
+    var notices = evaluation.notices.filter(function (notice) {
+      return notice.kind === "presentation_error" || notice.kind === "internal_error";
+    });
     var section = document.getElementById("presentation");
     if (!section) {
       section = element("section");
@@ -1062,10 +1133,10 @@
       section.tabIndex = -1;
       document.querySelector("main").appendChild(section);
     }
-    section.hidden = evaluation.notices.length === 0;
+    section.hidden = notices.length === 0;
     section.replaceChildren();
     if (!section.hidden) section.appendChild(element("h2", "", "Presentation diagnostics"));
-    for (var notice of evaluation.notices) {
+    for (var notice of notices) {
       section.appendChild(element("p", "notice", notice.message));
     }
   }
@@ -1112,10 +1183,14 @@
       hasApplied = true;
       // Failures are reported by the Checks cell and the tab counts; this cell
       // only says whether the results on screen are current.
-      setStatus(
-        outcome.evaluation.incomplete ? "Up to date; model incomplete" : "Up to date",
-        outcome.evaluation.incomplete ? "warn" : "ok",
-      );
+      if (inputsDiffer()) {
+        setStatus(autoRun ? "Waiting for the edit to finish" : "Edits not applied yet", "warn", true);
+      } else {
+        setStatus(
+          outcome.evaluation.incomplete ? "Up to date; model incomplete" : "Up to date",
+          outcome.evaluation.incomplete ? "warn" : "ok",
+        );
+      }
     } else if (outcome.status === "binding_errors") {
       controls.forEach(function (control) { control.rejectPending(completedRequest); });
       clearBindingErrors();
@@ -1126,7 +1201,10 @@
       }
       setStatus("Input rejected; showing previous results", "warn", true);
     } else {
-      setStatus("evaluation failed: " + outcome.message, "error");
+      // The submission was not evaluated: it is no longer pending, and the
+      // results on screen belong to the previous inputs.
+      controls.forEach(function (control) { control.rejectPending(completedRequest); });
+      setStatus("evaluation failed: " + outcome.message, "error", inputsDiffer());
     }
     // A parameter is overridden while its accepted binding differs from the baseline.
     var overriddenCount = 0;
@@ -1153,6 +1231,41 @@
   var evaluateQueued = false;
   var ready = false;
   var storedPorts = [];
+  // The bindings of the evaluation in flight, and of the last one the engine
+  // failed on (timed out or crashed), so a repeat failure stops the engine
+  // instead of restarting it forever.
+  var activeBindingsKey = null;
+  var failedBindingsKey = null;
+
+  function inputsDiffer() {
+    var differ = false;
+    controls.forEach(function (control) { if (control.hasUnappliedInput()) differ = true; });
+    return differ;
+  }
+  function evaluationPending() {
+    return activeRequest !== null || evaluateQueued || debounceTimer !== null;
+  }
+
+  // Replace a failed engine, as cancellation does; a second failure on the
+  // same bindings is final.
+  function recoverEngine(message, status) {
+    var key = activeBindingsKey === null ? "prepare" : activeBindingsKey;
+    clearTimeout(timeoutTimer);
+    timeoutTimer = null;
+    if (transport) transport.terminate();
+    controls.forEach(function (control) { control.abandonPending(); });
+    activeRequest = null;
+    activeBindingsKey = null;
+    ready = false;
+    evaluateQueued = false;
+    if (key === failedBindingsKey) {
+      fatal(message);
+      return;
+    }
+    failedBindingsKey = key;
+    setStatus(status, "warn", inputsDiffer());
+    startTransport();
+  }
 
   // Before the controls exist (the first evaluation seeds them), replay the
   // build-time baseline bindings so the initial result matches the page.
@@ -1161,6 +1274,7 @@
   }
 
   function scheduleEvaluate() {
+    if (halted) return;
     if (debounceTimer) clearTimeout(debounceTimer);
     if (options.onPending) options.onPending();
     setStatus("Recalculating…", "busy", true);
@@ -1171,6 +1285,7 @@
   }
 
   function runEvaluate() {
+    if (halted) return;
     if (!ready) {
       evaluateQueued = true;
       return;
@@ -1182,20 +1297,19 @@
     evaluateQueued = false;
     requestId += 1;
     activeRequest = requestId;
+    var bindings = activeBindings();
+    activeBindingsKey = JSON.stringify(bindings);
     setStatus("Recalculating…", "busy", true);
     if (!options.hostOwnsTimeout) timeoutTimer = setTimeout(function () {
       // Cancellation is worker teardown: a blocked evaluation cannot be
       // interrupted, so replace the whole engine and re-prepare.
-      transport.terminate();
-      controls.forEach(function (control) { control.rejectPending(activeRequest); });
-      activeRequest = null;
-      ready = false;
-      evaluateQueued = false;
-      setStatus("Timed out; restarting the engine", "warn", true);
-      startTransport();
+      recoverEngine(
+        "evaluating these inputs takes longer than " + EVALUATION_TIMEOUT_MS / 1000 + " s",
+        "Timed out; restarting the engine",
+      );
     }, EVALUATION_TIMEOUT_MS);
     controls.forEach(function (control) { control.markSubmitted(requestId); });
-    transport.postMessage({ type: "evaluate", id: requestId, bindings: activeBindings() });
+    transport.postMessage({ type: "evaluate", id: requestId, bindings: bindings });
   }
 
   function handleMessage(msg) {
@@ -1229,6 +1343,8 @@
       if (msg.id !== activeRequest) return;
       clearTimeout(timeoutTimer);
       activeRequest = null;
+      activeBindingsKey = null;
+      failedBindingsKey = null;
       if (controls.size === 0 && msg.outcome.status === "evaluated") {
         buildControls(storedPorts, msg.outcome.evaluation);
       }
@@ -1241,9 +1357,7 @@
       return;
     }
     if (msg.type === "fatal") {
-      clearTimeout(timeoutTimer);
-      activeRequest = null;
-      fatal(msg.message);
+      recoverEngine(msg.message, "The engine failed; restarting it");
     }
   }
 
@@ -1252,7 +1366,7 @@
       transport = options.createTransport({
         onMessage: handleMessage,
         onError: function (message) {
-          fatal(message || "the report engine crashed");
+          recoverEngine(message || "the report engine crashed", "The engine crashed; restarting it");
         },
       });
       if (!transport || typeof transport.postMessage !== "function" ||
@@ -1263,7 +1377,8 @@
       fatal("this browser refused to start the report engine (" + error + ")");
       return;
     }
-    setStatus("Preparing model…", "busy");
+    // A replaced engine prepares while the previous results stay visible.
+    setStatus("Preparing model…", "busy", inputsDiffer());
   }
 
   startTransport();

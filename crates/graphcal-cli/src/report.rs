@@ -27,6 +27,9 @@ use graphcal_report::report_ir::{
     Provenance, ReportBuildError, ReportInputs, SourceDigest, build_report, collect_doc_captions,
 };
 use graphcal_report::report_markdown::render_report_markdown;
+use graphcal_report::report_provenance::{
+    ParameterJsonArgument, ReproInvocation, build_provenance,
+};
 
 use crate::overrides::{ParameterArgs, ParameterJsonSource, ParsedOverrides};
 
@@ -156,17 +159,18 @@ pub fn run_build(
     }
     let result = prepared.evaluate(&bindings.finish()?)?;
 
-    let docs = collect_doc_captions(project.root_file().ast());
+    let docs = collect_doc_captions(prepared.tir().root());
     let title = args.file.file_stem().map_or_else(
         || "report".to_string(),
         |stem| stem.to_string_lossy().into_owned(),
     );
-    let provenance = Provenance {
-        compiler_version: compiler_version.to_string(),
-        sources: source_digests(&project, &args.file, args.root.as_deref(), &fs),
-        baseline_params: baseline_params(&result),
-        repro_command: repro_command(args, overrides),
-    };
+    let provenance = report_provenance(
+        compiler_version,
+        source_digests(&project, &args.file, args.root.as_deref(), &fs),
+        &result,
+        args,
+        overrides,
+    );
     let document = build_report(ReportInputs {
         title: &title,
         result: &result,
@@ -504,72 +508,41 @@ fn hex_string(bytes: &[u8]) -> String {
     out
 }
 
-/// Baseline entry parameter values as displayed, in declaration order.
-fn baseline_params(result: &EvalResult) -> Vec<(String, String)> {
-    result
-        .entry_params()
-        .map(|(name, outcome)| {
-            let display = match outcome {
-                Ok(value) => graphcal_report::value_display::scalar_display(value, &result.render)
-                    .unwrap_or_else(|error| format!("ERROR: {error}")),
-                Err(error) => format!("ERROR: {error}"),
-            };
-            (name.to_string(), display)
-        })
-        .collect()
-}
-
-/// The copy-pasteable command line reproducing this baseline evaluation.
-fn repro_command(args: &BuildArgs, overrides: &ParsedOverrides) -> String {
-    let mut parts = vec![
-        "graphcal".to_string(),
-        "eval".to_string(),
-        shell_quote(&args.file.display().to_string()),
-    ];
-    if let Some(root) = &args.root {
-        parts.push("--root".to_string());
-        parts.push(shell_quote(&root.display().to_string()));
-    }
-    for binding in &overrides.direct_parameters {
-        parts.push("--param".to_string());
-        parts.push(shell_quote(&format!(
-            "{}={}",
-            binding.name, binding.expression
-        )));
-    }
-    match &overrides.json_source {
-        Some(ParameterJsonSource::Inline(json)) => {
-            parts.push("--params-json".to_string());
-            parts.push(shell_quote(json));
-        }
-        Some(ParameterJsonSource::File(path)) => {
-            parts.push("--params-json-file".to_string());
-            parts.push(shell_quote(&path.display().to_string()));
-        }
-        Some(ParameterJsonSource::Stdin) => {
-            parts.push("--params-json-file".to_string());
-            parts.push("-".to_string());
-        }
-        None => {}
-    }
-    if let Some(limit) = overrides.json_max_bytes {
-        parts.push("--params-json-max-bytes".to_string());
-        parts.push(limit.to_string());
-    }
-    parts.join(" ")
-}
-
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::shell_quote;
-
-    #[test]
-    fn shell_quote_handles_plain_text_and_single_quotes() {
-        assert_eq!(shell_quote("model.gcl"), "'model.gcl'");
-        assert_eq!(shell_quote("scenario's.json"), "'scenario'\"'\"'s.json'");
-    }
+/// The provenance of this baseline evaluation, with the `graphcal eval`
+/// invocation that reproduces it.
+fn report_provenance(
+    compiler_version: &str,
+    sources: Vec<SourceDigest>,
+    result: &EvalResult,
+    args: &BuildArgs,
+    overrides: &ParsedOverrides,
+) -> Provenance {
+    let entry = args.file.display().to_string();
+    let root = args.root.as_ref().map(|root| root.display().to_string());
+    let json_file = match &overrides.json_source {
+        Some(ParameterJsonSource::File(path)) => Some(path.display().to_string()),
+        _ => None,
+    };
+    let parameter_json = match (&overrides.json_source, &json_file) {
+        (Some(ParameterJsonSource::Inline(json)), _) => Some(ParameterJsonArgument::Inline(json)),
+        (Some(ParameterJsonSource::File(_)), Some(path)) => Some(ParameterJsonArgument::File(path)),
+        (Some(ParameterJsonSource::Stdin), _) => Some(ParameterJsonArgument::Stdin),
+        _ => None,
+    };
+    build_provenance(
+        compiler_version,
+        sources,
+        result,
+        &ReproInvocation {
+            entry: &entry,
+            root: root.as_deref(),
+            parameters: overrides
+                .direct_parameters
+                .iter()
+                .map(|binding| (binding.name.as_str(), binding.expression.as_str()))
+                .collect(),
+            parameter_json,
+            parameter_json_max_bytes: overrides.json_max_bytes,
+        },
+    )
 }

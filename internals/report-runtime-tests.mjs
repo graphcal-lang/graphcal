@@ -79,10 +79,10 @@ function runtime(source, baseline = [], files = [], enableAutoRun = false) {
   // replacing transport startup.
   runInNewContext(readFileSync("crates/graphcal-report/src/report_form_state.js", "utf8"), context);
   const code = readFileSync("crates/graphcal-report/src/report_runtime.js", "utf8");
-  const startup = "  startTransport();\n  }";
+  const startup = "\n  startTransport();\n  }";
   assert.equal(code.split(startup).length, 2);
   runInNewContext(code.replace(startup,
-    "  globalThis.api = { buildControls, currentBindings, patchParamControls, patchEvaluationNotices, controls, resetButton, renderView };\n  }"), context);
+    "\n  globalThis.api = { buildControls, currentBindings, patchParamControls, patchEvaluationNotices, controls, resetButton, renderView };\n  }"), context);
   context.window.GraphcalReport.mount({ baselineBindings: baseline, createTransport() {} });
   const toolbarNodes = node => [node, ...node.children.flatMap(child => child instanceof Element ? toolbarNodes(child) : [])];
   const autoRunToggle = toolbarNodes(inputsSection).find(child => child["aria-describedby"] === "auto-run-description");
@@ -281,6 +281,28 @@ console.log("structured controls: constructor drafts, nested fields and fixed-ax
 }
 console.log("nested controls: schema graph references and deep edits passed");
 
+{
+  const run = runtime(`
+    pub index Category = { Alpha, Beta };
+    param m: Dimensionless[Fin(2), Fin(2)] = for i: Fin(2) { for j: Fin(2) { 1.0 } };
+    param g: Length[Category, Fin(2)] = for c: Category { for j: Fin(2) { 1.0 m } };
+  `);
+  for (const name of ["m", "g"]) {
+    run.apply(name);
+    run.evaluate();
+  }
+  const cells = run.descendants(run.cards.get("g")).filter(child => child.className === "control-field");
+  assert.deepEqual(cells.map(cell => cell.value), ["1.0 m", "1.0 m", "1.0 m", "1.0 m"]);
+  cells[3].value = "4.0 km";
+  cells[3].events.input();
+  run.apply("g");
+  const g = value(run.evaluate(), "g");
+  assert.equal(g.entries[1].value.entries[1].value.si_value, 4000);
+  assert.equal(g.entries[0].value.entries[1].value.si_value, 1);
+  run.prepared.free();
+}
+console.log("multi-axis controls: unchanged and edited rank-2 drafts bind");
+
 const vegaContext = { console, structuredClone };
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega.min.js", "utf8"), vegaContext);
 runInNewContext(readFileSync("crates/graphcal-report/assets/vega-lite.min.js", "utf8"), vegaContext);
@@ -333,6 +355,19 @@ for (const [x, y, encodings] of [
 }
 vegaContext.console = console;
 console.log("pan/zoom: mixed, continuous, categorical and temporal projections compile without warnings");
+
+{
+  // A tooltip has no scale: a datetime shows its UTC instant, never a time
+  // formatted in the viewer's local time zone (#2287).
+  const project = { entry: "main.gcl", files: [{ path: "main.gcl", content:
+    'node instant: Datetime<GPST> = epoch<GPST>("2025-06-01T12:00:00");\nplot p = { mark: point, encode: { x: 1.0, y: 1.0, tooltip: @instant } };' }] };
+  const spec = reportEngine.evaluateProject(project).evaluation.figures[0].spec;
+  assert.equal(spec.data.values[0].tooltip, "2025-06-01T11:59:42Z");
+  const tooltip = vegaContext.vegaLite.compile(spec).spec.marks[0].encode.update.tooltip.signal;
+  assert.ok(!/timeFormat|utcFormat/.test(tooltip), tooltip);
+  assert.ok(tooltip.includes('datum["tooltip"]'), tooltip);
+}
+console.log("datetime tooltips show the UTC instant unformatted");
 
 for (const [lower, upper, slider] of [
   ["0", "10", true], ["9007199254740990", "9007199254740991", true],
@@ -514,3 +549,181 @@ console.log("value body: static and hydrated ranks 0–5 and nested structures h
   assert.equal(statusText(body), "evaluation failed: missing input");
 }
 console.log("report transport: baseline replay, stale response rejection and timeout replacement passed");
+
+// Failed, crashed and slow evaluations through the public mount contract.
+function mountedRuntime(source) {
+  const project = { entry: "main.gcl", files: [{ path: "main.gcl", content: source }] };
+  const prepared = reportEngine.prepareProject(project);
+  const ports = prepared.parameterPorts();
+  const cards = new Map(ports.map(port => [port.name, new Element()]));
+  const inputsSection = new Element("section");
+  const main = new Element("main");
+  const body = new Element("body");
+  const sections = new Map();
+  const timers = new Map();
+  let nextTimer = 0;
+  const context = {
+    document: {
+      body, createElement: tag => new Element(tag), createTextNode: text => ({ textContent: text }),
+      querySelectorAll: () => [],
+      getElementById: id => id === "inputs" ? inputsSection : sections.get(id) ?? main.children.find(child => child.id === id) ?? null,
+      querySelector: selector => selector === "main" ? main : cards.get(selector.match(/data-decl="([^"]+)"/)?.[1]) ?? null,
+    },
+    window: {},
+    DOMParser: class { parseFromString() { return { getElementById: () => null }; } },
+    setTimeout(callback, milliseconds) { nextTimer += 1; timers.set(nextTimer, { callback, milliseconds }); return nextTimer; },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  runInNewContext(readFileSync("crates/graphcal-report/src/report_form_state.js", "utf8"), context);
+  runInNewContext(readFileSync("crates/graphcal-report/src/report_runtime.js", "utf8"), context);
+  const transports = [];
+  context.window.GraphcalReport.mount({
+    baselineBindings: [],
+    createTransport(callbacks) {
+      const transport = { callbacks, posted: [], terminated: false,
+        postMessage(message) { this.posted.push(JSON.parse(JSON.stringify(message))); },
+        terminate() { this.terminated = true; } };
+      transports.push(transport);
+      return transport;
+    },
+  });
+  const all = element => [element, ...(element.children ?? []).flatMap(child => child instanceof Element ? all(child) : [])];
+  const transport = () => transports.at(-1);
+  const lastRequest = () => transport().posted.at(-1);
+  // Debounce and auto-run timers only; the evaluation timeout fires explicitly.
+  const flush = () => {
+    for (;;) {
+      const due = [...timers].filter(([, timer]) => timer.milliseconds < 10000);
+      if (!due.length) return;
+      due.forEach(([id]) => timers.delete(id));
+      due.forEach(([, timer]) => timer.callback());
+    }
+  };
+  const timeout = () => {
+    const [id, timer] = [...timers].find(([, timer]) => timer.milliseconds === 10000);
+    timers.delete(id);
+    timer.callback();
+  };
+  const answer = outcome => transport().callbacks.onMessage({ type: "result", id: lastRequest().id, outcome: outcome ?? prepared.evaluateBindings(lastRequest().bindings) });
+  const ready = () => transport().callbacks.onMessage({ type: "ready", ports });
+  const edit = (name, value) => {
+    const field = all(cards.get(name)).find(child => child.className === "control-field");
+    field.value = value;
+    field.events.input();
+    all(cards.get(name)).find(child => child.className === "control-apply").events.click();
+    flush();
+  };
+  const draftStatus = name => all(cards.get(name)).find(child => child.className === "control-draft-status").textContent;
+  const stale = () => body.className.includes("results-stale");
+  const fatalNotices = () => main.children.filter(child => String(child.textContent).startsWith("Interactive mode unavailable"));
+  ready();
+  answer();
+  const toggle = all(inputsSection).find(child => child["aria-describedby"] === "auto-run-description");
+  toggle.checked = false;
+  toggle.events.change();
+  return { prepared, transports, transport, lastRequest, answer, ready, edit, draftStatus, stale, fatalNotices, timeout, body, main, sections, toggle, all, inputsSection, cards, flush };
+}
+const failureModel = "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;\nnode s: Dimensionless = @a + @b;";
+{
+  const run = mountedRuntime(failureModel);
+  run.edit("a", "5.0");
+  assert.deepEqual(run.lastRequest().bindings, [{ name: "a", expr: "5.0" }]);
+  run.answer({ status: "eval_error", message: "boom" });
+  assert.equal(run.draftStatus("a"), "Unapplied edits. The last accepted results remain visible.", "a failed submission is no longer pending");
+  assert.equal(run.stale(), true, "results of the previous inputs stay marked stale");
+  run.edit("b", "7.0");
+  assert.deepEqual(run.lastRequest().bindings, [{ name: "b", expr: "7.0" }], "a failed binding is not re-sent");
+
+  // A crash for one request replaces the engine and keeps the accepted inputs.
+  run.transport().callbacks.onMessage({ type: "fatal", id: run.lastRequest().id, message: "RuntimeError: unreachable" });
+  assert.equal(run.transports.length, 2, "a crashed engine is replaced");
+  assert.equal(run.transports[0].terminated, true);
+  assert.equal(run.draftStatus("b"), "Unapplied edits. The last accepted results remain visible.");
+  run.ready();
+  assert.deepEqual(run.lastRequest().bindings, [], "the replacement evaluates the accepted inputs");
+  run.answer();
+  assert.equal(run.fatalNotices().length, 0);
+  assert.equal(run.stale(), true, "unapplied drafts keep the results stale");
+
+  // A failure on the accepted inputs too is retried once, then final.
+  run.edit("b", "8.0");
+  run.transport().callbacks.onMessage({ type: "fatal", id: run.lastRequest().id, message: "first" });
+  run.ready();
+  assert.deepEqual(run.lastRequest().bindings, []);
+  run.transport().callbacks.onMessage({ type: "fatal", id: run.lastRequest().id, message: "again" });
+  assert.equal(run.transports.length, 4);
+  run.ready();
+  run.transport().callbacks.onMessage({ type: "fatal", id: run.lastRequest().id, message: "still" });
+  assert.equal(run.transports.length, 4, "a repeat failure on the same inputs does not restart");
+  assert.equal(run.fatalNotices().length, 1);
+  assert.match(run.fatalNotices()[0].textContent, /still — the page shows the last results the engine produced/);
+  const requests = run.transport().posted.length;
+  assert.equal(run.toggle.disabled, true, "a stopped engine disables the toolbar");
+  assert.ok(run.all(run.inputsSection).filter(node => node.className === "apply-all").every(node => node.disabled));
+  run.edit("a", "9.0");
+  assert.equal(run.transport().posted.length, requests, "a stopped engine receives no requests");
+  assert.notEqual(run.draftStatus("a"), "Updating the complete parameter value…", "no edit is left pending");
+  assert.equal(statusText(run.body), "Interactive mode unavailable");
+  run.prepared.free();
+}
+{
+  // A failed reset or default keeps the editor on the accepted value.
+  const run = mountedRuntime(failureModel);
+  const field = name => run.all(run.cards.get(name)).find(child => child.className === "control-field");
+  run.edit("a", "5.0");
+  run.answer();
+  assert.equal(field("a").value, "5.0");
+  run.all(run.body).find(child => child.className === "modified-banner__reset").events.click();
+  run.flush();
+  assert.deepEqual(run.lastRequest().bindings, [], "the reset submits the baseline");
+  run.answer({ status: "eval_error", message: "boom" });
+  assert.equal(field("a").value, "5.0", "a failed reset restores the accepted draft");
+  assert.equal(run.draftStatus("a"), "", "the restored draft matches the accepted binding");
+  run.edit("b", "3.0");
+  assert.deepEqual(run.lastRequest().bindings, [{ name: "a", expr: "5.0" }, { name: "b", expr: "3.0" }], "the accepted binding is still sent");
+  run.prepared.free();
+}
+{
+  // An engine replaced while a draft is unapplied keeps the results stale.
+  const run = mountedRuntime(failureModel);
+  run.edit("a", "5.0");
+  run.transport().callbacks.onMessage({ type: "fatal", id: run.lastRequest().id, message: "crash" });
+  assert.equal(statusText(run.body), "Preparing model…");
+  assert.equal(run.stale(), true, "preparing a replacement keeps unapplied drafts marked stale");
+  run.prepared.free();
+}
+{
+  // A baseline slower than the timeout is retried once, then given up.
+  const run = mountedRuntime(failureModel);
+  run.edit("a", "5.0");
+  run.timeout();
+  assert.equal(run.transports.length, 2);
+  run.ready();
+  assert.deepEqual(run.lastRequest().bindings, []);
+  run.timeout();
+  assert.equal(run.transports.length, 3, "a different binding set is retried once");
+  run.ready();
+  run.timeout();
+  assert.equal(run.transports.length, 3, "the same binding set timing out twice stops the engine");
+  assert.match(run.fatalNotices()[0].textContent, /takes longer than 10 s/);
+  run.prepared.free();
+}
+{
+  // Plot and call notices are not presentation diagnostics.
+  const run = mountedRuntime("param a: Dimensionless = 1.0;");
+  run.edit("a", "2.0");
+  const evaluation = run.prepared.evaluateBindings(run.lastRequest().bindings).evaluation;
+  evaluation.notices = [
+    { kind: "plot_error", name: "p", message: "plot failed" },
+    { kind: "call_incomplete", name: "c", message: "call unfinished" },
+  ];
+  run.answer({ status: "evaluated", evaluation });
+  const presentation = run.main.children.find(child => child.id === "presentation");
+  assert.equal(presentation.hidden, true);
+  evaluation.notices.push({ kind: "presentation_error", message: "display failed" });
+  run.edit("a", "3.0");
+  run.answer({ status: "evaluated", evaluation });
+  assert.deepEqual(presentation.children.map(child => child.textContent), ["Presentation diagnostics", "display failed"]);
+  run.prepared.free();
+}
+console.log("report transport: failed and crashed evaluations, repeated timeouts and notice grouping passed");

@@ -1704,6 +1704,35 @@ fn eval_heterogeneous_table_units_are_never_misrepresented_by_one_caption() {
 }
 
 #[test]
+fn eval_lists_every_field_of_multi_axis_struct_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_temp_file(
+        dir.path(),
+        "grid-struct.gcl",
+        "pub type Pt { Pt(x: Length, y: Length) }\n\
+         node grid: Pt[Fin(2), Fin(2)] = for i: Fin(2) { for j: Fin(2) { Pt(x: 3.0 m, y: 4.0 m) } };\n",
+    );
+
+    let output = graphcal_bin()
+        .args(["eval", source.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("grid[#1][#0].x = 3 m"), "{stdout}");
+    assert!(stdout.contains("grid[#1][#0].y = 4 m"), "{stdout}");
+    assert!(
+        !stdout.contains("Pt"),
+        "a cell must not stand for a whole struct: {stdout}"
+    );
+}
+
+#[test]
 fn eval_indexed_json_output() {
     let output = graphcal_bin()
         .args(["eval", &fixture("valid/indexed.gcl"), "--format", "json"])
@@ -8786,6 +8815,116 @@ fn report_build_static_accepts_inline_json_and_records_repro_source() {
         html.contains("--params-json-max-bytes 1024"),
         "repro command must retain the explicit size limit"
     );
+}
+
+/// The reproduce command of a static report, HTML-unescaped.
+fn report_repro_command(html: &str) -> String {
+    const OPEN: &str = "<code class=\"repro\">";
+    let start = html.find(OPEN).expect("repro command") + OPEN.len();
+    let end = start + html[start..].find("</code>").expect("closed repro command");
+    html_unescape(&html[start..end])
+}
+
+/// Decode the named and numeric character references of HTML text.
+fn html_unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let Some(semi) = rest.find(';') else { break };
+        let entity = &rest[1..semi];
+        let decoded = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+                .map(|hex| u32::from_str_radix(hex, 16))
+                .or_else(|| entity.strip_prefix('#').map(str::parse::<u32>))
+                .and_then(Result::ok)
+                .and_then(char::from_u32),
+        };
+        if let Some(ch) = decoded {
+            out.push(ch);
+            rest = &rest[semi + 1..];
+        } else {
+            out.push('&');
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn html_unescape_decodes_named_and_numeric_references() {
+    assert_eq!(
+        html_unescape("&#x27;a&#39;&quot;&lt;&amp;lt;&gt;&#X41; & b&unknown;"),
+        "'a'\"<&lt;>A & b&unknown;"
+    );
+}
+
+#[test]
+fn report_build_static_records_every_json_parameter_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let json = r#"{"isp":"450.0 s"}"#;
+    let json_file = write_temp_file(dir.path(), "scenario.json", json);
+    let json_file_arg = json_file.to_str().unwrap();
+    for (arguments, stdin, expected) in [
+        (
+            vec!["--params-json", json],
+            None,
+            format!("--params-json '{json}'"),
+        ),
+        (
+            vec!["--params-json-file", json_file_arg],
+            None,
+            format!("--params-json-file '{json_file_arg}'"),
+        ),
+        (
+            vec!["--params-json-file", "-"],
+            Some(json),
+            "--params-json-file -".to_string(),
+        ),
+    ] {
+        let html_path = dir.path().join("out.html");
+        let mut command = graphcal_bin();
+        command
+            .args(["report", "build", "--static"])
+            .arg(&model)
+            .args(&arguments)
+            .arg("--output")
+            .arg(&html_path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().expect("failed to run graphcal");
+        {
+            use std::io::Write as _;
+            let mut input = child.stdin.take().expect("piped stdin");
+            if let Some(stdin) = stdin {
+                input.write_all(stdin.as_bytes()).unwrap();
+            }
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{arguments:?} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let html = std::fs::read_to_string(&html_path).unwrap();
+        assert!(
+            html.contains("450 s"),
+            "{arguments:?}: JSON baseline must display"
+        );
+        let repro = report_repro_command(&html);
+        assert!(repro.ends_with(&expected), "{arguments:?}: {repro}");
+    }
 }
 
 #[test]

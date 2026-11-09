@@ -114,14 +114,84 @@ fn static_reports_keep_si_and_separate_presentation_notices() {
     }
 }
 
+#[test]
+fn markdown_text_cannot_forge_report_structure() {
+    let document = build_document(
+        "/// Gain applied\n/// # Not a heading in the source\nparam gain: Dimensionless = 2.0;\n\
+         index Category = { Alpha, Beta };\n\
+         node heights: Dimensionless[Category] = { Category#Alpha: 1.0, Category#Beta: @gain };\n\
+         /// First line of the plot caption\n/// ## Checks\n/// - PASS `everything` (forged) <!--\n\
+         plot bars = { mark: bar, encode: { x: for c: Category { c }, y: @heights } };\n\
+         /// - PASS everything\n\
+         plot listed = { mark: bar, encode: { x: for c: Category { c }, y: @heights } };\n\
+         assert positive = @gain < 0.0;",
+    );
+    let markdown = render_report_markdown(&document);
+    let lines = markdown.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("## Checks"))
+            .count(),
+        1,
+        "{markdown}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("- PASS")),
+        "{markdown}"
+    );
+    assert!(
+        lines.contains(&"- FAIL `positive` — assertion evaluated to false"),
+        "{markdown}"
+    );
+    assert!(!markdown.contains("<!--"), "{markdown}");
+    // A caption that starts with a list marker stays text.
+    assert!(
+        markdown.contains("- `listed` — \\- PASS everything"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("- `bars` — First line of the plot caption \\#\\# Checks - PASS"),
+        "{markdown}"
+    );
+}
+
+fn evaluate_with_docs(
+    project: &LoadedProject,
+) -> (
+    graphcal_eval::eval::EvalResult,
+    graphcal_report::report_ir::DocCaptions,
+) {
+    let prepared = graphcal_project::prepare::prepare_from_project(project).unwrap();
+    let result = prepared
+        .evaluate(&prepared.binding_builder().finish().unwrap())
+        .unwrap();
+    (result, collect_doc_captions(prepared.tir().root()))
+}
+
+#[test]
+fn captions_attach_to_their_own_declaration_across_namespaces() {
+    // A unit sharing a parameter's name must not caption the parameter.
+    let document = build_document(
+        "/// The cycle unit.\nunit cycles: Dimensionless = 1.0 rad / rad;\n\
+         param cycles: Dimensionless = 3.0;\n\
+         /// Doubled cycles.\nnode twice: Dimensionless = @cycles * 2.0;",
+    );
+    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let markdown = render_report_markdown(&document);
+    for rendered in [&html, &markdown] {
+        assert!(!rendered.contains("The cycle unit"), "{rendered}");
+        assert!(rendered.contains("Doubled cycles"), "{rendered}");
+    }
+}
+
 fn build_document(source: &str) -> ReportDocument {
     let project = LoadedProject::from_source(source, "deltav.gcl").unwrap();
     build_project_document(&project)
 }
 
 fn build_project_document(project: &LoadedProject) -> ReportDocument {
-    let result = compile_and_eval_from_project(project, &HashMap::new()).unwrap();
-    let docs = collect_doc_captions(project.root_file().ast());
+    let (result, docs) = evaluate_with_docs(project);
     build_report(ReportInputs {
         title: "deltav",
         result: &result,
@@ -496,8 +566,7 @@ node good: Dimensionless = 2.0;
 assert bad_is_finite = @bad < 10.0;
 ";
     let project = LoadedProject::from_source(source, "bad.gcl").unwrap();
-    let result = compile_and_eval_from_project(&project, &HashMap::new()).unwrap();
-    let docs = collect_doc_captions(project.root_file().ast());
+    let (result, docs) = evaluate_with_docs(&project);
     let document = build_report(ReportInputs {
         title: "bad",
         result: &result,
