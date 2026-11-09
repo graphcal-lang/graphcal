@@ -35,13 +35,16 @@ pub struct UnitChoiceArgument {
 
 /// Parse a `--unit NAME=UNIT` argument; the unit itself is resolved against
 /// the model later.
+///
+/// Neither side is trimmed: a unit spelling is compared exactly, so one with
+/// surrounding whitespace is rejected rather than silently normalized.
 pub fn parse_unit_choice(argument: &str) -> Result<UnitChoiceArgument, String> {
     let (port, unit) = argument
         .split_once('=')
         .ok_or_else(|| format!("expected NAME=UNIT, got `{argument}`"))?;
     Ok(UnitChoiceArgument {
-        port: PortName::new(port.trim()).map_err(|error| error.to_string())?,
-        unit: UnitSpelling::new(unit.trim()).map_err(|error| error.to_string())?,
+        port: PortName::new(port).map_err(|error| error.to_string())?,
+        unit: UnitSpelling::new(unit).map_err(|error| error.to_string())?,
     })
 }
 
@@ -109,7 +112,18 @@ pub struct SessionSelection<'a> {
     pub fixed: &'a ParsedOverrides,
 }
 
-/// Prepare and serve one session of the model over stdin and stdout.
+/// What `serve` does with a configured session.
+#[derive(Debug, Clone, Copy)]
+pub enum ServeMode {
+    /// Serve request batches until stdin closes, bounding each request by
+    /// the deadline.
+    Serve(graphcal_model_server::RequestDeadline),
+    /// Print the session's request-stream schema and exit.
+    PrintRequestSchema,
+}
+
+/// Prepare one session of the model and serve it over stdin and stdout, or
+/// print its request-stream schema (see [`ServeMode`]).
 ///
 /// Setup errors occur before any stdout bytes. A [`ModelServeError::Serve`]
 /// may occur after the result-stream schema has been written.
@@ -117,7 +131,7 @@ pub fn serve(
     file: &Path,
     selection: &SessionSelection<'_>,
     fingerprint: &FingerprintCheck,
-    deadline: graphcal_model_server::RequestDeadline,
+    mode: ServeMode,
     root: Option<&Path>,
 ) -> Result<(), ModelServeError> {
     let names = |names: &[String]| {
@@ -157,8 +171,15 @@ pub fn serve(
         value.bind(name, &mut fixed)?;
     }
     let session = prepared.model_session_with(Arc::new(schema), fixed.into_fixed())?;
-    graphcal_model_server::serve_stdio(&prepared, &session, deadline)
-        .map_err(ModelServeError::Serve)
+    match mode {
+        ServeMode::Serve(deadline) => {
+            graphcal_model_server::serve_stdio(&prepared, &session, deadline)
+        }
+        ServeMode::PrintRequestSchema => {
+            graphcal_model_server::write_request_schema_stdio(&session)
+        }
+    }
+    .map_err(ModelServeError::Serve)
 }
 
 fn prepare(file: &Path, root: Option<&Path>) -> Result<PreparedProject, ModelServeError> {

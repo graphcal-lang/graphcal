@@ -13,7 +13,7 @@
       "package": "review"
     },
     "instance": {
-      "id": "p:review/f:src/f:review/f:main/s:p",
+      "id": "p:review/f:review/f:main/s:p",
       "name": "p",
       "bound": true
     }
@@ -21,7 +21,7 @@
   "indexes": [],
   "nodes": [
     {
-      "id": "p:review/f:src/f:review/f:main/s:p/n:gain",
+      "id": "p:review/f:review/f:main/s:p/n:gain",
       "label": "gain",
       "name": "gain",
       "module": "review.lib",
@@ -35,7 +35,7 @@
       "unit": null,
       "pub": false,
       "deps": [
-        "p:review/f:src/f:review/f:main/n:k"
+        "p:review/f:review/f:main/n:k"
       ],
       "expr": "@k",
       "doc": "The gain the includer sets.",
@@ -64,7 +64,7 @@
       "presentation": []
     },
     {
-      "id": "p:review/f:src/f:review/f:main/s:p/n:out",
+      "id": "p:review/f:review/f:main/s:p/n:out",
       "label": "out",
       "name": "out",
       "module": "review.lib",
@@ -78,7 +78,7 @@
       "unit": null,
       "pub": true,
       "deps": [
-        "p:review/f:src/f:review/f:main/s:p/n:gain"
+        "p:review/f:review/f:main/s:p/n:gain"
       ],
       "expr": "@gain",
       "doc": null,
@@ -107,7 +107,7 @@
       "presentation": []
     },
     {
-      "id": "p:review/f:src/f:review/f:main/s:p/n:twice",
+      "id": "p:review/f:review/f:main/s:p/n:twice",
       "label": "twice",
       "name": "twice",
       "module": "review.lib",
@@ -121,7 +121,7 @@
       "unit": null,
       "pub": false,
       "deps": [
-        "p:review/f:src/f:review/f:main/s:p/n:out"
+        "p:review/f:review/f:main/s:p/n:out"
       ],
       "expr": "@out * 2.0",
       "doc": null,
@@ -150,7 +150,7 @@
       "presentation": []
     },
     {
-      "id": "p:review/f:src/f:review/f:main/s:p/n:positive",
+      "id": "p:review/f:review/f:main/s:p/n:positive",
       "label": "positive",
       "name": "positive",
       "module": "review.lib",
@@ -164,7 +164,7 @@
       "unit": null,
       "pub": false,
       "deps": [
-        "p:review/f:src/f:review/f:main/s:p/n:out"
+        "p:review/f:review/f:main/s:p/n:out"
       ],
       "expr": "@out > 0.0",
       "doc": null,
@@ -191,7 +191,7 @@
       "presentation": []
     },
     {
-      "id": "p:review/f:src/f:review/f:main/n:k",
+      "id": "p:review/f:review/f:main/n:k",
       "label": "k",
       "name": "k",
       "module": "review.main",

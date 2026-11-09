@@ -77,8 +77,8 @@ pub enum RecordSchemaError {
     PortMetadata { port: PortName },
     #[error("parameter `{port}` declares a domain its wire type cannot have")]
     DomainKindMismatch { port: PortName },
-    #[error("port `{port}` has a unit scale but carries no quantities")]
-    ScaleForNonQuantity { port: PortName },
+    #[error("port `{port}` has a unit scale but its wire type names no unit for it to scale")]
+    ScaleWithoutUnit { port: PortName },
     #[error("a unit scale is recorded for `{port}`, which the record does not hold")]
     ScaleForUnknownPort { port: PortName },
     #[error(transparent)]
@@ -108,10 +108,18 @@ pub struct RecordSchema {
 impl RecordSchema {
     /// Restore the session recorded by `schema`.
     ///
-    /// The `inputs` and `outputs` structs must each appear exactly once, and
-    /// must be exactly the fields [`record_inputs_field`] and
-    /// [`record_outputs_field`] give for the restored session. Fields without
+    /// The `inputs` and `outputs` structs are found by their `graphcal` role,
+    /// whatever their names. Each must appear exactly once, and must be
+    /// exactly the field [`record_inputs_field`] or [`record_outputs_field`]
+    /// gives for the restored session, apart from its name. Fields without
     /// `graphcal` metadata are ignored.
+    ///
+    /// A recorded unit scale must belong to a port whose wire type names the
+    /// unit it scales. A port without a recorded scale travels in its
+    /// canonical unit: without the model interface, a record cannot tell a
+    /// canonical unit from a chosen one whose scale its writer dropped, so a
+    /// consumer that holds the model checks the restored session against it
+    /// (the model server rejects a differing session schema).
     ///
     /// # Errors
     ///
@@ -191,9 +199,11 @@ impl RecordSchema {
 
         // Every port is now known; the stored fields must be exactly the
         // fields the restored session gives, including types and nullability.
+        // The structs are located by role, so their names are the
+        // application's choice.
         let expected = Fields::from(vec![
-            record_inputs_field(&session),
-            record_outputs_field(&session),
+            record_inputs_field(&session).with_name(schema.field(inputs).name()),
+            record_outputs_field(&session).with_name(schema.field(outputs).name()),
         ]);
         let received = Fields::from(vec![
             schema.field(inputs).clone(),
@@ -282,8 +292,13 @@ fn take_scale(
     wire: &WireType,
 ) -> Result<Option<SiScale>, RecordSchemaError> {
     let scale = scales.remove(port);
-    if scale.is_some() && wire.quantity().is_none() {
-        return Err(RecordSchemaError::ScaleForNonQuantity { port: port.clone() });
+    if scale.is_some()
+        && wire
+            .quantity()
+            .and_then(crate::wire_type::QuantityType::unit)
+            .is_none()
+    {
+        return Err(RecordSchemaError::ScaleWithoutUnit { port: port.clone() });
     }
     Ok(scale)
 }
@@ -427,6 +442,50 @@ mod tests {
             RecordSchema::decode(&with_inputs(unlabeled)),
             Err(RecordSchemaError::PortMetadata { .. })
         ));
+    }
+
+    #[test]
+    fn records_locate_their_structs_by_role_not_by_name() {
+        let session = sample_session();
+        let schema = Schema::new_with_metadata(
+            vec![
+                record_outputs_field(&session).with_name("results"),
+                record_inputs_field(&session).with_name("parameters"),
+            ],
+            record_metadata(&session),
+        );
+        let decoded = RecordSchema::decode(&schema).unwrap();
+        assert_eq!(decoded.session().as_ref(), &session);
+        assert_eq!(decoded.inputs_column(), 1);
+        assert_eq!(decoded.outputs_column(), 0);
+    }
+
+    #[test]
+    fn rejects_scales_of_ports_without_a_unit() {
+        let session = sample_session();
+        let mut metadata: SchemaMetadata =
+            serde_json::from_str(&record_metadata(&session)[METADATA_KEY]).unwrap();
+        // `mode` is a key and `failure` a Boolean: neither names a unit.
+        for port in ["mode", "failure"] {
+            metadata.si_scales = BTreeMap::from([(name(port), SiScale::new(2.0).unwrap())]);
+            let schema = Schema::new_with_metadata(
+                vec![
+                    record_inputs_field(&session),
+                    record_outputs_field(&session),
+                ],
+                HashMap::from([(
+                    METADATA_KEY.to_owned(),
+                    serde_json::to_string(&metadata).unwrap(),
+                )]),
+            );
+            assert!(
+                matches!(
+                    RecordSchema::decode(&schema),
+                    Err(RecordSchemaError::ScaleWithoutUnit { .. })
+                ),
+                "{port}"
+            );
+        }
     }
 
     #[test]

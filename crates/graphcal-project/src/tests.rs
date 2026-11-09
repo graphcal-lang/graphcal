@@ -4759,7 +4759,7 @@ fn model_interface_describes_wire_types_units_and_domains() {
     );
     assert_eq!(
         serde_json::to_string(length.dimension()).unwrap(),
-        r#"{"Length":1}"#
+        r#"[{"base":{"kind":"prelude","name":"Length"},"exponent":1}]"#
     );
     let Some(Domain::Quantity(bounds)) = interface.parameter("length").unwrap().domain() else {
         panic!("length has a quantity domain");
@@ -4789,7 +4789,7 @@ fn model_interface_describes_wire_types_units_and_domains() {
     let PortWire::Supported(WireType::Key(mode)) = wire("mode") else {
         panic!("mode is a key");
     };
-    let graphcal_model_protocol::AxisKind::Named { variants } = mode.axis().kind() else {
+    let graphcal_model_protocol::AxisKind::Named { variants, .. } = mode.axis().kind() else {
         panic!("mode ranges over a named index");
     };
     let variants = variants
@@ -4998,6 +4998,51 @@ fn model_sessions_carry_quantities_in_chosen_units() {
         Some(RowOutcome::Failure(
             graphcal_model_protocol::RowFailure::InputOutOfDomain { .. }
         ))
+    ));
+}
+
+#[test]
+fn an_output_overflowing_in_its_chosen_unit_fails_only_its_row() {
+    use graphcal_model_protocol::{
+        FiniteF64, InputColumn, PortName, RequestBatch, RowFailure, RowOutcome, SessionSpec,
+        UnitSpelling,
+    };
+
+    let project = crate::loader::LoadedProject::from_source(
+        "param x: Dimensionless;\npub node y: Length = @x * 1.0e306 m;\n",
+        "model.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let schema = std::sync::Arc::new(
+        prepared
+            .session_schema(
+                &SessionSpec::new(
+                    vec![PortName::new("x").unwrap()],
+                    vec![PortName::new("y").unwrap()],
+                )
+                .with_unit(
+                    PortName::new("y").unwrap(),
+                    UnitSpelling::new("mm").unwrap(),
+                ),
+            )
+            .unwrap(),
+    );
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let x = |value: f64| FiniteF64::new(value).unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![x(1e-10), x(1.0)])],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    assert!(matches!(result.row(0), Some(RowOutcome::Success(_))));
+    assert!(matches!(
+        result.row(1),
+        Some(RowOutcome::Failure(RowFailure::EvaluationError { message }))
+            if message.contains("`y`") && message.contains("`mm`")
     ));
 }
 
@@ -5716,7 +5761,7 @@ fn aliased_include_does_not_bind_the_source_module_name() {
         matches!(
             &error,
             CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }), .. })
-                if kind.to_string() == "unknown module `src.app.defaults`"
+                if kind.to_string() == "unknown module `app.defaults`"
         ),
         "unexpected alias-leak diagnostic: {error:?}"
     );
@@ -10604,7 +10649,9 @@ fn model_interface_carries_indexed_datetime_complex_and_algebraic_ports() {
     let PortWire::Supported(WireType::Indexed(profile)) = parameter("profile").wire() else {
         panic!("profile is indexed");
     };
-    assert!(matches!(profile.axis().kind(), AxisKind::Named { variants } if variants.len() == 2));
+    assert!(
+        matches!(profile.axis().kind(), AxisKind::Named { variants, .. } if variants.len() == 2)
+    );
     assert!(matches!(profile.element(), WireType::Quantity(_)));
     assert!(matches!(
         parameter("profile").domain(),
@@ -10642,20 +10689,133 @@ fn model_interface_names_the_base_dimension_that_needs_a_base_unit() {
     let project = crate::loader::LoadedProject::from_source(source, "model.gcl").unwrap();
     let prepared = prepare_from_project(&project).unwrap();
     let interface = prepared.model_interface().unwrap();
-    let PortWire::Unsupported { reason } = interface.parameter("budget").unwrap().wire() else {
+    let PortWire::Unsupported { reason, message } = interface.parameter("budget").unwrap().wire()
+    else {
         panic!("a dimension without a canonical unit is unsupported");
     };
-    assert!(
-        reason.ends_with("declare a `base unit` for base dimension `Money`"),
-        "{reason}"
+    assert_eq!(
+        *reason,
+        graphcal_model_protocol::UnsupportedReason::NoCanonicalUnit
     );
+    assert!(
+        message.ends_with("declare a `base unit` for base dimension `Money`"),
+        "{message}"
+    );
+}
+
+/// The interface of `model.gcl` in package `finance`, placed under
+/// `source_dir` inside a fresh project directory.
+fn finance_interface(source_dir: &str) -> graphcal_model_protocol::ModelInterface {
+    let directory = tempfile::tempdir().unwrap();
+    let package = directory.path().join(source_dir).join("finance");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        directory.path().join("graphcal.toml"),
+        format!("[package]\nname = \"finance\"\nsource_dir = \"{source_dir}\"\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("units.gcl"),
+        "pub base dim Money;\npub base unit usd: Money;\npub index Mode = { A, B };\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("model.gcl"),
+        "import finance.units::{ dim Money, unit usd, index Mode };\n\
+         pub index Phase = { Climb, Cruise };\n\
+         param budget: Money = 1.0 usd;\n\
+         param mode: Key<Mode>;\n\
+         pub node by_phase: Money[Phase] = for p: Phase { @budget };\n",
+    )
+    .unwrap();
+    let project = crate::loader::load_project(&package.join("model.gcl"), None, &fs()).unwrap();
+    ProjectCompiler::new(&project)
+        .prepare()
+        .unwrap()
+        .model_interface()
+        .unwrap()
+}
+
+#[test]
+fn model_wire_identities_name_declarations_as_the_user_writes_them() {
+    use graphcal_model_protocol::{
+        AxisKind, BaseDimension, InterfaceFingerprint, PortWire, WireType,
+    };
+
+    let interface = finance_interface("src");
+    let PortWire::Supported(WireType::Quantity(budget)) =
+        interface.parameter("budget").unwrap().wire()
+    else {
+        panic!("budget is a quantity");
+    };
+    let (base, _) = budget.dimension().exponents().next().unwrap();
+    let BaseDimension::Declared(money) = base else {
+        panic!("Money is a declared base dimension");
+    };
+    assert_eq!(money.to_string(), "finance.units.Money");
+    assert_eq!(money.package().as_str(), "finance");
+
+    let PortWire::Supported(WireType::Key(mode)) = interface.parameter("mode").unwrap().wire()
+    else {
+        panic!("mode is a key");
+    };
+    assert_eq!(
+        mode.axis().index().unwrap().to_string(),
+        "finance.units.Mode"
+    );
+    let PortWire::Supported(WireType::Indexed(by_phase)) =
+        interface.output("by_phase").unwrap().wire()
+    else {
+        panic!("by_phase is indexed");
+    };
+    assert!(matches!(
+        by_phase.axis().kind(),
+        AxisKind::Named { index, .. } if index.to_string() == "finance.model.Phase"
+    ));
+
+    // The source directory is file layout, not identity.
+    assert_eq!(
+        InterfaceFingerprint::of(&interface),
+        InterfaceFingerprint::of(&finance_interface("lib"))
+    );
+}
+
+#[test]
+fn indexes_with_one_name_in_two_modules_have_distinct_wire_identities() {
+    use graphcal_model_protocol::{PortWire, WireType};
+
+    let (_directory, root) = write_pipeline_project(
+        &[
+            ("left.gcl", "pub index Mode = { A, B };\n"),
+            ("right.gcl", "pub index Mode = { A, B };\n"),
+            (
+                "main.gcl",
+                "import pipeline.left as left;\nimport pipeline.right as right;\n\
+                 param l: Key<left::Mode>;\nparam r: Key<right::Mode>;\n\
+                 pub node same: Bool = true;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    let project = crate::loader::load_project(&root, None, &fs()).unwrap();
+    let interface = ProjectCompiler::new(&project)
+        .prepare()
+        .unwrap()
+        .model_interface()
+        .unwrap();
+    let axis = |name: &str| match interface.parameter(name).unwrap().wire() {
+        PortWire::Supported(WireType::Key(key)) => key.axis().clone(),
+        other => panic!("{name} is a key, not {other:?}"),
+    };
+    assert_ne!(axis("l"), axis("r"));
+    assert_eq!(axis("l").index().unwrap().to_string(), "pipeline.left.Mode");
 }
 
 #[test]
 fn model_sessions_round_trip_rich_values_through_evaluation() {
     use graphcal_model_protocol::{
-        ComplexValue, ConstructorPosition, FiniteF64, InputColumn, RequestBatch, RowFailure,
-        RowOutcome, Value, ValueRef, WireType,
+        ComplexValue, FiniteF64, InputColumn, RequestBatch, RowFailure, RowOutcome, Value,
+        ValueRef, WireType,
     };
 
     let project = crate::loader::LoadedProject::from_source(RICH_MODEL, "model.gcl").unwrap();
@@ -10733,7 +10893,7 @@ fn model_sessions_round_trip_rich_values_through_evaluation() {
     );
     assert!(matches!(
         values.get(schema.output_slot("shape_out").unwrap()),
-        Some(ValueRef::Algebraic { constructor, .. }) if constructor == ConstructorPosition::new(0)
+        Some(ValueRef::Algebraic { constructor, .. }) if constructor.get() == 0
     ));
     assert!(matches!(
         result.row(1),

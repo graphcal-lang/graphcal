@@ -10,15 +10,16 @@ use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::time_scale::TimeScale as GraphcalTimeScale;
 use graphcal_model_protocol::{
     AlgebraicType, ConstructorName, ConstructorType, DatetimeType, FieldName, FieldType,
-    IndexedType, KeyType, PortWire, QuantityType, TimeScale, TypeName, UnitSpelling, WireType,
+    IndexedType, KeyType, PortWire, QuantityType, TimeScale, TypeName, UnitSpelling,
+    UnsupportedReason, WireType,
 };
 
-use super::model_axis::{axis_wire, protocol_dimension};
+use super::model_axis::{Unsupported, axis_wire, protocol_dimension};
 use super::model_session::ModelInterfaceError;
 use super::{ModelValueSchema, PreparedProject};
 
 /// A wire type, or why the protocol cannot carry the value.
-type Wire = Result<WireType, String>;
+type Wire = Result<WireType, Unsupported>;
 
 impl PreparedProject {
     /// How a port of `schema` travels on the wire.
@@ -33,7 +34,7 @@ impl PreparedProject {
     ) -> Result<PortWire, ModelInterfaceError> {
         Ok(match self.wire(schema)? {
             Ok(wire) => PortWire::Supported(wire),
-            Err(reason) => PortWire::Unsupported { reason },
+            Err(Unsupported { reason, message }) => PortWire::Unsupported { reason, message },
         })
     }
 
@@ -77,11 +78,14 @@ impl PreparedProject {
                         match self.wire(field.value())? {
                             Ok(wire) => fields
                                 .push(FieldType::new(FieldName::new(field.name().as_str())?, wire)),
-                            Err(reason) => {
-                                return Ok(Err(format!(
-                                    "field `{}` of `{}`: {reason}",
-                                    field.name(),
-                                    constructor.name()
+                            Err(Unsupported { reason, message }) => {
+                                return Ok(Err(Unsupported::new(
+                                    reason,
+                                    format!(
+                                        "field `{}` of `{}`: {message}",
+                                        field.name(),
+                                        constructor.name()
+                                    ),
                                 )));
                             }
                         }
@@ -96,7 +100,9 @@ impl PreparedProject {
                     constructors,
                 )
                 .map(WireType::Algebraic)
-                .map_err(|error| error.to_string())
+                .map_err(|error| {
+                    Unsupported::new(UnsupportedReason::InvalidAlgebraicType, error.to_string())
+                })
             }
         })
     }
@@ -105,7 +111,7 @@ impl PreparedProject {
     fn quantity_type(
         &self,
         dimension: &GraphcalDimension,
-    ) -> Result<Result<QuantityType, String>, ModelInterfaceError> {
+    ) -> Result<Result<QuantityType, Unsupported>, ModelInterfaceError> {
         let dimensions = &self.tir().registry().dimensions;
         let exponents = match protocol_dimension(dimension)? {
             Ok(exponents) => exponents,
@@ -130,15 +136,22 @@ impl PreparedProject {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                return Ok(Err(format!(
-                    "dimension `{}` has no canonical unit; declare a `base unit` for base \
-                     dimension {unitless}",
-                    dimensions.format_dimension(dimension)
+                return Ok(Err(Unsupported::new(
+                    UnsupportedReason::NoCanonicalUnit,
+                    format!(
+                        "dimension `{}` has no canonical unit; declare a `base unit` for base \
+                         dimension {unitless}",
+                        dimensions.format_dimension(dimension)
+                    ),
                 )));
             };
             Some(UnitSpelling::new(spelling)?)
         };
-        Ok(QuantityType::new(exponents, unit).map_err(|error| error.to_string()))
+        // A dimensioned quantity names its canonical unit above, so only a
+        // quantity without one is rejected here.
+        Ok(QuantityType::new(exponents, unit).map_err(|error| {
+            Unsupported::new(UnsupportedReason::NoCanonicalUnit, error.to_string())
+        }))
     }
 }
 

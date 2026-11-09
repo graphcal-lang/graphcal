@@ -82,7 +82,7 @@ fn file_submodule_and_inline_dag_sharing_a_module_path_are_ambiguous() {
     );
     let error = eval_error(&root);
     assert!(
-        error.contains("module path `src.p.lib.x` is ambiguous"),
+        error.contains("module path `p.lib.x` is ambiguous"),
         "unexpected error: {error}"
     );
 }
@@ -105,7 +105,7 @@ fn alias_qualifier_names_inline_dags_not_file_submodules() {
     );
     let error = eval_error(&root);
     assert!(
-        error.contains("unknown module `src.p.lib.x`"),
+        error.contains("unknown module `p.lib.x`"),
         "unexpected error: {error}"
     );
 

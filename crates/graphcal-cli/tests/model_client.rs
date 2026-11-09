@@ -96,15 +96,14 @@ fn client_resolves_units_in_the_scope_of_the_model() {
     let length = margin.wire().supported().unwrap().quantity().unwrap();
     let value = FiniteF64::new(2500.0).unwrap();
     assert_eq!(
-        resolved[0].from_si(length, value),
-        Some(Ok(FiniteF64::new(2.5).unwrap()))
+        resolved[0].from_si(length.dimension(), value),
+        Ok(FiniteF64::new(2.5).unwrap())
     );
-    assert_eq!(resolved[1].from_si(length, value), None);
+    assert!(resolved[1].from_si(length.dimension(), value).is_err());
 
-    // The server answers each unit as the client spelled it.
-    let spaced = model.resolve_units(&[unit(" km ")]).unwrap();
-    assert_eq!(spaced[0].unit(), &unit(" km "));
-    assert_eq!(spaced[0].si_scale().get(), 1000.0);
+    // A spelling is compared exactly, so surrounding whitespace is rejected
+    // before it reaches the server rather than trimmed by some commands.
+    assert!(UnitSpelling::new(" km ").is_err());
 
     let error = model.resolve_units(&[unit("parsec_x")]).unwrap_err();
     assert!(
@@ -157,10 +156,34 @@ fn client_sessions_carry_quantities_in_server_resolved_units() {
         .output_in(&margin, unit("mm"))
         .spawn()
         .unwrap();
-    let Some(Domain::Quantity(bounds)) = session.schema().inputs()[0].domain() else {
+    let Some(Domain::Quantity(bounds)) = session.input(&load).unwrap().domain() else {
         panic!("load has a quantity domain");
     };
     assert_eq!(bounds.max().map(|max| max.get()), Some(1000.0));
+    // The handles describe the model's canonical units; the session carries
+    // the chosen ones.
+    let Some(Domain::Quantity(canonical)) = load.canonical_domain() else {
+        panic!("load has a quantity domain");
+    };
+    assert_eq!(canonical.max().map(|max| max.get()), Some(10.0));
+    assert_eq!(load.detail().unit(), Some(&unit("m")));
+    let carried_unit = |wire: &graphcal_model_protocol::WireType| {
+        wire.quantity()
+            .and_then(|quantity| quantity.unit())
+            .cloned()
+    };
+    assert_eq!(
+        carried_unit(session.input(&load).unwrap().wire()),
+        Some(unit("cm"))
+    );
+    assert_eq!(
+        carried_unit(session.output(&margin).unwrap().wire()),
+        Some(unit("mm"))
+    );
+    assert!(matches!(
+        session.input(&model.input::<Quantity>("factor").unwrap()),
+        Err(ClientError::NotVaried { .. })
+    ));
     let request = session
         .batch()
         .column(&load, [100.0, 2000.0])
@@ -197,6 +220,85 @@ fn client_sessions_carry_quantities_in_server_resolved_units() {
             .schema(),
         Err(ClientError::Session(_))
     ));
+}
+
+#[test]
+fn published_domain_bounds_in_a_chosen_unit_are_accepted_back() {
+    use graphcal_model_protocol::{Domain, UnitSpelling};
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("bound.gcl");
+    std::fs::write(
+        &file,
+        "param x: Length(min: 0.07 m, max: 0.35 m);\npub node y: Length = @x * 2.0;\n",
+    )
+    .unwrap();
+    let model = Model::describe(GraphcalCommand::new(file).program(env!("CARGO_BIN_EXE_graphcal")))
+        .unwrap();
+    let x = model.input::<Quantity>("x").unwrap();
+    let y = model.output::<Quantity>("y").unwrap();
+    let mut session = model
+        .session()
+        .vary_in(&x, UnitSpelling::new("cm").unwrap())
+        .output(&y)
+        .spawn()
+        .unwrap();
+    let Some(Domain::Quantity(bounds)) = session.schema().inputs()[0].domain() else {
+        panic!("x has a quantity domain");
+    };
+    let (min, max) = (bounds.min().unwrap().get(), bounds.max().unwrap().get());
+    // 35.0 cm would be 0.35000000000000003 m, above the declared maximum.
+    assert!(max < 35.0 && max > 34.999_999);
+    let request = session
+        .batch()
+        .column(&x, [min, max])
+        .unwrap()
+        .build()
+        .unwrap();
+    let result = session.evaluate(&request).unwrap();
+    for row in 0..2 {
+        assert!(
+            matches!(result.row(row).unwrap(), RowOutcome::Success(_)),
+            "{:?}",
+            result.failure(row)
+        );
+    }
+    session.shutdown().unwrap();
+}
+
+#[test]
+fn client_sessions_pass_the_request_timeout_to_the_server() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = Model::describe(command(dir.path())).unwrap();
+    let load = model.input::<Quantity>("load").unwrap();
+    let mode = model.input::<Key>("mode").unwrap();
+    let failure = model.output::<Bool>("failure").unwrap();
+    let session = |timeout| {
+        model
+            .session()
+            .vary(&load)
+            .vary(&mode)
+            .output(&failure)
+            .request_timeout(timeout)
+            .spawn()
+    };
+    let mut generous = session(std::time::Duration::from_secs(600)).unwrap();
+    let request = generous
+        .batch()
+        .column(&load, [1.0])
+        .unwrap()
+        .column(&mode, [mode.variant("A").unwrap()])
+        .unwrap()
+        .build()
+        .unwrap();
+    assert!(generous.evaluate(&request).is_ok());
+    generous.shutdown().unwrap();
+
+    let error = session(std::time::Duration::ZERO).unwrap_err();
+    assert!(
+        matches!(&error, ClientError::ServerStopped { stderr, .. } if stderr.contains("--request-timeout")),
+        "{error}"
+    );
 }
 
 const RICH_MODEL: &str = "pub index Phase = { Climb, Cruise };\n\

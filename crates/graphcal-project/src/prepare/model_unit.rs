@@ -88,7 +88,11 @@ impl PreparedProject {
         let (dimension, scale) = self.fixed_unit(unit)?;
         let dimension = match protocol_dimension(&dimension) {
             Ok(Ok(dimension)) => dimension,
-            Ok(Err(reason)) => return Err(ModelUnitError::UnrepresentableDimension { reason }),
+            Ok(Err(unsupported)) => {
+                return Err(ModelUnitError::UnrepresentableDimension {
+                    reason: unsupported.message,
+                });
+            }
             Err(error) => {
                 return Err(ModelUnitError::UnrepresentableDimension {
                     reason: error.to_string(),

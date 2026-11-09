@@ -7313,8 +7313,8 @@ fn graph_grouped_view_distinguishes_repeated_include_instances() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
-    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_1\\ntemplate rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate rocket.lib\\npackage rocket"));
     assert_eq!(stdout.matches("style=\"rounded,filled\"").count(), 2);
     let total = dot_statement_id_for_label(&stdout, "total_dv\\n");
     let instance_outputs = stdout
@@ -7370,9 +7370,9 @@ fn graph_max_depth_expands_only_requested_composition_levels() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("template src.graph.left\\npackage graph"));
-    assert!(stdout.contains("template src.graph.right\\npackage graph"));
-    assert!(stdout.contains("template src.graph.shared\\npackage graph"));
+    assert!(stdout.contains("template graph.left\\npackage graph"));
+    assert!(stdout.contains("template graph.right\\npackage graph"));
+    assert!(stdout.contains("template graph.shared\\npackage graph"));
     assert!(stdout.contains("1 value hidden"));
     assert!(stdout.contains("doubled\\nDimensionless"));
 }
@@ -7424,8 +7424,8 @@ fn graph_module_view_collapses_declaration_wiring() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
-    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_1\\ntemplate rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate rocket.lib\\npackage rocket"));
     assert!(stdout.contains("label=\"instantiates\""));
     assert!(!stdout.contains("mass_ratio\\nDimensionless"));
     assert!(!stdout.contains("total_dv\\nVelocity"));
@@ -7455,11 +7455,11 @@ fn graph_imported_values_render_as_external_nodes() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let external = dot_statement_id_for_label(&stdout, "src.lib.constants.g0\"");
+    let external = dot_statement_id_for_label(&stdout, "lib.constants.g0\"");
     let dependent = dot_statement_id_for_label(&stdout, "v_exhaust\\n");
     assert!(
         stdout.contains(&format!(
-            "\"{external}\" [label=\"src.lib.constants.g0\", shape=box, style=dashed];"
+            "\"{external}\" [label=\"lib.constants.g0\", shape=box, style=dashed];"
         )),
         "imported value should render as a dashed external node:\n{stdout}"
     );
@@ -8061,7 +8061,10 @@ fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
         .expect("failed to run graphcal");
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["protocol_version"], 2);
+    assert_eq!(
+        json["protocol_version"],
+        graphcal_model_protocol::PROTOCOL_VERSION
+    );
     assert!(
         json["interface_fingerprint"]
             .as_str()
@@ -8077,10 +8080,25 @@ fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
 }
 
 #[test]
+fn model_unit_rejects_spellings_with_surrounding_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let output = graphcal_bin()
+        .args(["model", "unit"])
+        .arg(&model)
+        .args(["--", " km "])
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty(), "a rejected unit prints nothing");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("leading or trailing whitespace"));
+}
+
+#[test]
 fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
-    let cases: [(&[&str], &str); 5] = [
+    let cases: [(&[&str], &str); 6] = [
         (
             &[
                 "--input",
@@ -8094,6 +8112,20 @@ fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
                 "--skip-fingerprint-check",
             ],
             "cannot carry port `load`",
+        ),
+        (
+            &[
+                "--input",
+                "load",
+                "--input",
+                "mode",
+                "--output",
+                "failure",
+                "--unit",
+                "load= kN",
+                "--skip-fingerprint-check",
+            ],
+            "leading or trailing whitespace",
         ),
         (
             &[
@@ -8289,6 +8321,50 @@ fn variant_position(
     let variant = graphcal_model_protocol::VariantName::new(name).unwrap();
     key.position(graphcal_model_protocol::KeyRef::Variant(&variant))
         .unwrap()
+}
+
+#[test]
+fn model_serve_prints_the_exact_request_schema() {
+    use arrow_ipc::reader::StreamReader;
+    use graphcal_model_protocol::arrow::request_schema;
+    use graphcal_model_protocol::{PortName, SessionSpec};
+
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let document = describe_batch_model(&model);
+    let output = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args([
+            "--input",
+            "mode",
+            "--input",
+            "load",
+            "--output",
+            "failure",
+            "--print-request-schema",
+        ])
+        .arg("--expect-fingerprint")
+        .arg(document.interface_fingerprint().to_string())
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reader = StreamReader::try_new(std::io::Cursor::new(output.stdout), None).unwrap();
+    let printed = reader.schema();
+    assert_eq!(reader.count(), 0, "the stream holds only the schema");
+    let name = |name: &str| PortName::new(name).unwrap();
+    let session = document
+        .interface()
+        .configure(
+            &SessionSpec::new(vec![name("load"), name("mode")], vec![name("failure")]),
+            graphcal_model_protocol::CanonicalUnitsOnly,
+        )
+        .unwrap();
+    assert_eq!(printed.as_ref(), request_schema(&session).as_ref());
 }
 
 #[test]

@@ -3,7 +3,9 @@
 use std::process::ExitStatus;
 
 use graphcal_model_protocol::arrow::{ResultDecodeError, SchemaMismatch};
-use graphcal_model_protocol::{KeyValue, PortName, RequestBatchError, SessionError};
+use graphcal_model_protocol::{
+    KeyValue, PortName, RequestBatchError, SessionError, UnsupportedReason,
+};
 use thiserror::Error;
 
 /// Why a client operation failed.
@@ -25,8 +27,12 @@ pub enum ClientError {
     UnknownInput { name: String },
     #[error("the model has no public output named `{name}`")]
     UnknownOutput { name: String },
-    #[error("port `{name}` cannot be used: {reason}")]
-    UnsupportedPort { name: PortName, reason: String },
+    #[error("port `{name}` cannot be used: {message}")]
+    UnsupportedPort {
+        name: PortName,
+        reason: UnsupportedReason,
+        message: String,
+    },
     #[error("port `{name}` is not a {expected} port")]
     KindMismatch {
         name: PortName,

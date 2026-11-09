@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use graphcal_model_protocol::{InterfaceFingerprint, SessionSpec, UnitSpelling};
 
@@ -68,12 +69,14 @@ impl GraphcalCommand {
 
     /// `graphcal model serve` for `spec`, refusing any interface but the
     /// one with `fingerprint`, with the values of its fixed parameters in
-    /// the JSON document `fixed`.
+    /// the JSON document `fixed` and each request bounded by
+    /// `request_timeout`.
     pub(crate) fn serve(
         &self,
         spec: &SessionSpec,
         fingerprint: InterfaceFingerprint,
         fixed: Option<&PathBuf>,
+        request_timeout: Option<Duration>,
     ) -> Command {
         let mut command = self.base("serve");
         for input in spec.inputs() {
@@ -89,6 +92,13 @@ impl GraphcalCommand {
         }
         if let Some(fixed) = fixed {
             command.arg("--params-json-file").arg(fixed);
+        }
+        if let Some(timeout) = request_timeout {
+            // Shortest round-tripping decimal seconds, as the server parses
+            // them.
+            command
+                .arg("--request-timeout")
+                .arg(timeout.as_secs_f64().to_string());
         }
         command
             .arg("--expect-fingerprint")
@@ -133,7 +143,12 @@ mod tests {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         )
         .unwrap();
-        let command = GraphcalCommand::new("model.gcl").serve(&spec, fingerprint, None);
+        let command = GraphcalCommand::new("model.gcl").serve(
+            &spec,
+            fingerprint,
+            None,
+            Some(Duration::from_millis(1500)),
+        );
         let arguments = command
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
@@ -150,6 +165,8 @@ mod tests {
                 "margin",
                 "--unit",
                 "load=kN",
+                "--request-timeout",
+                "1.5",
                 "--expect-fingerprint",
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             ]

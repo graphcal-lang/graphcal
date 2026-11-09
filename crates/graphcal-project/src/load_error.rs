@@ -210,6 +210,26 @@ pub enum LoadError {
         /// The directory entry that differs only in letter case, if any.
         on_disk: Option<String>,
     },
+
+    /// A module file that a symlink below the source directory leads out of
+    /// it; its module identity would be ambiguous.
+    #[error(
+        "module file `{}` lies outside the package's source directory `{}`",
+        path.display(),
+        source_dir.display()
+    )]
+    #[diagnostic(
+        code(graphcal::M042),
+        help(
+            "a module is named by its path below the source directory, so a module file must live there; move the file below the source directory instead of linking to it from there"
+        )
+    )]
+    ModuleOutsideSourceDir {
+        /// The file the symlink resolves to.
+        path: PathBuf,
+        /// The package's source directory.
+        source_dir: PathBuf,
+    },
 }
 
 fn spelling_mismatch_message(path: &std::path::Path, on_disk: Option<&str>) -> String {
@@ -241,7 +261,8 @@ impl LoadError {
             | Self::ManifestError { .. }
             | Self::SourceReadFailed { .. }
             | Self::InvalidModuleFileName { .. }
-            | Self::ModuleFileSpellingMismatch { .. } => None,
+            | Self::ModuleFileSpellingMismatch { .. }
+            | Self::ModuleOutsideSourceDir { .. } => None,
             Self::ImportFileNotFound { src, .. }
             | Self::ImportOutsideRoot { src, .. }
             | Self::PackageNameMismatch { src, .. }
@@ -303,6 +324,13 @@ mod tests {
                     on_disk: Some("lib.gcl".to_owned()),
                 },
                 "graphcal::M041",
+            ),
+            (
+                LoadError::ModuleOutsideSourceDir {
+                    path: PathBuf::from("pkg/foo.gcl"),
+                    source_dir: PathBuf::from("src"),
+                },
+                "graphcal::M042",
             ),
         ] {
             assert_eq!(

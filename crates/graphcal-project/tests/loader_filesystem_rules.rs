@@ -163,3 +163,55 @@ fn non_gcl_symlink_to_a_gcl_entry_is_an_invalid_source_path() {
         Some("graphcal::M023")
     );
 }
+
+/// A module symlink below the source directory that leads out of it is
+/// rejected (M042): the target's identity would be its path below the
+/// project root, `pkg.foo`, the identity of the real module
+/// `src/pkg/foo.gcl` too, and one of the two modules would replace the
+/// other.
+#[cfg(unix)]
+#[test]
+fn module_symlink_leaving_the_source_directory_is_rejected() {
+    let directory = package(&[
+        ("pkg/foo.gcl", "pub node y: Dimensionless = 2.0;\n"),
+        (
+            "src/pkg/foo.gcl",
+            "import pkg.alias::{y};\nnode x: Dimensionless = @y;\n",
+        ),
+    ]);
+    std::os::unix::fs::symlink(
+        "../../pkg/foo.gcl",
+        directory.path().join("src/pkg/alias.gcl"),
+    )
+    .unwrap();
+    for reader in readers(directory.path()) {
+        let error = load_project(&directory.path().join("src/pkg/foo.gcl"), None, &reader)
+            .expect_err("the alias leaves the source directory");
+        assert!(
+            matches!(
+                &error,
+                CompileError::Load(LoadError::ModuleOutsideSourceDir { path, .. })
+                    if path.ends_with("pkg/foo.gcl") && !path.ends_with("src/pkg/foo.gcl")
+            ),
+            "{error:?}"
+        );
+        assert_eq!(code(&error).as_deref(), Some("graphcal::M042"));
+    }
+}
+
+/// A module symlink that stays inside the source directory still loads.
+#[cfg(unix)]
+#[test]
+fn module_symlink_inside_the_source_directory_loads() {
+    let directory = package(&[
+        ("src/pkg/lib.gcl", "pub node y: Dimensionless = 2.0;\n"),
+        (
+            "src/pkg/main.gcl",
+            "import pkg.alias::{y};\nnode x: Dimensionless = @y;\n",
+        ),
+    ]);
+    std::os::unix::fs::symlink("lib.gcl", directory.path().join("src/pkg/alias.gcl")).unwrap();
+    for reader in readers(directory.path()) {
+        load_project(&directory.path().join("src/pkg/main.gcl"), None, &reader).unwrap();
+    }
+}

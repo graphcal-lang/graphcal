@@ -51,7 +51,10 @@ impl InputColumn {
         self.len() == 0
     }
 
-    fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
+    /// The value at `row` as a value of `wire`, the wire of this column's
+    /// parameter; `None` when `row` is out of range or the column does not
+    /// hold values of `wire`.
+    pub(crate) fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
         Some(match (self, wire) {
             (Self::Quantity(values), WireType::Quantity(_)) => {
                 ValueRef::Quantity(*values.get(row)?)
@@ -86,7 +89,7 @@ pub enum RequestBatchError {
     },
     #[error("a request batch must contain at least one row")]
     Empty,
-    #[error("parameter `{input}` has an out-of-range key at row {row}")]
+    #[error("parameter `{input}` has a key that is not an entry of its key type at row {row}")]
     KeyOutOfRange { input: PortName, row: usize },
     #[error("parameter `{input}` has a value of another shape at row {row}")]
     ShapeMismatch { input: PortName, row: usize },
@@ -195,9 +198,11 @@ impl RequestBatch {
         &self.columns
     }
 
-    /// The column of the varied parameter at `slot`.
+    /// The column of the varied parameter at `slot`; `None` for a slot of
+    /// another schema.
     #[must_use]
     pub fn column(&self, slot: InputSlot) -> Option<&InputColumn> {
+        self.schema.input(slot)?;
         self.columns.get(slot.get())
     }
 
@@ -230,6 +235,25 @@ pub enum OutputColumn {
 }
 
 impl OutputColumn {
+    /// The number of rows, with or without values.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        match self {
+            Self::Quantity(values) | Self::Datetime(values) => values.len(),
+            Self::Int(values) => values.len(),
+            Self::Bool(values) => values.len(),
+            Self::Key(values) => values.len(),
+            Self::Complex(values) => values.len(),
+            Self::Structured(values) => values.len(),
+        }
+    }
+
+    /// Whether the column has no rows.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     const fn empty(wire: &WireType) -> Self {
         match wire {
             WireType::Quantity(_) => Self::Quantity(Vec::new()),
@@ -253,33 +277,50 @@ impl OutputColumn {
         }
     }
 
-    /// Append `value`, which has already been checked against `wire`.
-    fn push(&mut self, wire: &WireType, value: &Value) -> bool {
+    /// Append `value`, checking that it has the shape of `wire`, the wire of
+    /// the output this column was created for. The column is unchanged on
+    /// error.
+    fn push(&mut self, wire: &WireType, value: &Value) -> Result<(), ValueShapeMismatch> {
         match (self, value, wire) {
-            (Self::Quantity(values), Value::Quantity(value), _)
-            | (Self::Datetime(values), Value::Datetime(value), _) => values.push(Some(*value)),
-            (Self::Int(values), Value::Int(value), _) => values.push(Some(*value)),
-            (Self::Bool(values), Value::Bool(value), _) => values.push(Some(*value)),
+            (Self::Quantity(values), Value::Quantity(value), WireType::Quantity(_))
+            | (Self::Datetime(values), Value::Datetime(value), WireType::Datetime(_)) => {
+                values.push(Some(*value));
+            }
+            (Self::Int(values), Value::Int(value), WireType::Int) => values.push(Some(*value)),
+            (Self::Bool(values), Value::Bool(value), WireType::Bool) => values.push(Some(*value)),
             (Self::Key(values), Value::Key(value), WireType::Key(key)) => {
-                let Some(position) = key.position(value.as_key_ref()) else {
-                    return false;
-                };
+                let position = key.position(value.as_key_ref()).ok_or(ValueShapeMismatch)?;
                 values.push(Some(position));
             }
-            (Self::Complex(values), Value::Complex(value), _) => values.push(Some(*value)),
+            (Self::Complex(values), Value::Complex(value), WireType::Complex(_)) => {
+                values.push(Some(*value));
+            }
             (
                 Self::Structured(values),
                 value @ (Value::Indexed(_) | Value::Algebraic { .. }),
-                _,
-            ) => {
-                values.push(Some(value.clone()));
-            }
-            _ => return false,
+                wire @ (WireType::Indexed(_) | WireType::Algebraic(_)),
+            ) if value.conforms_to(wire) => values.push(Some(value.clone())),
+            _ => return Err(ValueShapeMismatch),
         }
-        true
+        Ok(())
     }
 
-    fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
+    /// Drop every row from `rows` on.
+    fn truncate(&mut self, rows: usize) {
+        match self {
+            Self::Quantity(values) | Self::Datetime(values) => values.truncate(rows),
+            Self::Int(values) => values.truncate(rows),
+            Self::Bool(values) => values.truncate(rows),
+            Self::Key(values) => values.truncate(rows),
+            Self::Complex(values) => values.truncate(rows),
+            Self::Structured(values) => values.truncate(rows),
+        }
+    }
+
+    /// The value at `row` as a value of `wire`, the wire of this column's
+    /// output; `None` in a row without values, when `row` is out of range,
+    /// or when the column does not hold values of `wire`.
+    pub(crate) fn value<'a>(&'a self, wire: &'a WireType, row: usize) -> Option<ValueRef<'a>> {
         Some(match (self, wire) {
             (Self::Quantity(values), WireType::Quantity(_)) => {
                 ValueRef::Quantity((*values.get(row)?)?)
@@ -302,6 +343,10 @@ impl OutputColumn {
         })
     }
 }
+
+/// A value does not have the shape of its column's wire type.
+#[derive(Debug, Clone, Copy)]
+struct ValueShapeMismatch;
 
 /// Why rows cannot form output values for a session.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -367,18 +412,18 @@ impl OutputValuesBuilder {
                 found: values.len(),
             });
         }
-        if let Some(output) = outputs
-            .iter()
-            .zip(&values)
-            .find_map(|(output, value)| (!value.conforms_to(output.wire())).then_some(output))
-        {
-            return Err(OutputValuesError::KindMismatch {
-                output: output.name().clone(),
-            });
-        }
+        let rows = self.present.len();
         for ((column, output), value) in self.columns.iter_mut().zip(outputs).zip(&values) {
-            // Conformance was checked above, so every push succeeds.
-            let _pushed = column.push(output.wire(), value);
+            if column.push(output.wire(), value).is_err() {
+                // Each push checks its own value, so rolling back the columns
+                // already extended keeps every column one row per pushed row.
+                for column in &mut self.columns {
+                    column.truncate(rows);
+                }
+                return Err(OutputValuesError::KindMismatch {
+                    output: output.name().clone(),
+                });
+            }
         }
         self.present.push(true);
         Ok(())
@@ -441,9 +486,11 @@ impl OutputValues {
         &self.columns
     }
 
-    /// The column of the read output at `slot`.
+    /// The column of the read output at `slot`; `None` for a slot of
+    /// another schema.
     #[must_use]
     pub fn column(&self, slot: OutputSlot) -> Option<&OutputColumn> {
+        self.schema.output(slot)?;
         self.columns.get(slot.get())
     }
 }
@@ -623,17 +670,25 @@ mod tests {
         RequestBatch::new(Arc::new(sample_session()), columns)
     }
 
+    /// The position `index` of the sample session's `mode` key.
+    fn mode(index: usize) -> KeyPosition {
+        let WireType::Key(key) = sample_session().inputs()[1].wire().clone() else {
+            panic!("mode is a key");
+        };
+        key.position_at(index).unwrap()
+    }
+
     #[test]
     fn request_batches_match_session_inputs() {
         let batch = request(vec![
             InputColumn::Quantity(vec![finite(1.0), finite(2.0)]),
-            InputColumn::Key(vec![KeyPosition::new(1), KeyPosition::new(0)]),
+            InputColumn::Key(vec![mode(1), mode(0)]),
         ])
         .unwrap();
         assert_eq!(batch.rows(), 2);
-        let mode = batch.schema().input_slot("mode").unwrap();
+        let mode_slot = batch.schema().input_slot("mode").unwrap();
         assert!(matches!(
-            batch.value(mode, 0),
+            batch.value(mode_slot, 0),
             Some(ValueRef::Key(KeyRef::Variant(variant))) if variant.as_str() == "B"
         ));
 
@@ -644,14 +699,14 @@ mod tests {
         assert!(matches!(
             request(vec![
                 InputColumn::Int(vec![1]),
-                InputColumn::Key(vec![KeyPosition::new(0)]),
+                InputColumn::Key(vec![mode(0)]),
             ]),
             Err(RequestBatchError::KindMismatch { .. })
         ));
         assert!(matches!(
             request(vec![
                 InputColumn::Quantity(vec![finite(1.0)]),
-                InputColumn::Key(vec![KeyPosition::new(0), KeyPosition::new(0)]),
+                InputColumn::Key(vec![mode(0), mode(0)]),
             ]),
             Err(RequestBatchError::LengthMismatch { .. })
         ));
@@ -662,13 +717,64 @@ mod tests {
             ]),
             Err(RequestBatchError::Empty)
         ));
+        // A position of another key type with enough entries is rejected,
+        // not read as the session's third mode.
+        let other = crate::wire_type::KeyType::new(
+            crate::axis::Axis::new(crate::axis::AxisKind::Finite { size: 3 }).unwrap(),
+        );
         assert!(matches!(
             request(vec![
                 InputColumn::Quantity(vec![finite(1.0)]),
-                InputColumn::Key(vec![KeyPosition::new(2)]),
+                InputColumn::Key(vec![other.position_at(2).unwrap()]),
             ]),
             Err(RequestBatchError::KeyOutOfRange { row: 0, .. })
         ));
+    }
+
+    #[test]
+    fn slots_of_another_schema_select_nothing() {
+        let batch = request(vec![
+            InputColumn::Quantity(vec![finite(1.0)]),
+            InputColumn::Key(vec![mode(0)]),
+        ])
+        .unwrap();
+        let other = crate::interface::tests::sample_interface()
+            .configure(
+                &crate::session::SessionSpec::new(
+                    vec![
+                        crate::interface::tests::name("mode"),
+                        crate::interface::tests::name("load"),
+                    ],
+                    vec![crate::interface::tests::name("margin")],
+                ),
+                crate::session::CanonicalUnitsOnly,
+            )
+            .unwrap();
+        let foreign = other.input_slot("load").unwrap();
+        assert_eq!(foreign.get(), 0);
+        assert_eq!(batch.value(foreign, 0), None);
+        assert_eq!(batch.column(foreign), None);
+        let own = batch.schema().input_slot("load").unwrap();
+        assert_eq!(batch.value(own, 0), Some(ValueRef::Quantity(finite(1.0))));
+    }
+
+    #[test]
+    fn a_rejected_row_leaves_every_output_column_unchanged() {
+        let mut builder = OutputValuesBuilder::new(Arc::new(sample_session()));
+        // The first value fits `failure`; the second does not fit `margin`.
+        assert_eq!(
+            builder.push(Some(vec![Value::Bool(true), Value::Int(1)])),
+            Err(OutputValuesError::KindMismatch {
+                output: crate::interface::tests::name("margin"),
+            })
+        );
+        builder
+            .push(Some(vec![Value::Bool(false), Value::Quantity(finite(2.0))]))
+            .unwrap();
+        let values = builder.finish().unwrap();
+        assert_eq!(values.rows(), 1);
+        assert!(values.columns().iter().all(|column| column.len() == 1));
+        assert_eq!(values.columns()[0], OutputColumn::Bool(vec![Some(false)]));
     }
 
     #[test]

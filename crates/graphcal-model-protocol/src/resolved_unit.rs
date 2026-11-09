@@ -1,6 +1,7 @@
 //! A unit expression of a model, resolved to its dimension and scale.
 
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use crate::dimension::Dimension;
 use crate::finite::{FiniteF64, NonFiniteError};
@@ -57,34 +58,47 @@ impl ResolvedUnit {
         quantity.dimension() == &self.dimension
     }
 
-    /// `value`, a quantity of `quantity` in its canonical SI unit, in this
-    /// unit; `None` when the unit measures another dimension.
+    /// `value`, a quantity of `dimension` in its canonical SI unit, in this
+    /// unit.
+    ///
+    /// The value must be in SI: a quantity read in a session's chosen unit
+    /// is first converted with that port's [`SiScale`].
     ///
     /// # Errors
     ///
-    /// Returns [`NonFiniteError`] when the converted value overflows.
-    #[must_use]
+    /// Returns [`UnitConversionError`] when the unit measures another
+    /// dimension or the converted value overflows.
     pub fn from_si(
         &self,
-        quantity: &QuantityType,
+        dimension: &Dimension,
         value: FiniteF64,
-    ) -> Option<Result<FiniteF64, NonFiniteError>> {
-        self.measures(quantity)
-            .then(|| self.si_scale.from_si(value))
+    ) -> Result<FiniteF64, UnitConversionError> {
+        if dimension != &self.dimension {
+            return Err(UnitConversionError::DimensionMismatch {
+                unit: self.unit.clone(),
+            });
+        }
+        self.si_scale
+            .from_si(value)
+            .map_err(UnitConversionError::Overflow)
     }
+}
+
+/// Why a quantity cannot be expressed in a [`ResolvedUnit`].
+#[derive(Debug, Clone, PartialEq, Error)]
+pub enum UnitConversionError {
+    #[error("unit `{unit}` measures another dimension")]
+    DimensionMismatch { unit: UnitSpelling },
+    #[error(transparent)]
+    Overflow(NonFiniteError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dimension::Exponent;
-    use crate::label::BaseDimensionName;
 
     fn time() -> Dimension {
-        Dimension::from_iter([(
-            BaseDimensionName::new("Time").unwrap(),
-            Exponent::new(1, 1).unwrap(),
-        )])
+        crate::dimension::tests::base_dimension("Time")
     }
 
     #[test]
@@ -95,13 +109,25 @@ mod tests {
             SiScale::new(3600.0).unwrap(),
         );
         let seconds = QuantityType::new(time(), Some(UnitSpelling::new("s").unwrap())).unwrap();
-        let ratio = QuantityType::new(Dimension::dimensionless(), None).unwrap();
         let value = FiniteF64::new(7200.0).unwrap();
+        assert!(hour.measures(&seconds));
         assert_eq!(
-            hour.from_si(&seconds, value),
-            Some(Ok(FiniteF64::new(2.0).unwrap()))
+            hour.from_si(&time(), value),
+            Ok(FiniteF64::new(2.0).unwrap())
         );
-        assert_eq!(hour.from_si(&ratio, value), None);
+        assert!(matches!(
+            hour.from_si(&Dimension::dimensionless(), value),
+            Err(UnitConversionError::DimensionMismatch { .. })
+        ));
+        let tiny = ResolvedUnit::new(
+            UnitSpelling::new("tiny").unwrap(),
+            time(),
+            SiScale::new(1e-300).unwrap(),
+        );
+        assert!(matches!(
+            tiny.from_si(&time(), FiniteF64::new(1e300).unwrap()),
+            Err(UnitConversionError::Overflow(_))
+        ));
     }
 
     #[test]
@@ -114,7 +140,7 @@ mod tests {
         let json = serde_json::to_string(&hour).unwrap();
         assert_eq!(
             json,
-            r#"{"unit":"h","dimension":{"Time":1},"si_scale":3600.0}"#
+            r#"{"unit":"h","dimension":[{"base":{"kind":"prelude","name":"Time"},"exponent":1}],"si_scale":3600.0}"#
         );
         assert_eq!(serde_json::from_str::<ResolvedUnit>(&json).unwrap(), hour);
     }

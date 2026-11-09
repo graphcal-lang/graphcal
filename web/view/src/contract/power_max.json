@@ -10,7 +10,7 @@
   },
   "indexes": [
     {
-      "id": "p:power_project/f:src/f:power_project/f:components/n:Component",
+      "id": "p:power_project/f:power_project/f:components/n:Component",
       "name": "Component",
       "module": "power_project.components",
       "entries": [
@@ -33,7 +33,7 @@
       ]
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:components/n:Mode",
+      "id": "p:power_project/f:power_project/f:components/n:Mode",
       "name": "Mode",
       "module": "power_project.components",
       "entries": [
@@ -54,7 +54,7 @@
   ],
   "nodes": [
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:margin",
+      "id": "p:power_project/f:power_project/f:power_max/n:margin",
       "label": "margin",
       "name": "margin",
       "module": "power_project.power_max",
@@ -95,7 +95,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_budget",
+      "id": "p:power_project/f:power_project/f:power_max/n:p_budget",
       "label": "p_budget",
       "name": "p_budget",
       "module": "power_project.eps",
@@ -103,7 +103,7 @@
       "origin": {
         "kind": "included",
         "instance": {
-          "id": "p:power_project/f:src/f:power_project/f:power_max/i:%3Cinclude%40198%3E",
+          "id": "p:power_project/f:power_project/f:power_max/i:%3Cinclude%40198%3E",
           "name": "eps",
           "bound": false
         }
@@ -141,7 +141,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:eta_dcdc",
+      "id": "p:power_project/f:power_project/f:power_max/n:eta_dcdc",
       "label": "eta_dcdc",
       "name": "eta_dcdc",
       "module": "power_project.power_max",
@@ -182,7 +182,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_unit",
+      "id": "p:power_project/f:power_project/f:power_max/n:p_unit",
       "label": "p_unit",
       "name": "p_unit",
       "module": "power_project.power_max",
@@ -192,7 +192,7 @@
       },
       "element": "quantity",
       "axes": [
-        "p:power_project/f:src/f:power_project/f:components/n:Component"
+        "p:power_project/f:power_project/f:components/n:Component"
       ],
       "dimension": "Power",
       "unit": "W",
@@ -326,7 +326,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:duty",
+      "id": "p:power_project/f:power_project/f:power_max/n:duty",
       "label": "duty",
       "name": "duty",
       "module": "power_project.power_max",
@@ -336,8 +336,8 @@
       },
       "element": "quantity",
       "axes": [
-        "p:power_project/f:src/f:power_project/f:components/n:Component",
-        "p:power_project/f:src/f:power_project/f:components/n:Mode"
+        "p:power_project/f:power_project/f:components/n:Component",
+        "p:power_project/f:power_project/f:components/n:Mode"
       ],
       "dimension": "Dimensionless",
       "unit": null,
@@ -723,7 +723,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_avg",
+      "id": "p:power_project/f:power_project/f:power_max/n:p_avg",
       "label": "p_avg",
       "name": "p_avg",
       "module": "power_project.power_max",
@@ -733,15 +733,15 @@
       },
       "element": "quantity",
       "axes": [
-        "p:power_project/f:src/f:power_project/f:components/n:Component",
-        "p:power_project/f:src/f:power_project/f:components/n:Mode"
+        "p:power_project/f:power_project/f:components/n:Component",
+        "p:power_project/f:power_project/f:components/n:Mode"
       ],
       "dimension": "Power",
       "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
-        "p:power_project/f:src/f:power_project/f:power_max/n:duty",
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_unit"
+        "p:power_project/f:power_project/f:power_max/n:duty",
+        "p:power_project/f:power_project/f:power_max/n:p_unit"
       ],
       "expr": "for c: Component, m: Mode {\n    (c, m) => @p_unit[c] * @duty[c, m]\n}",
       "doc": null,
@@ -930,7 +930,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_bus",
+      "id": "p:power_project/f:power_project/f:power_max/n:p_bus",
       "label": "p_bus",
       "name": "p_bus",
       "module": "power_project.power_max",
@@ -940,15 +940,15 @@
       },
       "element": "quantity",
       "axes": [
-        "p:power_project/f:src/f:power_project/f:components/n:Component",
-        "p:power_project/f:src/f:power_project/f:components/n:Mode"
+        "p:power_project/f:power_project/f:components/n:Component",
+        "p:power_project/f:power_project/f:components/n:Mode"
       ],
       "dimension": "Power",
       "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
-        "p:power_project/f:src/f:power_project/f:power_max/n:eta_dcdc",
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_avg"
+        "p:power_project/f:power_project/f:power_max/n:eta_dcdc",
+        "p:power_project/f:power_project/f:power_max/n:p_avg"
       ],
       "expr": "for c: Component, m: Mode {\n    (c, m) => @p_avg[c, m] / @eta_dcdc\n}",
       "doc": null,
@@ -1137,7 +1137,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_mode",
+      "id": "p:power_project/f:power_project/f:power_max/n:p_mode",
       "label": "p_mode",
       "name": "p_mode",
       "module": "power_project.power_max",
@@ -1147,13 +1147,13 @@
       },
       "element": "quantity",
       "axes": [
-        "p:power_project/f:src/f:power_project/f:components/n:Mode"
+        "p:power_project/f:power_project/f:components/n:Mode"
       ],
       "dimension": "Power",
       "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_bus"
+        "p:power_project/f:power_project/f:power_max/n:p_bus"
       ],
       "expr": "for m: Mode {\n    sum(for c: Component { @p_bus[c, m] })\n}",
       "doc": null,
@@ -1212,7 +1212,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_peak",
+      "id": "p:power_project/f:power_project/f:power_max/n:p_peak",
       "label": "p_peak",
       "name": "p_peak",
       "module": "power_project.power_max",
@@ -1222,13 +1222,13 @@
       },
       "element": "quantity",
       "axes": [
-        "p:power_project/f:src/f:power_project/f:components/n:Component"
+        "p:power_project/f:power_project/f:components/n:Component"
       ],
       "dimension": "Power",
       "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_bus"
+        "p:power_project/f:power_project/f:power_max/n:p_bus"
       ],
       "expr": "for c: Component {\n    maximum(for m: Mode { @p_bus[c, m] })\n}",
       "doc": null,
@@ -1297,7 +1297,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_total",
+      "id": "p:power_project/f:power_project/f:power_max/n:p_total",
       "label": "p_total",
       "name": "p_total",
       "module": "power_project.power_max",
@@ -1311,7 +1311,7 @@
       "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_mode"
+        "p:power_project/f:power_project/f:power_max/n:p_mode"
       ],
       "expr": "maximum(@p_mode)",
       "doc": null,
@@ -1340,7 +1340,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_mean",
+      "id": "p:power_project/f:power_project/f:power_max/n:p_mean",
       "label": "p_mean",
       "name": "p_mean",
       "module": "power_project.power_max",
@@ -1354,8 +1354,8 @@
       "unit": "m^2*kg/s^3",
       "pub": false,
       "deps": [
-        "p:power_project/f:src/f:power_project/f:components/n:num",
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_total"
+        "p:power_project/f:power_project/f:components/n:num",
+        "p:power_project/f:power_project/f:power_max/n:p_total"
       ],
       "expr": "@p_total / to_float(@num)",
       "doc": null,
@@ -1384,7 +1384,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:p_required",
+      "id": "p:power_project/f:power_project/f:power_max/n:p_required",
       "label": "p_required",
       "name": "p_required",
       "module": "power_project.power_max",
@@ -1398,8 +1398,8 @@
       "unit": "m^2*kg/s^3",
       "pub": true,
       "deps": [
-        "p:power_project/f:src/f:power_project/f:power_max/n:margin",
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_total"
+        "p:power_project/f:power_project/f:power_max/n:margin",
+        "p:power_project/f:power_project/f:power_max/n:p_total"
       ],
       "expr": "@p_total * (1.0 + @margin)",
       "doc": null,
@@ -1428,7 +1428,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:heat_dcdc",
+      "id": "p:power_project/f:power_project/f:power_max/n:heat_dcdc",
       "label": "heat_dcdc",
       "name": "heat_dcdc",
       "module": "power_project.power_max",
@@ -1442,8 +1442,8 @@
       "unit": "m^2*kg/s^3",
       "pub": true,
       "deps": [
-        "p:power_project/f:src/f:power_project/f:power_max/n:eta_dcdc",
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_peak"
+        "p:power_project/f:power_project/f:power_max/n:eta_dcdc",
+        "p:power_project/f:power_project/f:power_max/n:p_peak"
       ],
       "expr": "sum(for c: Component { @p_peak[c] }) * (1.0 - @eta_dcdc)",
       "doc": null,
@@ -1472,7 +1472,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:power_max/n:within_budget",
+      "id": "p:power_project/f:power_project/f:power_max/n:within_budget",
       "label": "within_budget",
       "name": "within_budget",
       "module": "power_project.power_max",
@@ -1486,8 +1486,8 @@
       "unit": null,
       "pub": false,
       "deps": [
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_budget",
-        "p:power_project/f:src/f:power_project/f:power_max/n:p_required"
+        "p:power_project/f:power_project/f:power_max/n:p_budget",
+        "p:power_project/f:power_project/f:power_max/n:p_required"
       ],
       "expr": "@p_required <= @p_budget",
       "doc": null,
@@ -1514,7 +1514,7 @@
       "presentation": []
     },
     {
-      "id": "p:power_project/f:src/f:power_project/f:components/n:num",
+      "id": "p:power_project/f:power_project/f:components/n:num",
       "label": "num",
       "name": "num",
       "module": "power_project.components",

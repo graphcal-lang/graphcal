@@ -87,6 +87,26 @@ pub fn serve_stdio(
     )
 }
 
+/// Write the request-stream schema of `session` to stdout.
+///
+/// The schema is an Arrow IPC stream without batches, so a client in another
+/// language can build requests against the schema the server validates
+/// instead of reproducing it.
+///
+/// # Errors
+///
+/// Returns a [`ServeError`] for an I/O or IPC failure.
+pub fn write_request_schema_stdio(session: &ModelSession) -> Result<(), ServeError> {
+    write_request_schema(session, std::io::stdout().lock())
+}
+
+fn write_request_schema<W: Write>(session: &ModelSession, output: W) -> Result<(), ServeError> {
+    let mut writer = StreamWriter::try_new(output, &request_schema(session.schema()))?;
+    writer.finish()?;
+    writer.get_mut().flush()?;
+    Ok(())
+}
+
 /// Serve `session` over the given byte streams.
 ///
 /// # Errors
@@ -302,6 +322,20 @@ mod tests {
                 graphcal_model_protocol::RowFailure::InputOutOfDomain { .. }
             ))
         ));
+    }
+
+    #[test]
+    fn the_published_request_schema_is_the_one_the_server_validates() {
+        let project =
+            prepare_from_project(&LoadedProject::from_source(MODEL, "model.gcl").unwrap()).unwrap();
+        let session = session(&project);
+        let mut published = Vec::new();
+        write_request_schema(&session, &mut published).unwrap();
+        let reader = StreamReader::try_new(Cursor::new(published), None).unwrap();
+        let schema = reader.schema();
+        assert_eq!(reader.count(), 0, "the stream holds only the schema");
+        validate_schema(&request_schema(session.schema()), schema.as_ref()).unwrap();
+        assert_eq!(schema.as_ref(), request_schema(session.schema()).as_ref());
     }
 
     #[test]

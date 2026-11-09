@@ -782,7 +782,7 @@ result batch per request to stdout as Arrow IPC streams.
 graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=UNIT>]... \
     [--param <NAME=VALUE>]... [--params-json <JSON> | --params-json-file <FILE>] \
     (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) \
-    [--request-timeout <SECONDS>] [--root <ROOT>]
+    [--request-timeout <SECONDS> | --print-request-schema] [--root <ROOT>]
 ```
 
 **Arguments and options:**
@@ -797,6 +797,7 @@ graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=U
 | `--expect-fingerprint <FINGERPRINT>` | Refuse to start unless the interface fingerprint from `graphcal model describe` matches |
 | `--skip-fingerprint-check` | Serve without checking the fingerprint |
 | `--request-timeout <SECONDS>` | End the session with exit code `1` when one request batch is still evaluating after this many seconds; without it, a request evaluates until it finishes |
+| `--print-request-schema` | Print the session's request-stream schema as an Arrow IPC stream without batches and exit instead of serving |
 | `--root <ROOT>` | Explicit project root |
 
 Exactly one of `--expect-fingerprint` and `--skip-fingerprint-check` is

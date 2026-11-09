@@ -24,10 +24,10 @@ use graphcal_eval::eval_expr::j2000_seconds::{epoch_from_j2000_seconds, seconds_
 use graphcal_eval::runtime_value::{IndexAxis, IndexedValue, KeyValue, RuntimeValue, StructValue};
 use graphcal_model_protocol::{
     ComplexValue, ConstructorPosition, FiniteF64, KeyType, LabelError, SiScale, Value, ValueRef,
+    WireType,
 };
 use thiserror::Error;
 
-use super::model_axis::axis_wire;
 use super::model_port::OutputProjectionError;
 use super::{ModelValueSchema, PreparedProject};
 
@@ -35,6 +35,8 @@ use super::{ModelValueSchema, PreparedProject};
 #[derive(Debug, Clone)]
 pub(super) struct ConstructorCodec {
     applied: Arc<AppliedConstructor>,
+    /// Its position in the port's protocol type.
+    position: ConstructorPosition,
     fields: Vec<(FieldName, ValueCodec)>,
 }
 
@@ -68,12 +70,12 @@ pub(super) enum ValueCodec {
 pub(super) enum ValueCodecError {
     #[error("index `{index}` of a model port has no axis")]
     MissingAxis { index: IndexTypeRef },
-    #[error("key index `{index}` of a model port has no wire axis: {reason}")]
-    KeyAxis { index: IndexTypeRef, reason: String },
     #[error("type `{identity}` has no model definition")]
     MissingDefinition { identity: StructTypeRef },
     #[error("type `{identity}` has another constructor list than its model definition")]
     ConstructorMismatch { identity: StructTypeRef },
+    #[error("the session wire type of a model port does not have the port's shape")]
+    WireShape,
     #[error(transparent)]
     Label(#[from] LabelError),
     #[error(transparent)]
@@ -92,17 +94,22 @@ pub(super) enum ValueBindError {
 }
 
 impl PreparedProject {
-    /// The codec of a port of `schema` whose quantities travel in the unit of
-    /// `scale` (SI when `None`).
+    /// The codec of a port of `schema` carried as `wire`, the port's session
+    /// wire type, whose quantities travel in the unit of `scale` (SI when
+    /// `None`).
+    ///
+    /// Keys and constructors are taken from `wire`, so converted values
+    /// carry the positions of the session's own key and algebraic types.
     ///
     /// # Errors
     ///
     /// Returns [`ValueCodecError`] for a schema the protocol does not carry
-    /// (which a configured session never selects) or an algebraic type the
-    /// compiler cannot apply.
+    /// (which a configured session never selects), a `wire` of another
+    /// shape, or an algebraic type the compiler cannot apply.
     pub(super) fn value_codec(
         &self,
         schema: &ModelValueSchema,
+        wire: &WireType,
         scale: Option<SiScale>,
     ) -> Result<ValueCodec, ValueCodecError> {
         let axis = |index: &IndexTypeRef| {
@@ -110,29 +117,29 @@ impl PreparedProject {
                 index: index.clone(),
             })
         };
-        Ok(match schema {
-            ModelValueSchema::Quantity(_) => ValueCodec::Quantity(scale),
-            ModelValueSchema::Complex(_) => ValueCodec::Complex(scale),
-            ModelValueSchema::Int => ValueCodec::Int,
-            ModelValueSchema::Bool => ValueCodec::Bool,
-            ModelValueSchema::Datetime(time_scale) => ValueCodec::Datetime(*time_scale),
-            ModelValueSchema::Key(index) => ValueCodec::Key {
+        Ok(match (schema, wire) {
+            (ModelValueSchema::Quantity(_), WireType::Quantity(_)) => ValueCodec::Quantity(scale),
+            (ModelValueSchema::Complex(_), WireType::Complex(_)) => ValueCodec::Complex(scale),
+            (ModelValueSchema::Int, WireType::Int) => ValueCodec::Int,
+            (ModelValueSchema::Bool, WireType::Bool) => ValueCodec::Bool,
+            (ModelValueSchema::Datetime(time_scale), WireType::Datetime(_)) => {
+                ValueCodec::Datetime(*time_scale)
+            }
+            (ModelValueSchema::Key(index), WireType::Key(key)) => ValueCodec::Key {
                 axis: axis(index.identity())?,
-                key: KeyType::new(axis_wire(index)?.map_err(|reason| {
-                    ValueCodecError::KeyAxis {
-                        index: index.identity().clone(),
-                        reason,
-                    }
-                })?),
+                key: key.clone(),
             },
-            ModelValueSchema::Indexed {
-                element,
-                axis: index,
-            } => ValueCodec::Indexed {
+            (
+                ModelValueSchema::Indexed {
+                    element,
+                    axis: index,
+                },
+                WireType::Indexed(indexed),
+            ) => ValueCodec::Indexed {
                 axis: axis(index.identity())?,
-                element: Box::new(self.value_codec(element, scale)?),
+                element: Box::new(self.value_codec(element, indexed.element(), scale)?),
             },
-            ModelValueSchema::Algebraic(id) => {
+            (ModelValueSchema::Algebraic(id), WireType::Algebraic(wire)) => {
                 let definition = self.schema_graph.definition(id).ok_or_else(|| {
                     ValueCodecError::MissingDefinition {
                         identity: id.identity().clone(),
@@ -146,7 +153,9 @@ impl PreparedProject {
                 )
                 .map_err(|error| error.into_semantic_error(self.source))?
                 .applied_constructors(self.source)?;
-                if applied.len() != definition.constructors().len() {
+                if applied.len() != definition.constructors().len()
+                    || wire.constructors().len() != applied.len()
+                {
                     return Err(ValueCodecError::ConstructorMismatch {
                         identity: id.identity().clone(),
                     });
@@ -154,21 +163,36 @@ impl PreparedProject {
                 let constructors = applied
                     .into_iter()
                     .zip(definition.constructors())
-                    .map(|(applied, constructor)| {
+                    .zip(wire.entries())
+                    .map(|((applied, constructor), (position, wire_constructor))| {
+                        if constructor.fields().len() != wire_constructor.fields().len() {
+                            return Err(ValueCodecError::ConstructorMismatch {
+                                identity: id.identity().clone(),
+                            });
+                        }
                         let fields = constructor
                             .fields()
                             .iter()
-                            .map(|field| {
+                            .zip(wire_constructor.fields())
+                            .map(|(field, wire_field)| {
                                 // Units apply to quantity ports only, never to
                                 // the fields of an algebraic value.
-                                Ok((field.name().clone(), self.value_codec(field.value(), None)?))
+                                Ok((
+                                    field.name().clone(),
+                                    self.value_codec(field.value(), wire_field.wire(), None)?,
+                                ))
                             })
                             .collect::<Result<_, ValueCodecError>>()?;
-                        Ok(ConstructorCodec { applied, fields })
+                        Ok(ConstructorCodec {
+                            applied,
+                            position,
+                            fields,
+                        })
                     })
                     .collect::<Result<_, ValueCodecError>>()?;
                 ValueCodec::Algebraic(constructors)
             }
+            _ => return Err(ValueCodecError::WireShape),
         })
     }
 }
@@ -179,7 +203,12 @@ fn out_of_range(value: f64) -> ValueBindError {
     ))
 }
 
-fn to_si(scale: Option<SiScale>, value: FiniteF64) -> Result<f64, ValueBindError> {
+/// `value`, given in the unit of `scale` (SI when `None`), in SI.
+///
+/// # Errors
+///
+/// Returns [`ValueBindError::OutOfRange`] when the converted value overflows.
+pub(super) fn to_si(scale: Option<SiScale>, value: FiniteF64) -> Result<f64, ValueBindError> {
     scale
         .map_or(Ok(value), |scale| scale.to_si(value))
         .map(FiniteF64::get)
@@ -187,9 +216,10 @@ fn to_si(scale: Option<SiScale>, value: FiniteF64) -> Result<f64, ValueBindError
 }
 
 fn from_si(scale: Option<SiScale>, si: f64) -> Result<FiniteF64, OutputProjectionError> {
-    FiniteF64::new(si)
-        .and_then(|si| scale.map_or(Ok(si), |scale| scale.from_si(si)))
-        .map_err(|_| OutputProjectionError::Unrepresentable)
+    let si = FiniteF64::new(si).map_err(|_| OutputProjectionError::Unrepresentable)?;
+    scale
+        .map_or(Ok(si), |scale| scale.from_si(si))
+        .map_err(|_| OutputProjectionError::Overflow)
 }
 
 impl ValueCodec {
@@ -243,7 +273,8 @@ impl ValueCodec {
                 },
             ) => {
                 let codec = constructors
-                    .get(constructor.get())
+                    .iter()
+                    .find(|codec| codec.position == constructor)
                     .ok_or(ValueBindError::Shape)?;
                 if codec.fields.len() != fields.len() {
                     return Err(ValueBindError::Shape);
@@ -333,8 +364,7 @@ impl ValueCodec {
                     .map(|((_, codec), (_, field))| codec.protocol_value(field, cancellation))
                     .collect::<Result<_, _>>()?;
                 Value::Algebraic {
-                    // Both lists hold the constructors in declaration order.
-                    constructor: ConstructorPosition::new(position),
+                    constructor: constructors[position].position,
                     fields,
                 }
             }

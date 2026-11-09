@@ -102,7 +102,7 @@ fn static_item_reexported_by_an_include_is_not_a_term() {
     // The diagnostic names the module the source names, never the include's
     // internal instance.
     let message = error.to_string();
-    assert!(message.contains("src.p.mid"), "{message}");
+    assert!(message.contains("`p.mid`"), "{message}");
     assert!(!message.contains("<include@"), "{message}");
 }
 

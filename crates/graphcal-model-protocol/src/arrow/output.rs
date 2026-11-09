@@ -2,14 +2,13 @@
 
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, BooleanArray, Float64Array, Int64Array, StructArray};
+use arrow_array::{Array, StructArray};
 use arrow_schema::ArrowError;
 use thiserror::Error;
 
 use super::schema::output_fields;
-use super::value_array::{ValueDecodeError, decode, encode, key_array, with_placeholders};
-use crate::batch::{OutputColumn, OutputValues, OutputValuesBuilder, OutputValuesError};
-use crate::finite::FiniteF64;
+use super::value_array::{Presence, ValueDecodeError, decode, encode};
+use crate::batch::{OutputValues, OutputValuesBuilder, OutputValuesError};
 use crate::label::PortName;
 use crate::session::SessionSchema;
 use crate::value::Value;
@@ -22,10 +21,6 @@ pub enum OutputDecodeError {
     ColumnCount { expected: usize, received: usize },
     #[error("the outputs struct contains {count} null row(s)")]
     Nulls { count: usize },
-    #[error("the column for output `{output}` does not have its Arrow type")]
-    ArrowType { output: PortName },
-    #[error("output `{output}` has a non-finite value at row {row}")]
-    NonFinite { output: PortName, row: usize },
     #[error("the column for output `{output}` {source}")]
     Value {
         output: PortName,
@@ -55,37 +50,11 @@ impl OutputValues {
             .outputs()
             .iter()
             .zip(self.columns())
-            .map(|(output, column)| -> Result<ArrayRef, ArrowError> {
-                Ok(match (column, output.wire()) {
-                    (OutputColumn::Quantity(values), _) => Arc::new(Float64Array::from_iter(
-                        values.iter().map(|value| value.map(FiniteF64::get)),
-                    )),
-                    (OutputColumn::Int(values), _) => Arc::new(Int64Array::from(values.clone())),
-                    (OutputColumn::Bool(values), _) => Arc::new(BooleanArray::from(values.clone())),
-                    (OutputColumn::Key(values), WireType::Key(key)) => {
-                        key_array(key, values.iter().copied())?
-                    }
-                    (OutputColumn::Key(_), _) => {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "key column for non-key output `{}`",
-                            output.name()
-                        )));
-                    }
-                    (OutputColumn::Datetime(values), _) => Arc::new(Float64Array::from_iter(
-                        values.iter().map(|value| value.map(FiniteF64::get)),
-                    )),
-                    (OutputColumn::Complex(values), wire) => {
-                        let (values, valid) = with_placeholders(
-                            wire,
-                            values.iter().map(|value| value.map(Value::Complex)),
-                        );
-                        encode(wire, &values, Some(&valid))?
-                    }
-                    (OutputColumn::Structured(values), wire) => {
-                        let (values, valid) = with_placeholders(wire, values.iter().cloned());
-                        encode(wire, &values, Some(&valid))?
-                    }
-                })
+            .map(|(output, column)| {
+                let rows = (0..self.rows())
+                    .map(|row| column.value(output.wire(), row))
+                    .collect::<Vec<_>>();
+                encode(output.wire(), &rows, Presence::Nullable)
             })
             .collect::<Result<Vec<_>, _>>()?;
         StructArray::try_new(output_fields(schema), arrays, None)
@@ -163,59 +132,18 @@ fn decode_output(
     wire: &WireType,
     array: &dyn Array,
 ) -> Result<Vec<Option<Value>>, OutputDecodeError> {
-    let arrow_type = || OutputDecodeError::ArrowType {
+    decode(wire, array, Presence::Nullable).map_err(|source| OutputDecodeError::Value {
         output: output.clone(),
-    };
-    Ok(match wire {
-        WireType::Quantity(_) => array
-            .as_any()
-            .downcast_ref::<Float64Array>()
-            .ok_or_else(arrow_type)?
-            .iter()
-            .enumerate()
-            .map(|(row, value)| {
-                value
-                    .map(|value| {
-                        FiniteF64::new(value).map(Value::Quantity).map_err(|_| {
-                            OutputDecodeError::NonFinite {
-                                output: output.clone(),
-                                row,
-                            }
-                        })
-                    })
-                    .transpose()
-            })
-            .collect::<Result<_, _>>()?,
-        WireType::Int => array
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .ok_or_else(arrow_type)?
-            .iter()
-            .map(|value| value.map(Value::Int))
-            .collect(),
-        WireType::Bool => array
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .ok_or_else(arrow_type)?
-            .iter()
-            .map(|value| value.map(Value::Bool))
-            .collect(),
-        WireType::Complex(_)
-        | WireType::Datetime(_)
-        | WireType::Key(_)
-        | WireType::Indexed(_)
-        | WireType::Algebraic(_) => {
-            decode(wire, array).map_err(|source| OutputDecodeError::Value {
-                output: output.clone(),
-                source,
-            })?
-        }
+        source,
     })
 }
 
 #[cfg(test)]
 mod tests {
+    use arrow_array::{ArrayRef, BooleanArray, Float64Array};
     use arrow_schema::DataType;
+
+    use crate::finite::FiniteF64;
 
     use super::*;
     use crate::session::tests::sample_session;
@@ -289,7 +217,10 @@ mod tests {
         ]);
         assert!(matches!(
             OutputValues::from_struct_array(Arc::clone(&schema), &swapped),
-            Err(OutputDecodeError::ArrowType { .. })
+            Err(OutputDecodeError::Value {
+                source: ValueDecodeError::ArrowType,
+                ..
+            })
         ));
 
         let nulls = StructArray::new(fields, columns, Some(vec![true, false, true].into()));
@@ -322,7 +253,10 @@ mod tests {
         );
         assert!(matches!(
             OutputValues::from_struct_array(schema, &encoded),
-            Err(OutputDecodeError::NonFinite { row: 0, .. })
+            Err(OutputDecodeError::Value {
+                source: ValueDecodeError::NonFinite { row: 0 },
+                ..
+            })
         ));
     }
 }

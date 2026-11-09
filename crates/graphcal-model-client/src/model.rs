@@ -161,9 +161,10 @@ impl Model {
 
 fn port_detail<K: Kind>(name: &PortName, wire: &PortWire) -> Result<K::Detail, ClientError> {
     match wire {
-        PortWire::Unsupported { reason } => Err(ClientError::UnsupportedPort {
+        PortWire::Unsupported { reason, message } => Err(ClientError::UnsupportedPort {
             name: name.clone(),
-            reason: reason.clone(),
+            reason: *reason,
+            message: message.clone(),
         }),
         PortWire::Supported(wire) => K::detail(wire).ok_or_else(|| ClientError::KindMismatch {
             name: name.clone(),
@@ -189,16 +190,27 @@ impl<K: Kind> InputHandle<K> {
         self.port.name()
     }
 
-    /// The wire details: the [`QuantityType`](graphcal_model_protocol::QuantityType)
-    /// of a quantity or the [`KeyType`](graphcal_model_protocol::KeyType) of a key.
+    /// The wire details as the model describes them: the
+    /// [`QuantityType`](graphcal_model_protocol::QuantityType) of a quantity
+    /// in its canonical unit, or the
+    /// [`KeyType`](graphcal_model_protocol::KeyType) of a key.
+    ///
+    /// A session that carries the parameter in a chosen unit (see
+    /// [`SessionBuilder::vary_in`](crate::SessionBuilder::vary_in)) exchanges
+    /// values in that unit; [`Session::input`](crate::Session::input) gives
+    /// the parameter as the session carries it.
     #[must_use]
     pub const fn detail(&self) -> &K::Detail {
         &self.detail
     }
 
-    /// The declared domain, in the wire unit.
+    /// The declared domain, in the canonical unit.
+    ///
+    /// A session in a chosen unit converts the domain into that unit; read
+    /// it from [`Session::input`](crate::Session::input) before sampling
+    /// values for that session.
     #[must_use]
-    pub const fn domain(&self) -> Option<&Domain> {
+    pub const fn canonical_domain(&self) -> Option<&Domain> {
         self.domain.as_ref()
     }
 
@@ -349,7 +361,13 @@ impl<K: Kind> OutputHandle<K> {
         self.port.name()
     }
 
-    /// The wire details of the output.
+    /// The wire details of the output as the model describes them, with
+    /// quantities in their canonical unit.
+    ///
+    /// A session that reads the output in a chosen unit (see
+    /// [`SessionBuilder::output_in`](crate::SessionBuilder::output_in))
+    /// returns values in that unit; [`Session::output`](crate::Session::output)
+    /// gives the output as the session carries it.
     #[must_use]
     pub const fn detail(&self) -> &K::Detail {
         &self.detail

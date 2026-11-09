@@ -1,4 +1,7 @@
 //! Physical dimensions as base-dimension exponent maps.
+//!
+//! A base dimension is either a Graphcal prelude dimension (`Length`) or one
+//! a model declares, identified by its [`DeclaredName`].
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -6,7 +9,38 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use crate::declared_name::DeclaredName;
 use crate::label::BaseDimensionName;
+
+/// One base dimension.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BaseDimension {
+    /// A prelude base dimension, such as `Length`.
+    Prelude {
+        /// Its name.
+        name: BaseDimensionName,
+    },
+    /// A base dimension a model declares.
+    Declared(DeclaredName<BaseDimensionName>),
+}
+
+impl BaseDimension {
+    /// The prelude base dimension `name`.
+    #[must_use]
+    pub const fn prelude(name: BaseDimensionName) -> Self {
+        Self::Prelude { name }
+    }
+}
+
+impl fmt::Display for BaseDimension {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Prelude { name } => fmt::Display::fmt(name, formatter),
+            Self::Declared(name) => fmt::Display::fmt(name, formatter),
+        }
+    }
+}
 
 /// A non-zero, reduced rational exponent of one base dimension.
 ///
@@ -143,10 +177,21 @@ impl From<Exponent> for ExponentRepr {
 /// The empty map is the dimensionless dimension. Two dimensions are equal
 /// exactly when their exponent maps are equal, so dimensions compare without
 /// parsing any unit spelling.
+///
+/// Serialized as a list of `{"base": …, "exponent": …}` terms in base
+/// dimension order; a base dimension may appear once.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[serde(try_from = "Vec<DimensionTerm>", into = "Vec<DimensionTerm>")]
 pub struct Dimension {
-    exponents: BTreeMap<BaseDimensionName, Exponent>,
+    exponents: BTreeMap<BaseDimension, Exponent>,
+}
+
+/// A base dimension listed twice in one dimension.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("base dimension `{base}` is listed more than once")]
+pub struct DuplicateBaseDimension {
+    /// The repeated base dimension.
+    pub base: BaseDimension,
 }
 
 impl Dimension {
@@ -158,35 +203,75 @@ impl Dimension {
         }
     }
 
+    /// The dimension with `exponents`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DuplicateBaseDimension`] when a base dimension repeats.
+    pub fn new(
+        exponents: impl IntoIterator<Item = (BaseDimension, Exponent)>,
+    ) -> Result<Self, DuplicateBaseDimension> {
+        let mut map = BTreeMap::new();
+        for (base, exponent) in exponents {
+            if map.contains_key(&base) {
+                return Err(DuplicateBaseDimension { base });
+            }
+            map.insert(base, exponent);
+        }
+        Ok(Self { exponents: map })
+    }
+
     /// Whether this is the dimensionless dimension.
     #[must_use]
     pub fn is_dimensionless(&self) -> bool {
         self.exponents.is_empty()
     }
 
-    /// The non-zero exponents in base-dimension name order.
-    pub fn exponents(&self) -> impl ExactSizeIterator<Item = (&BaseDimensionName, Exponent)> {
+    /// The non-zero exponents in base-dimension order.
+    pub fn exponents(&self) -> impl ExactSizeIterator<Item = (&BaseDimension, Exponent)> {
         self.exponents
             .iter()
-            .map(|(name, exponent)| (name, *exponent))
+            .map(|(base, exponent)| (base, *exponent))
     }
 }
 
-impl FromIterator<(BaseDimensionName, Exponent)> for Dimension {
-    /// Collect exponents; a repeated base dimension keeps its last exponent.
-    fn from_iter<T: IntoIterator<Item = (BaseDimensionName, Exponent)>>(iter: T) -> Self {
-        Self {
-            exponents: iter.into_iter().collect(),
-        }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DimensionTerm {
+    base: BaseDimension,
+    exponent: Exponent,
+}
+
+impl TryFrom<Vec<DimensionTerm>> for Dimension {
+    type Error = DuplicateBaseDimension;
+
+    fn try_from(terms: Vec<DimensionTerm>) -> Result<Self, Self::Error> {
+        Self::new(terms.into_iter().map(|term| (term.base, term.exponent)))
+    }
+}
+
+impl From<Dimension> for Vec<DimensionTerm> {
+    fn from(dimension: Dimension) -> Self {
+        dimension
+            .exponents
+            .into_iter()
+            .map(|(base, exponent)| DimensionTerm { base, exponent })
+            .collect()
     }
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
+    use crate::label::{ModuleName, PackageName};
 
-    fn base(name: &str) -> BaseDimensionName {
-        BaseDimensionName::new(name).unwrap()
+    pub fn prelude(name: &str) -> BaseDimension {
+        BaseDimension::prelude(BaseDimensionName::new(name).unwrap())
+    }
+
+    /// A prelude base dimension to the first power.
+    pub fn base_dimension(name: &str) -> Dimension {
+        Dimension::new([(prelude(name), Exponent::new(1, 1).unwrap())]).unwrap()
     }
 
     #[test]
@@ -201,25 +286,52 @@ mod tests {
     }
 
     #[test]
-    fn dimension_json_uses_integers_and_ratio_objects() {
-        let dimension = Dimension::from_iter([
-            (base("Length"), Exponent::new(1, 1).unwrap()),
-            (base("Time"), Exponent::new(-1, 2).unwrap()),
-        ]);
+    fn dimension_json_lists_typed_base_dimensions() {
+        let money = BaseDimension::Declared(DeclaredName::new(
+            PackageName::new("finance").unwrap(),
+            vec![ModuleName::new("units").unwrap()],
+            BaseDimensionName::new("Money").unwrap(),
+        ));
+        let dimension = Dimension::new([
+            (money, Exponent::new(1, 1).unwrap()),
+            (prelude("Time"), Exponent::new(-1, 2).unwrap()),
+        ])
+        .unwrap();
         let json = serde_json::to_string(&dimension).unwrap();
         assert_eq!(
             json,
-            r#"{"Length":1,"Time":{"numerator":-1,"denominator":2}}"#
+            concat!(
+                r#"[{"base":{"kind":"prelude","name":"Time"},"exponent":{"numerator":-1,"denominator":2}},"#,
+                r#"{"base":{"kind":"declared","package":"finance","module":["units"],"name":"Money"},"exponent":1}]"#
+            )
         );
         assert_eq!(serde_json::from_str::<Dimension>(&json).unwrap(), dimension);
     }
 
     #[test]
-    fn integer_exponents_have_one_spelling() {
+    fn a_dimension_lists_each_base_once_with_one_exponent_spelling() {
+        let length = r#"{"kind":"prelude","name":"Length"}"#;
         assert!(
-            serde_json::from_str::<Dimension>(r#"{"Length":{"numerator":2,"denominator":1}}"#)
+            serde_json::from_str::<Dimension>(&format!(
+                r#"[{{"base":{length},"exponent":1}},{{"base":{length},"exponent":2}}]"#
+            ))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<Dimension>(&format!(
+                r#"[{{"base":{length},"exponent":{{"numerator":2,"denominator":1}}}}]"#
+            ))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<Dimension>(&format!(r#"[{{"base":{length},"exponent":0}}]"#))
                 .is_err()
         );
-        assert!(serde_json::from_str::<Dimension>(r#"{"Length":0}"#).is_err());
+        assert!(
+            serde_json::from_str::<Dimension>(
+                r#"[{"base":{"kind":"prelude","name":"Length","module":[]},"exponent":1}]"#
+            )
+            .is_err()
+        );
     }
 }

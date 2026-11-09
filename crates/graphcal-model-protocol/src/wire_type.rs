@@ -6,9 +6,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::axis::{Axis, KeyRef};
+use crate::content_id::ContentId;
 use crate::datetime_type::DatetimeType;
 use crate::dimension::Dimension;
 use crate::label::{ConstructorName, FieldName, TypeName, UnitSpelling};
+use crate::unsupported_reason::UnsupportedReason;
 
 /// A real quantity: its dimension and the unit its values are expressed in.
 ///
@@ -57,7 +59,22 @@ impl QuantityType {
     pub const fn unit(&self) -> Option<&UnitSpelling> {
         self.unit.as_ref()
     }
+
+    /// The same dimension with values expressed in `unit`. Naming a unit
+    /// always satisfies [`Self::new`].
+    #[must_use]
+    pub fn in_unit(&self, unit: UnitSpelling) -> Self {
+        Self {
+            dimension: self.dimension.clone(),
+            unit: Some(unit),
+        }
+    }
 }
+
+/// A unit was chosen for a wire type that carries no quantities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("the wire type carries no quantities")]
+pub struct NoQuantities;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -85,19 +102,19 @@ impl From<QuantityType> for QuantityTypeRepr {
 
 /// The position of an entry within a [`KeyType`]'s axis.
 ///
-/// A position is only meaningful together with the key type it came from.
+/// A position carries the identity of the key type it came from, so it
+/// selects nothing in another key type, even one with as many entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct KeyPosition(usize);
+pub struct KeyPosition {
+    key: ContentId,
+    index: usize,
+}
 
 impl KeyPosition {
-    pub(crate) const fn new(position: usize) -> Self {
-        Self(position)
-    }
-
     /// The zero-based position in axis order.
     #[must_use]
     pub const fn get(self) -> usize {
-        self.0
+        self.index
     }
 }
 
@@ -108,16 +125,38 @@ impl KeyPosition {
 /// the canonical SI unit. Positions within a named or coordinate axis are
 /// not semantic identities on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(from = "KeyTypeRepr", into = "KeyTypeRepr")]
 pub struct KeyType {
+    id: ContentId,
     axis: Axis,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyTypeRepr {
+    axis: Axis,
+}
+
+impl From<KeyTypeRepr> for KeyType {
+    fn from(repr: KeyTypeRepr) -> Self {
+        Self::new(repr.axis)
+    }
+}
+
+impl From<KeyType> for KeyTypeRepr {
+    fn from(key: KeyType) -> Self {
+        Self { axis: key.axis }
+    }
 }
 
 impl KeyType {
     /// A key over the entries of `axis`.
     #[must_use]
-    pub const fn new(axis: Axis) -> Self {
-        Self { axis }
+    pub fn new(axis: Axis) -> Self {
+        Self {
+            id: ContentId::of(&axis),
+            axis,
+        }
     }
 
     /// The axis whose entries the key selects.
@@ -126,21 +165,39 @@ impl KeyType {
         &self.axis
     }
 
+    const fn at(&self, index: usize) -> KeyPosition {
+        KeyPosition {
+            key: self.id,
+            index,
+        }
+    }
+
     /// Every position, in axis order.
     pub fn positions(&self) -> impl ExactSizeIterator<Item = KeyPosition> + use<> {
-        (0..self.axis.len()).map(KeyPosition::new)
+        let id = self.id;
+        (0..self.axis.len()).map(move |index| KeyPosition { key: id, index })
+    }
+
+    /// The position of the entry at zero-based axis-order `index`, when it
+    /// is in range.
+    #[must_use]
+    pub fn position_at(&self, index: usize) -> Option<KeyPosition> {
+        (index < self.axis.len()).then(|| self.at(index))
     }
 
     /// The position of the entry `key` selects, if any.
     #[must_use]
     pub fn position(&self, key: KeyRef<'_>) -> Option<KeyPosition> {
-        self.axis.position(key).map(KeyPosition::new)
+        self.axis.position(key).map(|index| self.at(index))
     }
 
-    /// The key of the entry at `position`, when it is in range.
+    /// The key of the entry at `position`; `None` when the position belongs
+    /// to another key type.
     #[must_use]
     pub fn key(&self, position: KeyPosition) -> Option<KeyRef<'_>> {
-        self.axis.key(position.get())
+        (position.key == self.id)
+            .then(|| self.axis.key(position.index))
+            .flatten()
     }
 }
 
@@ -234,24 +291,21 @@ impl ConstructorType {
 
 /// The position of a constructor within an [`AlgebraicType`].
 ///
-/// A position is only meaningful together with the type it came from; on the
-/// wire, constructors are resolved by name.
+/// A position carries the identity of the type it came from, so it selects
+/// nothing in another type; on the wire, constructors are resolved by name.
+/// Obtain one from [`AlgebraicType::position`] or
+/// [`AlgebraicType::entries`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ConstructorPosition(usize);
+pub struct ConstructorPosition {
+    algebraic: ContentId,
+    index: usize,
+}
 
 impl ConstructorPosition {
-    /// The constructor at zero-based declaration-order `position`; values
-    /// using it are checked against their type
-    /// ([`Value::conforms_to`](crate::Value::conforms_to)).
-    #[must_use]
-    pub const fn new(position: usize) -> Self {
-        Self(position)
-    }
-
     /// The zero-based declaration-order position.
     #[must_use]
     pub const fn get(self) -> usize {
-        self.0
+        self.index
     }
 }
 
@@ -260,6 +314,7 @@ impl ConstructorPosition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "AlgebraicTypeRepr", into = "AlgebraicTypeRepr")]
 pub struct AlgebraicType {
+    id: ContentId,
     name: TypeName,
     constructors: Vec<ConstructorType>,
 }
@@ -325,7 +380,18 @@ impl AlgebraicType {
                 });
             }
         }
-        Ok(Self { name, constructors })
+        Ok(Self {
+            id: ContentId::of(&(&name, &constructors)),
+            name,
+            constructors,
+        })
+    }
+
+    const fn at(&self, index: usize) -> ConstructorPosition {
+        ConstructorPosition {
+            algebraic: self.id,
+            index,
+        }
     }
 
     /// The type name.
@@ -347,7 +413,7 @@ impl AlgebraicType {
         self.constructors
             .iter()
             .enumerate()
-            .map(|(position, constructor)| (ConstructorPosition::new(position), constructor))
+            .map(|(index, constructor)| (self.at(index), constructor))
     }
 
     /// The position of the constructor named `name`.
@@ -356,13 +422,23 @@ impl AlgebraicType {
         self.constructors
             .iter()
             .position(|constructor| constructor.name().as_str() == name)
-            .map(ConstructorPosition::new)
+            .map(|index| self.at(index))
     }
 
-    /// The constructor at `position`, when it is in range.
+    /// The position of the constructor at zero-based declaration-order
+    /// `index`, when it is in range.
+    #[must_use]
+    pub fn position_at(&self, index: usize) -> Option<ConstructorPosition> {
+        (index < self.constructors.len()).then(|| self.at(index))
+    }
+
+    /// The constructor at `position`; `None` when the position belongs to
+    /// another type.
     #[must_use]
     pub fn constructor(&self, position: ConstructorPosition) -> Option<&ConstructorType> {
-        self.constructors.get(position.get())
+        (position.algebraic == self.id)
+            .then(|| self.constructors.get(position.index))
+            .flatten()
     }
 }
 
@@ -431,24 +507,20 @@ impl WireType {
     ///
     /// # Errors
     ///
-    /// Returns `None` when the wire is not quantity-like (see
-    /// [`Self::quantity`]), or [`QuantityTypeError`] when the quantity cannot
-    /// name `unit`.
-    pub fn with_unit(&self, unit: &UnitSpelling) -> Option<Result<Self, QuantityTypeError>> {
-        let rewrap = |quantity: &QuantityType| {
-            QuantityType::new(quantity.dimension().clone(), Some(unit.clone()))
-        };
-        Some(match self {
-            Self::Quantity(quantity) => rewrap(quantity).map(Self::Quantity),
-            Self::Complex(quantity) => rewrap(quantity).map(Self::Complex),
-            Self::Indexed(indexed) => indexed
-                .element()
-                .with_unit(unit)?
-                .map(|element| Self::Indexed(IndexedType::new(indexed.axis().clone(), element))),
+    /// Returns [`NoQuantities`] when the wire is not quantity-like (see
+    /// [`Self::quantity`]).
+    pub fn with_unit(&self, unit: &UnitSpelling) -> Result<Self, NoQuantities> {
+        match self {
+            Self::Quantity(quantity) => Ok(Self::Quantity(quantity.in_unit(unit.clone()))),
+            Self::Complex(quantity) => Ok(Self::Complex(quantity.in_unit(unit.clone()))),
+            Self::Indexed(indexed) => Ok(Self::Indexed(IndexedType::new(
+                indexed.axis().clone(),
+                indexed.element().with_unit(unit)?,
+            ))),
             Self::Int | Self::Bool | Self::Key(_) | Self::Datetime(_) | Self::Algebraic(_) => {
-                return None;
+                Err(NoQuantities)
             }
-        })
+        }
     }
 
     /// The innermost element of an indexed wire, or the wire itself.
@@ -472,8 +544,11 @@ pub enum PortWire {
     Supported(WireType),
     /// The protocol cannot carry the port's type.
     Unsupported {
-        /// Why the type cannot be carried.
-        reason: String,
+        /// Why the type cannot be carried, as a stable code.
+        reason: UnsupportedReason,
+        /// A human-readable explanation; not part of the interface
+        /// fingerprint.
+        message: String,
     },
 }
 
@@ -501,14 +576,17 @@ enum WireRepr {
     Datetime(DatetimeType),
     Indexed(IndexedType),
     Algebraic(AlgebraicType),
-    Unsupported { reason: String },
+    Unsupported {
+        reason: UnsupportedReason,
+        message: String,
+    },
 }
 
 /// A port marked unsupported where a supported wire type is required.
 #[derive(Debug, Error)]
-#[error("expected a supported wire type, found an unsupported port: {reason}")]
+#[error("expected a supported wire type, found an unsupported port: {message}")]
 pub struct UnsupportedWire {
-    reason: String,
+    message: String,
 }
 
 impl TryFrom<WireRepr> for WireType {
@@ -517,7 +595,7 @@ impl TryFrom<WireRepr> for WireType {
     fn try_from(repr: WireRepr) -> Result<Self, Self::Error> {
         match PortWire::from(repr) {
             PortWire::Supported(wire) => Ok(wire),
-            PortWire::Unsupported { reason } => Err(UnsupportedWire { reason }),
+            PortWire::Unsupported { message, .. } => Err(UnsupportedWire { message }),
         }
     }
 }
@@ -539,7 +617,7 @@ impl From<WireRepr> for PortWire {
             WireRepr::Datetime(datetime) => Self::Supported(WireType::Datetime(datetime)),
             WireRepr::Indexed(indexed) => Self::Supported(WireType::Indexed(indexed)),
             WireRepr::Algebraic(algebraic) => Self::Supported(WireType::Algebraic(algebraic)),
-            WireRepr::Unsupported { reason } => Self::Unsupported { reason },
+            WireRepr::Unsupported { reason, message } => Self::Unsupported { reason, message },
         }
     }
 }
@@ -555,7 +633,7 @@ impl From<PortWire> for WireRepr {
             PortWire::Supported(WireType::Datetime(datetime)) => Self::Datetime(datetime),
             PortWire::Supported(WireType::Indexed(indexed)) => Self::Indexed(indexed),
             PortWire::Supported(WireType::Algebraic(algebraic)) => Self::Algebraic(algebraic),
-            PortWire::Unsupported { reason } => Self::Unsupported { reason },
+            PortWire::Unsupported { reason, message } => Self::Unsupported { reason, message },
         }
     }
 }
@@ -564,8 +642,7 @@ impl From<PortWire> for WireRepr {
 mod tests {
     use super::*;
     use crate::axis::AxisKind;
-    use crate::dimension::Exponent;
-    use crate::label::{BaseDimensionName, IndexName, VariantName};
+    use crate::label::VariantName;
 
     fn variant(name: &str) -> VariantName {
         VariantName::new(name).unwrap()
@@ -573,10 +650,7 @@ mod tests {
 
     #[test]
     fn dimensioned_quantities_name_their_unit() {
-        let length = Dimension::from_iter([(
-            BaseDimensionName::new("Length").unwrap(),
-            Exponent::new(1, 1).unwrap(),
-        )]);
+        let length = crate::dimension::tests::base_dimension("Length");
         assert_eq!(
             QuantityType::new(length, None),
             Err(QuantityTypeError::MissingUnit)
@@ -586,12 +660,10 @@ mod tests {
 
     #[test]
     fn key_types_select_axis_entries_and_serialize_their_axis() {
-        let axis = Axis::new(
-            IndexName::new("Mode").unwrap(),
-            AxisKind::Named {
-                variants: vec![variant("B"), variant("A")],
-            },
-        )
+        let axis = Axis::new(AxisKind::Named {
+            index: crate::axis::tests::declared_index("Mode"),
+            variants: vec![variant("B"), variant("A")],
+        })
         .unwrap();
         let key = KeyType::new(axis);
         let a = variant("A");
@@ -603,7 +675,7 @@ mod tests {
         let json = serde_json::to_string(&WireType::Key(key.clone())).unwrap();
         assert_eq!(
             json,
-            r#"{"kind":"key","axis":{"kind":"named","index":"Mode","variants":["B","A"]}}"#
+            r#"{"kind":"key","axis":{"kind":"named","index":{"package":"model","module":[],"name":"Mode"},"variants":["B","A"]}}"#
         );
         assert_eq!(
             serde_json::from_str::<WireType>(&json).unwrap(),
@@ -611,7 +683,7 @@ mod tests {
         );
         assert!(
             serde_json::from_str::<WireType>(
-                r#"{"kind":"key","axis":{"kind":"finite","index":"Fin(2)","size":2},"extra":1}"#
+                r#"{"kind":"key","axis":{"kind":"finite","size":2},"extra":1}"#
             )
             .is_err(),
             "unknown fields are rejected"
@@ -621,18 +693,24 @@ mod tests {
     #[test]
     fn port_wire_json_is_one_tagged_object() {
         let unsupported = PortWire::Unsupported {
-            reason: "indexed".to_owned(),
+            reason: UnsupportedReason::NoCanonicalUnit,
+            message: "no unit".to_owned(),
         };
         let json = serde_json::to_string(&unsupported).unwrap();
-        assert_eq!(json, r#"{"kind":"unsupported","reason":"indexed"}"#);
+        assert_eq!(
+            json,
+            r#"{"kind":"unsupported","reason":"no_canonical_unit","message":"no unit"}"#
+        );
         assert_eq!(
             serde_json::from_str::<PortWire>(&json).unwrap(),
             unsupported
         );
 
         let quantity: PortWire =
-            serde_json::from_str(r#"{"kind":"quantity","dimension":{"Length":1},"unit":"m"}"#)
-                .unwrap();
+            serde_json::from_str(
+                r#"{"kind":"quantity","dimension":[{"base":{"kind":"prelude","name":"Length"},"exponent":1}],"unit":"m"}"#,
+            )
+            .unwrap();
         assert!(matches!(quantity.supported(), Some(WireType::Quantity(_))));
         assert!(
             serde_json::from_str::<PortWire>(r#"{"kind":"int","extra":1}"#).is_err(),
@@ -643,7 +721,10 @@ mod tests {
             r#"{"kind":"int"}"#
         );
         assert!(
-            serde_json::from_str::<WireType>(r#"{"kind":"unsupported","reason":"x"}"#).is_err(),
+            serde_json::from_str::<WireType>(
+                r#"{"kind":"unsupported","reason":"invalid_axis","message":"x"}"#
+            )
+            .is_err(),
             "a wire type is always supported"
         );
     }

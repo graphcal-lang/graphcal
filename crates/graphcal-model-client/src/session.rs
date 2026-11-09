@@ -5,13 +5,14 @@ use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
 use graphcal_model_protocol::arrow::{request_schema, result_schema, si_scales, validate_schema};
 use graphcal_model_protocol::{
-    CanonicalUnitsOnly, PortName, RequestBatch, ResultBatch, SessionSchema, SessionSpec, SiScale,
-    UnitSpelling,
+    CanonicalUnitsOnly, PortName, RequestBatch, ResultBatch, SessionInput, SessionOutput,
+    SessionSchema, SessionSpec, SiScale, UnitSpelling,
 };
 
 use crate::batch::{BatchBuilder, Request};
@@ -38,6 +39,7 @@ pub struct SessionBuilder<'m> {
     outputs: Vec<PortName>,
     units: Vec<(PortName, UnitSpelling)>,
     fixed: Vec<PathBuf>,
+    request_timeout: Option<Duration>,
     foreign: Option<PortName>,
 }
 
@@ -49,8 +51,18 @@ impl<'m> SessionBuilder<'m> {
             outputs: Vec::new(),
             units: Vec::new(),
             fixed: Vec::new(),
+            request_timeout: None,
             foreign: None,
         }
+    }
+
+    /// End the session when one request is still evaluating after
+    /// `timeout` (`graphcal model serve --request-timeout`); by default a
+    /// request evaluates until it finishes. The server rejects a zero
+    /// timeout when the session starts.
+    pub const fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
+        self
     }
 
     /// Fix the unvaried parameters named in the JSON document at `path` to
@@ -199,7 +211,12 @@ impl<'m> SessionBuilder<'m> {
         let mut child = self
             .model
             .command()
-            .serve(&spec, self.model.fingerprint(), self.fixed_document()?)
+            .serve(
+                &spec,
+                self.model.fingerprint(),
+                self.fixed_document()?,
+                self.request_timeout,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -333,6 +350,43 @@ impl Session {
     #[must_use]
     pub const fn schema(&self) -> &Arc<SessionSchema> {
         &self.schema
+    }
+
+    /// The varied parameter `input` as this session carries it: its wire
+    /// type in the session's unit, its domain converted into that unit, and
+    /// the unit's scale. Sample request values from this domain, not from
+    /// the handle's canonical one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] for a handle of another model or a parameter
+    /// this session does not vary.
+    pub fn input<K: Kind>(&self, input: &InputHandle<K>) -> Result<&SessionInput, ClientError> {
+        input.port().ensure_model(self.model)?;
+        self.schema
+            .input_slot(input.name().as_str())
+            .and_then(|slot| self.schema.input(slot))
+            .ok_or_else(|| ClientError::NotVaried {
+                name: input.name().clone(),
+            })
+    }
+
+    /// The read output `output` as this session carries it: its wire type
+    /// in the session's unit and the unit's scale. Label result values with
+    /// this unit, not with the handle's canonical one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] for a handle of another model or an output
+    /// this session does not read.
+    pub fn output<K: Kind>(&self, output: &OutputHandle<K>) -> Result<&SessionOutput, ClientError> {
+        output.port().ensure_model(self.model)?;
+        self.schema
+            .output_slot(output.name().as_str())
+            .and_then(|slot| self.schema.output(slot))
+            .ok_or_else(|| ClientError::NotRead {
+                name: output.name().clone(),
+            })
     }
 
     /// Start building a request.
