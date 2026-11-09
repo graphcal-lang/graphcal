@@ -353,6 +353,7 @@ mod tests {
             extern_fn_signatures: StdHashMap::new(),
             import_links: Vec::new(),
             buffer_parsed: true,
+            check: crate::analysis::ProjectCheck::Passed,
         }
     }
 

@@ -11,7 +11,7 @@ use tower_lsp::{LspService, lsp_types::Url};
 use crate::server::{Backend, service};
 
 const SOURCE: &str = "\
-index Phase;
+pub(bind) index Phase;
 node thrust: Dimensionless = 1.0;
 node doubled: Dimensionless = @thrust * 2.0;
 node root: Dimensionless = sqrt(4.0);

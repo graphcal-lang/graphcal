@@ -148,6 +148,9 @@ pub enum RenameRefusal {
     /// (a reserved built-in name, a duplicate, a shadowed term, …); `reason`
     /// is the compiler's message.
     WouldNotCompile { new_name: String, reason: String },
+    /// The project already fails to compile, which hides any error the
+    /// rename would add.
+    ProjectDoesNotCompile { name: String },
     /// A reference would silently resolve to a different definition.
     WouldChangeResolution { new_name: String },
     /// Transitive project loading did not produce a complete occurrence set.
@@ -171,6 +174,10 @@ impl std::fmt::Display for RenameRefusal {
             Self::WouldNotCompile { new_name, reason } => {
                 write!(f, "cannot rename to `{new_name}`: {reason}")
             }
+            Self::ProjectDoesNotCompile { name } => write!(
+                f,
+                "cannot safely rename `{name}` while the project has compile errors; fix them first"
+            ),
             Self::WouldChangeResolution { new_name } => write!(
                 f,
                 "cannot rename to `{new_name}`: a reference would then resolve to a different declaration"
@@ -225,6 +232,9 @@ pub fn rename(
                 new_name: new_name.to_string(),
                 reason,
             });
+        }
+        Err(RenameCheckFailure::OriginalDoesNotCompile) => {
+            return Err(RenameRefusal::ProjectDoesNotCompile { name: old_name });
         }
         Err(RenameCheckFailure::ChangedResolution) => {
             return Err(RenameRefusal::WouldChangeResolution {
@@ -488,7 +498,7 @@ index Step = range(0.0 s, 1.0 s, step: 1.0 s);
 node y: Dimensionless[Step] = unfold(
     Step,
     0.0,
-    |prev_y, prev_t, t| prev_y + (t - prev_t) / 1.0 s
+    |prev_y, prev_t, t| prev_y + 1.0
 );
 ";
         let analysis = analysis_from_source(source);
@@ -505,8 +515,8 @@ node y: Dimensionless[Step] = unfold(
     #[test]
     fn rename_field_access_isolated_by_owning_constructor() {
         let source = r"
-type Item { Item(mass: Dimensionless), }
-type Other { Other(mass: Dimensionless), }
+pub type Item { Item(mass: Dimensionless), }
+pub type Other { Other(mass: Dimensionless), }
 param item: Item = Item(mass: 1.0);
 param other: Other = Other(mass: 2.0);
 node item_mass: Dimensionless = @item.mass;
@@ -544,20 +554,20 @@ node other_mass: Dimensionless = @other.mass;
     #[test]
     fn rename_covers_nested_dag_include_and_composition_occurrences() {
         let source = r"
-param outer: Dimensionless = 2.0;
+param seed: Dimensionless = 2.0;
 dag d {
     param inner: Dimensionless;
-    node doubled: Dimensionless = @inner * 2.0;
+    pub node doubled: Dimensionless = @inner * 2.0;
 }
-include d(inner: @outer)::{ doubled as result };
-plot p = { mark: point, encode: { x: @outer } };
+include d(inner: @seed)::{ doubled as result };
+plot p = { mark: point, encode: { x: @seed } };
 figure f = { plots: [p] };
 ";
         let analysis = analysis_from_source(source);
         let uri = test_uri();
 
         for (needle, new_name, expected_edits) in [
-            ("param outer", "outside", 3),
+            ("param seed", "outside", 3),
             ("param inner", "inside", 3),
             ("node doubled", "twice", 2),
             ("plot p", "chart", 2),
@@ -1132,15 +1142,38 @@ assert power_ok = for m: Mode { @power_use[m] < @power_gen[m] };
         assert_eq!(references.len(), 3, "{references:?}");
     }
 
+    /// An earlier duplicate keeps the project failing with N001 both before
+    /// and after a rename that adds another duplicate, so the re-check could
+    /// not see it: renames are refused until the project compiles.
+    #[test]
+    fn rename_is_refused_while_the_project_does_not_compile() {
+        let source = "\
+node dup: Dimensionless = 1.0;
+node dup: Dimensionless = 2.0;
+param velocity: Velocity = 50.0 m/s;
+node momentum: Dimensionless = 1.0;
+";
+        let analysis = analysis_from_source(source);
+        assert!(!analysis.has_no_diagnostics());
+        let offset = source.find("momentum").unwrap();
+        assert_eq!(
+            rename(&analysis, &test_uri(), offset, "velocity"),
+            Err(RenameRefusal::ProjectDoesNotCompile {
+                name: "momentum".to_string()
+            })
+        );
+    }
+
     /// Issue #829, scoped namespaces: a variant name only collides with a
     /// sibling variant of the same index, not with a same-named variant of
     /// another index.
     #[test]
     fn rename_variant_collision_is_scoped_to_its_index() {
         let source = "\
-index Season = { Winter, Summer };
+pub index Season = { Winter, Summer };
 index Hemisphere = { North, Winter };
-node pick: Season = Season#Summer;
+param weights: Dimensionless[Season] = { Season#Winter: 1.0, Season#Summer: 2.0 };
+node pick: Dimensionless = @weights[Season#Summer];
 ";
         let analysis = analysis_from_source(source);
         let uri = test_uri();
@@ -1202,8 +1235,8 @@ node total: Velocity = @dv[Maneuver#Departure];
     #[test]
     fn rename_index_updates_multi_decl_axis_and_contextual_headers() {
         let source = "\
-index Component = { A };
-index Mode = { Safe, Nominal };
+pub index Component = { A };
+pub index Mode = { Safe, Nominal };
 param scalar: Dimensionless[Component],
 param enabled: Bool[Component, Mode]
     = table[Component, (_, Mode)] {

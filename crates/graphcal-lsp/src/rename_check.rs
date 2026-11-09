@@ -14,7 +14,7 @@ use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::syntax::span::Span;
 use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, NumberOrString, Url};
 
-use crate::analysis::AnalysisResult;
+use crate::analysis::{AnalysisResult, ProjectCheck};
 use crate::analysis_pipeline::{
     AnalysisDemand, EvaluationDemand, OpenBuffer, ViewModelDemand, run_analysis_with_cancellation,
 };
@@ -112,6 +112,9 @@ pub enum RenameCheckFailure {
     /// The edited sources raise a compile error the original did not; the
     /// payload is the compiler's message.
     NewCompileError(String),
+    /// The analysed project already fails to compile, so the re-check cannot
+    /// validate the rename.
+    OriginalDoesNotCompile,
     /// A reference would resolve to a different definition after the edit.
     ChangedResolution,
     /// An edited document is not part of the analysed snapshot.
@@ -150,6 +153,11 @@ impl<'a> RenameCheck<'a> {
         root_uri: &Url,
         plan: &PlannedRename,
     ) -> Result<(), RenameCheckFailure> {
+        // A failing project hides later errors behind the first one, so the
+        // re-check could not tell whether the rename adds another.
+        if analysis.check == ProjectCheck::Failed {
+            return Err(RenameCheckFailure::OriginalDoesNotCompile);
+        }
         let edited = edited_sources(analysis, root_uri, plan)?;
         let root_text = edited
             .get(root_uri)

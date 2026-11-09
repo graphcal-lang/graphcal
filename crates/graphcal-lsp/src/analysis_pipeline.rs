@@ -20,7 +20,7 @@ use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::LoadedProject;
 use graphcal_project::project_compiler::{CheckedProject, ProjectCompiler};
 
-use crate::analysis::{AnalysisResult, ResolvedImportLink};
+use crate::analysis::{AnalysisResult, ProjectCheck, ResolvedImportLink};
 use crate::file_identity::{DocumentUris, file_identity};
 use crate::fn_signatures::{build_extern_fn_signatures, build_fn_signatures};
 use crate::imported_definitions::{collect_import_surfaces, collect_imported_definitions};
@@ -405,6 +405,7 @@ pub fn run_analysis_with_cancellation(
                     extern_fn_signatures: HashMap::new(),
                     import_links: Vec::new(),
                     buffer_parsed,
+                    check: ProjectCheck::Failed,
                 },
                 degradations,
             });
@@ -514,6 +515,7 @@ pub fn run_analysis_with_cancellation(
                     extern_fn_signatures,
                     import_links,
                     buffer_parsed: true,
+                    check: ProjectCheck::Passed,
                 },
                 degradations,
             })
@@ -562,6 +564,7 @@ pub fn run_analysis_with_cancellation(
                     extern_fn_signatures: HashMap::new(),
                     import_links,
                     buffer_parsed: true,
+                    check: ProjectCheck::Failed,
                 },
                 degradations,
             })

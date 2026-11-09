@@ -79,6 +79,18 @@ pub struct AnalysisResult {
     /// unparsable more often than not, and completion/hover/goto should keep
     /// answering from the last successfully analyzed state.
     pub buffer_parsed: bool,
+    /// Whether the project loaded and passed the compiler's checks; runtime
+    /// (evaluation) diagnostics do not count.
+    pub check: ProjectCheck,
+}
+
+/// The compiler's verdict on the analysed project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectCheck {
+    /// The project loaded and checked.
+    Passed,
+    /// Loading or checking reported a compile error.
+    Failed,
 }
 
 impl AnalysisResult {
@@ -125,6 +137,7 @@ impl std::fmt::Debug for AnalysisResult {
             )
             .field("import_links_count", &self.import_links.len())
             .field("buffer_parsed", &self.buffer_parsed)
+            .field("check", &self.check)
             .finish()
     }
 }

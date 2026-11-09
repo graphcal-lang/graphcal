@@ -3693,6 +3693,7 @@ node bad: Mass = mass + length;
             extern_fn_signatures: HashMap::new(),
             import_links: Vec::new(),
             buffer_parsed: true,
+            check: crate::analysis::ProjectCheck::Passed,
         })
     }
 
