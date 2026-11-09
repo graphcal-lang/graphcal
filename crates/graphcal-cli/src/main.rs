@@ -846,7 +846,7 @@ fn handle_eval(
             if plot_json_only {
                 // stdout carries only the figure array, so the failures that
                 // explain a non-zero exit must still reach stderr.
-                report_eval_failures(&result, output_view);
+                report_unavailable_results(&result, output_view);
             } else {
                 match format {
                     OutputFormat::Text => print_text(&result, output_view),
@@ -1428,40 +1428,46 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
     }
 }
 
-/// Write every failing value and every failing or blocked assertion to
-/// stderr, in the same line format as text output.
+/// Write every unavailable value (failed or unfinished) and every assertion
+/// that did not pass to stderr, in the same line format as text output.
 ///
-/// Used when stdout is reserved for another payload (`--plot json`), so a
-/// non-zero exit is never left unexplained.
-fn report_eval_failures(result: &EvalResult, output_view: EvalOutputView) {
-    let failed_values: Vec<(String, &OutputUnavailable)> = result
+/// Used when stdout is reserved for another payload (`--plot json`): the
+/// lines text mode would show for anything not computed or not verified
+/// still reach the user, so neither a non-zero exit nor an assertion left
+/// unchecked by `todo` inputs (under `--allow-incomplete`) goes unreported.
+fn report_unavailable_results(result: &EvalResult, output_view: EvalOutputView) {
+    let unavailable_values: Vec<(String, &OutputUnavailable)> = result
         .output_values(output_view)
         .filter_map(|entry| match &entry.outcome {
-            Err(reason) if reason.has_failure() => Some((entry.name.to_string(), reason)),
-            Ok(_) | Err(_) => None,
+            Err(reason) => Some((entry.name.to_string(), reason)),
+            Ok(_) => None,
         })
         .collect();
-    let width = failed_values
+    let width = unavailable_values
         .iter()
         .map(|(name, _)| name.len())
         .max()
         .unwrap_or(0);
-    for (name, reason) in &failed_values {
-        eprintln!("{name:width$} = ERROR: {reason}");
+    for (name, reason) in &unavailable_values {
+        if reason.has_failure() {
+            eprintln!("{name:width$} = ERROR: {reason}");
+        } else {
+            eprintln!("{name:width$} = {reason}");
+        }
     }
 
-    let failed_assertions: Vec<(String, &graphcal_eval::eval::EvalAssertion)> = result
+    let unverified_assertions: Vec<(String, &graphcal_eval::eval::EvalAssertion)> = result
         .assertions
         .iter()
-        .filter(|assertion| is_assert_failure(&assertion.outcome))
+        .filter(|assertion| !matches!(assertion.outcome, graphcal_eval::eval::AssertResult::Pass))
         .map(|assertion| (assertion.name.to_string(), assertion))
         .collect();
-    let width = failed_assertions
+    let width = unverified_assertions
         .iter()
         .map(|(name, _)| name.len())
         .max()
         .unwrap_or(0);
-    for (name, assertion) in &failed_assertions {
+    for (name, assertion) in &unverified_assertions {
         eprintln!(
             "{}",
             format_assertion_line(

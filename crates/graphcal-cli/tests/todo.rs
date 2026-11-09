@@ -300,3 +300,47 @@ fn a_bound_reading_an_imported_unfinished_constant_is_rejected() {
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("graphcal::C010"));
 }
+
+/// CLI-5: `--plot json` reserves stdout for figures, so an assertion left
+/// unverified by `todo` inputs must still be reported on stderr, with the
+/// same line text mode prints, whether or not `--allow-incomplete` is given.
+#[test]
+fn plot_json_reports_todo_blocked_assertions_on_stderr() {
+    let source = "pub index Step = { A, B };\n\
+                  node y: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };\n\
+                  plot curve = { mark: bar, encode: { x: for s: Step { s }, y: for s: Step { @y[s] } } };\n\
+                  node pending: Length = todo<Length> {};\n\
+                  assert positive = @pending > 0.0 m;\n";
+    let text = String::from_utf8(run(source, &["eval", "--allow-incomplete"]).stdout).unwrap();
+    let assertion_line = text
+        .lines()
+        .find(|line| line.trim_start().starts_with("positive"))
+        .unwrap_or_else(|| panic!("text mode lists the assertion: {text}"));
+    let pending_line = text
+        .lines()
+        .find(|line| line.starts_with("pending"))
+        .unwrap_or_else(|| panic!("text mode lists the todo node: {text}"));
+
+    for (allow_incomplete, expected_code) in [(false, 1), (true, 0)] {
+        let mut args = vec!["eval", "--plot", "json"];
+        if allow_incomplete {
+            args.push("--allow-incomplete");
+        }
+        let output = run(source, &args);
+        assert_eq!(output.status.code(), Some(expected_code), "{args:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            serde_json::from_str::<serde_json::Value>(&stdout).is_ok_and(|json| json.is_array()),
+            "stdout must stay the figure array: {stdout}"
+        );
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains(assertion_line.trim()),
+            "{args:?}: expected `{assertion_line}` on stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains(pending_line.trim()),
+            "{args:?}: expected `{pending_line}` on stderr: {stderr}"
+        );
+    }
+}
