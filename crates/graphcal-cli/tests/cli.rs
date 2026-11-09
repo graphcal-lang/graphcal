@@ -8819,14 +8819,53 @@ fn report_build_static_accepts_inline_json_and_records_repro_source() {
 
 /// The reproduce command of a static report, HTML-unescaped.
 fn report_repro_command(html: &str) -> String {
-    let start = html.find("<code class=\"repro\">").expect("repro command") + 19;
+    const OPEN: &str = "<code class=\"repro\">";
+    let start = html.find(OPEN).expect("repro command") + OPEN.len();
     let end = start + html[start..].find("</code>").expect("closed repro command");
-    html[start..end]
-        .replace("&#x27;", "'")
-        .replace("&quot;", "\"")
-        .replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&amp;", "&")
+    html_unescape(&html[start..end])
+}
+
+/// Decode the named and numeric character references of HTML text.
+fn html_unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let Some(semi) = rest.find(';') else { break };
+        let entity = &rest[1..semi];
+        let decoded = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+                .map(|hex| u32::from_str_radix(hex, 16))
+                .or_else(|| entity.strip_prefix('#').map(str::parse::<u32>))
+                .and_then(Result::ok)
+                .and_then(char::from_u32),
+        };
+        if let Some(ch) = decoded {
+            out.push(ch);
+            rest = &rest[semi + 1..];
+        } else {
+            out.push('&');
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn html_unescape_decodes_named_and_numeric_references() {
+    assert_eq!(
+        html_unescape("&#x27;a&#39;&quot;&lt;&amp;lt;&gt;&#X41; & b&unknown;"),
+        "'a'\"<&lt;>A & b&unknown;"
+    );
 }
 
 #[test]
