@@ -408,12 +408,19 @@ pub enum TypeExprKind<P: Phase = Raw> {
     ///
     /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
     /// the built-in semantic identity instead of matching the source name.
-    ComplexApplication { generic_args: Vec<GenericArg<P>> },
+    /// `None` is a bare `Complex` (no `<…>` written), retained so HIR can
+    /// report the missing dimension; a written list is never empty.
+    ComplexApplication {
+        generic_args: Option<NonEmpty<GenericArg<P>>>,
+    },
     /// `Key<I>` — built-in index-key type parameterized by an index axis.
     ///
     /// Kept separate from [`Self::TypeApplication`] so downstream phases carry
     /// the built-in semantic identity instead of matching the source name.
-    KeyApplication { generic_args: Vec<GenericArg<P>> },
+    /// `None` is a bare `Key`, as for [`Self::ComplexApplication`].
+    KeyApplication {
+        generic_args: Option<NonEmpty<GenericArg<P>>>,
+    },
     /// An index label written in a type slot, such as `Phase#Launch`.
     ///
     /// The parser preserves this structured reference so HIR can issue a

@@ -29,7 +29,7 @@ pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(
         }
         TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => {
-            validate_generic_args(generic_args.iter(), src)
+            validate_generic_args(generic_args.iter().flatten(), src)
         }
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().try_for_each(|arg| {
             // Bounds before an index suffix are left to the indexed-argument

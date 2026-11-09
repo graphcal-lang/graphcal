@@ -173,13 +173,13 @@ impl Parser<'_> {
 
     /// Parse the built-in `Complex<D>` type former into its dedicated syntax variant.
     fn parse_complex_type(&mut self, name_span: Span) -> Result<ElementTypeExpr, ParseError> {
-        // Bare `Complex` is retained with zero arguments so HIR can report the
+        // Bare `Complex` is retained without arguments so HIR can report the
         // missing mandatory dimension with a targeted arity diagnostic.
         let (generic_args, end_span) = if self.lexer.peek() == Some(&Token::Lt) {
             let (generic_args, closing_span) = self.parse_generic_arg_list()?;
-            (generic_args.into_vec(), closing_span)
+            (Some(generic_args), closing_span)
         } else {
-            (Vec::new(), name_span)
+            (None, name_span)
         };
         Ok(ElementTypeExpr {
             kind: TypeExprKind::ComplexApplication { generic_args },
@@ -190,13 +190,13 @@ impl Parser<'_> {
 
     /// Parse the built-in `Key<I>` type former into its dedicated syntax variant.
     fn parse_key_type(&mut self, name_span: Span) -> Result<ElementTypeExpr, ParseError> {
-        // Bare `Key` is retained with zero arguments so HIR can report the
+        // Bare `Key` is retained without arguments so HIR can report the
         // missing mandatory index axis with a targeted arity diagnostic.
         let (generic_args, end_span) = if self.lexer.peek() == Some(&Token::Lt) {
             let (generic_args, closing_span) = self.parse_generic_arg_list()?;
-            (generic_args.into_vec(), closing_span)
+            (Some(generic_args), closing_span)
         } else {
-            (Vec::new(), name_span)
+            (None, name_span)
         };
         Ok(ElementTypeExpr {
             kind: TypeExprKind::KeyApplication { generic_args },
@@ -1196,7 +1196,7 @@ mod tests {
                 TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.leaf().as_str(), "Vec3");
                     assert_eq!(generic_args.len(), 2);
-                    assert_eq!(generic_arg_name(&generic_args[0]), "Length");
+                    assert_eq!(generic_arg_name(generic_args.first()), "Length");
                     assert_eq!(generic_arg_name(&generic_args[1]), "ECI");
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
@@ -1243,7 +1243,7 @@ mod tests {
             panic!("expected type application");
         };
         assert!(matches!(
-            &generic_args[0],
+            generic_args.first(),
             GenericArg::Index(IndexExpr::Finite {
                 cardinality: NatExpr::Add(_, _),
                 ..
@@ -1288,7 +1288,7 @@ mod tests {
                 TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.leaf().as_str(), "Timestamp");
                     assert_eq!(generic_args.len(), 1);
-                    assert_eq!(generic_arg_name(&generic_args[0]), "UTC");
+                    assert_eq!(generic_arg_name(generic_args.first()), "UTC");
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
             },
@@ -1375,11 +1375,14 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::ComplexApplication { generic_args } = &param.type_ann.element.kind else {
+        let TypeExprKind::ComplexApplication {
+            generic_args: Some(generic_args),
+        } = &param.type_ann.element.kind
+        else {
             panic!("expected ComplexApplication");
         };
         assert_eq!(generic_args.len(), 1);
-        assert_eq!(generic_arg_name(&generic_args[0]), "Length");
+        assert_eq!(generic_arg_name(generic_args.first()), "Length");
     }
 
     #[test]
@@ -1391,7 +1394,7 @@ mod tests {
         };
         assert!(matches!(
             &param.type_ann.element.kind,
-            TypeExprKind::ComplexApplication { generic_args } if generic_args.is_empty()
+            TypeExprKind::ComplexApplication { generic_args: None }
         ));
     }
 
@@ -1402,11 +1405,14 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.element.kind else {
+        let TypeExprKind::KeyApplication {
+            generic_args: Some(generic_args),
+        } = &param.type_ann.element.kind
+        else {
             panic!("expected KeyApplication");
         };
         assert_eq!(generic_args.len(), 1);
-        assert_eq!(generic_arg_name(&generic_args[0]), "Maneuver");
+        assert_eq!(generic_arg_name(generic_args.first()), "Maneuver");
     }
 
     #[test]
@@ -1416,12 +1422,15 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.element.kind else {
+        let TypeExprKind::KeyApplication {
+            generic_args: Some(generic_args),
+        } = &param.type_ann.element.kind
+        else {
             panic!("expected KeyApplication");
         };
         assert_eq!(generic_args.len(), 1);
         assert!(matches!(
-            &generic_args[0],
+            generic_args.first(),
             GenericArg::Index(IndexExpr::Finite { .. })
         ));
     }
@@ -1435,7 +1444,7 @@ mod tests {
         };
         assert!(matches!(
             &param.type_ann.element.kind,
-            TypeExprKind::KeyApplication { generic_args } if generic_args.is_empty()
+            TypeExprKind::KeyApplication { generic_args: None }
         ));
     }
 

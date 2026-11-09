@@ -13,6 +13,7 @@
 //! only the leaf methods they care about.
 
 use crate::syntax::ast::{Expr, ExprKind, GenericArg, IndexArg, TypeExpr, TypeExprKind};
+use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::Phase;
 
 /// Read-only visitor for [`Expr`] trees, generic over [`Phase`].
@@ -190,7 +191,7 @@ pub trait ExprVisitor<P: Phase> {
             }
             TypeExprKind::ComplexApplication { generic_args }
             | TypeExprKind::KeyApplication { generic_args } => {
-                self.visit_generic_args(generic_args)?;
+                self.visit_generic_args(generic_args.as_ref().map_or(&[], NonEmpty::as_slice))?;
             }
             TypeExprKind::IndexLabel { .. }
             | TypeExprKind::Dimensionless

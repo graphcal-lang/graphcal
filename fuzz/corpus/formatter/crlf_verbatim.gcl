@@ -1,0 +1,5 @@
+node a: Dimensionless = 1.0;
+node b: Dimensionless = if true {
+    // inside
+    1.0
+} else { 2.0 };

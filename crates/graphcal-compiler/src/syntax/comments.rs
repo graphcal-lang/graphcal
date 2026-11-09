@@ -1,3 +1,4 @@
+use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::span::{Span, Spanned};
 
 /// The delimiter that starts a comment.
@@ -100,6 +101,14 @@ impl DocComment {
     #[must_use]
     pub const fn span(&self) -> Span {
         self.span
+    }
+}
+
+/// A doc block is equivalent to another when its text is: the span is
+/// formatting, but the text is what hover, reports, and the view model show.
+impl FormatEquivalent for DocComment {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        self.text == other.text
     }
 }
 

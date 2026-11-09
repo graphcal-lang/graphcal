@@ -816,7 +816,7 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(crate::syntax::names:
         | TypeExprKind::KeyApplication { generic_args } => {
             // `Complex` and `Key` are built in; only their generic argument
             // contributes type-level dependencies.
-            for arg in generic_args {
+            for arg in generic_args.iter().flatten() {
                 match arg {
                     crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
                         collect_type_refs(type_expr, refs);

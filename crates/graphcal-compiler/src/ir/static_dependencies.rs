@@ -199,7 +199,7 @@ impl Collector<'_> {
             }
             TypeExprKind::ComplexApplication { generic_args }
             | TypeExprKind::KeyApplication { generic_args } => {
-                for argument in generic_args {
+                for argument in generic_args.iter().flatten() {
                     self.generic_arg(argument);
                 }
             }

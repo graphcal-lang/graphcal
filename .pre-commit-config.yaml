@@ -24,6 +24,8 @@ repos:
       - id: check-symlinks
       - id: mixed-line-ending
         args: [--fix=lf]
+        # Fuzz seeds keep CRLF / lone-CR line endings on purpose (see .gitattributes).
+        exclude: ^fuzz/corpus/
       # Rust crate attributes such as `#![no_main]` are not Unix shebangs.
       - id: check-shebang-scripts-are-executable
         exclude: ^(fuzz/fuzz_targets/.*|crates/.*/tests/.*)\.rs$

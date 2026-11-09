@@ -1,10 +1,17 @@
 //! The formatter's comment cursor over one source file.
 
+use graphcal_compiler::source_line::line_endings;
 use graphcal_compiler::syntax::comments::SourceMetadata;
 use graphcal_compiler::syntax::span::Span;
 use pretty::RcDoc;
 
 use super::doc::text_with_hardlines;
+
+/// Comments drained in one run, with the end offset of the last one.
+struct CommentRun {
+    doc: RcDoc<'static>,
+    end: usize,
+}
 
 /// State for tracking comments during formatting.
 pub struct Formatter<'src> {
@@ -14,6 +21,10 @@ pub struct Formatter<'src> {
     /// Set by [`Self::request_verbatim`] while a region is being formatted;
     /// consumed by the enclosing [`Self::format_or_verbatim`].
     verbatim_requested: bool,
+    /// End offset of the innermost construct being formatted (see
+    /// [`Self::within`]): a trailing comment drained inside it must start
+    /// before this offset.
+    construct_end: usize,
 }
 
 impl<'src> Formatter<'src> {
@@ -23,6 +34,7 @@ impl<'src> Formatter<'src> {
             metadata,
             next_comment: 0,
             verbatim_requested: false,
+            construct_end: usize::MAX,
         }
     }
 
@@ -39,42 +51,84 @@ impl<'src> Formatter<'src> {
     /// Drain all comments whose span starts before `before_offset`,
     /// returning them as a Doc with hardlines.
     ///
+    /// A blank line between two drained comments is kept: it separates a
+    /// detached `///` block from the doc block that follows it, so removing
+    /// it would merge the two.
+    ///
     /// Returns `None` when there are no comments to emit, so callers can
     /// avoid rendering a known-empty doc just to check for emptiness.
     pub fn drain_comments_before(&mut self, before_offset: usize) -> Option<RcDoc<'static>> {
-        let mut docs: Vec<RcDoc<'static>> = Vec::new();
-        while self.next_comment < self.metadata.comments().len() {
-            let comment = &self.metadata.comments()[self.next_comment];
+        self.drain_comment_run_before(before_offset)
+            .map(|run| run.doc)
+    }
+
+    /// Drain the comments leading a declaration (or a multi-declaration
+    /// slot) that starts at `declaration_offset`.
+    ///
+    /// Like [`Self::drain_comments_before`], and additionally keeps a blank
+    /// line between the last comment and the declaration: that blank line
+    /// decides whether a `///` block documents the declaration, so removing
+    /// it would attach a detached block to the declaration.
+    pub fn drain_comments_before_declaration(
+        &mut self,
+        declaration_offset: usize,
+    ) -> Option<RcDoc<'static>> {
+        self.drain_comment_run_before(declaration_offset)
+            .map(|run| {
+                if self.has_blank_line_between(run.end, declaration_offset) {
+                    run.doc.append(RcDoc::hardline())
+                } else {
+                    run.doc
+                }
+            })
+    }
+
+    fn drain_comment_run_before(&mut self, before_offset: usize) -> Option<CommentRun> {
+        let mut run: Option<CommentRun> = None;
+        while let Some(comment) = self.metadata.comments().get(self.next_comment) {
             if comment.span.offset() >= before_offset {
                 break;
             }
-            docs.push(RcDoc::text(comment.value.lexeme()));
-            docs.push(RcDoc::hardline());
+            let text = RcDoc::text(comment.value.lexeme()).append(RcDoc::hardline());
+            let end = comment.span.offset() + comment.span.len();
+            run = Some(match run {
+                None => CommentRun { doc: text, end },
+                Some(previous) => {
+                    let separator =
+                        if self.has_blank_line_between(previous.end, comment.span.offset()) {
+                            RcDoc::hardline()
+                        } else {
+                            RcDoc::nil()
+                        };
+                    CommentRun {
+                        doc: previous.doc.append(separator).append(text),
+                        end,
+                    }
+                }
+            });
             self.next_comment += 1;
         }
-        if docs.is_empty() {
-            None
-        } else {
-            Some(RcDoc::concat(docs))
-        }
+        run
     }
 
     /// Drain a trailing comment on the same line as `line_end_offset`.
     /// Returns the comment text (with leading space) or `None` when there
     /// isn't one.
+    ///
+    /// Only a comment inside the innermost construct being formatted (see
+    /// [`Self::within`]) qualifies: in `f(x); // note` the comment follows the
+    /// call, not its argument `x`, so the argument must not take it.
     pub fn drain_trailing_comment(&mut self, line_end_offset: usize) -> Option<RcDoc<'static>> {
-        if self.next_comment >= self.metadata.comments().len() {
-            return None;
-        }
-        let comment = &self.metadata.comments()[self.next_comment];
+        let comment = self.metadata.comments().get(self.next_comment)?;
         // A trailing comment must be on the same line — its offset must be
-        // between the end of the node and the next newline. The boundary is
-        // inclusive: a comment starting exactly at `line_end_offset` (no
-        // whitespace between the node and `//`) is still trailing.
-        if comment.span.offset() >= line_end_offset {
+        // between the end of the node and the next line ending (LF, CRLF, or
+        // lone CR). The boundary is inclusive: a comment starting exactly at
+        // `line_end_offset` (no whitespace between the node and `//`) is still
+        // trailing.
+        if comment.span.offset() >= line_end_offset && comment.span.offset() < self.construct_end {
             let between =
                 &self.source[line_end_offset..comment.span.offset().min(self.source.len())];
-            if !between.contains('\n') {
+            if line_endings(between).next().is_none() {
                 self.next_comment += 1;
                 return Some(RcDoc::text(format!(" {}", comment.value.lexeme())));
             }
@@ -134,6 +188,7 @@ impl<'src> Formatter<'src> {
             metadata: self.metadata,
             next_comment,
             verbatim_requested: false,
+            construct_end: self.construct_end,
         };
         let rendered = render(&mut fork);
         self.verbatim_requested |= fork.verbatim_requested;
@@ -146,6 +201,17 @@ impl<'src> Formatter<'src> {
     /// original source instead of the formatted doc.
     pub const fn request_verbatim(&mut self) {
         self.verbatim_requested = true;
+    }
+
+    /// Run `render` with `span` as the innermost construct being formatted,
+    /// so trailing-comment drains inside it cannot take a comment that
+    /// follows the construct.
+    pub fn within<T>(&mut self, span: Span, render: impl FnOnce(&mut Self) -> T) -> T {
+        let end = (span.offset() + span.len()).min(self.construct_end);
+        let outer = std::mem::replace(&mut self.construct_end, end);
+        let rendered = render(self);
+        self.construct_end = outer;
+        rendered
     }
 
     /// Format the source region `span` with `format`, falling back to the
@@ -164,7 +230,7 @@ impl<'src> Formatter<'src> {
         let end = span.offset() + span.len();
         let comment_snapshot = self.next_comment;
         let outer_request = std::mem::replace(&mut self.verbatim_requested, false);
-        let formatted = format(self);
+        let formatted = self.within(span, format);
         let verbatim_requested = std::mem::replace(&mut self.verbatim_requested, outer_request);
         if verbatim_requested || self.has_comment_before(end) {
             self.next_comment = comment_snapshot;

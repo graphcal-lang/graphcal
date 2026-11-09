@@ -1,5 +1,6 @@
 //! Layout helpers over `pretty` documents shared by every formatter module.
 
+use graphcal_compiler::source_line::split_lines;
 use pretty::RcDoc;
 
 /// Indentation step used everywhere in formatter docs. Typed as `isize`
@@ -21,9 +22,12 @@ pub(super) fn pad_right_to_width(text: &str, width: usize) -> String {
     format!("{}{}", text, " ".repeat(padding))
 }
 
+/// Emit verbatim `text` with each source line ending (LF, CRLF, or lone CR)
+/// replaced by a hardline, so a verbatim region uses the output's line
+/// endings rather than keeping its own.
 pub(super) fn text_with_hardlines(text: &str) -> RcDoc<'static> {
     RcDoc::intersperse(
-        text.split('\n').map(|line| {
+        split_lines(text).map(|line| {
             if line.is_empty() {
                 RcDoc::nil()
             } else {
@@ -163,5 +167,14 @@ mod tests {
         doc.render(80, &mut out).unwrap();
         let rendered = String::from_utf8(out).unwrap();
         assert_eq!(rendered, "{\n    a\n    b\n}");
+    }
+
+    #[test]
+    fn verbatim_text_drops_crlf_and_lone_cr_line_endings() {
+        let mut out = Vec::new();
+        text_with_hardlines("a\r\nb\rc")
+            .render(80, &mut out)
+            .unwrap();
+        assert_eq!(String::from_utf8(out).unwrap(), "a\nb\nc");
     }
 }

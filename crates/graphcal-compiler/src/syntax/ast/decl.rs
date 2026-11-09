@@ -107,10 +107,9 @@ pub struct Declaration<P: Phase = Raw> {
     pub span: Span,
     /// The `///` doc block immediately preceding this declaration, when one
     /// exists. Attached by the parser (see `syntax::doc_attach`); purely
-    /// documentary, so it never affects semantics or format equivalence: the
-    /// doc is re-derived from comments on every parse, and the formatter
-    /// preserves comments separately.
-    #[fe(skip)]
+    /// documentary, so it never affects semantics. Its text is still part of
+    /// format equivalence: docs feed hover, reports, and the view model, so
+    /// formatting must never change which declaration a doc block documents.
     pub doc: Option<crate::syntax::comments::DocComment>,
 }
 

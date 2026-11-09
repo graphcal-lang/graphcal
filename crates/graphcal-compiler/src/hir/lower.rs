@@ -368,10 +368,18 @@ fn lower_type_slot(
             lower_datetime_application(type_ann.span, type_args.as_slice())?,
         ),
         ast::TypeExprKind::ComplexApplication { generic_args } => {
-            ValueTypeKind::Complex(lower_complex_application(type_ann.span, generic_args, ctx)?)
+            ValueTypeKind::Complex(lower_complex_application(
+                type_ann.span,
+                written_generic_args(generic_args.as_ref()),
+                ctx,
+            )?)
         }
         ast::TypeExprKind::KeyApplication { generic_args } => {
-            ValueTypeKind::Key(lower_key_application(type_ann.span, generic_args, ctx)?)
+            ValueTypeKind::Key(lower_key_application(
+                type_ann.span,
+                written_generic_args(generic_args.as_ref()),
+                ctx,
+            )?)
         }
         ast::TypeExprKind::IndexLabel { index, label } => {
             return Err(HirLowerError::IndexLabelAsType {
@@ -414,6 +422,12 @@ fn lower_type_slot(
     };
 
     Ok(TypeSlot::Value(ValueType::new(kind, type_ann.span)))
+}
+
+/// The generic arguments of a built-in type former; a bare former (no `<…>`)
+/// has none, which the arity check reports.
+fn written_generic_args(args: Option<&NonEmpty<ast::GenericArg>>) -> &[ast::GenericArg] {
+    args.map_or(&[], NonEmpty::as_slice)
 }
 
 fn lower_complex_application(

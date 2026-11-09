@@ -2372,7 +2372,7 @@ fn collect_type_expr_refs_in_scope(
         }
         TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => {
-            for arg in generic_args {
+            for arg in generic_args.iter().flatten() {
                 collect_generic_arg_refs(arg, generic_scope, table, refs);
             }
         }
