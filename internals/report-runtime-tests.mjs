@@ -621,7 +621,7 @@ function mountedRuntime(source) {
   const toggle = all(inputsSection).find(child => child["aria-describedby"] === "auto-run-description");
   toggle.checked = false;
   toggle.events.change();
-  return { prepared, transports, transport, lastRequest, answer, ready, edit, draftStatus, stale, fatalNotices, timeout, body, main, sections, toggle, all, inputsSection };
+  return { prepared, transports, transport, lastRequest, answer, ready, edit, draftStatus, stale, fatalNotices, timeout, body, main, sections, toggle, all, inputsSection, cards, flush };
 }
 const failureModel = "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.0;\nnode s: Dimensionless = @a + @b;";
 {
@@ -664,6 +664,32 @@ const failureModel = "param a: Dimensionless = 1.0;\nparam b: Dimensionless = 2.
   assert.equal(run.transport().posted.length, requests, "a stopped engine receives no requests");
   assert.notEqual(run.draftStatus("a"), "Updating the complete parameter value…", "no edit is left pending");
   assert.equal(statusText(run.body), "Interactive mode unavailable");
+  run.prepared.free();
+}
+{
+  // A failed reset or default keeps the editor on the accepted value.
+  const run = mountedRuntime(failureModel);
+  const field = name => run.all(run.cards.get(name)).find(child => child.className === "control-field");
+  run.edit("a", "5.0");
+  run.answer();
+  assert.equal(field("a").value, "5.0");
+  run.all(run.body).find(child => child.className === "modified-banner__reset").events.click();
+  run.flush();
+  assert.deepEqual(run.lastRequest().bindings, [], "the reset submits the baseline");
+  run.answer({ status: "eval_error", message: "boom" });
+  assert.equal(field("a").value, "5.0", "a failed reset restores the accepted draft");
+  assert.equal(run.draftStatus("a"), "", "the restored draft matches the accepted binding");
+  run.edit("b", "3.0");
+  assert.deepEqual(run.lastRequest().bindings, [{ name: "a", expr: "5.0" }, { name: "b", expr: "3.0" }], "the accepted binding is still sent");
+  run.prepared.free();
+}
+{
+  // An engine replaced while a draft is unapplied keeps the results stale.
+  const run = mountedRuntime(failureModel);
+  run.edit("a", "5.0");
+  run.transport().callbacks.onMessage({ type: "fatal", id: run.lastRequest().id, message: "crash" });
+  assert.equal(statusText(run.body), "Preparing model…");
+  assert.equal(run.stale(), true, "preparing a replacement keeps unapplied drafts marked stale");
   run.prepared.free();
 }
 {

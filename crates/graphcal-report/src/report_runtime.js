@@ -563,6 +563,18 @@
     var pendingRevision = 0;
     var submittedRequest = null;
     var autoRunTimer = null;
+    // The editor state a reset or default submission replaced, restored when
+    // that submission is not accepted, so the editor keeps matching the
+    // accepted binding.
+    var replacedState = null;
+    function replaceForSubmission() {
+      replacedState = {
+        draft: cloneStructured(draft),
+        startingDraft: cloneStructured(startingDraft),
+        dirty: dirty,
+        sourceChanged: sourceChanged,
+      };
+    }
 
     var control = {
       name: port.name,
@@ -612,6 +624,7 @@
         if (!pending || submittedRequest !== id) return;
         control.currentBinding = pendingBinding;
         pending = false;
+        replacedState = null;
         if (pendingDraft) startingDraft = cloneStructured(pendingDraft);
         dirty = revision !== pendingRevision;
         sourceChanged = false;
@@ -630,6 +643,18 @@
         pending = false;
         pendingDraft = null;
         submittedRequest = null;
+        var replaced = replacedState;
+        replacedState = null;
+        if (replaced && revision === pendingRevision) {
+          draft = replaced.draft;
+          startingDraft = replaced.startingDraft;
+          dirty = replaced.dirty;
+          sourceChanged = replaced.sourceChanged;
+          render();
+          return;
+        }
+        // Newer edits stay in the editor, compared with the accepted value.
+        if (replaced) startingDraft = replaced.startingDraft;
         updateDraftStatus();
       },
       // Whether the inputs on screen differ from the ones the visible results
@@ -638,6 +663,7 @@
       stageBaseline: function () {
         if (autoRunTimer) clearTimeout(autoRunTimer);
         autoRunTimer = null;
+        replaceForSubmission();
         pending = true;
         pendingBinding = initialBinding;
         pendingDraft = null;
@@ -746,6 +772,7 @@
       }
       if (autoRunTimer) clearTimeout(autoRunTimer);
       autoRunTimer = null;
+      replacedState = null;
       pending = true;
       pendingDraft = cloneStructured(draft);
       pendingRevision = revision;
@@ -773,6 +800,7 @@
         if (halted) return;
         if (autoRunTimer) clearTimeout(autoRunTimer);
         autoRunTimer = null;
+        replaceForSubmission();
         pending = true;
         pendingBinding = null;
         pendingDraft = null;
@@ -1235,7 +1263,7 @@
       return;
     }
     failedBindingsKey = key;
-    setStatus(status, "warn", true);
+    setStatus(status, "warn", inputsDiffer());
     startTransport();
   }
 
@@ -1349,7 +1377,8 @@
       fatal("this browser refused to start the report engine (" + error + ")");
       return;
     }
-    setStatus("Preparing model…", "busy");
+    // A replaced engine prepares while the previous results stay visible.
+    setStatus("Preparing model…", "busy", inputsDiffer());
   }
 
   startTransport();
