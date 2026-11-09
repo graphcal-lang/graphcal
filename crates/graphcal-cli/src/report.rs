@@ -104,6 +104,15 @@ pub enum ReportError {
     )]
     HydrationUnsupported { reason: String },
     #[error(
+        "the project loaded with root {} instead of the resolved root {}",
+        loaded.as_ref().map_or_else(|| "(none)".to_string(), |root| root.display().to_string()),
+        resolved.display()
+    )]
+    ProjectRootChanged {
+        resolved: PathBuf,
+        loaded: Option<PathBuf>,
+    },
+    #[error(
         "the browser engine bundle override was not found at {path}\n\
          ensure the directory contains `graphcal_wasm.js` and \
          `graphcal_wasm_bg.wasm`, or remove the --engine-dir / \
@@ -135,13 +144,13 @@ pub fn run_build(
 ) -> Result<ReportStatus, ReportError> {
     validate_hydration_parameter_source(args, overrides)?;
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
+    // One resolved root names everything: the captured metadata, the loaded
+    // project (checked below), provenance, and the hydration bundle.
+    let project_root = resolve_entry_project_root(&args.file, args.root.as_deref(), &fs)?;
     let metadata = if args.static_only {
         Vec::new()
     } else {
-        capture_metadata(
-            &resolve_entry_project_root(&args.file, args.root.as_deref(), &fs)?,
-            &fs,
-        )?
+        capture_metadata(&project_root, &fs)?
     };
     let snapshot = graphcal_io::OverlayFileSystem::with_overlays(
         fs,
@@ -154,6 +163,12 @@ pub fn run_build(
     })?;
     let (project, host_fns) =
         crate::load_project_with_plugins(&args.file, args.root.as_deref(), &snapshot)?;
+    if project.project_root() != Some(project_root.as_path()) {
+        return Err(ReportError::ProjectRootChanged {
+            resolved: project_root,
+            loaded: project.project_root().map(Path::to_path_buf),
+        });
+    }
     let prepared = ProjectCompiler::new(&project)
         .host_fns(&host_fns)
         .prepare()?;
@@ -171,7 +186,7 @@ pub fn run_build(
     );
     let provenance = report_provenance(
         compiler_version,
-        source_digests(&project),
+        source_digests(&project, &project_root),
         &result,
         args,
         overrides,
@@ -195,7 +210,7 @@ pub fn run_build(
                 glue_js: engine.glue_js.as_ref(),
                 wasm: engine.wasm.as_ref(),
             },
-            &hydration_project(&project, args, &metadata)?,
+            &hydration_project(&project, args, &project_root, &metadata)?,
             baseline_binding_strings(overrides),
         )?),
     };
@@ -242,22 +257,19 @@ pub fn run_build(
 /// hydration payload feeds the browser engine's virtual filesystem, which
 /// requires forward-slash relative paths, and provenance names stay
 /// OS-independent.
-fn relative_source_name(path: &Path, root_dir: Option<&Path>) -> Option<String> {
-    root_dir
-        .and_then(|root| path.strip_prefix(root).ok())
-        .map(|relative| {
-            relative
-                .components()
-                .map(|component| component.as_os_str().to_string_lossy())
-                .collect::<Vec<_>>()
-                .join("/")
-        })
+fn relative_source_name(path: &Path, root_dir: &Path) -> Option<String> {
+    path.strip_prefix(root_dir).ok().map(|relative| {
+        relative
+            .components()
+            .map(|component| component.as_os_str().to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    })
 }
 
 /// SHA-256 digests of every loaded source, named relative to the project
 /// root and sorted by name so the artifact is machine-independent.
-fn source_digests(project: &LoadedProject) -> Vec<SourceDigest> {
-    let root_dir = project.project_root();
+fn source_digests(project: &LoadedProject, root_dir: &Path) -> Vec<SourceDigest> {
     let dependency_roots: std::collections::BTreeMap<_, _> = project
         .package_closure()
         .into_iter()
@@ -275,7 +287,10 @@ fn source_digests(project: &LoadedProject) -> Vec<SourceDigest> {
         .map(|file| {
             let id = file.dag_id();
             let path = file.path();
-            let scope = dependency_roots.get(id.package()).copied().or(root_dir);
+            let scope = dependency_roots
+                .get(id.package())
+                .copied()
+                .unwrap_or(root_dir);
             let relative =
                 relative_source_name(path, scope).unwrap_or_else(|| path.display().to_string());
             // Rendering boundary only: identities remain typed in the bundle.
@@ -402,6 +417,33 @@ fn capture_metadata(
         .into_iter()
         .try_fold(Vec::new(), |mut files, kind| {
             let path = project_root.join(kind.file_name());
+            // The overlay that freezes these bytes keys them by this path; a
+            // symlink would give it a second, diverging identity (and move the
+            // project root the loader sees), so only a regular file ships.
+            let not_regular = |found: &str| ReportError::HydrationUnsupported {
+                reason: format!(
+                    "could not capture {}: it must be a regular file in the project root, not {found}",
+                    kind.file_name()
+                ),
+            };
+            match fs.entry_kind(&path) {
+                Ok(graphcal_io::FileSystemEntryKind::File) => {}
+                Ok(graphcal_io::FileSystemEntryKind::Symlink) => {
+                    return Err(not_regular("a symlink"));
+                }
+                Ok(graphcal_io::FileSystemEntryKind::Directory) => {
+                    return Err(not_regular("a directory"));
+                }
+                Ok(graphcal_io::FileSystemEntryKind::Other) => {
+                    return Err(not_regular("a special file"));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(files),
+                Err(error) => {
+                    return Err(ReportError::HydrationUnsupported {
+                        reason: format!("could not capture {}: {error}", kind.file_name()),
+                    });
+                }
+            }
             match graphcal_compiler::outcome::without_cancellation(|cancellation| {
                 fs.read_to_string_bounded(&path, kind.limit(policy), cancellation)
             }) {
@@ -427,10 +469,9 @@ fn capture_metadata(
 fn hydration_project(
     project: &LoadedProject,
     args: &BuildArgs,
+    root_dir: &Path,
     metadata: &[CapturedMetadata],
 ) -> Result<ProjectBundle, ReportError> {
-    let root_dir = project.project_root();
-
     let dependencies = project
         .package_closure()
         .into_iter()

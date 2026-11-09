@@ -9143,6 +9143,72 @@ fn report_build_engine_dir_with_partial_bundle_reports_engine_missing() {
     assert!(stderr.contains("was not found at"), "stderr: {stderr}");
 }
 
+/// CLI-10 (CodeRabbit): capture, loading and hydration share one project
+/// root. A symlinked manifest would give the frozen bytes a second identity
+/// (and, with an absolute `--root`, move the root the loader sees), so an
+/// interactive build rejects it loudly; a static build is unaffected.
+#[cfg(unix)]
+#[test]
+fn report_build_hydrated_rejects_symlinked_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = std::path::absolute(dir.path().join("p")).unwrap();
+    std::fs::create_dir_all(project.join("sub")).unwrap();
+    std::fs::create_dir_all(project.join("src/demo")).unwrap();
+    std::fs::write(
+        project.join("sub/config.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("sub/config.toml", project.join("graphcal.toml")).unwrap();
+    let main = project.join("src/demo/main.gcl");
+    std::fs::write(
+        &main,
+        "param x: Length = 1.0 m;\npub node y: Length = 2.0 * @x;\n",
+    )
+    .unwrap();
+    let engine_dir = write_fake_engine(dir.path());
+    let html_path = dir.path().join("out.html");
+
+    for root in [Some(project.as_path()), None] {
+        let mut command = graphcal_bin();
+        command.args(["report", "build"]).arg(&main);
+        if let Some(root) = root {
+            command.arg("--root").arg(root);
+        }
+        let output = command
+            .arg("--engine-dir")
+            .arg(&engine_dir)
+            .arg("--output")
+            .arg(&html_path)
+            .output()
+            .expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2), "root: {root:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(
+                "could not capture graphcal.toml: it must be a regular file in the project root, not a symlink"
+            ) && stderr.contains("--static"),
+            "root: {root:?}: {stderr}"
+        );
+        assert!(!html_path.exists());
+    }
+
+    let output = graphcal_bin()
+        .args(["report", "build", "--static"])
+        .arg(&main)
+        .arg("--root")
+        .arg(&project)
+        .arg("--output")
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn report_build_hydrated_ships_dependency_free_manifest() {
     // A manifest without [dependencies] is not a reason to refuse hydration:
