@@ -608,12 +608,8 @@ fn load_project_with_budget_state<F: FileSystemReader>(
         })
         .into());
     }
-    let root_canonical = fs
-        .canonicalize(root_path)
-        .map_err(|_| io_not_found(root_path))?;
-
-    let root_dir = root_canonical.parent().unwrap_or(&root_canonical);
-    let project_root = resolve_project_root(root_dir, project_root_override, fs)?;
+    let (root_canonical, project_root) =
+        resolve_entry_and_project_root(root_path, project_root_override, fs)?;
 
     // Determine the package mode for the root file: real package iff a manifest
     // exists at `project_root` AND the root file lives inside the package's
@@ -1297,6 +1293,40 @@ pub fn build_rooted_filesystem(
 /// and descendants but not files above the entry-point's own directory.
 fn project_root_for<F: FileSystemReader>(root_file_dir: &Path, fs: &F) -> PathBuf {
     discover_project_root(root_file_dir, fs).unwrap_or_else(|| root_file_dir.to_path_buf())
+}
+
+/// The canonical entry file and the project root [`load_project`] reads its
+/// package from.
+fn resolve_entry_and_project_root<F: FileSystemReader>(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+    fs: &F,
+) -> Result<(PathBuf, PathBuf), CompileError> {
+    let root_canonical = fs
+        .canonicalize(root_path)
+        .map_err(|_| io_not_found(root_path))?;
+    let root_dir = root_canonical.parent().unwrap_or(&root_canonical);
+    let project_root = resolve_project_root(root_dir, project_root_override, fs)?;
+    Ok((root_canonical, project_root))
+}
+
+/// The project root [`load_project`] would read `root_path`'s package from.
+///
+/// For shells that must act on that directory before loading (for example,
+/// to freeze its manifest and lockfile bytes). After loading, prefer
+/// [`LoadedProject::project_root`].
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if `root_path` or the override cannot be
+/// canonicalized through `fs`.
+pub fn resolve_entry_project_root<F: FileSystemReader>(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+    fs: &F,
+) -> Result<PathBuf, CompileError> {
+    resolve_entry_and_project_root(root_path, project_root_override, fs)
+        .map(|(_, project_root)| project_root)
 }
 
 /// Resolve the project root, using an explicit override if provided,

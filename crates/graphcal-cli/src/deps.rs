@@ -13,8 +13,8 @@ use graphcal_io::{
 };
 use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitSourceId, GitTransport, GitUrl,
-    LockedPackage, LockedPlugin, Lockfile, LockfileParseLimits, PackageGraph, PackageInstanceId,
-    PackageManifest, PackageName, PackageSource, PackageSourceDirectory, PluginArtifactPath,
+    LockedPackage, LockedPlugin, Lockfile, LockfileParseLimits, PackageInstanceId, PackageManifest,
+    PackageName, PackageSource, PackageSourceDirectory, PluginArtifactPath,
     PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, Sha256DigestError,
     SourceTreeHashAlgorithm, SourceTreeHashes, parse_lockfile_str_with_limits, parse_manifest_str,
 };
@@ -340,8 +340,8 @@ pub fn lock(root_override: Option<&Path>) -> Result<LockOutcome, DepsError> {
         plugins,
     };
 
-    let graph = lockfile.package_graph(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)?;
-    ensure_lock_graph_loadable(&graph)?;
+    // Never write a lock the loader would reject.
+    lockfile.validate(env!("CARGO_PKG_VERSION"), STDLIB_VERSION)?;
 
     let content = lockfile.to_deterministic_toml();
     let lockfile_path = root.join("graphcal.lock");
@@ -549,13 +549,6 @@ fn resolve_root_entry(
             Ok((canonical, kind))
         }
     }
-}
-
-fn ensure_lock_graph_loadable(graph: &PackageGraph) -> Result<(), DepsError> {
-    graph
-        .package(graph.root())
-        .ok_or_else(|| DepsError::Internal("validated lock graph has no root".to_string()))?;
-    Ok(())
 }
 
 fn resolve_root(root_override: Option<&Path>) -> Result<PathBuf, DepsError> {

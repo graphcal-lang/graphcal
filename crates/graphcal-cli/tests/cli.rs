@@ -5738,6 +5738,41 @@ fn eval_plot_json_suppresses_normal_eval_output_even_with_json_format() {
     );
 }
 
+/// CLI-5: `--plot json` reserves stdout for the figure array, but failing
+/// nodes and assertions must still explain the non-zero exit on stderr.
+#[test]
+fn eval_plot_json_reports_failures_on_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("failing.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B };\n\
+         node y: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };\n\
+         plot curve = { mark: bar, encode: { x: for s: Step { s }, y: for s: Step { @y[s] } } };\n\
+         assert never = 1.0 > 2.0;\n\
+         node bad: Dimensionless = 1.0 / 0.0;\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let _json = parse_plot_json_stdout(&stdout);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("bad = ERROR: division by zero"),
+        "expected the failing node on stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("never  FAIL"),
+        "expected the failing assertion on stderr: {stderr}"
+    );
+}
+
 #[test]
 fn eval_plot_scatter_json() {
     let output = graphcal_bin()
@@ -8079,6 +8114,31 @@ fn describe_batch_model(model: &std::path::Path) -> graphcal_model_protocol::Des
     serde_json::from_slice(&output.stdout).expect("describe prints a describe document")
 }
 
+/// CLI-14: `model describe` and `model unit` render compile errors with
+/// their file, line and snippet, as `check` does.
+#[test]
+fn model_describe_and_unit_render_compile_errors_with_location() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "broken.gcl",
+        "param load: Length = 1.0 m;\nnode y: Length = @missing;\n",
+    );
+    for arguments in [vec!["describe"], vec!["unit", "m"]] {
+        let mut command = graphcal_bin();
+        command.arg("model").arg(arguments[0]).arg(&model);
+        command.args(&arguments[1..]);
+        let output = command.output().expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("broken.gcl:2:") && stderr.contains("@missing"),
+            "`model {}` must render the error location and snippet: {stderr}",
+            arguments[0]
+        );
+    }
+}
+
 #[test]
 fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
     let dir = tempfile::tempdir().unwrap();
@@ -9083,6 +9143,72 @@ fn report_build_engine_dir_with_partial_bundle_reports_engine_missing() {
     assert!(stderr.contains("was not found at"), "stderr: {stderr}");
 }
 
+/// CLI-10 (CodeRabbit): capture, loading and hydration share one project
+/// root. A symlinked manifest would give the frozen bytes a second identity
+/// (and, with an absolute `--root`, move the root the loader sees), so an
+/// interactive build rejects it loudly; a static build is unaffected.
+#[cfg(unix)]
+#[test]
+fn report_build_hydrated_rejects_symlinked_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = std::path::absolute(dir.path().join("p")).unwrap();
+    std::fs::create_dir_all(project.join("sub")).unwrap();
+    std::fs::create_dir_all(project.join("src/demo")).unwrap();
+    std::fs::write(
+        project.join("sub/config.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("sub/config.toml", project.join("graphcal.toml")).unwrap();
+    let main = project.join("src/demo/main.gcl");
+    std::fs::write(
+        &main,
+        "param x: Length = 1.0 m;\npub node y: Length = 2.0 * @x;\n",
+    )
+    .unwrap();
+    let engine_dir = write_fake_engine(dir.path());
+    let html_path = dir.path().join("out.html");
+
+    for root in [Some(project.as_path()), None] {
+        let mut command = graphcal_bin();
+        command.args(["report", "build"]).arg(&main);
+        if let Some(root) = root {
+            command.arg("--root").arg(root);
+        }
+        let output = command
+            .arg("--engine-dir")
+            .arg(&engine_dir)
+            .arg("--output")
+            .arg(&html_path)
+            .output()
+            .expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2), "root: {root:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(
+                "could not capture graphcal.toml: it must be a regular file in the project root, not a symlink"
+            ) && stderr.contains("--static"),
+            "root: {root:?}: {stderr}"
+        );
+        assert!(!html_path.exists());
+    }
+
+    let output = graphcal_bin()
+        .args(["report", "build", "--static"])
+        .arg(&main)
+        .arg("--root")
+        .arg(&project)
+        .arg("--output")
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn report_build_hydrated_ships_dependency_free_manifest() {
     // A manifest without [dependencies] is not a reason to refuse hydration:
@@ -9169,6 +9295,24 @@ fn report_build_hydrated_embeds_package_dependencies() {
         .0;
     let bundle = graphcal_project::project_bundle::ProjectBundle::from_json(payload).unwrap();
     assert_eq!(bundle.dependencies.len(), 1);
+    // CLI-10: the captured metadata ships under its typed kind.
+    let metadata: Vec<_> = bundle
+        .files
+        .iter()
+        .filter_map(|artifact| match &artifact.content {
+            graphcal_project::project_bundle::ArtifactContent::Manifest(_) => {
+                Some((artifact.path.as_str(), "manifest"))
+            }
+            graphcal_project::project_bundle::ArtifactContent::Lockfile(_) => {
+                Some((artifact.path.as_str(), "lockfile"))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        metadata,
+        [("graphcal.lock", "lockfile"), ("graphcal.toml", "manifest")]
+    );
 
     // The same project builds statically: the baseline is computed natively.
     let html_path = dir.path().join("out.html");

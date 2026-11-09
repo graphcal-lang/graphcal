@@ -88,7 +88,11 @@ fn parse_name_path(
         return NameAtom::parse(name).map(NamePath::from).map_err(invalid);
     };
     if member.contains("::") {
-        return Err(invalid(NameAtomError::ContainsDot));
+        return Err(JsonInputError::RepeatedQualifier {
+            param: param.to_string(),
+            role,
+            value: name.to_string(),
+        });
     }
     let owner = owner
         .split('.')
@@ -388,6 +392,12 @@ pub enum JsonInputError {
         value: String,
         reason: NameAtomError,
     },
+    /// A JSON-provided qualified name has more than one `::` separator.
+    RepeatedQualifier {
+        param: String,
+        role: &'static str,
+        value: String,
+    },
     /// A JSON-provided constructor path segment is not a source identifier.
     InvalidIdentifier {
         param: String,
@@ -465,6 +475,10 @@ impl fmt::Display for JsonInputError {
             } => {
                 write!(f, "invalid {role} name `{value}` for `{param}`: {reason}")
             }
+            Self::RepeatedQualifier { param, role, value } => write!(
+                f,
+                "invalid {role} name `{value}` for `{param}`: a qualified name has exactly one `::`; separate owner path segments with `.`"
+            ),
             Self::InvalidIdentifier {
                 param,
                 role,
@@ -1154,6 +1168,23 @@ mod tests {
             ),
             "expected InvalidName for dotted parameter key, got {result:?}",
         );
+    }
+
+    /// CLI-20: a second `::` is reported as such, not as a `.` in an atom.
+    #[test]
+    fn repeated_qualifier_is_named_in_the_error() {
+        let error = json_to_overrides(r#"{"status": {"variant": "lib::Mode::A"}}"#).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                JsonInputError::RepeatedQualifier { param, role: "constructor", value }
+                    if param == "status" && value == "lib::Mode::A"
+            ),
+            "{error:?}"
+        );
+        let message = error.to_string();
+        assert!(message.contains("exactly one `::`"), "{message}");
+        assert!(!message.contains("cannot contain `.`"), "{message}");
     }
 
     #[test]

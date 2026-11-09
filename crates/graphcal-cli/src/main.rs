@@ -573,16 +573,11 @@ fn run_plugin_new(name: &str, dir: Option<&Path>) {
     outln!("next steps:");
     outln!("  cd {}", plan.root.display());
     outln!("  cargo build --release --target wasm32-unknown-unknown");
-    outln!("  graphcal plugin test target/wasm32-unknown-unknown/release/<name>.wasm");
+    outln!("  graphcal plugin test {}", plan.release_artifact.display());
 }
 
-/// `graphcal plugin test`: load and validate a module (all ABI checks run
-/// before any plugin code), print its identity and signatures, and
-/// optionally call one function under the default resource limits.
-///
-/// Exit codes: 1 when the module fails validation or the called function
-/// fails or returns a value violating its declared kind; 2 for unreadable
-/// files or unusable --call arguments.
+/// Read a plugin module, refusing anything but a regular file and bounding
+/// the read by the plugin ingestion limit.
 fn read_plugin_module_bounded(module_path: &Path) -> Result<Vec<u8>, String> {
     let metadata = std::fs::symlink_metadata(module_path).map_err(|error| error.to_string())?;
     if !metadata.file_type().is_file() {
@@ -617,6 +612,13 @@ fn read_plugin_module_bounded(module_path: &Path) -> Result<Vec<u8>, String> {
     }
 }
 
+/// `graphcal plugin test`: load and validate a module (all ABI checks run
+/// before any plugin code), print its identity and signatures, and
+/// optionally call one function under the default resource limits.
+///
+/// Exit codes: 1 when the module fails validation or the called function
+/// fails or returns a value violating its declared kind; 2 for unreadable
+/// files or unusable --call arguments.
 fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
     let bytes = read_plugin_module_bounded(module_path).unwrap_or_else(|error| {
         bail_with(
@@ -731,20 +733,29 @@ fn report_parameter_error(error: &OverrideParseError) -> ! {
     process::exit(2);
 }
 
-fn run_model_describe(file: &Path, root: Option<&Path>) {
-    if let Err(error) = model::describe(file, root) {
-        eprintln!("error: {error}");
-        process::exit(error.exit_code());
+/// Print a `model` subcommand failure and exit with its status class.
+/// Compile errors render with their file, line and snippet, as `check` does.
+fn report_model_error(error: model::ModelServeError) -> ! {
+    let code = error.exit_code();
+    match error {
+        model::ModelServeError::Compile(error) => {
+            eprintln!("{:?}", miette::Report::new(error));
+        }
+        other => eprintln!("error: {other}"),
     }
+    process::exit(code);
 }
 
 fn run_model_command(command: ModelCommands) {
     match command {
-        ModelCommands::Describe { file, root } => run_model_describe(&file, root.as_deref()),
+        ModelCommands::Describe { file, root } => {
+            if let Err(error) = model::describe(&file, root.as_deref()) {
+                report_model_error(error);
+            }
+        }
         ModelCommands::Unit { file, units, root } => {
             if let Err(error) = model::resolve_units(&file, &units, root.as_deref()) {
-                eprintln!("error: {error}");
-                process::exit(error.exit_code());
+                report_model_error(error);
             }
         }
         ModelCommands::Serve {
@@ -806,14 +817,7 @@ fn run_model_serve(
     root: Option<&Path>,
 ) {
     if let Err(error) = model::serve(file, selection, fingerprint, mode, root) {
-        let code = error.exit_code();
-        match error {
-            model::ModelServeError::Compile(error) => {
-                eprintln!("{:?}", miette::Report::new(error));
-            }
-            other => eprintln!("error: {other}"),
-        }
-        process::exit(code);
+        report_model_error(error);
     }
 }
 
@@ -826,26 +830,24 @@ fn handle_eval(
     plot_output: Option<&PlotOutput>,
     allow_incomplete: bool,
 ) {
-    // Rooted sandbox: derive the project root from the loader's rules and
-    // confine reads to it. `root` (the user's explicit --root) takes
-    // precedence; otherwise walk up from `file`'s parent looking for
-    // `graphcal.toml`, falling back to the loose file's parent directory.
-    let outcome = build_rooted_filesystem(file, root).and_then(|fs| {
-        load_project_with_plugins(file, root, &fs).and_then(|(project, host_fns)| {
-            let prepared = ProjectCompiler::new(&project)
-                .host_fns(&host_fns)
-                .prepare()?;
-            let mut bindings = prepared.binding_builder();
-            for (name, value) in &overrides.values {
-                value.bind(name, &mut bindings)?;
-            }
-            prepared.evaluate(&bindings.finish()?)
-        })
+    let outcome = load_rooted_project_with_plugins(file, root).and_then(|(project, host_fns)| {
+        let prepared = ProjectCompiler::new(&project)
+            .host_fns(&host_fns)
+            .prepare()?;
+        let mut bindings = prepared.binding_builder();
+        for (name, value) in &overrides.values {
+            value.bind(name, &mut bindings)?;
+        }
+        prepared.evaluate(&bindings.finish()?)
     });
     match outcome {
         Ok(result) => {
             let plot_json_only = matches!(plot_output, Some(PlotOutput::Json));
-            if !plot_json_only {
+            if plot_json_only {
+                // stdout carries only the figure array, so the failures that
+                // explain a non-zero exit must still reach stderr.
+                report_unavailable_results(&result, output_view);
+            } else {
                 match format {
                     OutputFormat::Text => print_text(&result, output_view),
                     OutputFormat::Json => {
@@ -1004,6 +1006,19 @@ fn report_traversal_failures(failures: &TraversalFailures) {
     });
 }
 
+/// [`load_project_with_plugins`] in the sandbox of `file`'s project root.
+///
+/// The explicit `project_root` (`--root`) takes precedence; otherwise the
+/// loader walks up from `file`'s parent looking for `graphcal.toml`, falling
+/// back to the loose file's parent directory. Reads are confined to it.
+fn load_rooted_project_with_plugins(
+    file: &Path,
+    project_root: Option<&Path>,
+) -> Result<(LoadedProject, HostFunctionRegistry), CompileError> {
+    let fs = build_rooted_filesystem(file, project_root)?;
+    load_project_with_plugins(file, project_root, &fs)
+}
+
 /// Load a project and build the host function registry backing its extern
 /// (plugin) declarations: the built-in demo plugin plus every wasm plugin
 /// the project vendors, loaded through one plugin host per invocation.
@@ -1040,11 +1055,10 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
 
     let mut error_count = 0;
     for file in &targets {
-        let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
-            load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
+        let outcome =
+            load_rooted_project_with_plugins(file, project_root).and_then(|(project, host_fns)| {
                 ProjectCompiler::new(&project).host_fns(&host_fns).check()
-            })
-        });
+            });
         match outcome {
             Ok(checked) => {
                 let todos = checked.tir().reachable_unfinished().len();
@@ -1105,11 +1119,8 @@ fn run_graph(
     eprintln!(
         "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
     );
-    let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
-        load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
-            ProjectCompiler::new(&project).host_fns(&host_fns).check()
-        })
-    });
+    let outcome = load_rooted_project_with_plugins(file, project_root)
+        .and_then(|(project, host_fns)| ProjectCompiler::new(&project).host_fns(&host_fns).check());
     match outcome {
         Ok(checked) => match graphcal_project::graph_ir::project_tir(checked.tir()) {
             Ok(ir) => match format {
@@ -1164,8 +1175,7 @@ fn run_view(file: &Path, project_root: Option<&Path>, instance: Option<String>) 
         instance: ViewInstanceId::from_wire(instance),
     });
     let outcome = (|| -> Result<ViewModel, ViewFailure> {
-        let fs = build_rooted_filesystem(file, project_root)?;
-        let (project, host_fns) = load_project_with_plugins(file, project_root, &fs)?;
+        let (project, host_fns) = load_rooted_project_with_plugins(file, project_root)?;
         let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
         let projections = project_views(&project, &checked)?;
         let Some(projection) = projections.get(&target) else {
@@ -1328,11 +1338,8 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                 let width = max_name_len;
                 for entry in entries {
                     match entry {
-                        display::FlatEntry::Error(name, reason) if !reason.has_failure() => {
-                            outln!("{name:width$} = {reason}");
-                        }
-                        display::FlatEntry::Error(name, err) => {
-                            eprintln!("{name:width$} = ERROR: {err}");
+                        display::FlatEntry::Error(name, reason) => {
+                            print_unavailable_line(name, width, reason);
                         }
                         display::FlatEntry::Value(name, value) => {
                             // A coordinate key renders as its coordinate quantity.
@@ -1415,6 +1422,75 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                 outln!("{line}");
             }
         }
+    }
+}
+
+/// Write every unavailable value (failed or unfinished) and every assertion
+/// that did not pass to stderr, with text output's line formatters.
+///
+/// Used when stdout is reserved for another payload (`--plot json`): the
+/// lines text mode would show for anything not computed or not verified
+/// still reach the user, so neither a non-zero exit nor an assertion left
+/// unchecked by `todo` inputs (under `--allow-incomplete`) goes unreported.
+fn report_unavailable_results(result: &EvalResult, output_view: EvalOutputView) {
+    let unavailable_values: Vec<(String, &OutputUnavailable)> = result
+        .output_values(output_view)
+        .filter_map(|entry| match &entry.outcome {
+            Err(reason) => Some((entry.name.to_string(), reason)),
+            Ok(_) => None,
+        })
+        .collect();
+    let width = unavailable_values
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or(0);
+    for (name, reason) in &unavailable_values {
+        eprintln!("{}", format_unavailable_line(name, width, reason));
+    }
+
+    let unverified_assertions: Vec<(String, &graphcal_eval::eval::EvalAssertion)> = result
+        .assertions
+        .iter()
+        .filter(|assertion| !matches!(assertion.outcome, graphcal_eval::eval::AssertResult::Pass))
+        .map(|assertion| (assertion.name.to_string(), assertion))
+        .collect();
+    let width = unverified_assertions
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or(0);
+    for (name, assertion) in &unverified_assertions {
+        eprintln!(
+            "{}",
+            format_assertion_line(
+                name,
+                &assertion.outcome,
+                width,
+                result.assumes_map.get(&assertion.name),
+            )
+        );
+    }
+}
+
+/// Format the text-output line of a value that is unavailable: `ERROR:` for a
+/// failure, the bare reason (TODO, BLOCKED) for unfinished work.
+fn format_unavailable_line(name: &str, width: usize, reason: &OutputUnavailable) -> String {
+    if reason.has_failure() {
+        format!("{name:width$} = ERROR: {reason}")
+    } else {
+        format!("{name:width$} = {reason}")
+    }
+}
+
+/// Print a text-output unavailable-value line: failures to stderr,
+/// unfinished work (TODO, BLOCKED) to stdout with the values.
+fn print_unavailable_line(name: &str, width: usize, reason: &OutputUnavailable) {
+    let line = format_unavailable_line(name, width, reason);
+    if reason.has_failure() {
+        eprintln!("{line}");
+    } else {
+        outln!("{line}");
     }
 }
 

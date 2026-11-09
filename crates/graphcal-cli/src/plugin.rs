@@ -36,6 +36,8 @@ pub struct ScaffoldPlan {
     pub root: PathBuf,
     /// Files to create, relative to `root`.
     pub files: Vec<ScaffoldFile>,
+    /// The wasm module a release build produces, relative to `root`.
+    pub release_artifact: PathBuf,
 }
 
 /// One file of the scaffold.
@@ -85,7 +87,13 @@ pub fn scaffold_plan(name: &str, dir: Option<&Path>) -> Result<ScaffoldPlan, Sca
         lib_rs_file(),
         readme_file(name, &artifact),
     ];
-    Ok(ScaffoldPlan { root, files })
+    let release_artifact =
+        Path::new("target/wasm32-unknown-unknown/release").join(format!("{artifact}.wasm"));
+    Ok(ScaffoldPlan {
+        root,
+        files,
+        release_artifact,
+    })
 }
 
 fn cargo_toml_file(name: &str) -> ScaffoldFile {
@@ -1030,6 +1038,11 @@ mod tests {
         assert!(readme.contains("`SpanOutput` for `span`"), "{readme}");
         let toolchain = &plan.files[1].contents;
         assert!(toolchain.contains("wasm32-unknown-unknown"), "{toolchain}");
+        // CLI-21: the plan names the real artifact (`-` mapped to `_`).
+        assert_eq!(
+            plan.release_artifact,
+            Path::new("target/wasm32-unknown-unknown/release/fluid_props.wasm")
+        );
     }
 
     #[test]
