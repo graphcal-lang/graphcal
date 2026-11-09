@@ -1338,11 +1338,8 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                 let width = max_name_len;
                 for entry in entries {
                     match entry {
-                        display::FlatEntry::Error(name, reason) if !reason.has_failure() => {
-                            outln!("{name:width$} = {reason}");
-                        }
-                        display::FlatEntry::Error(name, err) => {
-                            eprintln!("{name:width$} = ERROR: {err}");
+                        display::FlatEntry::Error(name, reason) => {
+                            print_unavailable_line(name, width, reason);
                         }
                         display::FlatEntry::Value(name, value) => {
                             // A coordinate key renders as its coordinate quantity.
@@ -1429,7 +1426,7 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
 }
 
 /// Write every unavailable value (failed or unfinished) and every assertion
-/// that did not pass to stderr, in the same line format as text output.
+/// that did not pass to stderr, with text output's line formatters.
 ///
 /// Used when stdout is reserved for another payload (`--plot json`): the
 /// lines text mode would show for anything not computed or not verified
@@ -1449,11 +1446,7 @@ fn report_unavailable_results(result: &EvalResult, output_view: EvalOutputView) 
         .max()
         .unwrap_or(0);
     for (name, reason) in &unavailable_values {
-        if reason.has_failure() {
-            eprintln!("{name:width$} = ERROR: {reason}");
-        } else {
-            eprintln!("{name:width$} = {reason}");
-        }
+        eprintln!("{}", format_unavailable_line(name, width, reason));
     }
 
     let unverified_assertions: Vec<(String, &graphcal_eval::eval::EvalAssertion)> = result
@@ -1477,6 +1470,27 @@ fn report_unavailable_results(result: &EvalResult, output_view: EvalOutputView) 
                 result.assumes_map.get(&assertion.name),
             )
         );
+    }
+}
+
+/// Format the text-output line of a value that is unavailable: `ERROR:` for a
+/// failure, the bare reason (TODO, BLOCKED) for unfinished work.
+fn format_unavailable_line(name: &str, width: usize, reason: &OutputUnavailable) -> String {
+    if reason.has_failure() {
+        format!("{name:width$} = ERROR: {reason}")
+    } else {
+        format!("{name:width$} = {reason}")
+    }
+}
+
+/// Print a text-output unavailable-value line: failures to stderr,
+/// unfinished work (TODO, BLOCKED) to stdout with the values.
+fn print_unavailable_line(name: &str, width: usize, reason: &OutputUnavailable) {
+    let line = format_unavailable_line(name, width, reason);
+    if reason.has_failure() {
+        eprintln!("{line}");
+    } else {
+        outln!("{line}");
     }
 }
 
