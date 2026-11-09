@@ -41,7 +41,7 @@ repos:
       - id: rumdl
 
   - repo: https://github.com/crate-ci/typos
-    rev: dd369349b73c245acd4dd4154a4bdf771d052150  # frozen: typos-dict-v0.14.2
+    rev: 13d4ad9e5ad5db0958564fe6fb02b9b0f5ddb1aa  # frozen: typos-dict-v0.14.2
     hooks:
       - id: typos
 
