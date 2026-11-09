@@ -106,12 +106,29 @@ impl PlannedRename {
     }
 }
 
+/// A compile error the compiler reported, as published: its diagnostic code
+/// and its message without the hint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompileErrorReport {
+    pub code: Option<NumberOrString>,
+    pub message: String,
+}
+
+impl std::fmt::Display for CompileErrorReport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.code {
+            Some(NumberOrString::String(code)) => write!(f, "{code}: {}", self.message),
+            Some(NumberOrString::Number(code)) => write!(f, "{code}: {}", self.message),
+            None => f.write_str(&self.message),
+        }
+    }
+}
+
 /// Why a planned rename was rejected by the re-check.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RenameCheckFailure {
-    /// The edited sources raise a compile error the original did not; the
-    /// payload is the compiler's message.
-    NewCompileError(String),
+    /// The edited sources raise a compile error the original did not.
+    NewCompileError(CompileErrorReport),
     /// The analysed project already fails to compile, so the re-check cannot
     /// validate the rename.
     OriginalDoesNotCompile,
@@ -250,12 +267,11 @@ fn error_codes(
     counts
 }
 
-/// The first error of `after` beyond what `before` already reported,
-/// rendered as `code: message` without its hint.
+/// The first error of `after` beyond what `before` already reported.
 fn new_compile_error(
     before: &HashMap<Url, Vec<Diagnostic>>,
     after: &HashMap<Url, Vec<Diagnostic>>,
-) -> Option<String> {
+) -> Option<CompileErrorReport> {
     let mut budget = error_codes(before);
     after
         .values()
@@ -270,16 +286,13 @@ fn new_compile_error(
                 false
             }
         })
-        .map(|diagnostic| {
-            let message = diagnostic
+        .map(|diagnostic| CompileErrorReport {
+            code: diagnostic.code.clone(),
+            message: diagnostic
                 .message
                 .split_once("\n\n")
-                .map_or(diagnostic.message.as_str(), |(message, _)| message);
-            match &diagnostic.code {
-                Some(NumberOrString::String(code)) => format!("{code}: {message}"),
-                Some(NumberOrString::Number(code)) => format!("{code}: {message}"),
-                None => message.to_string(),
-            }
+                .map_or(diagnostic.message.as_str(), |(message, _)| message)
+                .to_string(),
         })
 }
 
@@ -445,9 +458,17 @@ mod tests {
                 ),
             ],
         )]);
+        let report = new_compile_error(&before, &added).expect("a new error");
         assert_eq!(
-            new_compile_error(&before, &added).as_deref(),
-            Some("graphcal::N009: node `PI` shadows a built-in name")
+            report,
+            CompileErrorReport {
+                code: Some(NumberOrString::String("graphcal::N009".to_string())),
+                message: "node `PI` shadows a built-in name".to_string(),
+            }
+        );
+        assert_eq!(
+            report.to_string(),
+            "graphcal::N009: node `PI` shadows a built-in name"
         );
     }
 

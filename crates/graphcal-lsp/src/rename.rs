@@ -5,7 +5,7 @@ use tower_lsp::lsp_types::{PrepareRenameResponse, TextEdit, Url, WorkspaceEdit};
 use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
 use crate::project_symbols::ProjectOccurrence;
-use crate::rename_check::{PlannedRename, RenameCheck, RenameCheckFailure};
+use crate::rename_check::{CompileErrorReport, PlannedRename, RenameCheck, RenameCheckFailure};
 use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
 use crate::symbol_identity::ExternFunctionId;
 use crate::symbol_table::SymbolKey;
@@ -145,9 +145,12 @@ pub enum RenameRefusal {
     /// The new name is not a lexable identifier (or is a hard keyword).
     InvalidIdentifier { new_name: String },
     /// The renamed program raises a compile error the original did not
-    /// (a reserved built-in name, a duplicate, a shadowed term, …); `reason`
+    /// (a reserved built-in name, a duplicate, a shadowed term, …); `error`
     /// is the compiler's message.
-    WouldNotCompile { new_name: String, reason: String },
+    WouldNotCompile {
+        new_name: String,
+        error: CompileErrorReport,
+    },
     /// The project already fails to compile, which hides any error the
     /// rename would add.
     ProjectDoesNotCompile { name: String },
@@ -171,8 +174,8 @@ impl std::fmt::Display for RenameRefusal {
             Self::InvalidIdentifier { new_name } => {
                 write!(f, "`{new_name}` is not a valid graphcal identifier")
             }
-            Self::WouldNotCompile { new_name, reason } => {
-                write!(f, "cannot rename to `{new_name}`: {reason}")
+            Self::WouldNotCompile { new_name, error } => {
+                write!(f, "cannot rename to `{new_name}`: {error}")
             }
             Self::ProjectDoesNotCompile { name } => write!(
                 f,
@@ -227,10 +230,10 @@ pub fn rename(
     match check.check(analysis, uri, &plan) {
         Ok(()) => {}
         Err(RenameCheckFailure::Cancelled) => return Ok(None),
-        Err(RenameCheckFailure::NewCompileError(reason)) => {
+        Err(RenameCheckFailure::NewCompileError(error)) => {
             return Err(RenameRefusal::WouldNotCompile {
                 new_name: new_name.to_string(),
-                reason,
+                error,
             });
         }
         Err(RenameCheckFailure::OriginalDoesNotCompile) => {
@@ -440,6 +443,10 @@ mod tests {
         super::rename(analysis, uri, offset, new_name, &check)
     }
 
+    fn compiler_code(code: &str) -> tower_lsp::lsp_types::NumberOrString {
+        tower_lsp::lsp_types::NumberOrString::String(code.to_string())
+    }
+
     /// The rename was refused because the compiler rejects the edited program
     /// with diagnostic `code`.
     #[track_caller]
@@ -448,8 +455,8 @@ mod tests {
         code: &str,
     ) {
         match result {
-            Err(RenameRefusal::WouldNotCompile { reason, .. }) => {
-                assert!(reason.starts_with(code), "{reason}");
+            Err(RenameRefusal::WouldNotCompile { error, .. }) => {
+                assert_eq!(error.code, Some(compiler_code(code)), "{error}");
             }
             other => panic!("expected a {code} refusal, got {other:?}"),
         }
@@ -1425,8 +1432,8 @@ include scaled(index T: Step)::{ ys };
                     }
                     // A field of a record a plugin returns is part of the
                     // plugin's signature, which no rename can change.
-                    Err(RenameRefusal::WouldNotCompile { reason, .. })
-                        if reason.starts_with("graphcal::W005") => {}
+                    Err(RenameRefusal::WouldNotCompile { error, .. })
+                        if error.code == Some(compiler_code("graphcal::W005")) => {}
                     other => failures.push(format!(
                         "{}: `{}` -> `{new_name}`: {other:?}",
                         path.display(),
