@@ -1,4 +1,4 @@
-//! Convert a JSON parameter document into parameter bindings (`HashMap<DeclName, Expr>`).
+//! Convert a JSON parameter document into parameter bindings, in document order.
 //!
 //! The JSON schema uses expression strings for leaf values and
 //! JSON objects for structs, tagged unions, and named-label indexed params.
@@ -18,7 +18,7 @@
 //! | `object` with `"type"` and `"fields"` | Single-variant struct |
 //! | `object` with `"index"` and `"entries"` | Named-label indexed param |
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fmt;
 
 use serde::Deserialize;
@@ -559,17 +559,19 @@ impl From<serde_json::Error> for JsonInputError {
 // Public API
 // ---------------------------------------------------------------------------
 
-/// Convert a JSON input string into a `HashMap` of parameter overrides.
+/// Convert a JSON input string into parameter overrides, in document order.
 ///
 /// Constructor and index spellings must be explicit in JSON. Concrete expected
 /// types, dimensions, completeness, and constraints are checked by the prepared evaluator.
-pub fn json_to_overrides(json_str: &str) -> Result<HashMap<DeclName, Expr>, JsonInputError> {
+pub fn json_to_overrides(
+    json_str: &str,
+) -> Result<indexmap::IndexMap<DeclName, Expr>, JsonInputError> {
     let json = parse_exact_json(json_str)?;
     let ExactJsonValue::Object(obj) = json else {
         return Err(JsonInputError::TopLevelNotObject);
     };
 
-    let mut overrides = HashMap::new();
+    let mut overrides = indexmap::IndexMap::new();
     for (name, value) in obj.iter() {
         let expr = convert_value(value, name)?;
         let decl_name =

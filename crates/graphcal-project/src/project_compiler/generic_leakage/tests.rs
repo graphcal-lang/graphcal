@@ -90,10 +90,10 @@ impl StaticBindingResolution for NothingBound {
 fn unbound(dependency: &ModuleInterface) -> Result<CoveredStaticBindings, PipelineError> {
     CoveredStaticBindings::check(
         dependency,
+        indexmap::IndexMap::new(),
         HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        indexmap::IndexMap::new(),
+        indexmap::IndexMap::new(),
         source(),
         Span::new(0, 0),
     )

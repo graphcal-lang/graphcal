@@ -700,7 +700,7 @@ fn resolve_instance_decl_type(
 }
 
 /// Declaration domain bounds keyed by the canonical declaration they bound.
-type DomainBounds = HashMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>;
+type DomainBounds = indexmap::IndexMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>;
 
 /// Require each value declaration's resolved type to be concrete (constants,
 /// then parameters, then nodes), moving its domain bounds into a table keyed
@@ -709,7 +709,7 @@ fn attach_checked_types(
     decls: crate::ir::decl_table::DeclTable<SignatureResolved>,
     src: SourceId,
 ) -> Result<(crate::ir::decl_table::DeclTable<Typed>, DomainBounds), SemanticError> {
-    let mut domain_bounds = HashMap::new();
+    let mut domain_bounds = DomainBounds::new();
     let decls = decls.try_map(signature_rank, |decl| {
         map_value_annotation(
             decl,
@@ -848,7 +848,7 @@ fn type_resolve_dag(
 
     let semantic = DagSemanticBody {
         domain_bounds,
-        dynamic_unit_scales: HashMap::new(),
+        dynamic_unit_scales: indexmap::IndexMap::new(),
         dependencies,
         override_reconciliations,
         bindable_nominals,

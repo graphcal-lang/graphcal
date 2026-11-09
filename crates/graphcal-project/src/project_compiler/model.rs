@@ -150,9 +150,14 @@ pub(super) struct IncludeInstanceRequest<'a> {
     pub(super) selective_names: Option<Vec<ImportAlias>>,
     pub(super) unit_projection_aliases: Vec<UnitProjectionAlias>,
     pub(super) runtime_unit_names: HashSet<UnitName>,
-    pub(super) assertion_aliases: HashMap<DeclName, DeclName>,
+    /// Selected assertions (template name to local alias), in the order the
+    /// include's selection list names them, which is the order they report in.
+    pub(super) assertion_aliases: indexmap::IndexMap<DeclName, DeclName>,
     pub(super) surface_outputs: Vec<ScopedName>,
-    pub(super) requested_plots: HashMap<DeclName, graphcal_compiler::ir::model::RequestedPlot>,
+    /// Selected plots by template name, in the order the include's selection
+    /// list names them, which is the order they present in.
+    pub(super) requested_plots:
+        indexmap::IndexMap<DeclName, graphcal_compiler::ir::model::RequestedPlot>,
     pub(super) include_span: Span,
     pub(super) import_item_attributes:
         HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
