@@ -63,6 +63,11 @@ jobs:
 
   public-surface:
     runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-public-surface' || 'ubuntu-latest' }}
+    env:
+      # cargo-hawk binaries link against one exact rustc and refuse any other.
+      # Keep this equal to the `channel` in astral-sh/hawk's rust-toolchain.toml
+      # for the pinned cargo-hawk release, independent of our own toolchain.
+      HAWK_RUSTC: 1.99.0
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -77,6 +82,9 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
+      - name: Install Hawk's Rust toolchain
+        run: rustup toolchain install "$HAWK_RUSTC" --profile minimal --target wasm32-unknown-unknown --no-self-update
+
       - uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-hawk@0.1.15
@@ -87,7 +95,7 @@ jobs:
       # `target/` so the cache volume reuses the instrumented dependency builds.
       - name: Check closed-world public surface
         run: >-
-          cargo hawk check -D warnings
+          cargo +"$HAWK_RUSTC" hawk check -D warnings
           --target-dir target/hawk
           --exclude-crate graphcal_compiler
           --exclude-crate graphcal_eval
