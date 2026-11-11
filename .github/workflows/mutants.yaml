@@ -85,7 +85,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
 
@@ -128,7 +128,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         if: runner.environment == 'github-hosted'
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
@@ -217,7 +217,7 @@ jobs:
           path: ~/.rustup
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
 
@@ -230,7 +230,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         if: runner.environment == 'github-hosted'
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
@@ -289,7 +289,7 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
 

@@ -63,6 +63,11 @@ jobs:
 
   public-surface:
     runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-8x16-ubuntu-2604;overrides.cache-tag=graphcal-ci-public-surface' || 'ubuntu-latest' }}
+    env:
+      # cargo-hawk binaries link against one exact rustc and refuse any other.
+      # Keep this equal to the `channel` in astral-sh/hawk's rust-toolchain.toml
+      # for the pinned cargo-hawk release, independent of our own toolchain.
+      HAWK_RUSTC: 1.99.0
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -77,7 +82,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: taiki-e/install-action@v2.87.31
+      - name: Install Hawk's Rust toolchain
+        run: rustup toolchain install "$HAWK_RUSTC" --profile minimal --target wasm32-unknown-unknown --no-self-update
+
+      - uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-hawk@0.1.15
 
@@ -87,7 +95,7 @@ jobs:
       # `target/` so the cache volume reuses the instrumented dependency builds.
       - name: Check closed-world public surface
         run: >-
-          cargo hawk check -D warnings
+          cargo +"$HAWK_RUSTC" hawk check -D warnings
           --target-dir target/hawk
           --exclude-crate graphcal_compiler
           --exclude-crate graphcal_eval
@@ -112,11 +120,11 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-deny@0.20.2
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-audit@0.22.2
 
@@ -167,7 +175,7 @@ jobs:
           path: ~/.rustup
 
       - name: Build and independently check Lean specifications
-        uses: leanprover/lean-action@v1.6.2
+        uses: leanprover/lean-action@v1.7.0
         with:
           lake-package-directory: formal
           auto-config: false
@@ -240,7 +248,7 @@ jobs:
         run: cargo build --locked --package graphcal
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
           enable-cache: false
@@ -324,7 +332,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         if: runner.environment == 'github-hosted'
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.90.1
         with:
           tool: wasm-pack@0.15.0
 
@@ -384,7 +392,7 @@ jobs:
         if: runner.environment == 'github-hosted'
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2.87.31
+        uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-llvm-cov
 
@@ -421,7 +429,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.90.1
         with:
           tool: cargo-hack
 
@@ -438,13 +446,13 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: "0.13.x"
           enable-cache: false
 
       - name: Install Nushell
-        uses: hustcer/setup-nu@v3.27
+        uses: hustcer/setup-nu@v3.29
         with:
           version: "0.115.1"
 
@@ -465,7 +473,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: crate-ci/typos@v1.51.1
+      - uses: crate-ci/typos@v1.52.0
 
   report-engine-tools:
     # Release builds run on these runners; the other platforms are covered by

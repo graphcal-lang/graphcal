@@ -86,8 +86,12 @@ test: formal-conformance pipeline-layers playground-test view-test
 # Audit the closed-world CLI surface while preserving documented external crate
 # and ABI boundaries that Hawk cannot observe from the shipped binary.
 # Baseline: zero findings with cargo-hawk 0.1.13 on Rust 1.98.0 (2026-08-30).
+# cargo-hawk runs only on the exact rustc it was built for, which can lag our
+# toolchain; keep this in sync with `HAWK_RUSTC` in .github/workflows/ci.yaml.
+hawk_rustc := "1.99.0"
+
 hawk:
-    cargo hawk check -D warnings \
+    cargo +{{hawk_rustc}} hawk check -D warnings \
         --exclude-crate graphcal_compiler \
         --exclude-crate graphcal_eval \
         --exclude-crate graphcal_io \

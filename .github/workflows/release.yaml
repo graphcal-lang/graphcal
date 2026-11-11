@@ -348,12 +348,12 @@ jobs:
         run: rustup toolchain install --no-self-update
       - name: Install wasm32 target
         run: rustup target add wasm32-unknown-unknown
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.90.1
         with:
           tool: wasm-pack@0.15.0,just@1.58.0
       - uses: voidzero-dev/setup-vp@v1.22.0
         with:
-          version: '1.4.0'
+          version: '1.5.0'
           node-version: '26.13.0'
           working-directory: web/view
           run-install: false
@@ -399,7 +399,7 @@ jobs:
           persist-credentials: false
       - uses: voidzero-dev/setup-vp@v1.22.0
         with:
-          version: '1.4.0'
+          version: '1.5.0'
           node-version: '26.13.0'
           working-directory: web/view-deploy
           run-install: false
