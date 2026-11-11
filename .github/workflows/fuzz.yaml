@@ -63,7 +63,7 @@ jobs:
             fuzz/target
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.2
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
 
@@ -78,7 +78,7 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
 
-      - uses: taiki-e/install-action@v2.87.31
+      - uses: taiki-e/install-action@v2.90.1
         if: matrix.target == 'parser'
         with:
           tool: cargo-deny@0.20.2
