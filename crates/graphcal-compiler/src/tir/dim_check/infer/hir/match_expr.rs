@@ -224,7 +224,7 @@ impl Infer<'_> {
                         )
                         .into());
                     };
-                    if !covered.insert(target.variant().name().clone()) {
+                    if !covered.insert(target.variant().name()) {
                         return Err(SemanticError::located(
                             self.env.src,
                             *span,

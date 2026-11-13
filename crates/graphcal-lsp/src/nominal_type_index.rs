@@ -16,7 +16,6 @@ use graphcal_compiler::hir;
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::resolved_name::{ResolvedConstructorName, ResolvedDeclName};
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::phase::never;
 
 use crate::symbol_identity::FieldId;
 
@@ -144,7 +143,7 @@ fn collect_declarations(
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(sugar) => never(*sugar),
+            DeclKind::Sugar(sugar) => match *sugar {},
         }
     }
 }

@@ -12,7 +12,6 @@ use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameName
 use crate::syntax::index_name::{IndexName, IndexNameNamespace, IndexVariantName};
 use crate::syntax::module_name::ScopeSegment;
 use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath};
-use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{
     ConstructorName, ConstructorNameNamespace, StructTypeName, StructTypeNameNamespace,
@@ -533,7 +532,7 @@ impl ModuleSymbols {
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            ast::DeclKind::Sugar(s) => never(*s),
+            ast::DeclKind::Sugar(s) => match *s {},
         }
     }
 

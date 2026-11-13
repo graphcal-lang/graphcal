@@ -2973,7 +2973,7 @@ fn checked_tir_records_typed_template_instance_bindings() {
             .output_projections()
             .map(|projection| projection.target)
             .collect::<Vec<_>>();
-        assert_eq!(targets, vec![concrete.clone(), output.clone()]);
+        assert_eq!(targets, vec![concrete, output.clone()]);
     }
 }
 

@@ -41,7 +41,6 @@ use crate::semantic_error::SemanticError;
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::NameAtom;
-use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 
 // Re-export declaration-collection data types.
@@ -305,7 +304,7 @@ fn required_bindability_interface(decl: &DeclKind) -> Option<InterfaceDecl> {
             clippy::uninhabited_references,
             reason = "Sugar(Infallible) proves this arm unreachable"
         )]
-        DeclKind::Sugar(s) => never(*s),
+        DeclKind::Sugar(s) => match *s {},
     }
 }
 
@@ -465,7 +464,7 @@ fn entry<E>(
             clippy::uninhabited_references,
             reason = "Sugar(Infallible) proves this arm unreachable"
         )]
-        DeclKind::Sugar(s) => never(*s),
+        DeclKind::Sugar(s) => match *s {},
         DeclKind::Assert(a) => declare(&a.name).map(|(identity, _)| {
             Decl::Assert(AssertEntry {
                 doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
@@ -775,7 +774,7 @@ fn validate_private_in_public(
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(s) => never(*s),
+            DeclKind::Sugar(s) => match *s {},
         }
 
         emit(

@@ -85,6 +85,7 @@ decimal_literal_representation = { level = "warn", priority = 1 }
 derive_partial_eq_without_eq = { level = "allow", priority = 1 }  # We implement `Eq` only when necessary
 disallowed_methods = { level = "warn", priority = 1 }
 else_if_without_else = { level = "warn", priority = 1 }
+empty_enums = { level = "allow", priority = 1 }  # Uninhabited enums serve as type-level markers (phases, name namespaces)
 expect_used = { level = "warn", priority = 1 }
 indexing_slicing = { level = "allow", priority = 1 }  # TODO: change to "warn" later
 missing_errors_doc = { level = "allow", priority = 1 }  # TODO: change to "warn" later
