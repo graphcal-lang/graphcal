@@ -25,12 +25,6 @@
   ],
   packageRules: [
     {
-      description: "Disable Renovate cooldown for Cargo crates until Cargo min-publish-age is stable (#885)",
-      matchManagers: ["cargo"],
-      matchDatasources: ["crate"],
-      minimumReleaseAge: null,
-    },
-    {
       description: "Hold num-bigint at 0.4 until num-rational supports 0.5 (rust-num/num-rational#157)",
       matchManagers: ["cargo"],
       matchPackageNames: ["num-bigint"],
