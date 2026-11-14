@@ -519,12 +519,6 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
                         )?;
                     }
                 }
-                crate::desugar::desugared_ast::MatchPattern::Constructor { name, .. } => {
-                    self.check_constructor(
-                        &name.value,
-                        OverrideMention::MatchConstructor(name.value.clone()),
-                    )?;
-                }
             }
             self.visit_expr(&arm.body)?;
         }

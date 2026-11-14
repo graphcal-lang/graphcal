@@ -18,7 +18,7 @@ use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::phase::{Desugared, Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::ContextualKeyword;
-use crate::syntax::type_name::{ConstructorName, FieldName};
+use crate::syntax::type_name::FieldName;
 
 /// Expression-level sugar — only legal in [`Raw`].
 ///
@@ -1492,24 +1492,16 @@ impl<'a, B> IntoIterator for &'a PatternBindings<B> {
 }
 
 /// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver#Departure`.
+///
+/// The punctuation alone selects the variant: a `#` makes an index-label
+/// pattern, anything else is a constructor path. HIR lowering resolves the
+/// path in the matching namespace.
 #[derive(Debug, Clone, FormatEquivalent)]
 pub enum MatchPattern {
-    /// Syntactic path pattern before semantic categorization.
-    ///
-    /// The parser emits this for both constructor-looking and index-label-looking
-    /// patterns. Name resolution may rewrite it to [`Self::Constructor`] or
-    /// [`Self::IndexLabel`] only when it can prove that categorization from the
-    /// local symbol context. Qualified paths that require module-aware lookup
-    /// remain syntactic paths instead of being half-resolved.
+    /// Constructor pattern written as a bare or module-qualified path:
+    /// `Impulsive(delta_v: dv)` or `Nominal`.
     Path {
         path: IdentPath,
-        bindings: PatternBindings<PatternBinding>,
-        #[fe(skip)]
-        span: Span,
-    },
-    /// Tagged-union constructor pattern: `Impulsive(delta_v: dv)` or `Nominal`.
-    Constructor {
-        name: Spanned<ConstructorName>,
         bindings: PatternBindings<PatternBinding>,
         #[fe(skip)]
         span: Span,
@@ -1517,8 +1509,8 @@ pub enum MatchPattern {
     /// Named-index label pattern: `Maneuver#Departure`.
     ///
     /// Index labels are fieldless, so this variant deliberately has no
-    /// binding payload. This variant is semantic: producers should construct it
-    /// only after proving that the path denotes an index variant.
+    /// binding payload. The parser builds it whenever the path is followed by
+    /// `#`; HIR lowering resolves the index and label.
     IndexLabel {
         index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
@@ -1531,16 +1523,14 @@ impl MatchPattern {
     #[must_use]
     pub(crate) const fn span(&self) -> Span {
         match self {
-            Self::Path { span, .. }
-            | Self::Constructor { span, .. }
-            | Self::IndexLabel { span, .. } => *span,
+            Self::Path { span, .. } | Self::IndexLabel { span, .. } => *span,
         }
     }
 
     #[must_use]
     pub fn bindings(&self) -> &[PatternBinding] {
         match self {
-            Self::Path { bindings, .. } | Self::Constructor { bindings, .. } => bindings.as_slice(),
+            Self::Path { bindings, .. } => bindings.as_slice(),
             Self::IndexLabel { .. } => &[],
         }
     }

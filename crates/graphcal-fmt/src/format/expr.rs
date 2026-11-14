@@ -1291,9 +1291,6 @@ pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
         MatchPattern::IndexLabel { index, variant, .. } => {
             RcDoc::text(format!("{}#{}", index.value, variant.value))
         }
-        MatchPattern::Constructor { name, bindings, .. } => {
-            append_pattern_bindings(RcDoc::text(name.value.as_str().to_string()), bindings)
-        }
     }
 }
 

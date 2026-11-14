@@ -1001,29 +1001,6 @@ impl ExprLowerer<'_> {
         pattern: &ast::MatchPattern,
     ) -> Result<MatchPattern, ExprLowerError> {
         match pattern {
-            ast::MatchPattern::Constructor {
-                name,
-                bindings,
-                span,
-            } => Ok(MatchPattern::Constructor {
-                constructor: Spanned::new(
-                    self.ctx
-                        .scope
-                        .resolver
-                        .resolve_constructor_path(
-                            self.ctx.scope.owner,
-                            &NamePath::local(name.value.atom().clone()),
-                        )
-                        .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                        .map_err(|source| ExprLowerError::ModuleResolve {
-                            source,
-                            span: name.span,
-                        })?,
-                    name.span,
-                ),
-                bindings: self.lower_pattern_bindings(bindings)?,
-                span: *span,
-            }),
             ast::MatchPattern::IndexLabel {
                 index,
                 variant,
