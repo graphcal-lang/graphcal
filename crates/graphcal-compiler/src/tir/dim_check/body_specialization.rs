@@ -46,7 +46,9 @@ impl BodySubstitution<'_> {
         span: Span,
     ) -> Result<CheckedType<Symbolic>, SemanticError> {
         match self {
-            Self::Static(substitution) => specialize_expression_type(ty, substitution, src),
+            Self::Static(substitution) => specialize_expression_type(ty, substitution).map_err(
+                crate::tir::typed::specialization::specialization_overflow(src, span),
+            ),
             Self::Generic(substitution) => substitution
                 .instantiate(ty, span)
                 .map(|ty| ty.to_symbolic())

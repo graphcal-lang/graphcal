@@ -900,7 +900,11 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .and_then(|factor| acc.checked_mul(&factor))
             })
             .map_err(|_| {
-                SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
+                SemanticError::located(
+                    src,
+                    projection.selected_at(),
+                    DimensionError::DimensionOverflow,
+                )
             })
     }
 

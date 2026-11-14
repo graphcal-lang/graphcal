@@ -146,6 +146,7 @@ impl ModuleResolver {
                                 include.instance_scope(),
                             ),
                             dimension_port_bindings(include),
+                            local_span,
                         );
                         let entry = self.entry_mut(owner)?;
                         entry.scope.selected_dimensions.remove(&local_name);

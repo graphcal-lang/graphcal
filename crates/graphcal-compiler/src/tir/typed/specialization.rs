@@ -15,6 +15,7 @@ use crate::ir::instance::identity::{instance_declaration, projection_alias, temp
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use crate::nat::NatPolyForm;
 use crate::plot_shape::PlotChannelShape;
+use crate::ratio::RatioError;
 use crate::resolved_name::{
     ResolvedDeclName, ResolvedDimName, ResolvedStructTypeName, ResolvedUnitName,
 };
@@ -22,6 +23,7 @@ use crate::semantic::checked_type::{Concreteness, IndexTypeRef, StructTypeRef};
 use crate::semantic_error::SemanticError;
 use crate::source_id::SourceId;
 use crate::syntax::dimension::UnitName;
+use crate::syntax::span::Span;
 use crate::tir::presentation::DagPresentationFacts;
 
 use super::complete_substitution::CompleteSubstitution;
@@ -29,11 +31,23 @@ use super::dag_position::DagPosition;
 use super::dag_slots::LocalDagFacts;
 use super::instance_graph::InstanceGraph;
 
+/// Report the exponent overflow of a specialization at `span` in `src`, the
+/// site that requested it.
+pub fn specialization_overflow(src: SourceId, span: Span) -> impl Fn(RatioError) -> SemanticError {
+    move |_| SemanticError::located(src, span, DimensionError::DimensionOverflow)
+}
+
+/// Substitute the bound dimension ports of `dimension`.
+///
+/// # Errors
+///
+/// A bound dimension raised to the template's exponents can leave the
+/// exponent range, like any other dimension arithmetic. The caller reports
+/// the overflow at the site that requested the specialization.
 fn specialize_dimension(
     dimension: &Dimension,
     substitution: &CompleteSubstitution<'_>,
-    src: SourceId,
-) -> Result<Dimension, SemanticError> {
+) -> Result<Dimension, RatioError> {
     dimension
         .iter()
         .try_fold(Dimension::dimensionless(), |acc, (base, exponent)| {
@@ -44,13 +58,7 @@ fn specialize_dimension(
                     .unwrap_or_else(|| Dimension::base(base.clone())),
                 BaseDimId::Prelude(_) => Dimension::base(base.clone()),
             };
-            // A bound dimension raised to the template's exponents can
-            // leave the exponent range, like any other dimension arithmetic.
-            let overflow = |_| {
-                SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
-            };
-            let factor = factor.pow(*exponent).map_err(overflow)?;
-            acc.checked_mul(&factor).map_err(overflow)
+            acc.checked_mul(&factor.pow(*exponent)?)
         })
 }
 
@@ -77,22 +85,19 @@ fn specialize_index(
 fn specialize_dim_arg(
     dimension: &ResolvedDim,
     substitution: &CompleteSubstitution<'_>,
-    src: SourceId,
-) -> Result<ResolvedDim, SemanticError> {
+) -> Result<ResolvedDim, RatioError> {
     match dimension {
         ResolvedDim::Concrete(dimension) => {
-            specialize_dimension(dimension, substitution, src).map(ResolvedDim::Concrete)
+            specialize_dimension(dimension, substitution).map(ResolvedDim::Concrete)
         }
         ResolvedDim::Symbolic { terms, span } => terms
             .iter()
             .map(|term| match term {
                 ResolvedDimTerm::Concrete { dim, power, op } => {
-                    specialize_dimension(dim, substitution, src).map(|dim| {
-                        ResolvedDimTerm::Concrete {
-                            dim,
-                            power: *power,
-                            op: *op,
-                        }
+                    specialize_dimension(dim, substitution).map(|dim| ResolvedDimTerm::Concrete {
+                        dim,
+                        power: *power,
+                        op: *op,
                     })
                 }
                 ResolvedDimTerm::GenericParam { .. } => Ok(term.clone()),
@@ -105,14 +110,13 @@ fn specialize_dim_arg(
 fn specialize_value_type(
     resolved: &ResolvedValueType,
     substitution: &CompleteSubstitution<'_>,
-    src: SourceId,
-) -> Result<ResolvedValueType, SemanticError> {
+) -> Result<ResolvedValueType, RatioError> {
     match resolved {
         ResolvedValueType::Quantity(dimension) => {
-            specialize_dim_arg(dimension, substitution, src).map(ResolvedValueType::Quantity)
+            specialize_dim_arg(dimension, substitution).map(ResolvedValueType::Quantity)
         }
         ResolvedValueType::Complex { dimension, span } => {
-            specialize_dim_arg(dimension, substitution, src).map(|dimension| {
+            specialize_dim_arg(dimension, substitution).map(|dimension| {
                 ResolvedValueType::Complex {
                     dimension,
                     span: *span,
@@ -132,16 +136,14 @@ fn specialize_value_type(
                 .iter()
                 .map(|argument| match argument {
                     ResolvedGenericArg::Dim(dimension) => {
-                        specialize_dim_arg(dimension, substitution, src)
-                            .map(ResolvedGenericArg::Dim)
+                        specialize_dim_arg(dimension, substitution).map(ResolvedGenericArg::Dim)
                     }
                     ResolvedGenericArg::Index(index) => Ok(ResolvedGenericArg::Index(
                         specialize_index(index, substitution),
                     )),
                     ResolvedGenericArg::Nat(_, _) => Ok(argument.clone()),
                     ResolvedGenericArg::Type(resolved) => {
-                        specialize_value_type(resolved, substitution, src)
-                            .map(ResolvedGenericArg::Type)
+                        specialize_value_type(resolved, substitution).map(ResolvedGenericArg::Type)
                     }
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -158,17 +160,23 @@ fn specialize_value_type(
     }
 }
 
+/// Specialize a resolved declaration type through an include's
+/// substitution.
+///
+/// # Errors
+///
+/// Returns the exponent overflow of a specialized dimension; the caller
+/// reports it at the site that requested the specialization.
 pub fn specialize_type(
     resolved: &ResolvedDeclType,
     substitution: &CompleteSubstitution<'_>,
-    src: SourceId,
-) -> Result<ResolvedDeclType, SemanticError> {
+) -> Result<ResolvedDeclType, RatioError> {
     match resolved {
         ResolvedDeclType::Value(value_type) => {
-            specialize_value_type(value_type, substitution, src).map(ResolvedDeclType::Value)
+            specialize_value_type(value_type, substitution).map(ResolvedDeclType::Value)
         }
         ResolvedDeclType::Indexed { element, indexes } => Ok(ResolvedDeclType::Indexed {
-            element: specialize_value_type(element, substitution, src)?,
+            element: specialize_value_type(element, substitution)?,
             indexes: indexes.map_ref(|index| specialize_index(index, substitution)),
         }),
     }
@@ -202,19 +210,24 @@ fn specialize_struct_ref(
     )
 }
 
+/// Specialize a checked expression type through an include's substitution.
+///
+/// # Errors
+///
+/// Returns the exponent overflow of a specialized dimension; the caller
+/// reports it at the site that requested the specialization.
 pub fn specialize_expression_type<V: Concreteness>(
     ty: &crate::semantic::checked_type::CheckedType<V>,
     substitution: &CompleteSubstitution<'_>,
-    src: SourceId,
-) -> Result<crate::semantic::checked_type::CheckedType<V>, SemanticError> {
+) -> Result<crate::semantic::checked_type::CheckedType<V>, RatioError> {
     use crate::semantic::checked_type::{CheckedGenericArg, CheckedType};
-    let recurse = |ty: &CheckedType<V>| specialize_expression_type(ty, substitution, src);
+    let recurse = |ty: &CheckedType<V>| specialize_expression_type(ty, substitution);
     Ok(match ty {
         CheckedType::Quantity(dimension) => {
-            CheckedType::Quantity(specialize_dimension(dimension, substitution, src)?)
+            CheckedType::Quantity(specialize_dimension(dimension, substitution)?)
         }
         CheckedType::Complex(dimension) => {
-            CheckedType::Complex(specialize_dimension(dimension, substitution, src)?)
+            CheckedType::Complex(specialize_dimension(dimension, substitution)?)
         }
         CheckedType::Key(index) => CheckedType::Key(specialize_index_ref(index, substitution)),
         CheckedType::Indexed { element, index } => CheckedType::Indexed {
@@ -226,9 +239,9 @@ pub fn specialize_expression_type<V: Concreteness>(
             args.iter()
                 .map(|arg| {
                     Ok(match arg {
-                        CheckedGenericArg::Dim(dimension) => CheckedGenericArg::Dim(
-                            specialize_dimension(dimension, substitution, src)?,
-                        ),
+                        CheckedGenericArg::Dim(dimension) => {
+                            CheckedGenericArg::Dim(specialize_dimension(dimension, substitution)?)
+                        }
                         CheckedGenericArg::Index(index) => {
                             CheckedGenericArg::Index(specialize_index_ref(index, substitution))
                         }
@@ -236,7 +249,7 @@ pub fn specialize_expression_type<V: Concreteness>(
                         CheckedGenericArg::Nat(_) => arg.clone(),
                     })
                 })
-                .collect::<Result<_, SemanticError>>()?,
+                .collect::<Result<_, RatioError>>()?,
         ),
         CheckedType::Bool | CheckedType::Int | CheckedType::Datetime(_) => ty.clone(),
     })
@@ -245,14 +258,12 @@ pub fn specialize_expression_type<V: Concreteness>(
 fn specialize_plot_channel(
     channel: &PlotChannelShape,
     substitution: &CompleteSubstitution<'_>,
-    src: SourceId,
-) -> Result<PlotChannelShape, SemanticError> {
+) -> Result<PlotChannelShape, RatioError> {
     let leaf = match channel.leaf() {
         crate::plot_shape::PlotLeafKind::Quantity(dimension) => {
             crate::plot_shape::PlotLeafKind::Quantity(specialize_dimension(
                 dimension,
                 substitution,
-                src,
             )?)
         }
         crate::plot_shape::PlotLeafKind::Key(index) => {
@@ -499,11 +510,13 @@ fn specialize_instance_semantics(
     edge: &HirInstanceRecord,
     substitution: &CompleteSubstitution<'_>,
     src: SourceId,
+    site: Span,
 ) -> Result<(), SemanticError> {
     let specialized = instance
         .value_decl_types()
         .map(|(identity, annotation)| {
-            specialize_type(annotation.checked().resolved(), substitution, src)
+            specialize_type(annotation.checked().resolved(), substitution)
+                .map_err(specialization_overflow(src, site))
                 .and_then(|resolved| super::CheckedDeclType::new(resolved, src))
                 .map(|checked| (identity, checked))
         })
@@ -625,7 +638,11 @@ pub fn instance_presentation_facts(
             channels
                 .iter()
                 .map(|(encoding, channel)| {
-                    specialize_plot_channel(channel, substitution, src)
+                    // Presentation facts carry no include site; the
+                    // instance's declarations were specialized (and an
+                    // overflow reported at its include) before them.
+                    specialize_plot_channel(channel, substitution)
+                        .map_err(specialization_overflow(src, src.whole_span()))
                         .map(|channel| (*encoding, channel))
                 })
                 .collect::<Result<_, _>>()
@@ -774,6 +791,9 @@ fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
 
 /// Materialize the instance `edge` allocates in the DAG at `parent`, which
 /// holds the edge, and return its position.
+///
+/// `site` is where a failure to specialize the instance is reported: the
+/// include declaration in `src` that (transitively) materializes it.
 fn instantiate_semantic_edge(
     tir: &mut UncheckedTir,
     graph: &mut InstanceGraph,
@@ -781,6 +801,7 @@ fn instantiate_semantic_edge(
     edge: &HirInstanceRecord,
     templates: &mut InstanceTemplates,
     src: SourceId,
+    site: Span,
 ) -> Result<DagPosition, SemanticError> {
     let owner = edge.instance.id().owner();
     let template_body = graph
@@ -824,7 +845,8 @@ fn instantiate_semantic_edge(
                     DiagnosticAnchor::WholeFile,
                 )
             })?;
-            info.dimension = specialize_dimension(&info.dimension, &substitution, src)?;
+            info.dimension = specialize_dimension(&info.dimension, &substitution)
+                .map_err(specialization_overflow(src, site))?;
             Ok((instance_declaration(edge.instance.id(), name), info))
         })
         .collect::<Result<Vec<_>, SemanticError>>()?;
@@ -840,7 +862,7 @@ fn instantiate_semantic_edge(
         templates,
         src,
     )?;
-    specialize_instance_semantics(&mut instance, edge, &substitution, src)?;
+    specialize_instance_semantics(&mut instance, edge, &substitution, src, site)?;
     for (unit, info) in runtime_unit_infos {
         tir.insert_runtime_unit(unit, info).map_err(|error| {
             SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
@@ -892,6 +914,11 @@ pub fn instantiate_semantic_edges(
         rigid: HashMap::new(),
     };
     let mut holders = tir.dags.iter_positions().collect::<Vec<_>>();
+    // The include in `src` each materialized instance descends from. An edge
+    // of a local DAG is written in `src`; an edge of a materialized instance
+    // is written in its template's source, so it inherits its holder's site.
+    // An edge of an imported DAG is written in another source.
+    let mut sites: HashMap<DagPosition, Option<Span>> = HashMap::new();
     while !holders.is_empty() {
         let edges = holders
             .iter()
@@ -913,8 +940,24 @@ pub fn instantiate_semantic_edges(
                 graph.record_edge(holder, instance);
                 continue;
             }
-            let instance =
-                instantiate_semantic_edge(tir, &mut graph, holder, &edge, &mut templates, src)?;
+            let site = match sites.get(&holder) {
+                Some(inherited) => *inherited,
+                None => tir
+                    .dags
+                    .shared_at(holder)
+                    .is_none()
+                    .then_some(edge.include_span),
+            };
+            let instance = instantiate_semantic_edge(
+                tir,
+                &mut graph,
+                holder,
+                &edge,
+                &mut templates,
+                src,
+                site.unwrap_or_else(|| src.whole_span()),
+            )?;
+            sites.insert(instance, site);
             #[cfg(feature = "test-cancellation")]
             crate::cancellation::ProgressPhase::Instantiation.record();
             materialized.push(instance);

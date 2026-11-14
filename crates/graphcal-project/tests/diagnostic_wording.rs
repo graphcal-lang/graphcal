@@ -45,3 +45,19 @@ fn generic_parameter_shadowing_a_private_static_reports_shadowing() {
     let source = "type T { T(x: Length) }\npub type Box<T: Type> { Box(value: T) }\nnode b: Box<Dimensionless> = Box<Dimensionless>(value: 1.0);\n";
     insta::assert_snapshot!(render_error(source, "shadow.gcl"));
 }
+
+/// TYC-10: an exponent overflow found while specializing an include is
+/// reported at the include (or the selected dimension), not over the file.
+#[test]
+fn instance_dimension_overflow_is_reported_at_the_include() {
+    let projected_value = "dim Vol = Length^3;\ndag lib {\n    pub(bind) dim D;\n    param x: D;\n    pub node y: D^1000000000 = @x ^ 1000000000;\n}\ninclude lib(dim D: Vol, x: 1.0 m^3)::{ y };\n";
+    insta::assert_snapshot!(
+        "instance_dimension_overflow_value",
+        render_error(projected_value, "ovf_value.gcl")
+    );
+    let projected_dimension = "dim Vol = Length^3;\ndag lib {\n    pub(bind) dim D;\n    pub dim Q = D^1000000000;\n    param x: D;\n}\ninclude lib(dim D: Vol, x: 1.0 m^3)::{ dim Q };\nnode n: Q = todo;\n";
+    insta::assert_snapshot!(
+        "instance_dimension_overflow_dimension",
+        render_error(projected_dimension, "ovf_dimension.gcl")
+    );
+}
