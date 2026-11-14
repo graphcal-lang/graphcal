@@ -1,10 +1,5 @@
 //! Dependency-ordered whole-project checking orchestration.
 
-#[allow(
-    clippy::wildcard_imports,
-    clippy::allow_attributes,
-    reason = "project compiler pass uses the shared internal model"
-)]
 use graphcal_compiler::semantic_error::graph::GraphError;
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -1,11 +1,6 @@
 //! Generic type-system leakage analysis at include boundaries.
 
 use graphcal_compiler::semantic_error::visibility::ReexportedDeclarationKind;
-#[allow(
-    clippy::wildcard_imports,
-    clippy::allow_attributes,
-    reason = "leakage checks consume project compiler model types"
-)]
 use std::collections::HashSet;
 
 use graphcal_compiler::semantic_error::SemanticError;
