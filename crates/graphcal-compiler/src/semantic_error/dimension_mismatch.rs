@@ -319,6 +319,7 @@ pub enum MismatchRule {
     IfConditionBool,
     IfBranchesSameDimension,
     MatchArmsSameType,
+    MapEntriesSameType,
     ToleranceSameDimension,
     AbsoluteToleranceDimension,
 }
@@ -514,6 +515,9 @@ impl std::fmt::Display for MismatchRule {
                 f.write_str("both branches of if/else must have the same dimension")
             }
             Self::MatchArmsSameType => f.write_str("all match arms must return the same type"),
+            Self::MapEntriesSameType => {
+                f.write_str("every entry of a map literal must have the same type as the first")
+            }
             Self::ToleranceSameDimension => f.write_str(
                 "actual and expected in tolerance assertion must have the same dimension",
             ),

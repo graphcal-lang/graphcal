@@ -567,6 +567,7 @@ fn dimension_mismatch_payloads_render_distinct_texts() {
         MismatchRule::IfConditionBool,
         MismatchRule::IfBranchesSameDimension,
         MismatchRule::MatchArmsSameType,
+        MismatchRule::MapEntriesSameType,
         MismatchRule::ToleranceSameDimension,
         MismatchRule::AbsoluteToleranceDimension,
     ];

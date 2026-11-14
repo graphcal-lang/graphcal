@@ -4,6 +4,7 @@ use crate::hir::expr::{Expr, MapEntry, MapEntryKey};
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedIndexVariant;
 use crate::semantic_error::dimension::DimensionError;
+use crate::semantic_error::dimension_mismatch::{MismatchOperand, MismatchRule};
 use crate::semantic_error::index::IndexError;
 use crate::source_id::SourceId;
 
@@ -381,9 +382,14 @@ impl Infer<'_> {
                 return Err(SemanticError::located(
                     self.env.src,
                     entry.value.span,
-                    DimensionError::DimensionMismatchInAnnotation {
-                        declared: first_type.spelling(&self.env.registry.dimensions),
-                        inferred: entry_type.spelling(&self.env.registry.dimensions),
+                    DimensionError::DimensionMismatch {
+                        expected: Box::new(MismatchOperand::Type(
+                            first_type.spelling(&self.env.registry.dimensions),
+                        )),
+                        found: Box::new(MismatchOperand::Type(
+                            entry_type.spelling(&self.env.registry.dimensions),
+                        )),
+                        help: Box::new(MismatchRule::MapEntriesSameType),
                     },
                 )
                 .into());

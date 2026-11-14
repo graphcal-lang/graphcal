@@ -61,3 +61,11 @@ fn instance_dimension_overflow_is_reported_at_the_include() {
         render_error(projected_dimension, "ovf_dimension.gcl")
     );
 }
+
+/// TYC-15: map entries of different types are a map-literal rule, not an
+/// annotation mismatch against a type nobody declared.
+#[test]
+fn map_entries_of_different_types_report_the_map_rule() {
+    let source = "index P = { A, B };\nnode x: Length[P] = { P#A: 1.0 m, P#B: 2.0 s };\n";
+    insta::assert_snapshot!(render_error(source, "map_entries.gcl"));
+}
