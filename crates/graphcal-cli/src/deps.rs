@@ -1229,8 +1229,10 @@ fn verify_mismatched_pin(
     }
 }
 
+/// Exclusive writer lock on one source's cache entry. Holding the locked file
+/// holds the lock; dropping it closes the file, which releases the lock.
 struct CacheWriterLock {
-    file: std::fs::File,
+    _file: std::fs::File,
 }
 
 impl CacheWriterLock {
@@ -1255,13 +1257,7 @@ impl CacheWriterLock {
             })?;
         file.lock()
             .map_err(|source| DepsError::CacheLock { path, source })?;
-        Ok(Self { file })
-    }
-}
-
-impl Drop for CacheWriterLock {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
+        Ok(Self { _file: file })
     }
 }
 
