@@ -121,9 +121,7 @@ pub fn project_indexed_entries(runtime: &RuntimeValue) -> Result<&[RuntimeValue]
 /// # Errors
 ///
 /// Returns an [`Invariant`] when the value is not a struct value.
-pub fn project_struct_value(
-    runtime: &RuntimeValue,
-) -> Result<&StructValue<RuntimeValue>, Invariant> {
+fn project_struct_value(runtime: &RuntimeValue) -> Result<&StructValue<RuntimeValue>, Invariant> {
     match runtime {
         RuntimeValue::Struct(value) => Ok(value),
         other => Err(mismatch_kind(other.describe(), "a struct value")),

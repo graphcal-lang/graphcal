@@ -501,7 +501,7 @@ impl<'p> ClosureDag<'p> {
 }
 
 /// `name` qualified by `scopes`, then by its own qualifier.
-fn qualified(scopes: &[ScopeSegment], name: &ScopedName) -> ScopedName {
+pub(crate) fn qualified(scopes: &[ScopeSegment], name: &ScopedName) -> ScopedName {
     let qualifier = scopes
         .iter()
         .chain(name.qualifier())
