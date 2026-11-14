@@ -22,7 +22,7 @@ use std::iter;
 
 use crate::syntax::ast::{
     ConstNodeDecl, DeclKind, Declaration, Expr, ExprKind, MapEntry, MapEntryKey, MultiDataRow,
-    MultiDecl, MultiDeclSlice, MultiHeaderCell, MultiSlotColumnSpan, NodeDecl, ParamDecl, SlotKind,
+    MultiDecl, MultiDeclSlice, MultiSlotColumnSpan, NodeDecl, ParamDecl, SlotKind,
 };
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
@@ -93,18 +93,16 @@ fn slot_entries(slice: &MultiDeclSlice, slot_index: usize) -> Vec<MapEntry<Desug
             .collect(),
         MultiSlotColumnSpan::Range {
             start,
-            end,
+            variants,
             extra_axis,
         } => slice
             .rows()
             .iter()
             .flat_map(|row| {
-                (*start..*end).filter_map(move |column| {
-                    let MultiHeaderCell::Variant { variant, .. } = &slice.header_cells()[column]
-                    else {
-                        return None;
-                    };
-                    Some(MapEntry {
+                variants
+                    .iter()
+                    .zip(*start..)
+                    .map(move |(variant, column)| MapEntry {
                         keys: entry_keys(
                             slice.prefix_keys(),
                             row_key(row),
@@ -112,7 +110,6 @@ fn slot_entries(slice: &MultiDeclSlice, slot_index: usize) -> Vec<MapEntry<Desug
                         ),
                         value: row.values()[column].clone().into(),
                     })
-                })
             })
             .collect(),
     }

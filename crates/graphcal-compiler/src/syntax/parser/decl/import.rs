@@ -332,23 +332,19 @@ impl Parser<'_> {
 
             let namespace = match p.lexer.peek() {
                 Some(Token::Type) => {
-                    let (_, span) = p.advance()?;
-                    let _ = span;
+                    p.advance()?;
                     crate::syntax::ast::ImportItemNamespace::Type
                 }
                 Some(Token::Dimension) => {
-                    let (_, span) = p.advance()?;
-                    let _ = span;
+                    p.advance()?;
                     crate::syntax::ast::ImportItemNamespace::Dimension
                 }
                 Some(Token::Unit) => {
-                    let (_, span) = p.advance()?;
-                    let _ = span;
+                    p.advance()?;
                     crate::syntax::ast::ImportItemNamespace::Unit
                 }
                 Some(Token::Index) => {
-                    let (_, span) = p.advance()?;
-                    let _ = span;
+                    p.advance()?;
                     crate::syntax::ast::ImportItemNamespace::Index
                 }
                 _ => crate::syntax::ast::ImportItemNamespace::Term,
