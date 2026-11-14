@@ -14,7 +14,7 @@ use crate::runtime_presentation::EvaluatedRuntimeValue;
 
 /// The status of one element of a group member.
 #[derive(Debug, Clone)]
-pub(crate) enum ElementSlot {
+pub enum ElementSlot {
     /// Not evaluated yet.
     Pending,
     Computed(EvaluatedRuntimeValue),

@@ -18,13 +18,13 @@ use thiserror::Error;
 
 use super::aggregations::AggregationError;
 use super::complex::ComplexEvalError;
-use super::conversions::ExactIntConversionError;
 use super::datetime::DatetimeRangeError;
 use super::linear_algebra_error::LinearAlgebraError;
 use super::numeric::{ExactI64ToF64Error, QuantityValidationError};
 use crate::domain_check::DomainViolation;
 use crate::host_abi::marshal::{ArgumentError, ResultError};
 use crate::host_fns::HostFnError;
+use graphcal_compiler::finite_value::ExactF64ToI64Error;
 use graphcal_compiler::semantic::int_arith::IntArithError;
 
 /// Why evaluating a checked expression failed at runtime.
@@ -51,7 +51,7 @@ pub(super) enum RuntimeFailure {
     #[error("Int unit scale: {0}")]
     IntUnitScale(ExactI64ToF64Error),
     #[error("to_int() argument {}{}", .0, rounding_help(.0))]
-    ToInt(ExactIntConversionError),
+    ToInt(ExactF64ToI64Error),
     #[error("builtin function `{function}` {error}")]
     ScalarFunction {
         function: ScalarFn,
@@ -179,14 +179,12 @@ pub(super) enum InlineAssertionFailure {
 }
 
 /// The advice an inexact `to_int()` argument gets.
-const fn rounding_help(error: &ExactIntConversionError) -> &'static str {
+const fn rounding_help(error: &ExactF64ToI64Error) -> &'static str {
     match error {
-        ExactIntConversionError::NonInteger { .. } => {
+        ExactF64ToI64Error::NonInteger { .. } => {
             "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()"
         }
-        ExactIntConversionError::NonFinite { .. } | ExactIntConversionError::OutOfRange { .. } => {
-            ""
-        }
+        ExactF64ToI64Error::NonFinite { .. } | ExactF64ToI64Error::OutOfRange { .. } => "",
     }
 }
 
@@ -202,18 +200,18 @@ const fn relation(search: CoordinateSearch) -> &'static str {
 mod tests {
     use graphcal_compiler::tir::texpr::CoordinateSearch;
 
-    use super::super::conversions::ExactIntConversionError;
     use super::{IntegerFailure, RuntimeFailure, UnitScaleContext, relation, rounding_help};
+    use graphcal_compiler::finite_value::ExactF64ToI64Error;
 
     #[test]
     fn failures_render_their_established_messages() {
         assert_eq!(
-            RuntimeFailure::ToInt(ExactIntConversionError::NonInteger { value: 1.5 }).to_string(),
+            RuntimeFailure::ToInt(ExactF64ToI64Error::NonInteger { value: 1.5 }).to_string(),
             "to_int() argument is not integer-valued (got 1.5); apply trunc(), floor(), ceil(), \
              or round() explicitly before to_int()"
         );
         assert_eq!(
-            rounding_help(&ExactIntConversionError::NonFinite { value: f64::NAN }),
+            rounding_help(&ExactF64ToI64Error::NonFinite { value: f64::NAN }),
             ""
         );
         assert_eq!(relation(CoordinateSearch::Floor), "at or below");

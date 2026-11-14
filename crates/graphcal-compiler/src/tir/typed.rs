@@ -232,17 +232,28 @@ impl TirDraft {
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<Self, Outcome<SemanticError>> {
         cancellation.checkpoint()?;
-        let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
-        let context_types = Arc::clone(&project_types);
-        let ctx = ModuleTypeContext::new(signed.hir().module(), module_resolver, &context_types);
-        type_resolve_impl(
+        // The root's display-dimension spellings and extern signatures seed
+        // the draft itself; the body resolves exactly like any other DAG's.
+        let mut signed = signed;
+        let display_dimensions = std::mem::take(&mut signed.hir.display_dimensions);
+        let extern_functions = std::mem::take(&mut signed.hir.extern_functions);
+        let root_dag = type_resolve_signed_dag(
             signed,
-            imported_bindings,
+            imported_types,
             src,
-            ctx,
-            project_types,
+            module_resolver,
+            &project_types,
             cancellation,
-        )
+        )?;
+        Ok(Self::new(
+            crate::display::formatting_registry::FormattingRegistry::new(
+                project_types.base_dimensions().clone(),
+                display_dimensions,
+            ),
+            project_types,
+            root_dag,
+            extern_functions,
+        ))
     }
 
     /// Resolve a signature-complete same-file inline DAG's bodies and add it
@@ -267,7 +278,7 @@ impl TirDraft {
         // map, exactly like the root body's, so calls inside it resolve.
         self.merge_declared_extern_functions(signed.hir())?;
         let project_types = self.project_types();
-        let dag = type_resolve_signed_single_with_imported_bindings_and_cancellation(
+        let dag = type_resolve_signed_dag(
             signed,
             imported_types,
             src,
@@ -350,61 +361,6 @@ fn finalize_hir_dag(
     check_hir_body_policies(dag, surface, module_ctx, src).map_err(Outcome::Failed)
 }
 
-fn type_resolve_impl(
-    signed: SignatureResolvedHirDag,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
-    src: SourceId,
-    module_ctx: ModuleTypeContext<'_>,
-    project_types: Arc<ProjectTypeStore>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TirDraft, Outcome<SemanticError>> {
-    cancellation.checkpoint()?;
-    let SignatureResolvedHirDag {
-        hir: ir,
-        decls,
-        domain_bounds,
-    } = signed;
-    let imported_bindings_for_hir = imported_bindings.clone();
-    let mut root_dag = type_resolve_dag(
-        decls,
-        src,
-        module_ctx.owner,
-        module_ctx,
-        &imported_bindings_for_hir,
-        domain_bounds,
-        cancellation,
-    )?
-    .with_body(
-        HirBody {
-            included_plots: ir.included_plots,
-            static_ports: ir.static_ports,
-            assumes_map: ir.assumes_map,
-            expected_fail: ir.expected_fail,
-            dynamic_unit_scales: ir.dynamic_unit_scales,
-            semantic_instances: ir.semantic_instances,
-        },
-        imported_bindings,
-        module_ctx,
-        src,
-    )?;
-    finalize_hir_dag(
-        &mut root_dag,
-        &ir.external_surface,
-        module_ctx,
-        src,
-        cancellation,
-    )?;
-    Ok(TirDraft::new(
-        crate::display::formatting_registry::FormattingRegistry::new(
-            project_types.base_dimensions().clone(),
-            ir.display_dimensions,
-        ),
-        project_types,
-        root_dag,
-        ir.extern_functions,
-    ))
-}
-
 /// Resolve type annotations for one DAG body without imports.
 #[cfg(test)]
 pub(crate) fn type_resolve_single_with_modules(
@@ -421,7 +377,7 @@ pub(crate) fn type_resolve_single_with_modules(
             project_types,
             cancellation,
         )?;
-        type_resolve_signed_single_with_imported_bindings_and_cancellation(
+        type_resolve_signed_dag(
             signed,
             &|_| None,
             src,
@@ -432,8 +388,9 @@ pub(crate) fn type_resolve_single_with_modules(
     })
 }
 
-/// Resolve a signature-complete non-root HIR module's bodies.
-fn type_resolve_signed_single_with_imported_bindings_and_cancellation(
+/// Resolve a signature-complete HIR DAG's bodies against its checked
+/// imported interfaces.
+fn type_resolve_signed_dag(
     signed: SignatureResolvedHirDag,
     imported_types: &ImportedConstantTypes<'_>,
     src: SourceId,
@@ -443,30 +400,18 @@ fn type_resolve_signed_single_with_imported_bindings_and_cancellation(
 ) -> Result<DagTIR, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
-    let ctx = ModuleTypeContext::new(signed.hir().module(), module_resolver, project_types);
-    type_resolve_single_impl(signed, imported_bindings, src, ctx, cancellation)
-}
-
-fn type_resolve_single_impl(
-    signed: SignatureResolvedHirDag,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
-    src: SourceId,
-    module_ctx: ModuleTypeContext<'_>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIR, Outcome<SemanticError>> {
-    cancellation.checkpoint()?;
+    let module_ctx = ModuleTypeContext::new(signed.hir().module(), module_resolver, project_types);
     let SignatureResolvedHirDag {
         hir: ir,
         decls,
         domain_bounds,
     } = signed;
-    let imported_bindings_for_hir = imported_bindings.clone();
     let mut dag = type_resolve_dag(
         decls,
         src,
         module_ctx.owner,
         module_ctx,
-        &imported_bindings_for_hir,
+        &imported_bindings,
         domain_bounds,
         cancellation,
     )?
@@ -641,9 +586,7 @@ impl<'a> DeclTypeResolver<'a> {
             Some(((view, complete), include_span)) => {
                 resolve_instance_decl_type(decl_type, complete, view, self.src, include_span)
             }
-            None => {
-                type_expr::resolve_hir_decl_type_with_project_types(decl_type, self.src, self.types)
-            }
+            None => type_expr::resolve_hir_decl_type(decl_type, self.src, self.types),
         }
     }
 }
@@ -655,7 +598,7 @@ pub(crate) fn resolve_todo_hole_type(
     src: SourceId,
     types: &ProjectTypeStore,
 ) -> Result<crate::semantic::checked_type::CheckedType, SemanticError> {
-    type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, types)?.to_checked_type(src)
+    type_expr::resolve_hir_decl_type(decl_type, src, types)?.to_checked_type(src)
 }
 
 /// Resolve declaration annotations in the type view `types` (see
@@ -712,7 +655,7 @@ fn resolve_instance_decl_type(
     src: SourceId,
     site: crate::syntax::span::Span,
 ) -> Result<ResolvedDeclType, SemanticError> {
-    let template_type = type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, view)?;
+    let template_type = type_expr::resolve_hir_decl_type(decl_type, src, view)?;
     specialization::specialize_type(&template_type, substitution)
         .map_err(specialization::specialization_overflow(src, site))
 }
@@ -1282,7 +1225,11 @@ impl<'d, 'c> TypeDefCollector<'d, 'c> {
                     definition_src,
                     annotation.span,
                 )?,
-                None => resolve_hir_decl_type(&annotation.decl_type, definition_src, ctx)?,
+                None => type_expr::resolve_hir_decl_type(
+                    &annotation.decl_type,
+                    definition_src,
+                    ctx.types,
+                )?,
             };
             let bounds = annotation
                 .domain_bounds
@@ -1974,7 +1921,6 @@ pub(crate) mod specialization;
 mod substitution;
 mod type_expr;
 pub use substitution::{Substitution, SubstitutionError};
-pub use type_expr::resolve_hir_decl_type;
 use type_expr::resolve_hir_generic_arg;
 
 #[cfg(test)]

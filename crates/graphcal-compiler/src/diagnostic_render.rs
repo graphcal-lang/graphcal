@@ -83,9 +83,7 @@ impl<K: DiagnosticKind + fmt::Debug> miette::Diagnostic for RenderableDiagnostic
     }
 
     fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
-        self.kind
-            .help()
-            .map(|help| Box::new(help) as Box<dyn fmt::Display + 'a>)
+        kind_help(&self.kind)
     }
 
     fn source_code(&self) -> Option<&dyn SourceCode> {
@@ -93,14 +91,34 @@ impl<K: DiagnosticKind + fmt::Debug> miette::Diagnostic for RenderableDiagnostic
     }
 
     fn labels(&self) -> Option<Box<dyn Iterator<Item = LabeledSpan> + '_>> {
-        let primary = LabeledSpan::new_with_span(self.kind.primary_label(), self.primary);
-        let secondary = self
-            .kind
-            .secondary_labels()
-            .into_iter()
-            .map(|label| LabeledSpan::new_with_span(Some(label.text), label.span));
-        Some(Box::new(std::iter::once(primary).chain(secondary)))
+        Some(Box::new(kind_labels(&self.kind, self.primary)))
     }
+}
+
+/// The `miette` help of a diagnostic payload.
+///
+/// Shared with every adapter that renders a located payload, so they all
+/// present its help identically.
+pub(crate) fn kind_help<K: DiagnosticKind>(kind: &K) -> Option<Box<dyn fmt::Display + '_>> {
+    kind.help()
+        .map(|help| Box::new(help) as Box<dyn fmt::Display + '_>)
+}
+
+/// The `miette` labels of a payload located at `primary`: the primary label
+/// first, then the payload's secondary labels in declaration order.
+///
+/// Shared with every adapter that renders a located payload, so they all
+/// present its labels identically.
+pub(crate) fn kind_labels<K: DiagnosticKind>(
+    kind: &K,
+    primary: Span,
+) -> impl Iterator<Item = LabeledSpan> + use<K> {
+    let primary = LabeledSpan::new_with_span(kind.primary_label(), primary);
+    let secondary = kind
+        .secondary_labels()
+        .into_iter()
+        .map(|label| LabeledSpan::new_with_span(Some(label.text), label.span));
+    std::iter::once(primary).chain(secondary)
 }
 
 #[cfg(test)]

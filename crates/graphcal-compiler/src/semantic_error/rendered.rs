@@ -5,6 +5,7 @@ use miette::Diagnostic;
 
 use super::SemanticError;
 use crate::diagnostic::DiagnosticKind as _;
+use crate::diagnostic_render::{kind_help, kind_labels};
 use crate::internal_error::InternalError;
 use crate::source_registry::{RegisteredSource, SourceRegistry};
 
@@ -64,10 +65,7 @@ impl Diagnostic for RenderedSemanticError {
 
     fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
         match &self.error {
-            SemanticError::Located(diagnostic) => diagnostic
-                .kind
-                .help()
-                .map(|help| Box::new(help) as Box<dyn std::fmt::Display + 'a>),
+            SemanticError::Located(diagnostic) => kind_help(&diagnostic.kind),
             SemanticError::Internal(_) => Some(Box::new(InternalError::HELP)),
         }
     }
@@ -79,15 +77,7 @@ impl Diagnostic for RenderedSemanticError {
     fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
         match &self.error {
             SemanticError::Located(diagnostic) => {
-                let primary = miette::LabeledSpan::new_with_span(
-                    diagnostic.kind.primary_label(),
-                    diagnostic.primary,
-                );
-                let secondary =
-                    diagnostic.kind.secondary_labels().into_iter().map(|label| {
-                        miette::LabeledSpan::new_with_span(Some(label.text), label.span)
-                    });
-                Some(Box::new(std::iter::once(primary).chain(secondary)))
+                Some(Box::new(kind_labels(&diagnostic.kind, diagnostic.primary)))
             }
             SemanticError::Internal(internal) => Some(Box::new(
                 internal
@@ -145,6 +135,50 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn located_error_renders_exactly_like_its_renderable_diagnostic() {
+        use crate::diagnostic::Diagnostic;
+        use crate::diagnostic_render::RenderableDiagnostic;
+        use crate::semantic_error::SemanticErrorKind;
+        use crate::semantic_error::attribute::AttributeError;
+        use crate::syntax::decl_name::DeclName;
+        use crate::syntax::span::Span;
+
+        let mut registry = SourceRegistry::new();
+        let text = "#[assumes(ok, ok)]\nnode x: Int = 1";
+        let source = registry.register("test.gcl", Arc::new(text.to_string()));
+        let kind = SemanticErrorKind::from(AttributeError::DuplicateAssumesArgument {
+            name: DeclName::expect_valid("ok"),
+            first: Span::new(10, 12),
+        });
+        let primary = Span::new(14, 16);
+
+        let rendered = super::RenderedSemanticError::new(
+            SemanticError::located(source, primary, kind.clone()),
+            &registry,
+        );
+        let renderable =
+            RenderableDiagnostic::new(Diagnostic::new(source, primary, kind), &registry)
+                .expect("the registry issued the source id");
+
+        let code =
+            |diagnostic: &dyn miette::Diagnostic| diagnostic.code().map(|code| code.to_string());
+        let help =
+            |diagnostic: &dyn miette::Diagnostic| diagnostic.help().map(|help| help.to_string());
+        let labels = |diagnostic: &dyn miette::Diagnostic| {
+            diagnostic
+                .labels()
+                .expect("located diagnostics expose labels")
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rendered.to_string(), renderable.to_string());
+        assert_eq!(code(&rendered), code(&renderable));
+        assert_eq!(help(&rendered), help(&renderable));
+        let rendered_labels = labels(&rendered);
+        assert_eq!(rendered_labels.len(), 2);
+        assert_eq!(rendered_labels, labels(&renderable));
     }
 
     #[test]

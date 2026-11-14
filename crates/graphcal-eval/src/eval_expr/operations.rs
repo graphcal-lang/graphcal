@@ -416,7 +416,7 @@ pub(super) fn int<'t>(
             .map_err(Outcome::Failed),
         IExpr::FromQuantity(arg) => {
             let value = operands.quantity(arg)?.get();
-            super::conversions::exact_f64_to_i64(value)
+            graphcal_compiler::finite_value::exact_f64_to_i64(value)
                 .map_err(|error| ctx.runtime_error(RuntimeFailure::ToInt(error), span))
                 .map_err(Outcome::Failed)
         }

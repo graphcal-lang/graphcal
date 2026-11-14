@@ -18,28 +18,20 @@ use graphcal_compiler::ir::instance::ExposedValueBody;
 use graphcal_compiler::node_unavailable::RuntimeUnavailable;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::non_empty::NonEmpty;
 
 use graphcal_compiler::display::include_scope_names::name_include_scopes;
 use graphcal_compiler::display::source_display_names::SourceDisplayNames;
 
 use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
-use crate::execution_plan::Entry;
+use crate::execution_plan::{Entry, qualified};
 
 /// `name`, written in `dag`, as the root `root` names it: qualified by the
 /// scopes of `dag` below the root.
 ///
 /// Returns `None` when `dag` is neither the root nor a module below it.
 fn qualified_below(root: &DagId, dag: &DagId, name: &ScopedName) -> Option<ScopedName> {
-    let path = dag.scopes_below(root)?;
-    let qualifier = path
-        .into_iter()
-        .chain(name.qualifier().iter().cloned())
-        .collect::<Vec<_>>();
-    Some(ScopedName::from_parts(
-        NonEmpty::try_from_vec(qualifier).ok(),
-        name.leaf().clone(),
-    ))
+    dag.scopes_below(root)
+        .map(|scopes| qualified(&scopes, name))
 }
 
 /// Source-level names of the runtime declarations the root DAG exposes, in
@@ -146,6 +138,7 @@ impl<'p> RootNames<'p> {
 mod tests {
     use graphcal_compiler::syntax::decl_name::DeclName;
     use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
+    use graphcal_compiler::syntax::non_empty::NonEmpty;
 
     use super::*;
 
