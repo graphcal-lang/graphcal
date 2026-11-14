@@ -1250,7 +1250,7 @@ impl CacheWriterLock {
                 path: path.clone(),
                 source,
             })?;
-        fs2::FileExt::lock_exclusive(&file)
+        file.lock()
             .map_err(|source| DepsError::CacheLock { path, source })?;
         Ok(Self { file })
     }
@@ -1258,7 +1258,7 @@ impl CacheWriterLock {
 
 impl Drop for CacheWriterLock {
     fn drop(&mut self) {
-        let _ = fs2::FileExt::unlock(&self.file);
+        let _ = self.file.unlock();
     }
 }
 
@@ -2108,20 +2108,13 @@ units = { git = "https://example.com/acme/units.git", rev = "aaaaaaaaaaaaaaaaaaa
             .open(lock_path)
             .unwrap();
 
-        let contention = fs2::FileExt::try_lock_exclusive(&second).unwrap_err();
-        // Contention surfaces a platform-specific OS error: `EWOULDBLOCK` on Unix,
-        // `ERROR_LOCK_VIOLATION` on Windows. Only the former maps to
-        // `ErrorKind::WouldBlock`; the latter decodes to `ErrorKind::Uncategorized`,
-        // a catch-all too coarse to distinguish contention from an unrelated
-        // failure. Compare the raw OS code against the one fs2 itself designates
-        // for a contended try-lock.
-        assert_eq!(
-            contention.raw_os_error(),
-            fs2::lock_contended_error().raw_os_error()
-        );
+        assert!(matches!(
+            second.try_lock(),
+            Err(std::fs::TryLockError::WouldBlock)
+        ));
         drop(first);
-        fs2::FileExt::try_lock_exclusive(&second).unwrap();
-        fs2::FileExt::unlock(&second).unwrap();
+        second.try_lock().unwrap();
+        second.unlock().unwrap();
     }
 
     #[test]
