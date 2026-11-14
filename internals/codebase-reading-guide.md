@@ -823,12 +823,12 @@ points in `prepare/`.
 | `project_compiler/pipeline.rs`    | Dependency-ordered HIR lowering and checking continuations       |
 | `prepare/model_schema.rs`    | Finite typed arena for recursive model-value definitions        |
 | `prepare/prepared.rs`        | Checked-to-prepared transition and reusable evaluation surface  |
-| `prepare/binding_compile.rs` | Closed external-value lowering and binding-row validation       |
-| `prepare/model_port.rs`      | Generic model ports and per-row model evaluation                |
-| `prepare/model_session.rs`   | Batch-protocol interface, session resolution, and evaluation    |
-| `prepare/model_unit.rs`      | Resolving session-chosen units to fixed SI scales               |
-| `prepare/model_wire.rs`      | Port value schemas as batch-protocol wire types                 |
-| `prepare/model_value.rs`     | Protocol values to and from runtime values, per session port    |
+| `prepare/prepared/binding_compile.rs` | Closed external-value lowering and binding-row validation       |
+| `prepare/prepared/model_port.rs`      | Generic model ports and per-row model evaluation                |
+| `prepare/prepared/model_session.rs`   | Batch-protocol interface, session resolution, and evaluation    |
+| `prepare/prepared/model_unit.rs`      | Resolving session-chosen units to fixed SI scales               |
+| `prepare/prepared/model_wire.rs`      | Port value schemas as batch-protocol wire types                 |
+| `prepare/prepared/model_value.rs`     | Protocol values to and from runtime values, per session port    |
 | `prepare/output.rs`          | Presentation-only output projection                            |
 | `inline_dag.rs`                   | Inline-DAG self-import preprocessing                            |
 | `graph_ir/`             | Dependency-graph export model and DOT rendering               |
@@ -2187,38 +2187,38 @@ figure, static or live, is themed.
 479. `crates/graphcal-project/src/view_model/value.rs`
 480. `crates/graphcal-project/src/view_model/cells.rs`
 481. `crates/graphcal-project/src/view_model/target.rs`
-482. `crates/graphcal-project/src/prepare/model_axis.rs`
-483. `crates/graphcal-project/src/loader/same_file_reference.rs`
-484. `crates/graphcal-project/src/loader/inline_dags.rs`
-485. `crates/graphcal-project/src/loader/same_file_reference/tests.rs`
-486. `crates/graphcal-project/src/project_compiler/rebound_type_selection.rs`
-487. `crates/graphcal-project/src/loader/module_file.rs`
-488. `crates/graphcal-project/src/loader/source_snapshot.rs`
-489. `crates/graphcal-project/src/loader/build.rs`
-490. `crates/graphcal-project/src/loader/build/tests.rs`
-491. `crates/graphcal-project/src/loader/source_authority.rs`
-492. `crates/graphcal-project/src/loader.rs`
-493. `crates/graphcal-project/src/loader/module_file/tests.rs`
-494. `crates/graphcal-project/src/project_compiler/selected_include_items.rs`
-495. `crates/graphcal-project/src/project_compiler/imports.rs`
-496. `crates/graphcal-project/src/project_compiler/imports/tests.rs`
-497. `crates/graphcal-project/src/project_compiler/lowering.rs`
-498. `crates/graphcal-project/src/project_compiler/checking.rs`
-499. `crates/graphcal-project/src/project_compiler/pipeline.rs`
-500. `crates/graphcal-project/src/project_compiler/session.rs`
-501. `crates/graphcal-project/src/prepare/prepared.rs`
-502. `crates/graphcal-project/src/prepare/mod.rs`
-503. `crates/graphcal-project/src/prepare/binding_compile.rs`
-504. `crates/graphcal-project/src/project_compiler/mod.rs`
-505. `crates/graphcal-project/src/tests/sealed_program.rs`
-506. `crates/graphcal-project/src/prepare/model_port.rs`
-507. `crates/graphcal-project/src/prepare/model_unit.rs`
-508. `crates/graphcal-project/src/prepare/model_value.rs`
-509. `crates/graphcal-project/src/prepare/model_session.rs`
-510. `crates/graphcal-project/src/prepare/model_wire.rs`
-511. `crates/graphcal-project/src/loader/tests.rs`
-512. `crates/graphcal-project/src/project_compiler/selected_include_items/tests.rs`
-513. `crates/graphcal-project/src/prepare/structured_source.rs`
+482. `crates/graphcal-project/src/loader/same_file_reference.rs`
+483. `crates/graphcal-project/src/loader/inline_dags.rs`
+484. `crates/graphcal-project/src/loader/same_file_reference/tests.rs`
+485. `crates/graphcal-project/src/project_compiler/rebound_type_selection.rs`
+486. `crates/graphcal-project/src/loader/module_file.rs`
+487. `crates/graphcal-project/src/loader/source_snapshot.rs`
+488. `crates/graphcal-project/src/loader/build.rs`
+489. `crates/graphcal-project/src/loader/build/tests.rs`
+490. `crates/graphcal-project/src/loader/source_authority.rs`
+491. `crates/graphcal-project/src/loader.rs`
+492. `crates/graphcal-project/src/loader/module_file/tests.rs`
+493. `crates/graphcal-project/src/project_compiler/selected_include_items.rs`
+494. `crates/graphcal-project/src/project_compiler/imports.rs`
+495. `crates/graphcal-project/src/project_compiler/imports/tests.rs`
+496. `crates/graphcal-project/src/project_compiler/lowering.rs`
+497. `crates/graphcal-project/src/project_compiler/checking.rs`
+498. `crates/graphcal-project/src/project_compiler/pipeline.rs`
+499. `crates/graphcal-project/src/project_compiler/session.rs`
+500. `crates/graphcal-project/src/prepare/prepared/model_axis.rs`
+501. `crates/graphcal-project/src/prepare/prepared/binding_compile.rs`
+502. `crates/graphcal-project/src/prepare/prepared/model_port.rs`
+503. `crates/graphcal-project/src/prepare/prepared/model_unit.rs`
+504. `crates/graphcal-project/src/prepare/prepared/model_value.rs`
+505. `crates/graphcal-project/src/prepare/prepared.rs`
+506. `crates/graphcal-project/src/prepare/prepared/model_session.rs`
+507. `crates/graphcal-project/src/prepare/mod.rs`
+508. `crates/graphcal-project/src/project_compiler/mod.rs`
+509. `crates/graphcal-project/src/tests/sealed_program.rs`
+510. `crates/graphcal-project/src/loader/tests.rs`
+511. `crates/graphcal-project/src/project_compiler/selected_include_items/tests.rs`
+512. `crates/graphcal-project/src/prepare/prepared/model_wire.rs`
+513. `crates/graphcal-project/src/prepare/prepared/structured_source.rs`
 514. `crates/graphcal-report/src/lib.rs`
 515. `crates/graphcal-report/src/escape.rs`
 516. `crates/graphcal-report/src/vega_assets.rs`

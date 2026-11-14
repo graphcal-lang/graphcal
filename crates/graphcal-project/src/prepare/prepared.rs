@@ -49,21 +49,13 @@ use super::model_schema::{
 };
 use super::output::apply_include_debug_names;
 
-#[path = "binding_compile.rs"]
 mod binding_compile;
-#[path = "model_axis.rs"]
 mod model_axis;
-#[path = "model_port.rs"]
 mod model_port;
-#[path = "model_session.rs"]
 mod model_session;
-#[path = "model_unit.rs"]
 mod model_unit;
-#[path = "model_value.rs"]
 mod model_value;
-#[path = "model_wire.rs"]
 mod model_wire;
-#[path = "structured_source.rs"]
 mod structured_source;
 
 use binding_compile::build_parameter_ports;
