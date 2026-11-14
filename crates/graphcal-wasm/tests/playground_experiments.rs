@@ -10,8 +10,8 @@ use std::error::Error;
 use std::path::Path;
 
 use graphcal_wasm::{
-    AssertionOutcomeView, BindingRequest, EvaluateOutcome, PlaygroundFile, PlaygroundRequest,
-    PrepareOutcome, prepare,
+    AssertionOutcomeView, BindingRequest, BrowserBindingRequest, EvaluateOutcome, PlaygroundFile,
+    PlaygroundRequest, PrepareOutcome, prepare,
 };
 
 fn experiment(
@@ -36,12 +36,14 @@ fn experiment(
     };
     let bindings = bindings
         .iter()
-        .map(|(name, expr)| BindingRequest {
-            name: (*name).to_owned(),
-            expr: (*expr).to_owned(),
+        .map(|(name, expr)| {
+            BrowserBindingRequest::Expression(BindingRequest {
+                name: (*name).to_owned(),
+                expr: (*expr).to_owned(),
+            })
         })
         .collect::<Vec<_>>();
-    let evaluation = match project.evaluate(&bindings) {
+    let evaluation = match project.evaluate_browser(&bindings) {
         EvaluateOutcome::Evaluated { evaluation } => evaluation,
         outcome => panic!("{filename} {bindings:?}: {outcome:?}"),
     };

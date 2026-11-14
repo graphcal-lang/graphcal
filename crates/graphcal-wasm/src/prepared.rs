@@ -25,7 +25,7 @@ use serde::Serialize;
 
 use crate::PlaygroundRequest;
 use crate::bindings::{
-    BindingPathSegmentView, BindingRequest, BrowserBindingRequest, bind_browser_one, bind_one,
+    BindingPathSegmentView, BindingRequest, BrowserBindingRequest, bind_browser_one,
 };
 use crate::diagnostics::{DiagnosticView, compile_error_view};
 use crate::output::EvaluationView;
@@ -396,27 +396,11 @@ impl PreparedPlayground {
             .collect()
     }
 
-    /// Bind the supplied closed values and evaluate the full project view.
+    /// Evaluate browser bindings, including recursively structured values.
     ///
     /// Unbound parameters fall back to their compiled defaults. Every
     /// rejected binding is reported (not just the first) so a controls panel
     /// can annotate each offending input.
-    #[must_use]
-    pub fn evaluate(&self, bindings: &[BindingRequest]) -> EvaluateOutcome {
-        match self.evaluate_result(bindings) {
-            Ok(result) => EvaluateOutcome::Evaluated {
-                evaluation: EvaluationView::from(&result),
-            },
-            Err(EvaluationFailure::BindingErrors(errors)) => {
-                EvaluateOutcome::BindingErrors { errors }
-            }
-            Err(
-                EvaluationFailure::EvalError(message) | EvaluationFailure::NeedsValues(message),
-            ) => EvaluateOutcome::EvalError { message },
-        }
-    }
-
-    /// Evaluate browser bindings, including recursively structured values.
     #[must_use]
     pub fn evaluate_browser(&self, bindings: &[BrowserBindingRequest]) -> EvaluateOutcome {
         match self.evaluate_browser_result(bindings) {
@@ -529,53 +513,6 @@ impl PreparedPlayground {
         self.prepared
             .evaluate(&row)
             .map(|result| (result, spelled))
-            .map_err(|error| EvaluationFailure::EvalError(error.to_string()))
-    }
-
-    /// Evaluate once and derive both the complete view and static report from
-    /// that exact result.
-    #[must_use]
-    pub fn evaluate_report(&self, bindings: &[BindingRequest]) -> EvaluateReportOutcome {
-        match self.evaluate_result(bindings) {
-            Ok(result) => match self.report.render(&result, bindings) {
-                Ok(html) => EvaluateReportOutcome::Evaluated {
-                    evaluation: EvaluationView::from(&result),
-                    html,
-                },
-                Err(message) => EvaluateReportOutcome::EvalError { message },
-            },
-            Err(EvaluationFailure::BindingErrors(errors)) => {
-                EvaluateReportOutcome::BindingErrors { errors }
-            }
-            Err(
-                EvaluationFailure::EvalError(message) | EvaluationFailure::NeedsValues(message),
-            ) => EvaluateReportOutcome::EvalError { message },
-        }
-    }
-
-    fn evaluate_result(
-        &self,
-        bindings: &[BindingRequest],
-    ) -> Result<EvalResult, EvaluationFailure> {
-        let mut builder = self.prepared.binding_builder();
-        let mut errors = Vec::new();
-        for binding in bindings {
-            if let Err(message) = bind_one(&mut builder, binding) {
-                errors.push(BindingErrorView {
-                    name: binding.name.clone(),
-                    message,
-                    path: Vec::new(),
-                });
-            }
-        }
-        if !errors.is_empty() {
-            return Err(EvaluationFailure::BindingErrors(errors));
-        }
-        let row = builder
-            .finish()
-            .map_err(|error| EvaluationFailure::NeedsValues(error.to_string()))?;
-        self.prepared
-            .evaluate(&row)
             .map_err(|error| EvaluationFailure::EvalError(error.to_string()))
     }
 }
@@ -1004,6 +941,13 @@ mod tests {
         prepared_or_panic(prepare(single_file(source)))
     }
 
+    fn expression_binding(name: &str, expr: &str) -> BrowserBindingRequest {
+        BrowserBindingRequest::Expression(BindingRequest {
+            name: name.to_string(),
+            expr: expr.to_string(),
+        })
+    }
+
     fn prepare_view_ok(source: &str) -> PreparedPlayground {
         prepared_or_panic(prepare_view(single_file(source)))
     }
@@ -1070,13 +1014,8 @@ assert positive = @delta_v > 0.0 m/s;
     #[test]
     fn evaluated_view_follows_bindings() {
         let prepared = prepare_view_ok(DELTA_V);
-        let outcome = prepared.evaluate_view(
-            &[BrowserBindingRequest::Expression(BindingRequest {
-                name: "isp".to_string(),
-                expr: "450.0 s".to_string(),
-            })],
-            &ViewTarget::Module,
-        );
+        let outcome =
+            prepared.evaluate_view(&[expression_binding("isp", "450.0 s")], &ViewTarget::Module);
         let EvaluateViewOutcome::Evaluated { view } = outcome else {
             panic!("expected an evaluated view, got {outcome:?}");
         };
@@ -1094,10 +1033,7 @@ assert positive = @delta_v > 0.0 m/s;
         // A rejected binding answers with the structure, untouched by the
         // evaluation before it.
         let outcome = prepared.evaluate_view(
-            &[BrowserBindingRequest::Expression(BindingRequest {
-                name: "isp".to_string(),
-                expr: "@nowhere".to_string(),
-            })],
+            &[expression_binding("isp", "@nowhere")],
             &ViewTarget::Module,
         );
         let EvaluateViewOutcome::BindingErrors { view, errors } = outcome else {
@@ -1119,13 +1055,8 @@ assert positive = @delta_v > 0.0 m/s;
         assert!(view.nodes.iter().all(|node| node.value.is_none()));
         assert!(view.nodes.iter().any(|node| node.name == "twice"));
 
-        let outcome = prepared.evaluate_view(
-            &[BrowserBindingRequest::Expression(BindingRequest {
-                name: "span".to_string(),
-                expr: "3.0 m".to_string(),
-            })],
-            &ViewTarget::Module,
-        );
+        let outcome =
+            prepared.evaluate_view(&[expression_binding("span", "3.0 m")], &ViewTarget::Module);
         assert!(
             matches!(&outcome, EvaluateViewOutcome::Evaluated { .. }),
             "{outcome:?}"
@@ -1183,16 +1114,13 @@ assert positive = @delta_v > 0.0 m/s;
     fn repeated_evaluation_binds_closed_values() {
         let prepared = prepare_ok(DELTA_V);
 
-        let baseline = prepared.evaluate(&[]);
+        let baseline = prepared.evaluate_browser(&[]);
         let EvaluateOutcome::Evaluated { evaluation } = baseline else {
             panic!("expected baseline evaluation");
         };
         assert!(!evaluation.has_errors);
 
-        let outcome = prepared.evaluate(&[BindingRequest {
-            name: "isp".to_string(),
-            expr: "450.0 s".to_string(),
-        }]);
+        let outcome = prepared.evaluate_browser(&[expression_binding("isp", "450.0 s")]);
         let EvaluateOutcome::Evaluated { evaluation } = outcome else {
             panic!("expected evaluation with binding");
         };
@@ -1330,7 +1258,11 @@ assert positive = @delta_v > 0.0 m/s;
         };
         assert_eq!(spelled.len(), 1);
         assert_eq!(spelled[0].expr, expected);
-        let Ok(reparsed) = prepared.evaluate_result(&spelled) else {
+        let spelled: Vec<_> = spelled
+            .into_iter()
+            .map(BrowserBindingRequest::Expression)
+            .collect();
+        let Ok((reparsed, _)) = prepared.evaluate_browser_result(&spelled) else {
             panic!("the canonical spelling `{expected}` does not bind");
         };
         assert_eq!(
@@ -1525,12 +1457,9 @@ assert positive = @delta_v > 0.0 m/s;
     fn report_escapes_captions_and_tracks_bound_baseline_without_an_engine() {
         let source = "/// Speed <unsafe> & caption\nparam speed: Velocity = 1.0 m/s;\nnode doubled: Velocity = @speed * 2.0;";
         let prepared = prepare_ok(source);
-        let binding = BindingRequest {
-            name: "speed".to_string(),
-            expr: "36.0 km/h".to_string(),
-        };
+        let binding = expression_binding("speed", "36.0 km/h");
         let EvaluateReportOutcome::Evaluated { evaluation, html } =
-            prepared.evaluate_report(std::slice::from_ref(&binding))
+            prepared.evaluate_report_browser(std::slice::from_ref(&binding))
         else {
             panic!("expected report");
         };
@@ -1543,7 +1472,8 @@ assert positive = @delta_v > 0.0 m/s;
         assert!(!html.contains("vega.min.js"));
         assert!(!html.contains("wasm"));
 
-        let EvaluateReportOutcome::Evaluated { html, .. } = prepared.evaluate_report(&[]) else {
+        let EvaluateReportOutcome::Evaluated { html, .. } = prepared.evaluate_report_browser(&[])
+        else {
             panic!("expected reset report");
         };
         assert!(!html.contains("speed=36.0 km/h"));
@@ -1562,15 +1492,9 @@ dag chart {
 include chart(k: @k)::{ points as renamed };
 ",
         );
-        for bindings in [
-            vec![],
-            vec![BindingRequest {
-                name: "k".to_string(),
-                expr: "2.0 m".to_string(),
-            }],
-        ] {
+        for bindings in [vec![], vec![expression_binding("k", "2.0 m")]] {
             let EvaluateReportOutcome::Evaluated { evaluation, html } =
-                prepared.evaluate_report(&bindings)
+                prepared.evaluate_report_browser(&bindings)
             else {
                 panic!("expected report");
             };
@@ -1583,21 +1507,17 @@ include chart(k: @k)::{ points as renamed };
     fn report_binding_rejection_is_recoverable_and_reports_all_errors() {
         let prepared = prepare_ok(DELTA_V);
         let bad = [
-            BindingRequest {
-                name: "isp".to_string(),
-                expr: "2.0 kg".to_string(),
-            },
-            BindingRequest {
-                name: "missing".to_string(),
-                expr: "1.0".to_string(),
-            },
+            expression_binding("isp", "2.0 kg"),
+            expression_binding("missing", "1.0"),
         ];
-        let EvaluateReportOutcome::BindingErrors { errors } = prepared.evaluate_report(&bad) else {
+        let EvaluateReportOutcome::BindingErrors { errors } =
+            prepared.evaluate_report_browser(&bad)
+        else {
             panic!("expected binding errors");
         };
         assert_eq!(errors.len(), 2);
         assert!(matches!(
-            prepared.evaluate_report(&[]),
+            prepared.evaluate_report_browser(&[]),
             EvaluateReportOutcome::Evaluated { .. }
         ));
     }
@@ -1605,16 +1525,10 @@ include chart(k: @k)::{ points as renamed };
     #[test]
     fn every_rejected_binding_is_reported() {
         let prepared = prepare_ok(DELTA_V);
-        let outcome = prepared.evaluate(&[
-            BindingRequest {
-                name: "isp".to_string(),
-                // Wrong dimension: a mass is not a time.
-                expr: "450.0 kg".to_string(),
-            },
-            BindingRequest {
-                name: "unknown".to_string(),
-                expr: "1.0".to_string(),
-            },
+        let outcome = prepared.evaluate_browser(&[
+            // Wrong dimension: a mass is not a time.
+            expression_binding("isp", "450.0 kg"),
+            expression_binding("unknown", "1.0"),
         ]);
         let EvaluateOutcome::BindingErrors { errors } = outcome else {
             panic!("expected binding errors, got {outcome:?}");
@@ -1627,10 +1541,7 @@ include chart(k: @k)::{ points as renamed };
     #[test]
     fn out_of_domain_binding_is_rejected() {
         let prepared = prepare_ok(DELTA_V);
-        let outcome = prepared.evaluate(&[BindingRequest {
-            name: "isp".to_string(),
-            expr: "1000.0 s".to_string(),
-        }]);
+        let outcome = prepared.evaluate_browser(&[expression_binding("isp", "1000.0 s")]);
         assert!(
             matches!(outcome, EvaluateOutcome::BindingErrors { .. }),
             "a value outside the declared domain must be rejected at binding time"
@@ -1640,10 +1551,7 @@ include chart(k: @k)::{ points as renamed };
     #[test]
     fn expression_injection_is_rejected() {
         let prepared = prepare_ok(DELTA_V);
-        let outcome = prepared.evaluate(&[BindingRequest {
-            name: "isp".to_string(),
-            expr: "@g0 * 40.0 s^2/m".to_string(),
-        }]);
+        let outcome = prepared.evaluate_browser(&[expression_binding("isp", "@g0 * 40.0 s^2/m")]);
         assert!(
             matches!(outcome, EvaluateOutcome::BindingErrors { .. }),
             "references must be rejected: readers bind closed values only"
@@ -1690,19 +1598,10 @@ include chart(k: @k)::{ points as renamed };
              param mode: Key<Mode> = Mode#Nominal;\n\
              node out: Dimensionless = if @enabled { 1.0 } else { 0.0 };\n",
         );
-        let outcome = prepared.evaluate(&[
-            BindingRequest {
-                name: "enabled".to_string(),
-                expr: "false".to_string(),
-            },
-            BindingRequest {
-                name: "retries".to_string(),
-                expr: "3".to_string(),
-            },
-            BindingRequest {
-                name: "mode".to_string(),
-                expr: "Mode#Safe".to_string(),
-            },
+        let outcome = prepared.evaluate_browser(&[
+            expression_binding("enabled", "false"),
+            expression_binding("retries", "3"),
+            expression_binding("mode", "Mode#Safe"),
         ]);
         let EvaluateOutcome::Evaluated { evaluation } = outcome else {
             panic!("expected evaluation, got {outcome:?}");
