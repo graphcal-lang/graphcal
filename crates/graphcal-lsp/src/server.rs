@@ -2002,24 +2002,28 @@ mod tests {
         );
     }
 
+    fn builtin(name: &str) -> BuiltinFn {
+        BuiltinFn::parse(name).unwrap()
+    }
+
     #[test]
     fn complex_signature_help_uses_dimension_aware_signatures() {
         let signatures = build_fn_signatures();
         assert_eq!(
             signatures
-                .get("complex")
+                .get(&builtin("complex"))
                 .map(|signature| signature.label.as_str()),
             Some("fn complex<D: Dim>(re: D, im: D) -> Complex<D>")
         );
         assert_eq!(
             signatures
-                .get("polar")
+                .get(&builtin("polar"))
                 .map(|signature| signature.parameters.as_slice()),
             Some(["magnitude: D".to_string(), "phase: Angle".to_string()].as_slice())
         );
         assert_eq!(
             signatures
-                .get("abs")
+                .get(&builtin("abs"))
                 .map(|signature| signature.label.as_str()),
             Some("fn abs<D: Dim>(x: D | Complex<D>) -> D")
         );
@@ -2030,13 +2034,13 @@ mod tests {
         let signatures = build_fn_signatures();
         assert_eq!(
             signatures
-                .get("product")
+                .get(&builtin("product"))
                 .map(|signature| signature.label.as_str()),
             Some("fn product<D: Dim, I: Index>(values: D[I]) -> D^|I|")
         );
         assert_eq!(
             signatures
-                .get("rss")
+                .get(&builtin("rss"))
                 .map(|signature| signature.label.as_str()),
             Some("fn rss<D: Dim, I: Index>(values: D[I]) -> D")
         );
@@ -2051,7 +2055,8 @@ mod tests {
             .collect::<std::collections::BTreeSet<_>>();
         let keys = signatures
             .keys()
-            .map(String::as_str)
+            .copied()
+            .map(BuiltinFn::as_str)
             .collect::<std::collections::BTreeSet<_>>();
         assert_eq!(keys, documented);
         for function in BuiltinFn::all() {
@@ -2059,14 +2064,14 @@ mod tests {
                 continue;
             };
             assert_eq!(
-                signatures[function.as_str()].parameters.len(),
+                signatures[&function].parameters.len(),
                 arity,
                 "`{function}`"
             );
         }
-        assert!(!signatures.contains_key("datetime"));
-        assert!(!signatures.contains_key("to_float"));
-        let label = |name: &str| signatures[name].label.as_str();
+        assert!(!signatures.contains_key(&builtin("datetime")));
+        assert!(!signatures.contains_key(&builtin("to_float")));
+        let label = |name: &str| signatures[&builtin(name)].label.as_str();
         assert_eq!(label("sqrt"), "fn sqrt<D: Dim>(x: D) -> D^(1/2)");
         assert_eq!(label("atan2"), "fn atan2<D: Dim>(y: D, x: D) -> Angle");
         assert_eq!(label("abs"), "fn abs<D: Dim>(x: D | Complex<D>) -> D");

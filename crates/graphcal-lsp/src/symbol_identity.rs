@@ -243,17 +243,7 @@ impl SymbolId {
             Self::ExternFunction(id) => id.function().as_str(),
             Self::BuiltinFunction(name) => name.as_str(),
             Self::BuiltinConstant(name) => name.as_str(),
-            Self::TimeScale(scale) => match scale {
-                TimeScale::UTC => "UTC",
-                TimeScale::TAI => "TAI",
-                TimeScale::TT => "TT",
-                TimeScale::TDB => "TDB",
-                TimeScale::ET => "ET",
-                TimeScale::GPST => "GPST",
-                TimeScale::GST => "GST",
-                TimeScale::BDT => "BDT",
-                TimeScale::QZSST => "QZSST",
-            },
+            Self::TimeScale(scale) => scale.as_str(),
             Self::Local(_) => "",
         }
     }

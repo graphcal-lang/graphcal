@@ -1,10 +1,10 @@
 //! Token-level cursor context detection for Signature Help and Completion.
 //!
 //! Since the Graphcal parser has no error recovery, the AST may not exist when
-//! the user is mid-keystroke. This module tokenizes raw source text and scans
-//! backward from the cursor to determine context.
+//! the user is mid-keystroke. This module scans the compiler lexer's tokens
+//! of the raw source text backward from the cursor to determine context.
 
-use graphcal_compiler::syntax::lexer::Lexer;
+use graphcal_compiler::syntax::lexer::{TokenizedSource, tokenize};
 use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
@@ -53,14 +53,34 @@ pub enum CoordinateIndexCompletionContext {
     PointsLabel,
 }
 
-/// Tokenize the source and collect all `(Token, Span)` pairs.
-fn tokenize(source: &str) -> Vec<(Token, Span)> {
-    let mut lexer = Lexer::new(source);
-    let mut tokens = Vec::new();
-    while let Some((tok, span)) = lexer.next_token() {
-        tokens.push((tok, span));
+/// Editor text lexed once by the compiler lexer, so every cursor query of
+/// one request shares the same tokens of that text.
+pub struct LexedSource<'s> {
+    text: &'s str,
+    tokenized: TokenizedSource,
+}
+
+impl<'s> LexedSource<'s> {
+    /// Lex `text`.
+    #[must_use]
+    pub fn new(text: &'s str) -> Self {
+        Self {
+            text,
+            tokenized: tokenize(text),
+        }
     }
-    tokens
+
+    /// The lexed text.
+    #[must_use]
+    pub const fn text(&self) -> &'s str {
+        self.text
+    }
+
+    /// The syntax tokens of the text, in source order.
+    #[must_use]
+    pub fn tokens(&self) -> &[(Token, Span)] {
+        self.tokenized.tokens()
+    }
 }
 
 /// Whether a token starting *at* `offset` counts as "at or before" the cursor
@@ -95,9 +115,9 @@ fn find_token_before(tokens: &[(Token, Span)], offset: usize, boundary: Boundary
 /// Scans backward from the cursor, counting unmatched parentheses. When an
 /// unmatched `(` is found preceded by an identifier, that's the function name.
 /// Commas at depth 0 are counted to determine the active parameter index.
-pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext> {
-    let tokens = tokenize(source);
-    let start_idx = find_token_before(&tokens, offset, Boundary::Inclusive)?;
+pub fn find_fn_call_context(lexed: &LexedSource<'_>, offset: usize) -> Option<FnCallContext> {
+    let (source, tokens) = (lexed.text(), lexed.tokens());
+    let start_idx = find_token_before(tokens, offset, Boundary::Inclusive)?;
 
     // If the cursor is exactly on or past a token, we might be "after" it.
     // Start scanning from start_idx backward.
@@ -129,7 +149,7 @@ pub fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext
                     // and recover the callee's source path so extern calls
                     // (`fluids::density(`) keep their qualifier.
                     if i > 0 && tokens[i - 1].0.is_identifier() {
-                        return callee_path(source, &tokens, i - 1).map(|callee| FnCallContext {
+                        return callee_path(source, tokens, i - 1).map(|callee| FnCallContext {
                             callee,
                             active_param: comma_count,
                         });
@@ -195,11 +215,11 @@ fn callee_path(source: &str, tokens: &[(Token, Span)], leaf_idx: usize) -> Optio
 /// Determine whether the cursor is at a contextual coordinate-constructor or
 /// authoritative-argument label position.
 pub fn determine_coordinate_index_completion_context(
-    source: &str,
+    lexed: &LexedSource<'_>,
     offset: usize,
 ) -> Option<CoordinateIndexCompletionContext> {
-    let tokens = tokenize(source);
-    let end = find_token_before(&tokens, offset, Boundary::Exclusive)?;
+    let tokens = lexed.tokens();
+    let end = find_token_before(tokens, offset, Boundary::Exclusive)?;
     let statement_start = tokens[..=end]
         .iter()
         .rposition(|(token, _)| matches!(token, Token::Semicolon | Token::LBrace | Token::RBrace))
@@ -360,10 +380,10 @@ fn selective_import_completion_context(
 }
 
 /// Determine the completion context at the given cursor offset.
-pub fn determine_completion_context(source: &str, offset: usize) -> CompletionContext {
-    let tokens = tokenize(source);
+pub fn determine_completion_context(lexed: &LexedSource<'_>, offset: usize) -> CompletionContext {
+    let tokens = lexed.tokens();
 
-    if let Some(context) = selective_import_completion_context(source, offset, &tokens) {
+    if let Some(context) = selective_import_completion_context(lexed.text(), offset, tokens) {
         return CompletionContext::ImportItem(context);
     }
 
@@ -373,7 +393,7 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
 
     // Find the last token that ends at or before the cursor.
     // We want the token *before* where the user is typing.
-    let preceding_idx = find_token_before(&tokens, offset, Boundary::Exclusive);
+    let preceding_idx = find_token_before(tokens, offset, Boundary::Exclusive);
 
     let Some(idx) = preceding_idx else {
         // No token before cursor — start of file.
@@ -382,7 +402,7 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
 
     let (ref tok, _span) = tokens[idx];
 
-    if is_in_table_index_list(&tokens, idx) {
+    if is_in_table_index_list(tokens, idx) {
         return CompletionContext::TypeAnnotation;
     }
 
@@ -423,6 +443,21 @@ pub fn determine_completion_context(source: &str, offset: usize) -> CompletionCo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn find_fn_call_context(source: &str, offset: usize) -> Option<FnCallContext> {
+        super::find_fn_call_context(&LexedSource::new(source), offset)
+    }
+
+    fn determine_completion_context(source: &str, offset: usize) -> CompletionContext {
+        super::determine_completion_context(&LexedSource::new(source), offset)
+    }
+
+    fn determine_coordinate_index_completion_context(
+        source: &str,
+        offset: usize,
+    ) -> Option<CoordinateIndexCompletionContext> {
+        super::determine_coordinate_index_completion_context(&LexedSource::new(source), offset)
+    }
 
     #[test]
     fn selective_import_completion_recovers_path_and_category_marker() {
