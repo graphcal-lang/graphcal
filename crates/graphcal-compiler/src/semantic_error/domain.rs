@@ -17,14 +17,6 @@ use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 use crate::tir::typed::declared_type_spelling::DeclaredTypeSpelling;
 
-/// One step from a constant into a nested value: a struct field or an
-/// indexed entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValuePathStep {
-    Field(FieldName),
-    Entry(IndexEntryKey),
-}
-
 /// A constrained field of a nominal type: `Type.field` when the constructor
 /// is record-shaped and named like its type (`constructor` is `None`),
 /// `Type.Constructor.field` otherwise.
@@ -53,50 +45,6 @@ pub enum DomainSubject {
     NominalField(Box<NominalFieldPath>),
     /// A constrained field named by its constructor: `Constructor.field`.
     ConstructorField(Box<(ConstructorName, FieldName)>),
-    /// A value inside a constant.
-    Value(Box<ValuePath>),
-}
-
-/// A constant's value or a value nested inside it: `root.step.step`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValuePath {
-    root: DeclName,
-    steps: Vec<ValuePathStep>,
-}
-
-impl ValuePath {
-    /// The whole value of the constant `root`.
-    #[must_use]
-    pub const fn new(root: DeclName) -> Self {
-        Self {
-            root,
-            steps: Vec::new(),
-        }
-    }
-
-    /// The value one step further into this one.
-    #[must_use]
-    pub fn child(&self, step: ValuePathStep) -> Self {
-        let mut steps = self.steps.clone();
-        steps.push(step);
-        Self {
-            root: self.root.clone(),
-            steps,
-        }
-    }
-}
-
-impl std::fmt::Display for ValuePath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.root.fmt(f)?;
-        for step in &self.steps {
-            match step {
-                ValuePathStep::Field(field) => write!(f, ".{field}")?,
-                ValuePathStep::Entry(key) => write!(f, ".{key}")?,
-            }
-        }
-        Ok(())
-    }
 }
 
 impl std::fmt::Display for DomainSubject {
@@ -105,7 +53,6 @@ impl std::fmt::Display for DomainSubject {
             Self::Declaration(name) => name.fmt(f),
             Self::NominalField(path) => path.fmt(f),
             Self::ConstructorField(path) => write!(f, "{}.{}", path.0, path.1),
-            Self::Value(path) => path.fmt(f),
         }
     }
 }

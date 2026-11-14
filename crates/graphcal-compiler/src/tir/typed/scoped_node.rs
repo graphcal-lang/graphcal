@@ -431,25 +431,6 @@ impl<'t> Scoped<'t, TExpr> {
         });
         references
     }
-
-    /// Every declaration this tree references through `@name`, including
-    /// unselected branches, resolved in its own scope, in handle order.
-    #[must_use]
-    pub fn graph_refs(self) -> Vec<ResolvedDeclName> {
-        let scope = self.scope();
-        let mut handles = BTreeSet::new();
-        visit_tnodes(TNodeRef::Value(self.get()), &mut |node| {
-            if let TNodeRef::Value(expr) = node
-                && let TExprKind::GraphRef(target) = expr.kind()
-            {
-                handles.insert(&target.value);
-            }
-        });
-        handles
-            .into_iter()
-            .map(|handle| scope.resolve(handle))
-            .collect()
-    }
 }
 
 impl<'t> Scoped<'t, TIndexArg> {

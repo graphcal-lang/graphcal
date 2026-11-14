@@ -390,12 +390,6 @@ impl CheckedTir {
             .map(CheckedDag::dag_id)
     }
 
-    /// Whether `dag_id` is one of [`Self::default_runnable_dags`].
-    #[must_use]
-    pub fn runs_on_defaults(&self, dag_id: &DagId) -> bool {
-        self.default_runnable_dags().any(|id| id == dag_id)
-    }
-
     /// Whether `dag` declares a required param or a required index, so that
     /// it runs only with bindings for them.
     fn requires_inputs(&self, dag: &CheckedDag) -> bool {

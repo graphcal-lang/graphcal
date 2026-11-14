@@ -1131,15 +1131,6 @@ impl DagTIR {
         })
     }
 
-    /// Identities of every value declaration, including required parameters
-    /// that have no default expression, in source order.
-    pub fn value_declaration_identities(&self) -> impl Iterator<Item = &ResolvedDeclName> {
-        self.decls
-            .order()
-            .iter()
-            .filter(|identity| self.value_decl_annotation(identity).is_some())
-    }
-
     /// Look up the single authoritative HIR expression owned by a const.
     #[must_use]
     pub fn const_expr(&self, key: &ResolvedDeclName) -> Option<&crate::hir::expr::Expr> {
@@ -1299,36 +1290,11 @@ impl DagTIR {
             .map(|metadata| &metadata.expected)
     }
 
-    /// Iterate over expected-fail configurations without exposing diagnostic provenance.
-    pub fn expected_fail_entries(
-        &self,
-    ) -> impl Iterator<Item = (&ResolvedDeclName, &ExpectedFail)> {
-        self.expected_fail
-            .iter()
-            .map(|(name, metadata)| (name, &metadata.expected))
-    }
-
     #[must_use]
     pub const fn imported_bindings(
         &self,
     ) -> &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding> {
         &self.imported_bindings
-    }
-
-    /// Every imported binding with the declaration this DAG's bodies read it
-    /// as: the imported declaration, re-owned by this DAG's frame when an
-    /// enclosing template owns it.
-    pub fn imported_binding_destinations(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            &crate::ir::imported_binding::ImportedBinding,
-            ResolvedDeclName,
-        ),
-    > {
-        self.imported_bindings
-            .values()
-            .map(|binding| (binding, self.frame.rebase(binding.target())))
     }
 
     /// The runtime destination of an imported value: its target re-keyed
