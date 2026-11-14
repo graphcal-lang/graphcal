@@ -962,6 +962,24 @@ mod tests {
         }
     }
 
+    /// The generic visitor walks Raw table-literal sugar, so collecting
+    /// holes from parser output does not miss the ones inside a table.
+    #[test]
+    fn raw_todo_hole_collection_walks_table_literal_entries() {
+        let file = Parser::new(
+            "node x: Length[Maneuver] = table[Maneuver] { Burn: 1.0 m; Coast: todo<Length> {}; };",
+        )
+        .parse_file()
+        .unwrap();
+        let DeclKind::Node(node) = &file.declarations[0].kind else {
+            panic!("expected a node declaration");
+        };
+        assert_eq!(
+            crate::syntax::visitor::collect_todo_holes(&node.value).len(),
+            1
+        );
+    }
+
     #[test]
     fn todo_hole_is_an_atom_with_its_type_and_interface() {
         let expr = parse_node_expr("2.0 * todo<Length[Fin(2)]> { @a, @m.c::b, }");
