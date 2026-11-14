@@ -1375,8 +1375,7 @@ impl LanguageServer for Backend {
             let mut docs = self.documents.write().await;
             let mut affected: Vec<Url> = docs
                 .get(&uri)
-                .map(|prev| prev.diagnostics.keys().cloned().collect())
-                .unwrap_or_default();
+                .map_or_default(|prev| prev.diagnostics.keys().cloned().collect());
             if !affected.contains(&uri) {
                 affected.push(uri.clone());
             }
@@ -1956,7 +1955,7 @@ mod tests {
             (ScalarValueKind::Int, "Int[I]"),
         ] {
             let kind = ParamKind::Indexed {
-                element: element.clone(),
+                element,
                 indexes: NonEmpty::singleton(index.clone()),
             };
             let signature = FunctionSignature::try_new(

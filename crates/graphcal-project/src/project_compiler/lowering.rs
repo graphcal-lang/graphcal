@@ -151,7 +151,7 @@ fn validate_direct_dag_calls(
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(sugar) => graphcal_compiler::syntax::phase::never(*sugar),
+            DeclKind::Sugar(sugar) => match *sugar {},
         }
     }
     Ok(())

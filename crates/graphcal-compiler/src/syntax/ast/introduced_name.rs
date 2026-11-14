@@ -8,7 +8,7 @@
 
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::names::NameAtom;
-use crate::syntax::phase::{Desugared, never};
+use crate::syntax::phase::Desugared;
 use crate::syntax::span::Span;
 
 use super::{DeclKind, TypeDeclBody};
@@ -234,7 +234,7 @@ impl DeclKind<Desugared> {
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            Self::Sugar(s) => never(*s),
+            Self::Sugar(s) => match *s {},
         };
         Some(IntroducedName {
             kind,
@@ -273,7 +273,7 @@ impl DeclKind<Desugared> {
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            Self::Sugar(s) => never(*s),
+            Self::Sugar(s) => match *s {},
         };
         let exposure = declared.map_or(DeclExposure::Private, IntroducedName::exposure);
         declared

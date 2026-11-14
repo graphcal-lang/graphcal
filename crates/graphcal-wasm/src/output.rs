@@ -58,8 +58,7 @@ impl From<&EvalResult> for EvaluationView {
                 affected_declarations: result
                     .assumes_map
                     .get(&assertion.name)
-                    .map(|affected| affected.iter().map(ToString::to_string).collect())
-                    .unwrap_or_default(),
+                    .map_or_default(|affected| affected.iter().map(ToString::to_string).collect()),
             })
             .collect();
 

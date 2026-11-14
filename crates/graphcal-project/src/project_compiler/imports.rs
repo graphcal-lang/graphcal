@@ -944,7 +944,7 @@ pub(super) fn process_include<'a>(
                 match selected {
                     SelectedItemKind::Assertion => {
                         ctx.imported_names.assert_names.push((local.clone(), span));
-                        assertion_aliases.insert(original.clone(), local.clone());
+                        assertion_aliases.insert(original, local);
                     }
                     SelectedItemKind::Value(kind) => {
                         surface_outputs.push(scoped.clone());

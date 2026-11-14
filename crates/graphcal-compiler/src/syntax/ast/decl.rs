@@ -145,8 +145,8 @@ pub enum DeclKind<P: Phase = Raw> {
     /// surface forms like multi-decl (issue #481) that are eliminated by the
     /// desugar pass. In [`Desugared`](Raw), the
     /// payload is [`core::convert::Infallible`] — the variant is statically
-    /// unreachable, so post-desugar consumers handle it with
-    /// `crate::syntax::phase::never`.
+    /// unreachable, so post-desugar consumers handle it with an empty match:
+    /// `Sugar(s) => match *s {}`.
     #[phase_lift(residual = RawDeclSugar)]
     Sugar(P::DeclSugar),
 }

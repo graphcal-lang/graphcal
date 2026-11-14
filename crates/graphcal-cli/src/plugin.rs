@@ -525,8 +525,7 @@ pub fn render_import_block(
 pub fn suggest_alias(module_path: &Path) -> Result<SourceIdentifier, SourceIdentifierError> {
     let stem = module_path
         .file_stem()
-        .map(|stem| stem.to_string_lossy())
-        .unwrap_or_default();
+        .map_or_default(|stem| stem.to_string_lossy());
     let mut alias: String = stem
         .chars()
         .map(|character| {

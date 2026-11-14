@@ -325,7 +325,7 @@ impl ModuleInterface {
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(sugar) => crate::syntax::phase::never(*sugar),
+            DeclKind::Sugar(sugar) => match *sugar {},
         }
     }
 

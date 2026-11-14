@@ -19,7 +19,6 @@ use crate::static_interface::{
 };
 use crate::syntax::ast::{GenericArg, ImportItemNamespace};
 use crate::syntax::names::{NameAtom, NamePath};
-use crate::syntax::phase::never;
 
 /// The module scope in which a declaration's Static references resolve.
 #[derive(Debug, Clone, Copy)]
@@ -333,7 +332,7 @@ impl Collector<'_> {
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(s) => never(*s),
+            DeclKind::Sugar(s) => match *s {},
         }
     }
 }

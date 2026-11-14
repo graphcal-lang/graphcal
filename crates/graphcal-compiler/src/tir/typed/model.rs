@@ -281,7 +281,7 @@ impl ProjectTypeStore {
             let identity = definition.identity().clone();
             let handle = Arc::clone(
                 self.struct_types
-                    .entry(identity.clone())
+                    .entry(identity)
                     .or_insert_with(|| Arc::clone(definition)),
             );
             for constructor in crate::hir::nominal::ResolvedConstructor::members_of(&handle) {

@@ -518,7 +518,7 @@ fn resolve_application_field_constraints(
         let field = constrained.field();
         let field_semantics = field.semantics();
         let display_name = DomainSubject::ConstructorField(Box::new((
-            field.member().constructor().name().clone(),
+            field.member().constructor().name(),
             field.field().name().clone(),
         )));
         let first_bound = bounds.get().first();

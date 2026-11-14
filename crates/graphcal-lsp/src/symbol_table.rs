@@ -23,7 +23,6 @@ use graphcal_compiler::syntax::ast::InputBindingCategory;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::names::{NameAtom, NameDef, NamePath};
-use graphcal_compiler::syntax::phase::never;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::span::Spanned;
 use graphcal_compiler::syntax::type_name::GenericParamName;
@@ -1565,7 +1564,7 @@ fn collect_declarations(
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(s) => never(*s),
+            DeclKind::Sugar(s) => match *s {},
         }
     }
 }
@@ -2794,7 +2793,7 @@ pub fn enrich_from_tir(table: &mut SymbolTable, tir: &CheckedTir, dag_id: &DagId
         };
         for member in members {
             for field in member.fields() {
-                let constructor = identity.constructor(member.name().clone());
+                let constructor = identity.constructor(member.name());
                 let field_key = SymbolKey::Field(FieldId::new(constructor, field.name().clone()));
                 if !table.definitions.contains_key(&field_key) {
                     table.insert_definition(

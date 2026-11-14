@@ -10,7 +10,6 @@ use crate::syntax::ast::{InputBindingCategory, PowerExponent, UnresolvedRef};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
-use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 
 use super::context::{ExprLoweringContext, TodoHolePolicy};
@@ -288,7 +287,7 @@ impl ExprLowerer<'_> {
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            ast::ExprKind::Sugar(sugar) => never(*sugar),
+            ast::ExprKind::Sugar(sugar) => match *sugar {},
         };
         children
             .into_iter()
@@ -640,7 +639,7 @@ impl ExprLowerer<'_> {
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            ast::ExprKind::Sugar(s) => never(*s),
+            ast::ExprKind::Sugar(s) => match *s {},
         };
         Ok(Expr::new(kind, expr.span))
     }
