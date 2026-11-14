@@ -91,6 +91,75 @@ pub const fn exact_i64_to_f64(value: i64) -> Result<f64, ExactI64ToF64Error> {
     }
 }
 
+/// Failure to convert a binary64 value to an `i64` without changing it.
+#[derive(Debug, Clone, Copy, PartialEq, Error)]
+pub enum ExactF64ToI64Error {
+    /// `i64` values are always finite.
+    #[error("is not finite (got {value})")]
+    NonFinite {
+        /// The rejected binary64 value.
+        value: f64,
+    },
+    /// Converting the value would require an implicit rounding policy.
+    #[error("is not integer-valued (got {value})")]
+    NonInteger {
+        /// The rejected binary64 value.
+        value: f64,
+    },
+    /// The value is integral but outside the `i64` range.
+    #[error(
+        "is outside the representable integer range ({}..={}) (got {value})",
+        i64::MIN,
+        i64::MAX
+    )]
+    OutOfRange {
+        /// The rejected binary64 value.
+        value: f64,
+    },
+}
+
+/// Convert a binary64 value to an `i64` only when the conversion preserves it
+/// exactly.
+///
+/// Rust's direct `as i64` cast truncates fractional values and saturates
+/// values outside the `i64` range; explicit range and round-trip checks reject
+/// both. Numeric equality deliberately accepts `-0.0` as the integer zero.
+///
+/// # Errors
+///
+/// Returns [`ExactF64ToI64Error`] naming the invariant `value` fails.
+pub fn exact_f64_to_i64(value: f64) -> Result<i64, ExactF64ToI64Error> {
+    if !value.is_finite() {
+        return Err(ExactF64ToI64Error::NonFinite { value });
+    }
+
+    let lower_inclusive = -2.0_f64.powi(63);
+    let upper_exclusive = 2.0_f64.powi(63);
+    if value < lower_inclusive || value >= upper_exclusive {
+        return Err(ExactF64ToI64Error::OutOfRange { value });
+    }
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the following binary64 round trip rejects values that would be truncated"
+    )]
+    let converted = value as i64;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the binary64 round trip is the exactness check"
+    )]
+    let round_trip = converted as f64;
+    #[expect(
+        clippy::float_cmp,
+        reason = "exactness requires equality; no tolerance or rounding policy is implicit"
+    )]
+    if round_trip != value {
+        return Err(ExactF64ToI64Error::NonInteger { value });
+    }
+
+    Ok(converted)
+}
+
 impl FiniteQuantity {
     /// Positive zero.
     pub const ZERO: Self = Self(0.0);
@@ -235,7 +304,7 @@ impl FiniteQuantity {
 
 #[cfg(test)]
 mod tests {
-    use crate::finite_value::FiniteQuantity;
+    use crate::finite_value::{ExactF64ToI64Error, FiniteQuantity, exact_f64_to_i64};
 
     proptest::proptest! {
         #[test]
@@ -308,5 +377,49 @@ mod tests {
             q(f64::MAX).checked_div(tiny),
             Err(FiniteArithmeticError::Infinite)
         );
+    }
+
+    #[test]
+    fn exact_conversion_accepts_integer_valued_inputs() {
+        for (value, expected) in [
+            (0.0, 0),
+            (-0.0, 0),
+            (42.0, 42),
+            (-42.0, -42),
+            (1.0e18, 1_000_000_000_000_000_000),
+            (-2.0_f64.powi(63), i64::MIN),
+        ] {
+            assert_eq!(exact_f64_to_i64(value), Ok(expected));
+        }
+    }
+
+    #[test]
+    fn exact_conversion_rejects_fractional_inputs() {
+        for value in [3.7, -3.7, f64::MIN_POSITIVE] {
+            assert_eq!(
+                exact_f64_to_i64(value),
+                Err(ExactF64ToI64Error::NonInteger { value })
+            );
+        }
+    }
+
+    #[test]
+    fn exact_conversion_rejects_non_finite_inputs() {
+        for value in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+            assert!(matches!(
+                exact_f64_to_i64(value),
+                Err(ExactF64ToI64Error::NonFinite { .. })
+            ));
+        }
+    }
+
+    #[test]
+    fn exact_conversion_rejects_values_outside_int_range() {
+        for value in [2.0_f64.powi(63), 1.0e20, -1.0e20] {
+            assert_eq!(
+                exact_f64_to_i64(value),
+                Err(ExactF64ToI64Error::OutOfRange { value })
+            );
+        }
     }
 }
