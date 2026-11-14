@@ -6,8 +6,9 @@ use std::sync::Arc;
 use tower_lsp::lsp_types::Url;
 
 use crate::project_symbols::{ProjectDocumentSymbols, ProjectSymbolIndex};
+use crate::symbol_identity::SymbolId;
 use crate::symbol_identity::{SourceSymbolPath, VisibleBinding};
-use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolKey, SymbolTable};
+use crate::symbol_table::{self, DefinitionInfo, SymbolCategory, SymbolTable};
 use graphcal_compiler::cancellation::{CancellationToken, Cancelled};
 use graphcal_compiler::syntax::names::NameAtom;
 
@@ -60,7 +61,7 @@ pub fn collect_import_surfaces(
 /// qualifiers and selective aliases are separate bindings, including
 /// transitive re-exports resolved through the compiler's module scope.
 pub struct ImportedSymbols {
-    pub definitions: HashMap<SymbolKey, ImportedDefinition>,
+    pub definitions: HashMap<SymbolId, ImportedDefinition>,
     pub bindings: Vec<VisibleBinding>,
     pub project_index: ProjectSymbolIndex,
 }
@@ -297,8 +298,8 @@ pub fn resolve_selective_binding(
             .resolve_decl_path(owner, &path)
             .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
         {
-            Ok(declaration) => SymbolKey::Declaration(declaration),
-            Err(_) => SymbolKey::Constructor(
+            Ok(declaration) => SymbolId::Declaration(declaration),
+            Err(_) => SymbolId::Constructor(
                 resolver
                     .resolve_constructor_path(owner, &path)
                     .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
@@ -308,22 +309,22 @@ pub fn resolve_selective_binding(
         ImportItemNamespace::Type => resolver
             .resolve_struct_type_path(owner, &path)
             .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            .map(SymbolKey::StructType)
+            .map(SymbolId::StructType)
             .ok()?,
         ImportItemNamespace::Dimension => resolver
             .resolve_dimension_path(owner, &path)
             .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            .map(SymbolKey::Dimension)
+            .map(SymbolId::Dimension)
             .ok()?,
         ImportItemNamespace::Unit => resolver
             .resolve_unit_path(owner, &path)
             .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            .map(SymbolKey::Unit)
+            .map(SymbolId::Unit)
             .ok()?,
         ImportItemNamespace::Index => resolver
             .resolve_index_path(owner, &path)
             .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved)
-            .map(SymbolKey::Index)
+            .map(SymbolId::Index)
             .ok()?,
     };
     Some(VisibleBinding::new(target, SourceSymbolPath::local(local)))
@@ -421,7 +422,7 @@ pub fn collect_module_import_definitions(
 /// constructor fields, generic parameters, and DAG body declarations) retain
 /// their parent as a structured qualifier.
 pub fn selective_import_spelling(
-    key: &SymbolKey,
+    key: &SymbolId,
     category: SymbolCategory,
     namespace: graphcal_compiler::desugar::desugared_ast::ImportItemNamespace,
     target_module: &graphcal_compiler::dag_id::DagId,
@@ -438,16 +439,16 @@ pub fn selective_import_spelling(
     }
 
     let attached = match key {
-        SymbolKey::IndexVariant(id) => {
+        SymbolId::IndexVariant(id) => {
             id.index().owner() == target_module && id.index().as_str() == original
         }
-        SymbolKey::Field(id) => {
+        SymbolId::Field(id) => {
             id.owner().owner() == target_module && id.owner().as_str() == original
         }
-        SymbolKey::GenericParam(id) => {
+        SymbolId::GenericParam(id) => {
             id.owner().owner() == target_module && id.owner().as_str() == original
         }
-        SymbolKey::Declaration(name) => {
+        SymbolId::Declaration(name) => {
             name.owner().parent().as_ref() == Some(target_module)
                 && name
                     .owner()
@@ -462,12 +463,12 @@ pub fn selective_import_spelling(
     }
     let leaf = NameAtom::parse(key.leaf_name()).ok()?;
     match key {
-        SymbolKey::IndexVariant(_) => Some(SourceSymbolPath::index_label(
+        SymbolId::IndexVariant(_) => Some(SourceSymbolPath::index_label(
             Vec::new(),
             local.clone(),
             leaf,
         )),
-        SymbolKey::Field(_) | SymbolKey::GenericParam(_) => Some(SourceSymbolPath::associated(
+        SymbolId::Field(_) | SymbolId::GenericParam(_) => Some(SourceSymbolPath::associated(
             Vec::new(),
             local.clone(),
             leaf,
@@ -516,14 +517,14 @@ pub const fn selective_import_allows_category(
 
 /// Source-visible spelling contributed by a module import.
 pub fn module_import_spelling(
-    key: &SymbolKey,
+    key: &SymbolId,
     category: SymbolCategory,
     module_name: &NameAtom,
     target_module: &graphcal_compiler::dag_id::DagId,
 ) -> Option<SourceSymbolPath> {
     // Importing an inline DAG makes the DAG declaration itself callable by the
     // local module alias (`@alias(...)`).
-    if let SymbolKey::Declaration(name) = key
+    if let SymbolId::Declaration(name) = key
         && target_module.parent().as_ref() == Some(name.owner())
         && target_module.leaf().inline_dag() == Some(&name.to_unowned_def_name())
     {
@@ -534,22 +535,22 @@ pub fn module_import_spelling(
     let qualifier = module_relative_qualifier(module_name, owner, target_module)?;
     let leaf = NameAtom::parse(key.leaf_name()).ok()?;
     match key {
-        SymbolKey::IndexVariant(id) => Some(SourceSymbolPath::index_label(
+        SymbolId::IndexVariant(id) => Some(SourceSymbolPath::index_label(
             qualifier,
             NameAtom::parse(id.index().as_str()).ok()?,
             leaf,
         )),
-        SymbolKey::Field(id) => Some(SourceSymbolPath::associated(
+        SymbolId::Field(id) => Some(SourceSymbolPath::associated(
             qualifier,
             NameAtom::parse(id.owner().as_str()).ok()?,
             leaf,
         )),
-        SymbolKey::GenericParam(id) => Some(SourceSymbolPath::associated(
+        SymbolId::GenericParam(id) => Some(SourceSymbolPath::associated(
             qualifier,
             NameAtom::parse(id.owner().as_str()).ok()?,
             leaf,
         )),
-        SymbolKey::Declaration(_) if category == SymbolCategory::Dag => {
+        SymbolId::Declaration(_) if category == SymbolCategory::Dag => {
             let mut segments = qualifier;
             segments.push(leaf);
             SourceSymbolPath::dag_path(segments)
@@ -575,8 +576,8 @@ pub fn module_relative_qualifier(
 }
 
 pub fn insert_imported_def(
-    result: &mut HashMap<SymbolKey, ImportedDefinition>,
-    key: SymbolKey,
+    result: &mut HashMap<SymbolId, ImportedDefinition>,
+    key: SymbolId,
     uri: &Url,
     source: &Arc<String>,
     def: &DefinitionInfo,

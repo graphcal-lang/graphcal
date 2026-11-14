@@ -417,7 +417,6 @@ pub fn run_analysis_with_cancellation(
     let analysis_inputs = input_snapshot.finish_loaded_project(filesystem_inputs);
     let root_ast = project.root_file().ast();
     let import_links = collect_import_links(&project, cancellation)?;
-    cancellation.checkpoint()?;
     // Extern (plugin) registry for this pass: the built-in demo plugin plus
     // the project's vendored wasm plugins. The plugin host outlives passes,
     // so unchanged modules come from its content-hash cache.

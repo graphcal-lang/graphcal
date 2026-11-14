@@ -8,7 +8,7 @@ use crate::project_symbols::ProjectOccurrence;
 use crate::rename_check::{CompileErrorReport, PlannedRename, RenameCheck, RenameCheckFailure};
 use crate::resolve::{ResolvedSymbol, SymbolLocation, reference_lookup_keys, resolve_symbol_at};
 use crate::symbol_identity::ExternFunctionId;
-use crate::symbol_table::SymbolKey;
+use crate::symbol_identity::SymbolId;
 use graphcal_compiler::resolved_name::{ResolvedConstructorName, ResolvedStructTypeName};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::token::SourceIdentifier;
@@ -45,7 +45,7 @@ fn validate_rename_target(
     }
     // The plugin ABI fixes an extern function's name: the declaration must
     // spell the plugin's export, so no rename of it can compile.
-    if let SymbolKey::ExternFunction(function) = &resolved.key {
+    if let SymbolId::ExternFunction(function) = &resolved.key {
         return Err(RenameRefusal::ExternFunction {
             function: function.clone(),
         });
@@ -277,7 +277,7 @@ fn plan_rename(
         return Ok(None);
     }
 
-    let targets: Vec<SymbolKey> = rename_unit(analysis, &resolved.key)
+    let targets: Vec<SymbolId> = rename_unit(analysis, &resolved.key)
         .iter()
         .flat_map(reference_lookup_keys)
         .collect();
@@ -320,19 +320,19 @@ fn plan_rename(
 /// spelling by the language's record rule: renaming either alone turns the
 /// record into a union (S007). Both are declared together in the renamed
 /// symbol's own file.
-fn rename_unit(analysis: &AnalysisResult, key: &SymbolKey) -> Vec<SymbolKey> {
+fn rename_unit(analysis: &AnalysisResult, key: &SymbolId) -> Vec<SymbolId> {
     let table = &analysis.symbol_table;
     let record_constructor = |nominal: &ResolvedStructTypeName| {
         nominal.constructor(record_constructor_name(nominal.leaf()))
     };
     let record = match key {
-        SymbolKey::StructType(nominal) => Some((nominal.clone(), record_constructor(nominal))),
-        SymbolKey::Constructor(constructor) => {
+        SymbolId::StructType(nominal) => Some((nominal.clone(), record_constructor(nominal))),
+        SymbolId::Constructor(constructor) => {
             table
                 .definitions
                 .keys()
                 .find_map(|candidate| match candidate {
-                    SymbolKey::StructType(nominal)
+                    SymbolId::StructType(nominal)
                         if record_constructor(nominal) == *constructor =>
                     {
                         Some((nominal.clone(), constructor.clone()))
@@ -345,8 +345,8 @@ fn rename_unit(analysis: &AnalysisResult, key: &SymbolKey) -> Vec<SymbolKey> {
     let counterpart = record
         .filter(|(nominal, constructor)| is_record(table, nominal, constructor))
         .map(|(nominal, constructor)| match key {
-            SymbolKey::StructType(_) => SymbolKey::Constructor(constructor),
-            _ => SymbolKey::StructType(nominal),
+            SymbolId::StructType(_) => SymbolId::Constructor(constructor),
+            _ => SymbolId::StructType(nominal),
         });
     std::iter::once(key.clone()).chain(counterpart).collect()
 }
@@ -359,20 +359,20 @@ fn is_record(
 ) -> bool {
     let Some(body) = table
         .definitions
-        .get(&SymbolKey::StructType(nominal.clone()))
+        .get(&SymbolId::StructType(nominal.clone()))
         .map(|definition| definition.decl_span)
     else {
         return false;
     };
     let mut constructors = table.definitions.iter().filter(|(candidate, definition)| {
-        matches!(candidate, SymbolKey::Constructor(other) if other.owner() == nominal.owner())
+        matches!(candidate, SymbolId::Constructor(other) if other.owner() == nominal.owner())
             && body.offset() <= definition.decl_span.offset()
             && definition.decl_span.offset() + definition.decl_span.len()
                 <= body.offset() + body.len()
     });
     matches!(
         (constructors.next(), constructors.next()),
-        (Some((SymbolKey::Constructor(only), _)), None) if only == constructor
+        (Some((SymbolId::Constructor(only), _)), None) if only == constructor
     )
 }
 
@@ -1405,7 +1405,7 @@ include scaled(index T: Step)::{ ys };
                 .definitions
                 .iter()
                 .filter(|(key, definition)| {
-                    definition.is_navigable() && !matches!(key, SymbolKey::ExternFunction(_))
+                    definition.is_navigable() && !matches!(key, SymbolId::ExternFunction(_))
                 })
                 .map(|(_, definition)| definition)
                 .collect();

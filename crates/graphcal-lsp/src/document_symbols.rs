@@ -6,7 +6,8 @@ use tower_lsp::lsp_types::{DocumentSymbol, Location, SymbolInformation, SymbolKi
 
 use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
-use crate::symbol_table::{SymbolCategory, SymbolKey};
+use crate::symbol_identity::SymbolId;
+use crate::symbol_table::SymbolCategory;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// Build document symbols from an analysis result.
@@ -26,7 +27,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
     // per call rather than re-scanning all definitions (O(N*M) in total).
     let variants_by_parent = build_variants_index(analysis);
 
-    let mut outline: HashMap<&SymbolKey, DocumentSymbol> = HashMap::new();
+    let mut outline: HashMap<&SymbolId, DocumentSymbol> = HashMap::new();
     for (key, def) in &table.definitions {
         // Skip builtins, locals, and variants (variants are shown as children).
         // Also skip definitions with zero-length spans (synthetic/builtins).
@@ -56,7 +57,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
 
         // Collect children (variants for indexes and tagged unions).
         let children = match key {
-            SymbolKey::Index(parent) => collect_children(&lines, &variants_by_parent, parent),
+            SymbolId::Index(parent) => collect_children(&lines, &variants_by_parent, parent),
             _ => Vec::new(),
         };
 
@@ -75,7 +76,7 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
         );
     }
 
-    let mut members: HashMap<Option<SymbolKey>, Vec<&SymbolKey>> = HashMap::new();
+    let mut members: HashMap<Option<SymbolId>, Vec<&SymbolId>> = HashMap::new();
     for key in outline.keys() {
         let parent = outline_parent(analysis, key).filter(|parent| outline.contains_key(parent));
         members.entry(parent).or_default().push(key);
@@ -85,16 +86,16 @@ pub fn build_document_symbols(analysis: &AnalysisResult) -> Vec<DocumentSymbol> 
 
 /// The outline entry `key` nests under: its type for a constructor, the
 /// declaring `dag` for a member of an inline DAG, nothing at the top level.
-fn outline_parent(analysis: &AnalysisResult, key: &SymbolKey) -> Option<SymbolKey> {
+fn outline_parent(analysis: &AnalysisResult, key: &SymbolId) -> Option<SymbolId> {
     match key {
-        SymbolKey::Constructor(constructor) => {
+        SymbolId::Constructor(constructor) => {
             let span = analysis.symbol_table.definitions.get(key)?.decl_span;
             analysis
                 .symbol_table
                 .definitions
                 .iter()
                 .find(|(candidate, definition)| {
-                    matches!(candidate, SymbolKey::StructType(nominal) if nominal.owner() == constructor.owner())
+                    matches!(candidate, SymbolId::StructType(nominal) if nominal.owner() == constructor.owner())
                         && definition.decl_span.offset() <= span.offset()
                         && span.offset() + span.len()
                             <= definition.decl_span.offset() + definition.decl_span.len()
@@ -104,15 +105,15 @@ fn outline_parent(analysis: &AnalysisResult, key: &SymbolKey) -> Option<SymbolKe
         _ => key
             .owner()
             .and_then(ResolvedDeclName::naming_inline_dag)
-            .map(SymbolKey::Declaration),
+            .map(SymbolId::Declaration),
     }
 }
 
 /// The sorted outline entries under `parent`, each with its own members.
 fn nest<'key>(
-    parent: Option<&SymbolKey>,
-    outline: &mut HashMap<&'key SymbolKey, DocumentSymbol>,
-    members: &HashMap<Option<SymbolKey>, Vec<&'key SymbolKey>>,
+    parent: Option<&SymbolId>,
+    outline: &mut HashMap<&'key SymbolId, DocumentSymbol>,
+    members: &HashMap<Option<SymbolId>, Vec<&'key SymbolId>>,
 ) -> Vec<DocumentSymbol> {
     let mut symbols: Vec<DocumentSymbol> = members
         .get(&parent.cloned())
@@ -190,7 +191,7 @@ fn build_variants_index(
         if def.category != SymbolCategory::IndexVariant {
             continue;
         }
-        if let SymbolKey::IndexVariant(variant) = key {
+        if let SymbolId::IndexVariant(variant) = key {
             out.entry(variant.index().clone()).or_default().push(def);
         }
     }

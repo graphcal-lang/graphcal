@@ -971,7 +971,7 @@ The LSP consumes compiler/evaluator APIs and adds editor-facing analysis:
 | `file_identity.rs`          | Canonical document identities of files and URIs   |
 | `server.rs`                 | Server lifecycle, scheduling, and protocol handlers |
 | `diagnostics.rs`            | Compiler/evaluator diagnostics to LSP diagnostics |
-| `symbol_table.rs`           | Typed `SymbolKey` index from decl shells + tolerantly lowered HIR |
+| `symbol_table.rs`           | Typed `SymbolId` index from decl shells + tolerantly lowered HIR |
 | `completion.rs`             | Completion                                        |
 | `hover.rs`                  | Hover                                             |
 | `goto_definition.rs`        | Go to definition                                  |

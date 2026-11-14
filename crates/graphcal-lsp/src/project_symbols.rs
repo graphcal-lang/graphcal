@@ -12,10 +12,11 @@ use graphcal_compiler::syntax::span::Span;
 use tower_lsp::lsp_types::{Range, Url};
 
 use crate::convert::LineIndex;
+use crate::symbol_identity::SymbolId;
 use crate::symbol_identity::{
     ReferenceTarget, UnresolvedSymbol, VisibleBinding, resolve_visible_target,
 };
-use crate::symbol_table::{DefinitionInfo, ReferenceInfo, SymbolKey, SymbolTable};
+use crate::symbol_table::{DefinitionInfo, ReferenceInfo, SymbolTable};
 
 /// Symbol data for one physical source document in a project snapshot.
 #[derive(Debug)]
@@ -42,7 +43,7 @@ impl ProjectDocumentSymbols {
         }
     }
 
-    fn resolve_reference(&self, reference: &ReferenceInfo) -> Option<SymbolKey> {
+    fn resolve_reference(&self, reference: &ReferenceInfo) -> Option<SymbolId> {
         self.table
             .resolve_local_target(&reference.target)
             .map(|target| self.canonical_visible_target(target))
@@ -56,7 +57,7 @@ impl ProjectDocumentSymbols {
             })
     }
 
-    fn canonical_visible_target(&self, resolved: SymbolKey) -> SymbolKey {
+    fn canonical_visible_target(&self, resolved: SymbolId) -> SymbolId {
         if self.table.definitions.contains_key(&resolved) {
             return resolved;
         }
@@ -81,7 +82,7 @@ impl ProjectDocumentSymbols {
     fn may_unresolved_reference_target(
         &self,
         unresolved: &UnresolvedSymbol,
-        target: &SymbolKey,
+        target: &SymbolId,
     ) -> bool {
         if !unresolved.accepts(target) {
             return false;
@@ -116,7 +117,7 @@ pub enum ResolutionSite {
     Definition(ProjectOccurrence),
     /// An identity without a navigable definition in the snapshot (a
     /// built-in, for instance).
-    Identity(SymbolKey),
+    Identity(SymbolId),
     /// The occurrence has no unique target.
     Unresolved,
 }
@@ -181,7 +182,7 @@ impl ProjectSymbolIndex {
 
     /// Query visibility at the canonical definition, not at the cursor's root.
     #[must_use]
-    pub fn is_externally_visible(&self, target: &SymbolKey) -> bool {
+    pub fn is_externally_visible(&self, target: &SymbolId) -> bool {
         self.documents.values().any(|document| {
             document.table.definitions.contains_key(target)
                 && document.table.is_externally_visible(target)
@@ -196,7 +197,7 @@ impl ProjectSymbolIndex {
     }
 
     #[must_use]
-    pub fn resolve_root_reference(&self, reference: &ReferenceInfo) -> Option<SymbolKey> {
+    pub fn resolve_root_reference(&self, reference: &ReferenceInfo) -> Option<SymbolId> {
         self.root_uri
             .as_ref()
             .and_then(|uri| self.documents.get(uri))?
@@ -209,7 +210,7 @@ impl ProjectSymbolIndex {
     }
 
     #[must_use]
-    pub fn definition(&self, target: &SymbolKey) -> Option<ProjectDefinition<'_>> {
+    pub fn definition(&self, target: &SymbolId) -> Option<ProjectDefinition<'_>> {
         self.documents.values().find_map(|document| {
             let definition = document.table.definitions.get(target)?;
             definition.is_navigable().then(|| ProjectDefinition {
@@ -223,7 +224,7 @@ impl ProjectSymbolIndex {
     }
 
     #[must_use]
-    pub fn references(&self, target: &SymbolKey) -> Vec<ProjectOccurrence> {
+    pub fn references(&self, target: &SymbolId) -> Vec<ProjectOccurrence> {
         let mut occurrences: Vec<_> = self
             .documents
             .values()
@@ -275,7 +276,7 @@ impl ProjectSymbolIndex {
     /// intentionally different and therefore does not participate in a
     /// canonical-definition rename.
     #[must_use]
-    pub fn rename_occurrences(&self, target: &SymbolKey) -> Vec<ProjectOccurrence> {
+    pub fn rename_occurrences(&self, target: &SymbolId) -> Vec<ProjectOccurrence> {
         let Some(canonical_name) = self
             .definition(target)
             .map(|definition| definition.definition.name.as_str())
@@ -314,7 +315,7 @@ impl ProjectSymbolIndex {
     /// Whether a tolerant occurrence could denote `target` but lacks one
     /// canonical resolution. A rename is unsafe while this is true.
     #[must_use]
-    pub fn has_ambiguous_reference_to(&self, target: &SymbolKey) -> bool {
+    pub fn has_ambiguous_reference_to(&self, target: &SymbolId) -> bool {
         self.documents.values().any(|document| {
             document.table.references().iter().any(|reference| {
                 let ReferenceTarget::Unresolved(unresolved) = &reference.target else {
@@ -330,12 +331,7 @@ impl ProjectSymbolIndex {
     /// therefore initiate a project-wide canonical rename. Alias uses remain
     /// navigable but deliberately cannot trigger a surprising API rename.
     #[must_use]
-    pub fn occurrence_can_initiate_rename(
-        &self,
-        uri: &Url,
-        span: Span,
-        target: &SymbolKey,
-    ) -> bool {
+    pub fn occurrence_can_initiate_rename(&self, uri: &Url, span: Span, target: &SymbolId) -> bool {
         let Some(canonical_name) = self
             .definition(target)
             .map(|definition| definition.definition.name.as_str())
