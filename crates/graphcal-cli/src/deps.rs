@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -822,7 +823,9 @@ fn materialize_git_revision(
         remote
             .with_refspecs([fetch_refspec.as_str()], gix::remote::Direction::Fetch)
             .map(|remote| remote.with_fetch_tags(gix::remote::fetch::Tags::None))
-    });
+    })
+    // Only the pinned commit's tree is ever read, so its history is not needed.
+    .with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(NonZeroU32::MIN));
     let (repo, _) = prepare_fetch
         .fetch_only(gix::progress::Discard, &should_interrupt)
         .map_err(|source| git_materialize_error(url, rev, source))?;
