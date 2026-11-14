@@ -18,13 +18,17 @@ use graphcal_model_protocol::{
     SessionError, SessionSchema, SessionSpec, SiScale, UnitSpelling, WireType,
 };
 
-use super::model_value::{ValueBindError, ValueCodec, ValueCodecError, to_si};
-use super::{
-    CompileError, DeclName, Error, ModelExecutionError, ModelOutputPort, ModelRowFailure,
-    ModelRowOutcome, ParameterBindingBuilder, ParameterBindingRow, ParameterDomain, ParameterPort,
-    ParameterPosition, PreparedProject,
+use super::binding_compile::ParameterBindingRow;
+use super::model_port::{
+    ModelExecutionError, ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterDomain,
+    ParameterPort,
 };
+use super::model_value::{ValueBindError, ValueCodec, ValueCodecError, to_si};
+use super::{ParameterBindingBuilder, ParameterPosition, PreparedProject};
 use crate::binding_error::BindingError;
+use crate::compile_error::CompileError;
+use graphcal_compiler::syntax::decl_name::DeclName;
+use thiserror::Error;
 
 /// How one varied parameter is bound from its request column.
 #[derive(Debug, Clone)]

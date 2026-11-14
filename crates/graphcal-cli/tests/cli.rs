@@ -455,6 +455,66 @@ fn deps_lock_writes_deterministic_git_lockfile() {
 }
 
 #[cfg(unix)]
+#[test]
+fn deps_lock_fetches_only_the_pinned_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    let first_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let pinned_rev = update_git_package_module(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\npub const node two: Dimensionless = 2.0;\n",
+        "second",
+    );
+    let project = dir.path().join("mission");
+    write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\n\
+             units = {{ git = \"{}\", rev = \"{pinned_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ two };\nnode three: Dimensionless = @two + 1.0;\n",
+    );
+    let cache = dir.path().join("cache");
+
+    let output = run_deps_lock(&project, &cache);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock = std::fs::read_to_string(project.join("graphcal.lock")).unwrap();
+    let parsed_lock = graphcal_package::parse_lockfile_str(&lock).unwrap();
+    let cache_root = graphcal_project::package_cache::PackageCacheRoot::from_path(&cache).unwrap();
+    let (source, digest) = parsed_lock
+        .packages
+        .iter()
+        .find_map(|package| match &package.source {
+            graphcal_package::PackageSource::Git {
+                source,
+                tree_hashes,
+            } => Some((source.clone(), tree_hashes.sha256)),
+            graphcal_package::PackageSource::Root => None,
+        })
+        .unwrap();
+    let checkout = gix::open(cache_root.git_checkout(&source, &digest)).unwrap();
+    assert!(checkout.is_shallow().unwrap());
+    let pinned = gix::hash::ObjectId::from_hex(pinned_rev.as_bytes()).unwrap();
+    let parent = gix::hash::ObjectId::from_hex(first_rev.as_bytes()).unwrap();
+    assert!(checkout.find_commit(pinned).is_ok());
+    assert!(
+        checkout.try_find_object(parent).unwrap().is_none(),
+        "the parent commit must not be fetched"
+    );
+}
+
+#[cfg(unix)]
 fn run_deps_lock(project: &Path, cache: &Path) -> std::process::Output {
     graphcal_bin()
         .args(["deps", "lock", "--root"])

@@ -14,9 +14,10 @@ use graphcal_model_protocol::{
     UnsupportedReason, WireType,
 };
 
+use super::PreparedProject;
 use super::model_axis::{Unsupported, axis_wire, protocol_dimension};
 use super::model_session::ModelInterfaceError;
-use super::{ModelValueSchema, PreparedProject};
+use crate::prepare::model_schema::ModelValueSchema;
 
 /// A wire type, or why the protocol cannot carry the value.
 type Wire = Result<WireType, Unsupported>;

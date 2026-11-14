@@ -20,14 +20,26 @@ use graphcal_compiler::syntax::type_name::ConstructorName;
 use graphcal_eval::invariant::Failure;
 use miette::SourceSpan;
 
+use super::model_port::ParameterPort;
 use super::{
-    AstExprKind, CheckedEntryInterface, CompileError, DeclName, DiagnosticAnchor, EvalSession,
-    Expr, ExprLoweringContext, GenericScope, HirExprKind, ModelIndexKind, ModelIndexSchema,
-    ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId, ModelValueSchema, ModuleScope,
-    ParameterBindingBuilder, ParameterPort, ParameterPosition, ParameterValue, PreparedProject,
-    RuntimeParameterBinding, RuntimeParameterBindings, RuntimeValueMap, SemanticError, Span,
-    parameter_domain,
+    ParameterBindingBuilder, ParameterPosition, ParameterValue, PreparedProject, parameter_domain,
 };
+use crate::compile_error::CompileError;
+use crate::prepare::model_schema::{
+    ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
+    ModelValueSchema,
+};
+use crate::project_compiler::CheckedEntryInterface;
+use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
+use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+use graphcal_compiler::hir::ExprLoweringContext;
+use graphcal_compiler::hir::expr::ExprKind as HirExprKind;
+use graphcal_compiler::hir::lower::{GenericScope, ModuleScope};
+use graphcal_compiler::semantic_error::SemanticError;
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::span::Span;
+use graphcal_eval::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
+use graphcal_eval::eval_expr::{EvalSession, RuntimeValueMap};
 
 /// One checked browser-editor value. Containers carry stable schema-arena
 /// positions; only leaves contain parsed Graphcal literal syntax.

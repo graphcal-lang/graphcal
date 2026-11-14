@@ -1,4 +1,5 @@
-//! Phase 1 regression tests from `.local/2026-08-05_code-review-chunk-3.md`.
+//! Regressions for strict sink lowering, canonical owners, override
+//! reconciliation, template-closure checks, and include output projection.
 #![cfg(test)]
 
 use std::collections::HashMap;

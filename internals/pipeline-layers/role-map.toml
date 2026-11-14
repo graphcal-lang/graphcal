@@ -2170,7 +2170,7 @@ role = "facade"
 
 [[module]]
 package = "project"
-path = ["tests", "prop"]
+path = ["tests", "evaluation", "prop"]
 role = "facade"
 
 [[module]]
@@ -3046,6 +3046,101 @@ role = "contracts"
 [[module]]
 package = "project"
 path = ["tests", "exec_plan"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "dag_calls"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "declaration_rules"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "definition_site_scope"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "derived_dimensions"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "domain_constraints"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "evaluation"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "generics"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "include_bindings"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "index_injection"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "inline_dags"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "instances"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "instantiated_imports"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "model_sessions"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "overrides"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "plans"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "prepared_bindings"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "same_leaf_owners"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "type_store"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "work_bounds"]
 role = "facade"
 
 [[module]]

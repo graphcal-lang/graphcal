@@ -5,16 +5,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use graphcal_compiler::declaration_category::DeclCategory;
-use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
+use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::hir::ExprLoweringContext;
-use graphcal_compiler::hir::expr::ExprKind as HirExprKind;
-use graphcal_compiler::hir::lower::{GenericScope, ModuleScope};
 use graphcal_compiler::outcome::{CancellationMode, Outcome, without_cancellation};
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
-use graphcal_compiler::semantic::time_scale::TimeScale;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::source_id::SourceId;
@@ -24,18 +20,14 @@ use graphcal_compiler::static_interface::StaticInputKind;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::span::Span;
 use graphcal_eval::runtime_value::{IndexAxis, KeyValue, RuntimeValue};
 use miette::{NamedSource, SourceSpan};
-use thiserror::Error;
 
 use crate::binding_error::{BindingError, BindingValueKind};
 use crate::compile_error::CompileError;
-use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_eval::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
-use graphcal_eval::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
-use graphcal_eval::eval::types::{EvalResult, Value};
-use graphcal_eval::eval_expr::{EvalSession, RuntimeValueMap};
+use graphcal_eval::eval::bindings::RuntimeParameterBinding;
+use graphcal_eval::eval::types::EvalResult;
 
 use crate::project_compiler::{
     CheckedEntryInterface, CheckedProject, CheckedProjectRuntimeParts, CompiledFile,
@@ -43,27 +35,16 @@ use crate::project_compiler::{
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
 
-use super::model_schema::{
-    ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
-    ModelValueSchema,
-};
+use super::model_schema::{ModelSchemaGraph, ModelSchemaGraphBuilder};
 use super::output::apply_include_debug_names;
 
-#[path = "binding_compile.rs"]
 mod binding_compile;
-#[path = "model_axis.rs"]
 mod model_axis;
-#[path = "model_port.rs"]
 mod model_port;
-#[path = "model_session.rs"]
 mod model_session;
-#[path = "model_unit.rs"]
 mod model_unit;
-#[path = "model_value.rs"]
 mod model_value;
-#[path = "model_wire.rs"]
 mod model_wire;
-#[path = "structured_source.rs"]
 mod structured_source;
 
 use binding_compile::build_parameter_ports;
