@@ -28,3 +28,11 @@ fn param_and_pub_node_of_one_name_report_duplicate() {
     let source = "param x: Length = 1.0 m;\npub node x: Length = @x * 2.0;\n";
     insta::assert_snapshot!(render_error(source, "collide.gcl"));
 }
+
+/// RES-13: two includes with one alias are a duplicate name reported at the
+/// second alias, not a duplicate internal module over the whole file.
+#[test]
+fn duplicate_include_alias_is_reported_at_the_alias() {
+    let source = "dag d { pub node y: Length = 1.0 m; }\ninclude d() as x;\ninclude d() as x;\nnode z: Length = @x::y;\n";
+    insta::assert_snapshot!(render_error(source, "dupinc.gcl"));
+}
