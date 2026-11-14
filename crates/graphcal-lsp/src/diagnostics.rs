@@ -2,6 +2,7 @@
 
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
+use graphcal_compiler::semantic_error::domain::DomainError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
@@ -323,44 +324,36 @@ fn structured_data(error: &CompileError) -> Option<RepairData> {
     let CompileError::Eval(e) = error else {
         return None;
     };
-    match e.error() {
+    let SemanticError::Located(diagnostic) = e.error() else {
+        return None;
+    };
+    match &diagnostic.kind {
         // V003: the private item that needs `pub`.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }),
-            ..
-        }) => Some(RepairData::AddVisibility {
-            item: ref_name.to_string(),
-            visibility: AddedVisibility::Public,
-        }),
+        SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }) => {
+            Some(RepairData::AddVisibility {
+                item: ref_name.to_string(),
+                visibility: AddedVisibility::Public,
+            })
+        }
         // V006: the leaked private item that needs `pub`.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind:
-                SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage { leaked_name, .. }),
-            ..
-        }) => Some(RepairData::AddVisibility {
-            item: leaked_name.to_string(),
-            visibility: AddedVisibility::Public,
-        }),
+        SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage { leaked_name, .. }) => {
+            Some(RepairData::AddVisibility {
+                item: leaked_name.to_string(),
+                visibility: AddedVisibility::Public,
+            })
+        }
         // V002: the required item that must join the bindable interface.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind:
-                SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable {
-                    name, ..
-                }),
-            ..
+        SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable {
+            name, ..
         }) => Some(RepairData::AddVisibility {
             item: name.to_string(),
             visibility: AddedVisibility::Bindable,
         }),
         // V008: a selective include can select the missing types; a
         // module-form include cannot specialize them at all.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind:
-                SemanticErrorKind::Visibility(VisibilityError::IncludeMustSelectReboundType {
-                    types,
-                    form: IncludeForm::Selective,
-                    ..
-                }),
+        SemanticErrorKind::Visibility(VisibilityError::IncludeMustSelectReboundType {
+            types,
+            form: IncludeForm::Selective,
             ..
         }) => Some(RepairData::SelectTypes {
             types: types
@@ -370,44 +363,38 @@ fn structured_data(error: &CompileError) -> Option<RepairData> {
         }),
         // D020: an exact replacement exists only when the decimal spelling
         // maps exactly into the dimension rational model.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind:
-                SemanticErrorKind::Dimension(DimensionError::FloatPowerExponent {
-                    replacement: Some(replacement),
-                    ..
-                }),
+        SemanticErrorKind::Dimension(DimensionError::FloatPowerExponent {
+            replacement: Some(replacement),
             ..
         }) => Some(RepairData::ExactExponent {
             replacement: replacement.clone(),
         }),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }),
+        // C011: a written integer literal has an exact Dimensionless spelling.
+        SemanticErrorKind::Domain(DomainError::IntBoundOnDimensionlessDomain {
+            literal: Some(literal),
             ..
-        }) => name
+        }) => Some(RepairData::DimensionlessBound {
+            replacement: format!("{literal}.0"),
+        }),
+        SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }) => name
             .as_bare()
             .map(|name| auto_import_data(name.as_str(), AutoImportCategory::Dimension)),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name, .. }),
-            ..
-        }) if !name.is_qualified() => Some(auto_import_data(
-            name.leaf().as_str(),
-            AutoImportCategory::Unit,
-        )),
+        SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name, .. })
+            if !name.is_qualified() =>
+        {
+            Some(auto_import_data(
+                name.leaf().as_str(),
+                AutoImportCategory::Unit,
+            ))
+        }
         // Structural `Fin(N)` axes are never importable.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }),
-            ..
-        }) => name
+        SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }) => name
             .declared_name()
             .map(|name| auto_import_data(name.as_str(), AutoImportCategory::Index)),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Struct(StructError::UnknownStructType { name, .. }),
-            ..
-        }) => Some(auto_import_data(name.to_string(), AutoImportCategory::Type)),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Struct(StructError::UnknownLocalRef { name, .. }),
-            ..
-        }) => match name {
+        SemanticErrorKind::Struct(StructError::UnknownStructType { name, .. }) => {
+            Some(auto_import_data(name.to_string(), AutoImportCategory::Type))
+        }
+        SemanticErrorKind::Struct(StructError::UnknownLocalRef { name, .. }) => match name {
             UnknownLocal::Named(name) => {
                 Some(auto_import_data(name.as_str(), AutoImportCategory::Term))
             }
@@ -415,13 +402,14 @@ fn structured_data(error: &CompileError) -> Option<RepairData> {
                 Some(auto_import_data(name.as_str(), AutoImportCategory::Term))
             }
         },
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }),
-            ..
-        }) if name.qualifier().is_empty() => Some(auto_import_data(
-            name.leaf().as_str(),
-            AutoImportCategory::Term,
-        )),
+        SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. })
+            if name.qualifier().is_empty() =>
+        {
+            Some(auto_import_data(
+                name.leaf().as_str(),
+                AutoImportCategory::Term,
+            ))
+        }
         _ => None,
     }
 }

@@ -71,6 +71,9 @@ pub enum RepairData {
     /// D020: replace the decimal exponent with the exactly equal rational
     /// the compiler proved.
     ExactExponent { replacement: String },
+    /// C011: replace an integer-literal bound of a `Dimensionless` domain
+    /// with the same number written as a `Dimensionless` literal.
+    DimensionlessBound { replacement: String },
     /// Add `visibility` to the declaration of the private item `item`.
     AddVisibility {
         item: String,
@@ -120,6 +123,9 @@ mod tests {
         for repair in [
             RepairData::ExactExponent {
                 replacement: "(1/4)".to_string(),
+            },
+            RepairData::DimensionlessBound {
+                replacement: "-3.0".to_string(),
             },
             RepairData::AddVisibility {
                 item: "Velocity".to_string(),

@@ -254,9 +254,16 @@ pub enum DomainError {
         bound_name: DomainBoundKind,
         bound_type: TypeSpelling,
     },
-    /// An Int bound on a quantity domain that `f64` cannot represent exactly.
-    #[error("domain bound integer {value} is too large for exact quantity comparison")]
-    InexactIntDomainBound { value: i64 },
+    /// An `Int` bound on a `Dimensionless` domain. Bounds are compared with
+    /// the value, and `Int` and quantities are never compared implicitly.
+    #[error("domain bound type mismatch on Dimensionless `{name}`: {bound_name} bound is an Int")]
+    IntBoundOnDimensionlessDomain {
+        name: DomainSubject,
+        bound_name: DomainBoundKind,
+        /// The bound's value when it is a (possibly negated) integer
+        /// literal, so the help can spell its `Dimensionless` replacement.
+        literal: Option<i64>,
+    },
     #[error("domain constraints are not supported on the type of a `todo` hole")]
     TodoHoleDomainConstraint,
     /// A bound reads a constant that has no value: its formula, or that of a
@@ -279,9 +286,9 @@ impl DiagnosticKind for DomainError {
             Self::IntDomainBoundTypeMismatch { .. } => "graphcal::C005",
             Self::GenericTypeArgDomainConstraint => "graphcal::C006",
             Self::DatetimeDomainBoundTypeMismatch { .. } => "graphcal::C007",
-            Self::InexactIntDomainBound { .. } => "graphcal::C008",
             Self::TodoHoleDomainConstraint => "graphcal::C009",
             Self::DomainBoundReadsUnfinishedConstant { .. } => "graphcal::C010",
+            Self::IntBoundOnDimensionlessDomain { .. } => "graphcal::C011",
         }
     }
 
@@ -302,7 +309,9 @@ impl DiagnosticKind for DomainError {
             Self::DatetimeDomainBoundTypeMismatch { .. } => {
                 Some("datetime bound has the wrong time scale or value type".to_owned())
             }
-            Self::InexactIntDomainBound { .. } => Some("error here".to_owned()),
+            Self::IntBoundOnDimensionlessDomain { .. } => {
+                Some("Dimensionless bound must not be an Int".to_owned())
+            }
             Self::DomainBoundReadsUnfinishedConstant { .. } => {
                 Some("bound has no value yet".to_owned())
             }
@@ -319,7 +328,10 @@ impl DiagnosticKind for DomainError {
             Self::GenericTypeArgDomainConstraint => Some("put the constraint on the field in the struct definition, not on the generic type argument".to_owned()),
             Self::DatetimeDomainBoundTypeMismatch { .. } => Some("datetime bounds must have exactly the constrained Datetime<S> type; use an explicit time-scale conversion".to_owned()),
             Self::TodoHoleDomainConstraint => Some("put the constraint on the declaration's type instead".to_owned()),
-            Self::InexactIntDomainBound { .. } => None,
+            Self::IntBoundOnDimensionlessDomain { literal, .. } => Some(literal.map_or_else(
+                || "convert the bound with `to_float(...)`, or write an integer literal as a Dimensionless number such as `0.0`".to_owned(),
+                |literal| format!("write `{literal}.0` instead of `{literal}`"),
+            )),
             Self::DomainBoundReadsUnfinishedConstant { .. } => Some("a bound must be known when the model is checked; finish the constant's formula first".to_owned()),
         }
     }
@@ -333,7 +345,7 @@ impl DiagnosticKind for DomainError {
             | Self::IntDomainBoundTypeMismatch { .. }
             | Self::GenericTypeArgDomainConstraint
             | Self::DatetimeDomainBoundTypeMismatch { .. }
-            | Self::InexactIntDomainBound { .. }
+            | Self::IntBoundOnDimensionlessDomain { .. }
             | Self::TodoHoleDomainConstraint
             | Self::DomainBoundReadsUnfinishedConstant { .. } => Vec::new(),
         }

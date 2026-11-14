@@ -1,7 +1,6 @@
 //! Domain-bound resolution and compile-time constraint validation.
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
-use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::semantic_error::domain::{DomainBoundSpelling, DomainError, DomainSubject};
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -147,19 +146,10 @@ fn resolve_constraint_from_bounds(
             src,
             &"a quantity",
             |value, bound| {
-                let quantity = match value {
-                    RuntimeValue::Quantity(value) => *value,
-                    RuntimeValue::Int(value) => {
-                        match FiniteQuantity::try_new(
-                            exact_domain_int_bound(*value, src, bound.value.span)
-                                .map_err(Outcome::Failed)?,
-                        ) {
-                            Ok(quantity) => quantity,
-                            Err(_) => return Ok(None),
-                        }
-                    }
-                    _ => return Ok(None),
+                let RuntimeValue::Quantity(quantity) = value else {
+                    return Ok(None);
                 };
+                let quantity = *quantity;
                 Ok(Some((
                     quantity,
                     quantity_bound_spelling(&bound.value, quantity.get()),
@@ -714,21 +704,6 @@ fn resolve_constraint_target(
             decl_span,
             DomainError::InvalidDomainTarget { type_kind },
         )
-    })
-}
-
-/// Format a bound expression for display (e.g., `"100 kg"`, `"0.01 N"`).
-///
-/// For simple expressions (numbers, quantity literals, unary negation), the
-/// original syntactic form is preserved. For complex expressions, the
-/// pre-evaluated SI value is displayed as a fallback — no re-evaluation needed.
-fn exact_domain_int_bound(
-    value: i64,
-    src: SourceId,
-    span: graphcal_compiler::syntax::span::Span,
-) -> Result<f64, SemanticError> {
-    crate::eval_expr::numeric::exact_i64_to_f64(value).map_err(|_| {
-        SemanticError::located(src, span, DomainError::InexactIntDomainBound { value })
     })
 }
 

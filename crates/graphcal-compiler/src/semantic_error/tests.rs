@@ -862,21 +862,30 @@ fn plugin_payloads_render_their_text_as_before() {
 }
 
 #[test]
-fn inexact_int_domain_bound_has_its_own_domain_code() {
-    use super::domain::DomainError;
+fn int_bound_on_dimensionless_domain_suggests_the_dimensionless_spelling() {
+    use super::domain::{DomainError, DomainSubject};
     use crate::diagnostic::DiagnosticKind;
+    use crate::syntax::ast::DomainBoundKind;
 
-    let error = DomainError::InexactIntDomainBound { value: i64::MAX };
-    assert_eq!(error.code(), "graphcal::C008");
+    let error = |literal| DomainError::IntBoundOnDimensionlessDomain {
+        name: DomainSubject::Declaration(crate::syntax::decl_name::DeclName::expect_valid("ratio")),
+        bound_name: DomainBoundKind::Min,
+        literal,
+    };
+    assert_eq!(error(Some(-3)).code(), "graphcal::C011");
     assert_eq!(
-        error.to_string(),
-        format!(
-            "domain bound integer {} is too large for exact quantity comparison",
-            i64::MAX
-        )
+        error(Some(-3)).to_string(),
+        "domain bound type mismatch on Dimensionless `ratio`: min bound is an Int"
     );
-    assert_eq!(error.primary_label().as_deref(), Some("error here"));
-    assert_eq!(error.help(), None);
+    assert_eq!(
+        error(Some(-3)).help().as_deref(),
+        Some("write `-3.0` instead of `-3`")
+    );
+    assert!(
+        error(None)
+            .help()
+            .is_some_and(|help| help.contains("to_float(...)") && help.contains("`0.0`"))
+    );
 }
 
 #[test]

@@ -1310,6 +1310,14 @@ fn error_int_domain_bound_type_mismatch() {
     insta::assert_snapshot!(rendered);
 }
 
+#[test]
+fn error_int_bound_on_dimensionless_domain() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/int_bound_on_dimensionless_domain.gcl");
+    let rendered = render_error(source, "int_bound_on_dimensionless_domain.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 // --- Struct/union member field domain constraint errors (#450 Pos 1+2) ---
 
 #[test]

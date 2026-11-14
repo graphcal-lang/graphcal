@@ -1037,8 +1037,9 @@ fn check_dimensions_dag(
 /// For each param/node with `(min: ..., max: ...)` constraints whose target type
 /// is a quantity, `Int`, or `Datetime<S>`, infers the type of each bound
 /// expression using the regular type checker and verifies it matches:
-/// - `Quantity(d)` target: bound must be `Quantity(d)` (or `Int` if `d` is dimensionless).
-/// - `Dimensionless` target: bound must be `Quantity(dimensionless)` or `Int`.
+/// - `Quantity(d)` target, including `Dimensionless`: bound must be
+///   `Quantity(d)`; an `Int` bound on a `Dimensionless` target gets its own
+///   diagnostic that suggests the `Dimensionless` spelling.
 /// - `Int` target: bound must be exactly `Int`.
 /// - `Datetime<S>` target: bound must be exactly `Datetime<S>`.
 ///

@@ -66,8 +66,8 @@ fn normalized_nat_axes_do_not_replay_source_arithmetic() {
     assert!(!literal_control.has_errors());
     for expression in [
         "sum(for i: Fin(N * 18446744073709551615 * 0 + 1) { 1.0 })",
-        "to_int(fin_key(Fin(N * 18446744073709551615 * 0 + 1), 0))",
-        "to_int(key(Fin(N * 18446744073709551615 * 0 + 1), 0))",
+        "to_float(to_int(fin_key(Fin(N * 18446744073709551615 * 0 + 1), 0)))",
+        "to_float(to_int(key(Fin(N * 18446744073709551615 * 0 + 1), 0)))",
     ] {
         let source = format!(
             "type NatIdentity<N: Nat> {{ NatIdentity(value: Dimensionless(min: {expression})), }} node value: NatIdentity<2> = NatIdentity<2>(value: 1.0);"

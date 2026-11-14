@@ -514,7 +514,7 @@ T(max: expr)                      // upper bound only
 T(min: expr, max: expr)[I]        // constrained indexed type (element-wise)
 ```
 
-ここで `T` は数量型、`Int`、`Datetime<S>` のいずれかでなければならず、`I` はインデックス軸です。`min` と `max` はともに任意で、片方だけでも両方でも指定できます。境界は、その値を含むコンパイル時定数式です。各境界は `T` が要求する型を持たなければなりません。特に、`Int` の境界は厳密に `Int` であり、日時の境界は対象の `Datetime<S>` と厳密に同じ時刻系でなければなりません。
+ここで `T` は数量型、`Int`、`Datetime<S>` のいずれかでなければならず、`I` はインデックス軸です。`min` と `max` はともに任意で、片方だけでも両方でも指定できます。境界は、その値を含むコンパイル時定数式です。各境界は `T` が要求する型を持たなければなりません。特に、`Int` の境界は厳密に `Int` であり、`Dimensionless` の境界は `Dimensionless` の数値（`0` ではなく `0.0`）であり、日時の境界は対象の `Datetime<S>` と厳密に同じ時刻系でなければなりません。
 
 ### サポートする型 { #supported-types }
 
