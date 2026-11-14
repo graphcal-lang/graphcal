@@ -1921,7 +1921,7 @@ fn same_leaf_imported_dimensions_resolve_qualified_in_declarations() {
     // The qualifier names no module alias: the resolver's error, as in a
     // node annotation, not an unknown dimension (RES-14).
     assert!(
-        !ok && !stderr.contains("D004") && stderr.contains("`zzz`"),
+        !ok && stderr.contains("graphcal::M006") && stderr.contains("unknown module `zzz`"),
         "stderr: {stderr}"
     );
 

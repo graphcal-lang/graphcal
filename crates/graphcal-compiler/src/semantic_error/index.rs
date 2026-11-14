@@ -262,6 +262,22 @@ pub enum IndexError {
     EmptyMapEntry,
 }
 
+impl IndexError {
+    /// The overflow of a closed `Fin(...)` cardinality, wherever it is
+    /// written: a declaration or an include binding.
+    #[must_use]
+    pub const fn fin_cardinality_overflow(op: crate::syntax::nat_eval::NatArithmetic) -> Self {
+        match op {
+            crate::syntax::nat_eval::NatArithmetic::Addition => {
+                Self::FinCardinalityAdditionOverflow
+            }
+            crate::syntax::nat_eval::NatArithmetic::Multiplication => {
+                Self::FinCardinalityMultiplicationOverflow
+            }
+        }
+    }
+}
+
 impl DiagnosticKind for IndexError {
     fn code(&self) -> &'static str {
         match self {

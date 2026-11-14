@@ -150,3 +150,42 @@ fn help_texts_match_the_language() {
     let inline_reuse = "node x: Length = 1.0 m;\ndag d {\n    pub node x: Length = 2.0 m;\n}\nnode y: Length = @d()::x;\n";
     assert!(compile_and_eval_named(inline_reuse, "inline_reuse.gcl").is_ok());
 }
+
+/// The stable code of the error `source` reports.
+fn error_code(source: &str, name: &str) -> String {
+    let err = compile_and_eval_named(source, name).unwrap_err();
+    let diagnostic: &dyn Diagnostic = &err;
+    diagnostic.code().unwrap().to_string()
+}
+
+/// TIR-15: one mistake has one code, wherever it is written.
+#[test]
+fn one_mistake_has_one_code() {
+    for (expected, sources) in [
+        (
+            "graphcal::I040",
+            [
+                "node x: Dimensionless[Fin(4294967296 * 4294967296)] = for i: Fin(4294967296 * 4294967296) { 1.0 };\n",
+                "dag target { pub(bind) index Axis; }\ninclude target(index Axis: Fin(4294967296 * 4294967296))::{ index Axis as EffectiveAxis };\nnode indexed: Dimensionless[EffectiveAxis] = for i: EffectiveAxis { 1.0 };\n",
+            ],
+        ),
+        (
+            "graphcal::N021",
+            [
+                "pub index M = { A };\nparam x: M = 1.0;\n",
+                "pub index M = { A };\nparam x: M<Length> = 1.0;\n",
+            ],
+        ),
+        (
+            "graphcal::M006",
+            [
+                "node y: Length = 5.0 nr::mile;\n",
+                "node x: nr::Thing = 1.0;\n",
+            ],
+        ),
+    ] {
+        for source in sources {
+            assert_eq!(error_code(source, "codes.gcl"), expected, "{source}");
+        }
+    }
+}

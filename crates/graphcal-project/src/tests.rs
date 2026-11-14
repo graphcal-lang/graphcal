@@ -1679,16 +1679,21 @@ fn structural_index_binding_cardinality_must_be_closed() {
     ));
     assert!(matches!(
         compile_and_eval(&program("4294967296 * 4294967296")).unwrap_err(),
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NatOverflow { .. }), .. }), .. })
-            if kind.to_string().contains("type-level Nat arithmetic overflow")
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Index(IndexError::FinCardinalityMultiplicationOverflow),
+                ..
+            }),
+            ..
+        })
     ));
-    // A closed part that overflows is reported even after a name, like a
-    // `Fin(...)` written in a declaration.
+    // A closed part that overflows is reported even after a name, with the
+    // same code as a `Fin(...)` written in a declaration.
     assert!(matches!(
         compile_and_eval(&program("N + 4294967296 * 4294967296")).unwrap_err(),
         CompileError::Eval(RenderedSemanticError {
             error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Index(IndexError::NatOverflow { .. }),
+                kind: SemanticErrorKind::Index(IndexError::FinCardinalityMultiplicationOverflow),
                 ..
             }),
             ..

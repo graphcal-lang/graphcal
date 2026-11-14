@@ -401,6 +401,21 @@ fn lower_type_slot(
                         slot: TypePathSlot::TypeApplication,
                         span: name.span,
                     },
+                    // An index applied like a type is the same mistake as an
+                    // index written as a type, so it gets the same N021.
+                    ModuleResolveError::WrongUniverseName {
+                        actual: SurfaceNameKind::Index,
+                        ..
+                    } if let Ok(index) =
+                        ctx.resolver.resolve_index_path(ctx.owner, &name.value) =>
+                    {
+                        HirLowerError::IndexAsType {
+                            index: IndexRef::Concrete(Spanned::new(
+                                index.into_resolved(),
+                                name.span,
+                            )),
+                        }
+                    }
                     source => HirLowerError::ModuleResolve {
                         source,
                         span: name.span,

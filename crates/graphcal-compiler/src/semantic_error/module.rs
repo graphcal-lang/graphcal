@@ -270,12 +270,17 @@ impl DiagnosticKind for ModuleError {
 
 impl ModuleError {
     /// The diagnostic of a module-resolution failure that no more specific
-    /// family variant describes; an ambiguous module path keeps its own code.
+    /// family variant describes. Failures that have their own module
+    /// diagnostic keep its code wherever they surface: an ambiguous module
+    /// path (M034) and a qualifier naming no module alias (M006).
     #[must_use]
     pub fn resolution(error: ModuleResolveError) -> Self {
         match error {
             ModuleResolveError::AmbiguousModulePath { first, second } => {
                 Self::AmbiguousModulePath { first, second }
+            }
+            ModuleResolveError::UnknownModuleAlias { alias, .. } => {
+                Self::UnknownModule { name: alias }
             }
             error => Self::ModuleResolution {
                 error: Box::new(error),

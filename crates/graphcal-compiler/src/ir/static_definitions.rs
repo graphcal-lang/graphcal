@@ -1570,17 +1570,14 @@ fn validate_structural_finite_indexes(
 /// The value of a variable-free `Fin(...)` cardinality, or `None` when it
 /// names a generic parameter; a closed part that overflows is rejected.
 fn concrete_nat_value(expr: &ast::NatExpr, src: SourceId) -> Result<Option<u64>, SemanticError> {
-    use crate::syntax::nat_eval::{ClosedNat, NatArithmetic};
+    use crate::syntax::nat_eval::ClosedNat;
     match expr.closed_value() {
         Ok(ClosedNat::Value(value)) => Ok(Some(value)),
         Ok(ClosedNat::Open { .. }) => Ok(None),
         Err(overflow) => Err(SemanticError::located(
             src,
             overflow.span,
-            match overflow.op {
-                NatArithmetic::Addition => IndexError::FinCardinalityAdditionOverflow,
-                NatArithmetic::Multiplication => IndexError::FinCardinalityMultiplicationOverflow,
-            },
+            IndexError::fin_cardinality_overflow(overflow.op),
         )),
     }
 }
