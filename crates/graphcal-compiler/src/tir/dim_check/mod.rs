@@ -1103,7 +1103,8 @@ fn check_one_bound(
 
 /// Reject domain constraints on base types that don't accept them.
 ///
-/// Bool, Label, and algebraic types cannot carry `(min: …, max: …)` bounds.
+/// Bool, Complex, Key, and algebraic types cannot carry `(min: …, max: …)`
+/// bounds.
 /// The check is a pure function of the resolved declaration type—independent
 /// of any bound expression's value—so it belongs in compile-time validation
 /// rather than runtime resolution.

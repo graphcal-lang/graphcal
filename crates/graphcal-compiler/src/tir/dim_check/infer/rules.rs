@@ -48,7 +48,7 @@ pub(in crate::tir::dim_check) fn resolve_unit_dimension_or_diagnose(
 
 /// Typing rule for `match` arms: all arms must have the same type, and at
 /// least one arm must exist. `arm_body_span` maps an arm index to the span
-/// of its body for diagnostics (the two engines carry different arm types).
+/// of its body for diagnostics.
 pub(in crate::tir::dim_check) fn match_arms_rule(
     arm_types: &[CheckedType<Symbolic>],
     arm_body_span: impl Fn(usize) -> Span,
