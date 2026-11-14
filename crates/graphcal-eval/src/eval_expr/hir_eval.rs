@@ -738,8 +738,6 @@ fn coordinate_search(
     })
 }
 
-/// Evaluate `argmin`/`argmax`: the key of the extremum entry on the reduced
-/// axis.
 /// The expression of one plugin-call argument, in the argument's scope.
 fn argument_node(arg: Scoped<'_, TExternArg>) -> Scoped<'_, TExpr> {
     arg.map(|arg| &arg.value)

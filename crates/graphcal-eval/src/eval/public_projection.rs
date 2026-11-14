@@ -34,14 +34,6 @@ use crate::presentation_evidence::{
 use crate::runtime_presentation::{PresentedRef, PresentedView};
 use crate::runtime_value::{IndexedValue, RuntimeValue, StructValue};
 
-/// Project `value`, of `declared_type`, to the public value model, displayed
-/// as presented, with the display failure of each leaf that keeps its SI
-/// value.
-///
-/// # Errors
-///
-/// Returns an [`Invariant`] when a runtime variant differs from its checked
-/// type.
 /// The value of a declaration checked as `Bool`.
 ///
 /// # Errors
@@ -160,7 +152,9 @@ pub fn project_key_position(runtime: &RuntimeValue) -> Result<usize, Invariant> 
     }
 }
 
-/// Project `value`, checked as `declared_type`, to its public value.
+/// Project `value`, checked as `declared_type`, to the public value model,
+/// displayed as presented, with the display failure of each leaf that keeps
+/// its SI value.
 ///
 /// # Errors
 ///
