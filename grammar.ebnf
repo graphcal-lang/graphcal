@@ -208,14 +208,14 @@ regular_declaration_kind
    `--params-json-file`; required callable-DAG ports use include/call bindings.
    Params never take visibility. *)
 param_decl
-   = "param", IDENT, [ ":", type_expr ], [ "=", expr ], ";";
+   = "param", IDENT, ":", type_expr, [ "=", expr ], ";";
 
 (* --- node, const node --- *)
 node_decl
-   = "node", IDENT, [ ":", type_expr ], "=", expr, ";";
+   = "node", IDENT, ":", type_expr, "=", expr, ";";
 
 const_decl
-   = "const", "node", IDENT, [ ":", type_expr ], "=", expr, ";";
+   = "const", "node", IDENT, ":", type_expr, "=", expr, ";";
 
 (* --- multi-decl (dataframe-like) ---                                  *)
 (*                                                                      *)
@@ -974,7 +974,9 @@ dag_path
    = namespace_path;
 
 ident_expr
-   = ident_path,
+   = index_label                                   (* owner-qualified index
+                                                       label `Phase#Burn` *)
+   | ident_path,
      [ "<", generic_arg_list, ">" ],
      "(", [ call_arg_list ], ")"                   (* function call or
                                                        constructor call *)
@@ -1106,7 +1108,7 @@ paren_expr
 
 (* --- Match expression --- *)
 match_expr
-   = "match", expr, "{", [ match_arm, { [ "," ], match_arm }, [ "," ] ], "}";
+   = "match", expr, "{", [ match_arm, { ",", match_arm }, [ "," ] ], "}";
 
 match_arm
    = match_pattern, "=>", expr;
