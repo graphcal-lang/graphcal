@@ -479,7 +479,8 @@ pub enum WireType {
     Int,
     /// A Boolean (Arrow `Boolean`).
     Bool,
-    /// A categorical key (Arrow `Dictionary<Int32, Utf8>`).
+    /// A key of an axis (Arrow `Dictionary<Int32, Utf8>` on a named index,
+    /// `UInt32` on `Fin(n)`, `Float64` on a coordinate index).
     Key(KeyType),
     /// A datetime instant, seconds since J2000 in its time scale (Arrow
     /// `Float64`).
