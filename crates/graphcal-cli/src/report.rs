@@ -303,7 +303,8 @@ fn source_digests(project: &LoadedProject, root_dir: &Path) -> Vec<SourceDigest>
             hasher.update(file.source().as_bytes());
             SourceDigest {
                 name,
-                sha256: hex_string(&hasher.finalize()),
+                sha256: graphcal_package::Sha256Digest::from_bytes(hasher.finalize().into())
+                    .to_string(),
             }
         })
         .collect();
@@ -551,16 +552,6 @@ fn baseline_binding_strings(overrides: &ParsedOverrides) -> Vec<(String, String)
         .iter()
         .map(|binding| (binding.name.to_string(), binding.expression.clone()))
         .collect()
-}
-
-/// Lowercase hexadecimal rendering of a digest.
-fn hex_string(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 /// The provenance of this baseline evaluation, with the `graphcal eval`

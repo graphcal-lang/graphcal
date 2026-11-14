@@ -1188,14 +1188,13 @@ fn verify_locked_source(
         graphcal_package::SourceTreeHashAlgorithm::GraphcalSourceTreeV1
         | graphcal_package::SourceTreeHashAlgorithm::LegacyUnrecordedCoverage => tree_hashes.sha256,
     };
-    if actual.sha256() == expected.to_string() {
+    let actual = Sha256Digest::from_bytes(actual.sha256());
+    if actual == expected {
         Ok(snapshot)
     } else {
         Err(loader_manifest_error(format!(
-            "cached package `{}` hash mismatch; expected {}, got {}; run `graphcal deps lock`",
+            "cached package `{}` hash mismatch; expected {expected}, got {actual}; run `graphcal deps lock`",
             package.id,
-            expected,
-            actual.sha256()
         ))
         .into())
     }

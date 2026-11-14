@@ -869,7 +869,7 @@ fn install_dependency_cache_generation(
     std::fs::write(staging.join("src/units/lib.gcl"), dependency_source).unwrap();
     let manifest = parse_manifest_str(manifest_text).unwrap();
     let reader = RealFileSystem::rooted(&staging).unwrap();
-    let tree_hash = Sha256Digest::new(
+    let tree_hash = Sha256Digest::from_bytes(
         hash_source_tree(
             &reader,
             &staging,
@@ -879,8 +879,7 @@ fn install_dependency_cache_generation(
         )
         .unwrap()
         .sha256(),
-    )
-    .unwrap();
+    );
     drop(reader);
     let dependency_root = crate::package_cache::PackageCacheRoot::from_path(cache_root)
         .unwrap()
