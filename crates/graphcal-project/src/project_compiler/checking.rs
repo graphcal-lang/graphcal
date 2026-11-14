@@ -3,11 +3,6 @@
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::source_id::SourceId;
 
-#[allow(
-    clippy::wildcard_imports,
-    clippy::allow_attributes,
-    reason = "project checking consumes the shared internal phase model"
-)]
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 

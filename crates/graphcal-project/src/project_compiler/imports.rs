@@ -1,10 +1,5 @@
 //! Import processing functions for project-based compilation.
 
-#[allow(
-    clippy::wildcard_imports,
-    clippy::allow_attributes,
-    reason = "project compiler pass uses the shared internal model"
-)]
 use graphcal_compiler::syntax::span::Spanned;
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};

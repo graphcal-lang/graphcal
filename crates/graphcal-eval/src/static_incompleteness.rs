@@ -22,7 +22,7 @@ use crate::unfinished_reach::{BoundParameters, Origins, Query, UnfinishedReachMe
 /// The inline calls an expression's availability depends on.
 ///
 /// References through `@name` are body handles, resolved only in the scope
-/// the expression runs in ([`ScopedNode::graph_refs`]).
+/// the expression runs in.
 pub trait ExpressionDependencies {
     /// Every inline DAG call's output and explicitly bound parameters.
     fn dag_calls(&self) -> Vec<Query>;

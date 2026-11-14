@@ -8,7 +8,6 @@
 use std::fmt::Write;
 
 use crate::escape::{escape_json_for_script, html_escape};
-use crate::plot_page::VegaScriptSource;
 use crate::report_hydrate::{Hydration, render_hydration_block};
 use crate::report_ir::{CardBody, CheckStatus, ReportDocument, ValueCard};
 use crate::value_display::{GridTable, ValueBody};
@@ -25,17 +24,13 @@ const REPORT_CHARTS_JS: &str = include_str!("report_charts.js");
 /// re-evaluates on input. The static baseline stays byte-for-byte intact
 /// underneath: hydration is enhancement, never a prerequisite.
 #[must_use]
-pub fn render_report_html(
-    document: &ReportDocument,
-    scripts: VegaScriptSource,
-    hydration: Option<&Hydration<'_>>,
-) -> String {
+pub fn render_report_html(document: &ReportDocument, hydration: Option<&Hydration<'_>>) -> String {
     let vega_scripts = if document.figures.is_empty() && document.plot_errors.is_empty() {
         String::new()
     } else {
         format!(
             "{}\n<script>{REPORT_CHARTS_JS}</script>",
-            crate::plot_page::vega_script_tags(scripts)
+            crate::plot_page::vega_script_tags()
         )
     };
     let hydration_block = hydration.map_or_else(String::new, render_hydration_block);

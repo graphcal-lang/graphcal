@@ -216,11 +216,6 @@ impl CheckedDag {
         self.body.value_decl_types()
     }
 
-    /// Identities of this DAG's value declarations, in source order.
-    pub fn value_declaration_identities(&self) -> impl Iterator<Item = &ResolvedDeclName> {
-        self.body.value_declaration_identities()
-    }
-
     /// Whether a declaration is an unfinished constant or node: its formula
     /// contains a `todo<T> { … }` hole.
     #[must_use]

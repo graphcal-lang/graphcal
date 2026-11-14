@@ -22,7 +22,6 @@ use graphcal_project::project_bundle::{
     ArtifactContent, BundleArtifact, BundleError, ProjectBundle,
 };
 use graphcal_project::project_compiler::ProjectCompiler;
-use graphcal_report::plot_page::VegaScriptSource;
 use graphcal_report::report_html::render_report_html;
 use graphcal_report::report_hydrate::{EngineBundle, Hydration};
 use graphcal_report::report_ir::{
@@ -215,7 +214,7 @@ pub fn run_build(
         )?),
     };
 
-    let html = render_report_html(&document, VegaScriptSource::Inline, hydration.as_ref());
+    let html = render_report_html(&document, hydration.as_ref());
     let output = args
         .output
         .clone()

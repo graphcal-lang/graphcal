@@ -3,7 +3,7 @@
 use tower_lsp::lsp_types::{InlayHint, InlayHintKind, InlayHintLabel, Range};
 
 use crate::analysis::AnalysisResult;
-use crate::symbol_table::SymbolKey;
+use crate::symbol_identity::SymbolId;
 
 /// Produce inlay hints for declarations within the given range.
 ///
@@ -31,7 +31,7 @@ pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayH
         };
 
         let value = match entry.key.as_ref() {
-            SymbolKey::Declaration(identity) => analysis.eval_values.get(identity),
+            SymbolId::Declaration(identity) => analysis.eval_values.get(identity),
             _ => None,
         };
 

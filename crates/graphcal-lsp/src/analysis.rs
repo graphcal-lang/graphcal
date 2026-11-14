@@ -6,8 +6,9 @@ use std::sync::Arc;
 use tower_lsp::lsp_types::{Diagnostic, Url};
 
 use crate::project_symbols::ProjectSymbols;
+use crate::symbol_identity::SymbolId;
 use crate::symbol_identity::{UnresolvedSymbol, VisibleBinding, resolve_visible_target};
-use crate::symbol_table::{SymbolKey, SymbolTable};
+use crate::symbol_table::SymbolTable;
 use crate::workspace_revision::AnalysisInputs;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
@@ -35,7 +36,7 @@ pub struct AnalysisResult {
     /// The symbol table (built from AST, enriched from TIR if available).
     pub symbol_table: SymbolTable,
     /// Definitions from imported files, keyed by symbol key.
-    pub imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
+    pub imported_definitions: HashMap<SymbolId, ImportedDefinition>,
     /// Complete immutable occurrence index for the loaded project snapshot.
     pub project_symbols: ProjectSymbols,
     /// Source-visible aliases/qualifiers for imported canonical definitions.
@@ -94,7 +95,7 @@ pub enum ProjectCheck {
 }
 
 impl AnalysisResult {
-    pub fn resolve_imported_target(&self, unresolved: &UnresolvedSymbol) -> Option<SymbolKey> {
+    pub fn resolve_imported_target(&self, unresolved: &UnresolvedSymbol) -> Option<SymbolId> {
         resolve_visible_target(&self.imported_bindings, unresolved)
     }
 }

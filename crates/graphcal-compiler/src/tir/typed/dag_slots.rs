@@ -241,13 +241,6 @@ impl<L: SlotBody> DagSlots<L> {
         }
     }
 
-    /// The imported checked handles, in identity order.
-    pub fn shared_iter(&self) -> impl Iterator<Item = (&DagId, &Arc<CheckedDag>)> {
-        self.shared_order
-            .iter()
-            .map(|(dag_id, &index)| (dag_id, &self.shared[index]))
-    }
-
     /// The local bodies in visiting order: the root, then the others in
     /// identity order.
     pub fn local_iter(&self) -> impl Iterator<Item = (&DagId, &L)> {

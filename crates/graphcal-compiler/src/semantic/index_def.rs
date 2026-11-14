@@ -50,12 +50,6 @@ impl IndexCardinality {
     pub const fn get(self) -> usize {
         self.0.get()
     }
-
-    /// Return the validated non-zero cardinality.
-    #[must_use]
-    pub const fn non_zero(self) -> NonZeroUsize {
-        self.0
-    }
 }
 
 /// Failure to validate a concrete index cardinality.

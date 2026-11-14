@@ -263,12 +263,6 @@ pub fn binop_rule(
             if lhs_type == rhs_type {
                 return Ok(CheckedType::Bool);
             }
-            if let (Some(lhs_dim), Some(rhs_dim)) =
-                (lhs_type.quantity_dimension(), rhs_type.quantity_dimension())
-                && lhs_dim == rhs_dim
-            {
-                return Ok(CheckedType::Bool);
-            }
             Err(SemanticError::located(
                 src,
                 rhs.span,

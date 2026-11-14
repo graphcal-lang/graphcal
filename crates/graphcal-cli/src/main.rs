@@ -919,22 +919,16 @@ fn handle_plot_output(result: &EvalResult, plot_mode: &PlotOutput) -> bool {
     match plot_mode {
         PlotOutput::Browser | PlotOutput::HtmlFile(_) if rendered.is_empty() => {}
         PlotOutput::HtmlFile(path) => {
-            let html = graphcal_report::plot_page::render_html(
-                &rendered,
-                graphcal_report::plot_page::VegaScriptSource::Inline,
-            )
-            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
+            let html = graphcal_report::plot_page::render_html(&rendered)
+                .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
             std::fs::write(path, html).unwrap_or_else(|e| {
                 bail_with(&format!("could not write {}", path.display()), e, 2)
             });
             eprintln!("wrote plots to {}", path.display());
         }
         PlotOutput::Browser => {
-            let html = graphcal_report::plot_page::render_html(
-                &rendered,
-                graphcal_report::plot_page::VegaScriptSource::Inline,
-            )
-            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
+            let html = graphcal_report::plot_page::render_html(&rendered)
+                .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
             let mut tmp = tempfile::Builder::new()
                 .prefix("graphcal_plot_")
                 .suffix(".html")

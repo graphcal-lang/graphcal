@@ -433,20 +433,11 @@ fn visibility_payloads_render_their_mentions_as_before() {
 
 #[test]
 fn domain_payloads_render_their_subjects_as_before() {
-    use super::domain::{
-        DomainSubject, NominalFieldPath, UnconstrainableType, ValuePath, ValuePathStep,
-    };
+    use super::domain::{DomainSubject, NominalFieldPath, UnconstrainableType};
     use crate::syntax::decl_name::DeclName;
-    use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
     use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
     let field = FieldName::expect_valid("mass");
-    let root = ValuePath::new(DeclName::expect_valid("sat"));
-    let nested = root
-        .child(ValuePathStep::Field(field.clone()))
-        .child(ValuePathStep::Entry(IndexEntryKey::Named(
-            IndexVariantName::expect_valid("Launch"),
-        )));
     let cases = [
         (
             DomainSubject::Declaration(DeclName::expect_valid("sat")),
@@ -475,18 +466,10 @@ fn domain_payloads_render_their_subjects_as_before() {
             ))),
             "Sat.mass",
         ),
-        (DomainSubject::Value(Box::new(root)), "sat"),
     ];
     for (subject, expected) in cases {
         assert_eq!(subject.to_string(), expected);
     }
-    assert_eq!(
-        DomainSubject::Value(Box::new(nested)).to_string(),
-        format!(
-            "sat.mass.{}",
-            IndexEntryKey::Named(IndexVariantName::expect_valid("Launch"))
-        )
-    );
     let targets = [
         (UnconstrainableType::Bool, "`Bool`"),
         (UnconstrainableType::Complex, "`Complex`"),

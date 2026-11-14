@@ -1843,8 +1843,9 @@ mod tests {
     };
     use crate::fn_signatures::{ExternCallee, build_fn_signatures};
     use crate::project_symbols::{ProjectDocumentSymbols, ProjectSymbols};
+    use crate::symbol_identity::SymbolId;
     use crate::symbol_identity::VisibleBinding;
-    use crate::symbol_table::{SymbolKey, SymbolTable};
+    use crate::symbol_table::SymbolTable;
     use crate::value_format::*;
     use crate::workspace_revision::AnalysisInputs;
     use crate::{completion, goto_definition, inlay_hints};
@@ -1852,7 +1853,7 @@ mod tests {
     fn imported_target_for_spelling<'a>(
         analysis: &'a AnalysisResult,
         spelling: &str,
-    ) -> Option<&'a SymbolKey> {
+    ) -> Option<&'a SymbolId> {
         analysis
             .imported_bindings
             .iter()
