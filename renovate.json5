@@ -22,6 +22,17 @@
       ],
       datasourceTemplate: "pypi",
     },
+    {
+      customType: "regex",
+      description: "Update the pinned qa-corpus commit checked out by CI",
+      managerFilePatterns: ["/^\\.github\\/workflows\\/ci\\.yaml$/"],
+      matchStrings: [
+        "repository: graphcal-lang/qa-corpus\\n(?:\\s*#.*\\n)*\\s*ref: (?<currentDigest>[0-9a-f]{40}) # renovate: branch=(?<currentValue>\\S+)",
+      ],
+      depNameTemplate: "graphcal-lang/qa-corpus",
+      packageNameTemplate: "https://github.com/graphcal-lang/qa-corpus",
+      datasourceTemplate: "git-refs",
+    },
   ],
   packageRules: [
     {

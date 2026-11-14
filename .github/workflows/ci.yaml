@@ -232,7 +232,9 @@ jobs:
         uses: actions/checkout@v7.0.1
         with:
           repository: graphcal-lang/qa-corpus
-          ref: main
+          # Pinned to a commit on qa-corpus `main` so CI never runs unreviewed
+          # code from another repository; Renovate bumps it (see renovate.json5).
+          ref: de87560abc0d30fe3e314a5e941ec14b818d3362 # renovate: branch=main
           path: qa-corpus
           persist-credentials: false
 
