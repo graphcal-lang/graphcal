@@ -90,8 +90,8 @@ pub fn build_extern_fn_signatures(
 /// Get builtin function signatures for Signature Help.
 ///
 /// Computed once and cached in a static. Builtins never change at runtime.
-pub fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo> {
-    static FN_SIGS: LazyLock<HashMap<String, FnSignatureInfo>> = LazyLock::new(|| {
+pub fn build_fn_signatures() -> &'static HashMap<BuiltinFn, FnSignatureInfo> {
+    static FN_SIGS: LazyLock<HashMap<BuiltinFn, FnSignatureInfo>> = LazyLock::new(|| {
         let mut sigs = HashMap::new();
         for function in BuiltinFn::all() {
             let info = match function.entry() {
@@ -104,7 +104,7 @@ pub fn build_fn_signatures() -> &'static HashMap<String, FnSignatureInfo> {
                 },
                 BuiltinEntry::Bespoke(_) => continue,
             };
-            sigs.insert(function.as_str().to_string(), info);
+            sigs.insert(function, info);
         }
         sigs
     });

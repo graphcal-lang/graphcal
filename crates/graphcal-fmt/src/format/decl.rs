@@ -636,18 +636,7 @@ fn format_include_param_bindings(
 ) -> RcDoc<'static> {
     let binding_docs: Vec<RcDoc<'static>> = bindings
         .iter()
-        .map(|b| {
-            let marker = match b.category {
-                graphcal_compiler::syntax::ast::InputBindingCategory::Unmarked => "",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Type => "type ",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Dimension => "dim ",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Index => "index ",
-            };
-            RcDoc::text(marker)
-                .append(RcDoc::text(b.name.name.as_str().to_owned()))
-                .append(RcDoc::text(": "))
-                .append(format_expr(fmt, &b.value))
-        })
+        .map(|b| super::expr::format_param_binding(fmt, b, super::expr::format_expr))
         .collect();
     soft_parenthesized_list(binding_docs, false)
 }

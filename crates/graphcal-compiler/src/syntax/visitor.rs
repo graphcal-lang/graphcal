@@ -9,18 +9,65 @@
 //! phase-invariant — variants and field shapes are identical across phases —
 //! so the same default-method bodies work for both.
 //!
-//! Default implementations recurse into child expressions. Implementors override
-//! only the leaf methods they care about.
+//! Default implementations recurse into child expressions — including the
+//! children of phase-specific sugar, through [`VisitablePhase`] — so a
+//! generic visitor sees the same expressions in both phases. Implementors
+//! override only the leaf methods they care about.
 
-use crate::syntax::ast::{Expr, ExprKind, GenericArg, IndexArg, TypeExpr, TypeExprKind};
+use crate::syntax::ast::{
+    BindingValue, Expr, ExprKind, GenericArg, IndexArg, RawExprSugar, TypeExpr, TypeExprKind,
+};
 use crate::syntax::non_empty::NonEmpty;
-use crate::syntax::phase::Phase;
+use crate::syntax::phase::{Desugared, Phase, Raw};
+
+/// A [`Phase`] whose expression sugar an [`ExprVisitor`] can walk.
+///
+/// Each phase states how its sugar payload reaches child expressions, so the
+/// default traversal never skips them silently.
+pub trait VisitablePhase: Phase + Sized {
+    /// Visit the child expressions of `sugar`, the payload of `expr`.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the visitor's error.
+    fn visit_sugar_children<V: ExprVisitor<Self> + ?Sized>(
+        visitor: &mut V,
+        expr: &Expr<Self>,
+        sugar: &Self::ExprSugar,
+    ) -> Result<(), V::Error>;
+}
+
+impl VisitablePhase for Raw {
+    fn visit_sugar_children<V: ExprVisitor<Self> + ?Sized>(
+        visitor: &mut V,
+        expr: &Expr<Self>,
+        sugar: &RawExprSugar,
+    ) -> Result<(), V::Error> {
+        match sugar {
+            RawExprSugar::TableLiteral { entries, .. } => visitor.visit_map_entries(expr, entries),
+        }
+    }
+}
+
+impl VisitablePhase for Desugared {
+    #[expect(
+        clippy::uninhabited_references,
+        reason = "Desugared has no expression sugar, so this is never called"
+    )]
+    fn visit_sugar_children<V: ExprVisitor<Self> + ?Sized>(
+        _visitor: &mut V,
+        _expr: &Expr<Self>,
+        sugar: &std::convert::Infallible,
+    ) -> Result<(), V::Error> {
+        match *sugar {}
+    }
+}
 
 /// Read-only visitor for [`Expr`] trees, generic over [`Phase`].
 ///
 /// Default implementations for container nodes recurse into children.
 /// Override leaf methods to intercept specific node types.
-pub trait ExprVisitor<P: Phase> {
+pub trait ExprVisitor<P: VisitablePhase> {
     type Error;
 
     /// Top-level dispatch. Override to add pre/post-visit logic.
@@ -111,11 +158,10 @@ pub trait ExprVisitor<P: Phase> {
                 self.visit_todo_hole(expr, hole)
             }
 
-            // Phase-specific sugar. Default: ignore — Raw consumers that need
-            // to walk into sugar (formatter) bypass the visitor; Desugared
-            // consumers' Sugar payload is `Infallible` so this arm is
-            // statically unreachable.
-            ExprKind::Sugar(_) => self.visit_sugar(expr),
+            // Phase-specific sugar: the phase walks its children. The
+            // Desugared payload is `Infallible`, so this arm is statically
+            // unreachable there.
+            ExprKind::Sugar(sugar) => self.visit_sugar(expr, sugar),
         }
     }
 
@@ -126,10 +172,10 @@ pub trait ExprVisitor<P: Phase> {
         Ok(())
     }
 
-    /// Called for `Sugar` variants (Raw-only surface forms). Default: no-op.
-    /// Override in Raw-phase visitors that need to walk into sugar payloads.
-    fn visit_sugar(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
-        Ok(())
+    /// Called for `Sugar` variants (Raw-only surface forms). Default: visit
+    /// the sugar's child expressions.
+    fn visit_sugar(&mut self, expr: &Expr<P>, sugar: &P::ExprSugar) -> Result<(), Self::Error> {
+        P::visit_sugar_children(self, expr, sugar)
     }
 
     fn visit_graph_ref(&mut self, _expr: &Expr<P>) -> Result<(), Self::Error> {
@@ -153,14 +199,19 @@ pub trait ExprVisitor<P: Phase> {
         Ok(())
     }
 
-    /// Called for `InlineDagRef`. Default: recurse into binding value expressions.
+    /// Called for `InlineDagRef`. Default: recurse into value expressions
+    /// and type-binding values.
     fn visit_inline_dag_ref(
         &mut self,
         _expr: &Expr<P>,
         args: &[crate::syntax::ast::ParamBinding<P>],
     ) -> Result<(), Self::Error> {
         for arg in args {
-            self.visit_expr(&arg.value)?;
+            match &arg.value {
+                BindingValue::Value(value) => self.visit_expr(value)?,
+                BindingValue::Type(type_expr) => self.visit_type_expr(type_expr)?,
+                BindingValue::Dimension(_) | BindingValue::Index(_) => {}
+            }
         }
         Ok(())
     }
@@ -302,15 +353,17 @@ pub trait ExprVisitor<P: Phase> {
 /// Every `todo<T> { … }` hole of `expr`, in pre-order, each spanned by the
 /// whole hole.
 #[must_use]
-pub fn collect_todo_holes<P: Phase>(
+pub fn collect_todo_holes<P: VisitablePhase>(
     expr: &Expr<P>,
 ) -> Vec<crate::syntax::span::Spanned<crate::syntax::ast::TodoHole<P>>>
 where
     crate::syntax::ast::TodoHole<P>: Clone,
 {
-    struct Collector<P: Phase>(Vec<crate::syntax::span::Spanned<crate::syntax::ast::TodoHole<P>>>);
+    struct Collector<P: VisitablePhase>(
+        Vec<crate::syntax::span::Spanned<crate::syntax::ast::TodoHole<P>>>,
+    );
 
-    impl<P: Phase> ExprVisitor<P> for Collector<P>
+    impl<P: VisitablePhase> ExprVisitor<P> for Collector<P>
     where
         crate::syntax::ast::TodoHole<P>: Clone,
     {

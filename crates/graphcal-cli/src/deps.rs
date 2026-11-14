@@ -2,7 +2,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
@@ -15,8 +14,8 @@ use graphcal_package::{
     DependencyName, DependencySpec, GitCommitHash, GitSourceId, GitTransport, GitUrl,
     LockedPackage, LockedPlugin, Lockfile, LockfileParseLimits, PackageInstanceId, PackageManifest,
     PackageName, PackageSource, PackageSourceDirectory, PluginArtifactPath,
-    PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, Sha256DigestError,
-    SourceTreeHashAlgorithm, SourceTreeHashes, parse_lockfile_str_with_limits, parse_manifest_str,
+    PluginArtifactPathError, STDLIB_VERSION, Sha256Digest, SourceTreeHashAlgorithm,
+    SourceTreeHashes, parse_lockfile_str_with_limits, parse_manifest_str,
 };
 use graphcal_project::loader::discover_project_root;
 use graphcal_project::package_cache::{PackageCacheRoot, PackageCacheRootError};
@@ -1428,7 +1427,7 @@ fn git_package_id(
     key_hash.update(url.to_string().as_bytes());
     key_hash.update([0]);
     key_hash.update(rev.as_str().as_bytes());
-    let key = hex_string(&key_hash.finalize());
+    let key = Sha256Digest::from_bytes(key_hash.finalize().into()).to_string();
     let short_rev = rev.as_str().get(..12).ok_or_else(|| {
         DepsError::Internal(format!("validated Git rev `{}` is too short", rev.as_str()))
     })?;
@@ -1462,7 +1461,7 @@ fn hash_source_tree(
     })?
     .hash();
     let charged = budget.account_source_tree(root, &hash)?;
-    let sha256 = Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)?;
+    let sha256 = Sha256Digest::from_bytes(hash.sha256());
     Ok((sha256, charged))
 }
 
@@ -1482,15 +1481,7 @@ fn hash_source_dir_only(
         graphcal_io::capture_source_tree(&fs, root, &source_dir.to_path_buf(), limits, cancellation)
     })?
     .hash();
-    Sha256Digest::new(hash.sha256()).map_err(DepsError::Sha256Digest)
-}
-
-fn hex_string(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
+    Ok(Sha256Digest::from_bytes(hash.sha256()))
 }
 
 /// `graphcal deps` command failure.
@@ -1531,9 +1522,6 @@ pub enum DepsError {
     /// Deterministic source-tree traversal or hashing failed.
     #[error(transparent)]
     SourceTreeHash(#[from] graphcal_io::SourceTreeHashError),
-    /// A generated source-tree digest was not canonical.
-    #[error(transparent)]
-    Sha256Digest(#[from] Sha256DigestError),
     /// A bounded package artifact read failed.
     #[error("could not read `{}`: {source}", path.display())]
     ArtifactRead {
@@ -2164,7 +2152,7 @@ node x: Dimensionless = demo::lerp(0.0, 1.0, 0.5);
         assert_eq!(pins[0].path().to_string(), "plugins/demo.wasm");
         assert_eq!(
             pins[0].sha256().to_string(),
-            hex_string(&Sha256::digest(plugin_bytes))
+            Sha256Digest::from_bytes(Sha256::digest(plugin_bytes).into()).to_string()
         );
 
         let _ = std::fs::remove_dir_all(&root);
@@ -2199,7 +2187,7 @@ dag outer {
         assert_eq!(pins[0].path().to_string(), "plugins/nested.wasm");
         assert_eq!(
             pins[0].sha256().to_string(),
-            hex_string(&Sha256::digest(plugin_bytes))
+            Sha256Digest::from_bytes(Sha256::digest(plugin_bytes).into()).to_string()
         );
 
         let _ = std::fs::remove_dir_all(&root);

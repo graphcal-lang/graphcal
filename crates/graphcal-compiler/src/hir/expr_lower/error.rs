@@ -36,7 +36,11 @@ pub enum ExprLowerError {
     },
     /// A categorized Static DAG-call binding did not contain a type-level value.
     #[error("invalid Static binding value for `{name}`")]
-    InvalidStaticBindingValue { name: NameAtom, span: Span },
+    InvalidStaticBindingValue {
+        kind: crate::static_interface::StaticInputKind,
+        name: NameAtom,
+        span: Span,
+    },
     /// A `todo<T> { … }` hole outside a constant or node formula.
     #[error("`todo` holes are allowed only in `node` and `const node` formulas")]
     TodoHoleNotAllowed { span: Span },

@@ -962,6 +962,24 @@ mod tests {
         }
     }
 
+    /// The generic visitor walks Raw table-literal sugar, so collecting
+    /// holes from parser output does not miss the ones inside a table.
+    #[test]
+    fn raw_todo_hole_collection_walks_table_literal_entries() {
+        let file = Parser::new(
+            "node x: Length[Maneuver] = table[Maneuver] { Burn: 1.0 m; Coast: todo<Length> {}; };",
+        )
+        .parse_file()
+        .unwrap();
+        let DeclKind::Node(node) = &file.declarations[0].kind else {
+            panic!("expected a node declaration");
+        };
+        assert_eq!(
+            crate::syntax::visitor::collect_todo_holes(&node.value).len(),
+            1
+        );
+    }
+
     #[test]
     fn todo_hole_is_an_atom_with_its_type_and_interface() {
         let expr = parse_node_expr("2.0 * todo<Length[Fin(2)]> { @a, @m.c::b, }");
@@ -1838,7 +1856,7 @@ mod tests {
                 assert_eq!(args.len(), 1);
                 assert_eq!(args[0].name.name.as_str(), "x");
                 assert!(
-                    matches!(&args[0].value.kind, ExprKind::GraphRef(id) if id.to_scoped_name().leaf().as_str() == "p")
+                    matches!(&args[0].value, crate::syntax::ast::BindingValue::Value(value) if matches!(&value.kind, ExprKind::GraphRef(id) if id.to_scoped_name().leaf().as_str() == "p"))
                 );
                 assert_eq!(output.value.as_str(), "result");
             }

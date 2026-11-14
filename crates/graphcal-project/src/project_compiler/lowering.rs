@@ -88,7 +88,15 @@ impl ExprVisitor<Desugared> for DirectDagCallValidator<'_> {
             )?;
         }
         args.iter()
-            .try_for_each(|binding| self.visit_expr(&binding.value))
+            .filter_map(|binding| match &binding.value {
+                graphcal_compiler::desugar::desugared_ast::BindingValue::Value(value) => {
+                    Some(value)
+                }
+                graphcal_compiler::desugar::desugared_ast::BindingValue::Type(_)
+                | graphcal_compiler::desugar::desugared_ast::BindingValue::Dimension(_)
+                | graphcal_compiler::desugar::desugared_ast::BindingValue::Index(_) => None,
+            })
+            .try_for_each(|value| self.visit_expr(value))
     }
 }
 

@@ -24,7 +24,7 @@ use crate::syntax::decl_name::DeclName;
 use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::names::NamePath;
-use crate::syntax::non_empty::AtLeastTwo;
+use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::span::{Span, Spanned};
 
 /// Value-declaration kind of a multi-decl slot, with the visibility the kind
@@ -121,10 +121,11 @@ pub enum MultiSlotAxis {
 pub enum MultiSlotColumnSpan {
     /// 1-D slot: one column at `col_idx`.
     Single(usize),
-    /// 2-D slot: columns `start..end`, one per variant of `extra_axis`.
+    /// 2-D slot: columns `start..start + variants.len()`, one per listed
+    /// variant of `extra_axis`, in header order.
     Range {
         start: usize,
-        end: usize,
+        variants: NonEmpty<Spanned<IndexVariantName>>,
         extra_axis: Spanned<NamePath>,
     },
 }
@@ -259,12 +260,6 @@ impl MultiDeclSharedAxes {
         self.slice_axes.len() + 1
     }
 
-    /// Returns `false`; provided for sequence-like callers.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        false
-    }
-
     /// Iterate over axes in source order: slice axes first, then row axis.
     pub fn iter(&self) -> impl Iterator<Item = &TableIndexSpec> {
         self.slice_axes
@@ -335,11 +330,6 @@ impl MultiDeclBuilder {
         }
     }
 
-    #[must_use]
-    pub const fn shared_axes(&self) -> &MultiDeclSharedAxes {
-        &self.shared_axes
-    }
-
     /// Start a slice by mapping its header cells to the slots.
     ///
     /// For each slot tuple entry:
@@ -402,8 +392,9 @@ impl MultiSliceBuilder<'_> {
         self.slice.header_cells.len()
     }
 
+    #[cfg(test)]
     #[must_use]
-    pub const fn row_count(&self) -> usize {
+    pub(crate) const fn row_count(&self) -> usize {
         self.slice.rows.len()
     }
 
@@ -464,19 +455,23 @@ fn layout_columns(
             }
             MultiSlotAxis::Axis(extra_axis) => {
                 let start = cursor;
-                cursor += header_cells[start..]
-                    .iter()
-                    .take_while(|cell| matches!(cell, MultiHeaderCell::Variant { .. }))
-                    .count();
-                if cursor == start {
-                    return Err(MultiDeclLayoutError::NotEnoughCells {
-                        slot_name: slot.name.value.clone(),
-                        span: extra_axis.span,
-                    });
-                }
+                let variants = NonEmpty::try_from_vec(
+                    header_cells[start..]
+                        .iter()
+                        .map_while(|cell| match cell {
+                            MultiHeaderCell::Variant { variant, .. } => Some(variant.clone()),
+                            MultiHeaderCell::Underscore { .. } => None,
+                        })
+                        .collect(),
+                )
+                .map_err(|_| MultiDeclLayoutError::NotEnoughCells {
+                    slot_name: slot.name.value.clone(),
+                    span: extra_axis.span,
+                })?;
+                cursor += variants.len();
                 layout.push(MultiSlotColumnSpan::Range {
                     start,
-                    end: cursor,
+                    variants,
                     extra_axis: extra_axis.clone(),
                 });
             }
@@ -559,14 +554,13 @@ mod tests {
         let multi = builder.finish(span(0), span(0));
         let layout = multi.slices()[0].column_layout();
         assert!(matches!(layout[0], MultiSlotColumnSpan::Single(0)));
-        assert!(matches!(
-            layout[1],
-            MultiSlotColumnSpan::Range {
-                start: 1,
-                end: 3,
-                ..
-            }
-        ));
+        let MultiSlotColumnSpan::Range {
+            start: 1, variants, ..
+        } = &layout[1]
+        else {
+            panic!("expected the variant columns to start at 1")
+        };
+        assert_eq!(variants.len(), 2);
     }
 
     #[test]

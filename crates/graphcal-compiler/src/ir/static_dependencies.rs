@@ -731,18 +731,12 @@ impl ReboundClosure<'_> {
             .iter()
             .filter(|include| &include.instance_scope() == scope)
             .flat_map(|include| &include.param_bindings)
-            .filter(|binding| {
-                binding.category != crate::syntax::ast::InputBindingCategory::Unmarked
-            })
-            .filter_map(|binding| match &binding.value.kind {
-                crate::syntax::ast::ExprKind::UnresolvedRef(
-                    crate::syntax::ast::UnresolvedRef::Path(path),
-                ) => self
-                    .scope
+            .filter_map(|binding| binding.value.static_name())
+            .filter_map(|name| {
+                self.scope
                     .resolver
-                    .resolve_static_path(self.scope.owner, &path.to_name_path())
-                    .ok(),
-                _ => None,
+                    .resolve_static_path(self.scope.owner, &name.value)
+                    .ok()
             })
             .collect()
     }

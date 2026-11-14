@@ -65,7 +65,7 @@ pub struct AnalysisResult {
     pub view: Option<graphcal_project::view_model::ViewModels>,
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).
-    pub fn_signatures: &'static HashMap<String, FnSignatureInfo>,
+    pub fn_signatures: &'static HashMap<graphcal_compiler::builtin::BuiltinFn, FnSignatureInfo>,
     /// Extern (plugin) function signatures from this file's `import plugin`
     /// blocks, keyed by the typed `alias::name` call spelling. Per-file,
     /// unlike the static builtin map.

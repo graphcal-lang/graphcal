@@ -403,15 +403,6 @@ impl<'a> HirRefCollector<'a> {
                     Self::reference(table, local.span, key.clone());
                 }
             }
-            hir::expr::ExprKind::TypeSystemRef(type_ref) => {
-                let target = match &type_ref.value {
-                    hir::expr::TypeSystemRef::Type(name) => SymbolKey::StructType(name.clone()),
-                    hir::expr::TypeSystemRef::Dimension(name) => SymbolKey::Dimension(name.clone()),
-                    hir::expr::TypeSystemRef::Index(name) => SymbolKey::Index(name.clone()),
-                    hir::expr::TypeSystemRef::IndexVariant(variant) => Self::variant_key(variant),
-                };
-                Self::reference(table, type_ref.span, target);
-            }
             hir::expr::ExprKind::VariantLiteral(variant) => {
                 Self::variant_reference(variant, table);
             }
@@ -2177,7 +2168,7 @@ fn collect_include_decl(
         };
         for binding in &include.param_bindings {
             let input = NamePath::local(binding.name.name.atom().clone());
-            let input_target = match binding.category {
+            let input_target = match binding.category() {
                 InputBindingCategory::Unmarked => {
                     template_decl(binding.name.name.atom()).map(SymbolKey::Declaration)
                 }
@@ -2247,31 +2238,27 @@ fn collect_binding_value_refs(
     table: &mut SymbolTable,
     refs: &mut HirRefCollector<'_>,
 ) {
-    use graphcal_compiler::syntax::ast::{ExprKind, IndexExpr, UnresolvedRef};
-    let unresolved: fn(SourceSymbolPath) -> UnresolvedSymbol = match binding.category {
-        InputBindingCategory::Unmarked => {
-            refs.collect_body(&binding.value, table);
+    use graphcal_compiler::syntax::ast::BindingValue;
+    let unresolved: fn(SourceSymbolPath) -> UnresolvedSymbol = match &binding.value {
+        BindingValue::Value(value) => {
+            refs.collect_body(value, table);
             return;
         }
-        InputBindingCategory::Index => {
-            if let Some(IndexExpr::Name(path)) = binding.value.index_binding_arg() {
-                table.references.push(ReferenceInfo {
-                    span: path.span,
-                    target: ReferenceTarget::Unresolved(UnresolvedSymbol::Index(
-                        SourceSymbolPath::from_name_path(&path.value),
-                    )),
-                });
+        BindingValue::Type(type_expr) => {
+            if type_expr.as_lone_name().is_none() {
+                collect_type_expr_refs(type_expr, table, refs);
+                return;
             }
-            return;
+            UnresolvedSymbol::StructType
         }
-        InputBindingCategory::Dimension => UnresolvedSymbol::Dimension,
-        InputBindingCategory::Type => UnresolvedSymbol::StructType,
+        BindingValue::Index(_) => UnresolvedSymbol::Index,
+        BindingValue::Dimension(_) => UnresolvedSymbol::Dimension,
     };
-    if let ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) = &binding.value.kind {
+    if let Some(name) = binding.value.static_name() {
         table.references.push(ReferenceInfo {
-            span: binding.value.span,
+            span: name.span,
             target: ReferenceTarget::Unresolved(unresolved(SourceSymbolPath::from_name_path(
-                &path.to_name_path(),
+                &name.value,
             ))),
         });
     }

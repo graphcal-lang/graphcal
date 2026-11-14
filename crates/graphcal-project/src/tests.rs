@@ -2788,6 +2788,7 @@ fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
 /// include member denotes the instance declaration.
 #[test]
 fn include_edges_record_which_exposed_values_have_local_alias_bodies() {
+    use graphcal_compiler::ir::entry::ValueOrigin;
     use graphcal_compiler::ir::instance::ExposedValueBody;
 
     let (_directory, root) = write_pipeline_project(
@@ -2831,6 +2832,15 @@ fn include_edges_record_which_exposed_values_have_local_alias_bodies() {
     assert_eq!(*renamed_body, ExposedValueBody::LocalAlias);
     let alias = body.bound_decl_identity(&renamed).unwrap();
     assert_eq!(alias.owner(), tir.root_dag_id());
+    // The generated alias carries a typed origin; the declared-type check
+    // trusts its body by that origin, never by its name.
+    let origin_of = |name: &str| {
+        body.nodes()
+            .find(|node| node.name().as_str() == name)
+            .map(graphcal_compiler::ir::entry::NodeEntry::origin)
+    };
+    assert_eq!(origin_of("renamed"), Some(ValueOrigin::IncludeAlias));
+    assert_eq!(origin_of("total"), Some(ValueOrigin::Source));
 
     let member = member_name(&["high"], "output");
     let (_, member_body, member_target) = bodies

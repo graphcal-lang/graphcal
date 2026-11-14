@@ -179,7 +179,7 @@ fn check_instance_defaults(
         if !inherited {
             check_decl_expr_type(
                 ctx,
-                entry.name(),
+                crate::ir::entry::ValueOrigin::Source,
                 &entry.identity(),
                 &entry.type_ann,
                 default,
@@ -260,6 +260,7 @@ pub(super) fn instance_bodies<'t>(
     cancellation: &CancellationToken,
 ) -> Result<InstanceFacts<InstanceChecked>, Outcome<SemanticError>> {
     let published = graph.join(
+        &tir.dags,
         canonical.map_ref(|checked| Some(&checked.bodies)),
         instances.map_ref(|_| None),
     );

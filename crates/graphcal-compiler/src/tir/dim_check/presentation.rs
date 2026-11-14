@@ -46,7 +46,7 @@ pub(super) fn collect_presentation_facts(
             )
             .map_err(Outcome::Failed)
         })?;
-    let presentation = graph.join(canonical_facts, instance_facts);
+    let presentation = graph.join(&tir.dags, canonical_facts, instance_facts);
     crate::tir::typed::specialization::add_plot_projections(tir, presentation, src)
         .map_err(Outcome::Failed)
 }

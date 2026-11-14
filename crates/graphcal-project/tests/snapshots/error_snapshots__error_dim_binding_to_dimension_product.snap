@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+invalid type-level binding value for `D`
+    Diagnostic severity: error
+Begin snippet for dim_binding_to_dimension_product.gcl starting at line 5, column 1
+
+snippet line 5: }
+snippet line 6: include holder(dim D: Length / Time, value: 1.0 m/s) as h;
+    label at line 6, columns 23 to 35: expected a compatible type-level binding argument
+diagnostic help: dimension bindings accept the name of a declared dimension, such as `dim D: Length`; declare a derived dimension under a name (`dim Speed = Length / Time;`) to bind it
+diagnostic code: graphcal::M016

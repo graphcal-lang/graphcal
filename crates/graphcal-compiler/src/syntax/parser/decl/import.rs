@@ -332,23 +332,19 @@ impl Parser<'_> {
 
             let namespace = match p.lexer.peek() {
                 Some(Token::Type) => {
-                    let (_, span) = p.advance()?;
-                    let _ = span;
+                    p.advance()?;
                     crate::syntax::ast::ImportItemNamespace::Type
                 }
                 Some(Token::Dimension) => {
-                    let (_, span) = p.advance()?;
-                    let _ = span;
+                    p.advance()?;
                     crate::syntax::ast::ImportItemNamespace::Dimension
                 }
                 Some(Token::Unit) => {
-                    let (_, span) = p.advance()?;
-                    let _ = span;
+                    p.advance()?;
                     crate::syntax::ast::ImportItemNamespace::Unit
                 }
                 Some(Token::Index) => {
-                    let (_, span) = p.advance()?;
-                    let _ = span;
+                    p.advance()?;
                     crate::syntax::ast::ImportItemNamespace::Index
                 }
                 _ => crate::syntax::ast::ImportItemNamespace::Term,
@@ -378,39 +374,42 @@ impl Parser<'_> {
         Ok(names.into_vec())
     }
 
-    /// Parse categorized DAG bindings. Unmarked targets are parameters;
-    /// `type`, `dim`, and `index` select Static targets. `param` is invalid.
+    /// Parse categorized DAG bindings. Unmarked targets are parameters with a
+    /// value expression; `type`, `dim`, and `index` select Static targets
+    /// whose value is parsed with the type, dimension, or index grammar.
+    /// `param` is invalid.
     pub(in crate::syntax::parser) fn parse_import_param_bindings(
         &mut self,
     ) -> Result<Vec<crate::syntax::ast::ParamBinding>, ParseError> {
         self.expect(Token::LParen)?;
 
         let bindings = self.parse_comma_separated(Token::RParen, |p| {
+            use crate::syntax::ast::InputBindingCategory;
             let (category, marker_span) = match p.lexer.peek() {
-                Some(Token::Type) => {
-                    let (_, span) = p.advance()?;
-                    (crate::syntax::ast::InputBindingCategory::Type, Some(span))
-                }
-                Some(Token::Dimension) => {
-                    let (_, span) = p.advance()?;
-                    (
-                        crate::syntax::ast::InputBindingCategory::Dimension,
-                        Some(span),
-                    )
-                }
-                Some(Token::Index) => {
-                    let (_, span) = p.advance()?;
-                    (crate::syntax::ast::InputBindingCategory::Index, Some(span))
-                }
-                _ => (crate::syntax::ast::InputBindingCategory::Unmarked, None),
+                Some(Token::Type) => (InputBindingCategory::Type, Some(p.advance()?.1)),
+                Some(Token::Dimension) => (InputBindingCategory::Dimension, Some(p.advance()?.1)),
+                Some(Token::Index) => (InputBindingCategory::Index, Some(p.advance()?.1)),
+                _ => (InputBindingCategory::Unmarked, None),
             };
             let name_ident = p.parse_any_ident()?;
             let name_span = name_ident.span;
             p.expect(Token::Colon)?;
-            let value = p.parse_expr()?;
-            let binding_span = marker_span.unwrap_or(name_span).merge(value.span);
+            let value = match category {
+                InputBindingCategory::Unmarked => {
+                    crate::syntax::ast::BindingValue::Value(p.parse_expr()?)
+                }
+                InputBindingCategory::Type => {
+                    crate::syntax::ast::BindingValue::Type(p.parse_type_expr()?)
+                }
+                InputBindingCategory::Dimension => {
+                    crate::syntax::ast::BindingValue::Dimension(p.parse_dim_expr()?)
+                }
+                InputBindingCategory::Index => {
+                    crate::syntax::ast::BindingValue::Index(p.parse_index_expr()?)
+                }
+            };
+            let binding_span = marker_span.unwrap_or(name_span).merge(value.span());
             Ok(crate::syntax::ast::ParamBinding {
-                category,
                 name: name_ident,
                 value,
                 span: binding_span,
@@ -421,7 +420,7 @@ impl Parser<'_> {
         let mut declared = std::collections::HashMap::new();
         for binding in &bindings {
             if let Some(first) =
-                declared.insert((binding.category, &binding.name.name), binding.name.span)
+                declared.insert((binding.category(), &binding.name.name), binding.name.span)
             {
                 return Err(ParseError::new(
                     ParseErrorKind::DuplicateDagBinding {

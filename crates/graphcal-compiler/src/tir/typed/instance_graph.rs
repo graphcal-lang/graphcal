@@ -208,19 +208,23 @@ impl InstanceGraph {
         ))
     }
 
-    /// The table of every local body's fact: a canonical body's from
-    /// `canonical`, an instance's from `instances`.
+    /// The table of every local body of `dags`: a canonical body's fact
+    /// from `canonical`, an instance's from `instances`.
     ///
-    /// Both tables must be mapped from this graph.
+    /// # Panics
+    ///
+    /// Panics unless both tables are mapped from this graph and `dags` is
+    /// the registry this graph materialized its instances into.
     #[must_use]
     pub fn join<T>(
         &self,
+        dags: &DagRegistry,
         canonical: CanonicalFacts<T>,
         instances: InstanceFacts<T>,
     ) -> LocalDagFacts<T> {
-        debug_assert_eq!(canonical.0.len(), self.canonical_locals);
-        debug_assert_eq!(instances.0.len(), self.origins.len());
-        LocalDagFacts::from_aligned(canonical.0.into_iter().chain(instances.0).collect())
+        assert_eq!(canonical.0.len(), self.canonical_locals);
+        assert_eq!(instances.0.len(), self.origins.len());
+        dags.aligned_facts(canonical.0.into_iter().chain(instances.0).collect())
     }
 }
 

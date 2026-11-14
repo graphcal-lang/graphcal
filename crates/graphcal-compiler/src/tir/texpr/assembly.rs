@@ -233,8 +233,7 @@ impl PendingNodes {
             | ExprKind::CivilDateTimeLiteral(_)
             | ExprKind::EpochLiteral(_)
             | ExprKind::ZonedDateTimeLiteral(_)
-            | ExprKind::IanaTimeZoneLiteral(_)
-            | ExprKind::TypeSystemRef(_) => return Err(AssemblyError::ContextualValue(id())),
+            | ExprKind::IanaTimeZoneLiteral(_) => return Err(AssemblyError::ContextualValue(id())),
             ExprKind::QuantityLiteral { value, unit } => TExprKind::QuantityLiteral {
                 value: *value,
                 unit: unit.clone(),

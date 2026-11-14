@@ -1,7 +1,6 @@
 //! Deterministic, symlink-safe package source-tree hashing.
 
 use std::collections::BTreeMap;
-use std::fmt::Write as _;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
@@ -40,17 +39,17 @@ impl SourceTreeHashLimits {
 /// Successful deterministic source-tree digest plus consumed resources.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceTreeHash {
-    sha256: String,
+    sha256: [u8; 32],
     files: u64,
     bytes: u64,
     entries: u64,
 }
 
 impl SourceTreeHash {
-    /// Lowercase hexadecimal SHA-256 digest.
+    /// SHA-256 digest bytes.
     #[must_use]
-    pub fn sha256(&self) -> &str {
-        &self.sha256
+    pub const fn sha256(&self) -> [u8; 32] {
+        self.sha256
     }
 
     /// Number of regular files hashed.
@@ -407,7 +406,7 @@ impl SourceTreeSnapshot {
             hasher.update([0]);
         }
         SourceTreeHash {
-            sha256: hex_string(&hasher.finalize()),
+            sha256: hasher.finalize().into(),
             files: self.files.len() as u64,
             bytes: self.bytes,
             entries: self.entries,
@@ -518,14 +517,6 @@ impl SourceTreeSnapshot {
             }
         })
     }
-}
-
-fn hex_string(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }
 
 #[cfg(test)]

@@ -35,7 +35,7 @@ fn auto_import_data(name: impl Into<String>, category: AutoImportCategory) -> Re
 }
 
 /// Report source markers even in libraries and unused DAG definitions.
-pub fn unfinished_formula_diagnostics<P: graphcal_compiler::syntax::phase::Phase>(
+pub fn unfinished_formula_diagnostics<P: graphcal_compiler::syntax::visitor::VisitablePhase>(
     declarations: &[graphcal_compiler::syntax::ast::Declaration<P>],
     source: &str,
 ) -> Vec<Diagnostic>

@@ -765,6 +765,7 @@ where
             doc: entry.doc,
             type_ann: map(identity, entry.type_ann)?,
             identity: entry.identity,
+            origin: entry.origin,
             expr: entry.expr,
             span: entry.span,
             definition_range: entry.definition_range,
@@ -782,6 +783,7 @@ where
             doc: entry.doc,
             type_ann: map(identity, entry.type_ann)?,
             identity: entry.identity,
+            origin: entry.origin,
             definition: entry.definition,
             span: entry.span,
             definition_range: entry.definition_range,
@@ -1525,7 +1527,6 @@ impl HirPolicyChecker<'_> {
             | crate::hir::expr::ExprKind::EpochLiteral(_)
             | crate::hir::expr::ExprKind::ZonedDateTimeLiteral(_)
             | crate::hir::expr::ExprKind::IanaTimeZoneLiteral(_)
-            | crate::hir::expr::ExprKind::TypeSystemRef(_)
             | crate::hir::expr::ExprKind::ConstRef(_)
             | crate::hir::expr::ExprKind::LocalRef(_) => Ok(()),
             crate::hir::expr::ExprKind::QuantityLiteral { unit, .. } => {

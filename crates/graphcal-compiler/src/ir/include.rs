@@ -254,6 +254,7 @@ impl UnfrozenIR {
         self.decls.push(Decl::Const(entry::ConstEntry {
             doc: None,
             identity: projection_alias(&body_resolution_owner, name),
+            origin: entry::ValueOrigin::IncludeAlias,
             type_ann: InScope::new(type_ann, type_resolution_owner),
             expr: InScope::new(expr, body_resolution_owner),
             span,
@@ -291,6 +292,7 @@ impl UnfrozenIR {
         self.decls.push(Decl::Node(entry::NodeEntry {
             doc: None,
             identity,
+            origin: entry::ValueOrigin::IncludeAlias,
             type_ann: InScope::new(type_ann, type_resolution_owner),
             definition: InScope::new(expr, body_resolution_owner),
             span,
@@ -518,12 +520,6 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
                             OverrideMention::MatchConstructor(constructor.clone()),
                         )?;
                     }
-                }
-                crate::desugar::desugared_ast::MatchPattern::Constructor { name, .. } => {
-                    self.check_constructor(
-                        &name.value,
-                        OverrideMention::MatchConstructor(name.value.clone()),
-                    )?;
                 }
             }
             self.visit_expr(&arm.body)?;

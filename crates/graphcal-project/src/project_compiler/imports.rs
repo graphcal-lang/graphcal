@@ -10,7 +10,7 @@ use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
 
 use graphcal_compiler::declaration_category::{DeclCategory, ValueDeclCategory};
-use graphcal_compiler::desugar::desugared_ast::ModulePath;
+use graphcal_compiler::desugar::desugared_ast::{BindingValue, ModulePath};
 use graphcal_compiler::ir::resolve::{ImportedValueNames, ScopedName};
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -28,7 +28,7 @@ use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
 
-use super::binding_values::{extract_index_binding_target, extract_type_name_from_binding_expr};
+use super::binding_values::{extract_index_binding_target, static_binding_name};
 use super::including_module::IncludingModule;
 use crate::compile_error::PipelineError;
 use crate::loader::loaded_file::LoadedModule;
@@ -542,51 +542,54 @@ fn classify_param_bindings(
 
         let binding_name = &binding.name.name;
         let binding_decl = DeclName::classify(binding_name.atom().clone());
-        match binding.category {
-            InputBindingCategory::Unmarked
+        match (&binding.value, binding.category()) {
+            (BindingValue::Value(value), _)
                 if dep.declares(binding_name.atom(), IntroducedKind::Param) =>
             {
-                out.params.insert(binding_decl, binding.value.clone());
+                out.params.insert(binding_decl, value.clone());
             }
-            InputBindingCategory::Type
+            (BindingValue::Type(_), _)
                 if static_input_is_bindable(dep, StaticInputKind::Type, binding_name.atom()) =>
             {
-                let rhs_name = extract_type_name_from_binding_expr(
+                let rhs_name = static_binding_name(
                     &binding.value,
+                    StaticInputKind::Type,
                     binding_name.atom(),
                     file_src,
                 )?;
                 out.types.insert(
                     StructTypeName::classify(binding_name.atom().clone()),
-                    StructTypeName::expect_valid(rhs_name),
+                    StructTypeName::classify(rhs_name.clone()),
                 );
             }
-            InputBindingCategory::Dimension
+            (BindingValue::Dimension(_), _)
                 if static_input_is_bindable(
                     dep,
                     StaticInputKind::Dimension,
                     binding_name.atom(),
                 ) =>
             {
-                let rhs_name = extract_type_name_from_binding_expr(
+                let rhs_name = static_binding_name(
                     &binding.value,
+                    StaticInputKind::Dimension,
                     binding_name.atom(),
                     file_src,
                 )?;
                 out.dims.insert(
                     DimName::classify(binding_name.atom().clone()),
-                    DimName::expect_valid(rhs_name),
+                    DimName::classify(rhs_name.clone()),
                 );
             }
-            InputBindingCategory::Index
+            (BindingValue::Index(index), _)
                 if static_input_is_bindable(dep, StaticInputKind::Index, binding_name.atom()) =>
             {
                 let dep_name = IndexName::classify(binding_name.atom().clone());
-                let target = extract_index_binding_target(&binding.value, &dep_name, file_src)?;
-                out.index_spans.insert(dep_name.clone(), binding.value.span);
+                let span = binding.value.span();
+                let target = extract_index_binding_target(index, span, &dep_name, file_src)?;
+                out.index_spans.insert(dep_name.clone(), span);
                 out.indexes.insert(dep_name, target);
             }
-            InputBindingCategory::Unmarked => {
+            (_, InputBindingCategory::Unmarked) => {
                 if let Some(kind) = non_param_binding_kind(dep, binding_name.atom()) {
                     return Err(PipelineError::Semantic(SemanticError::located(
                         file_src,
@@ -606,7 +609,7 @@ fn classify_param_bindings(
                     },
                 )));
             }
-            category => {
+            (_, category) => {
                 return Err(PipelineError::Semantic(SemanticError::located(
                     file_src,
                     binding.name.span,

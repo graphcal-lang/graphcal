@@ -5,7 +5,7 @@ use tower_lsp::lsp_types::{
 };
 
 use crate::analysis::AnalysisResult;
-use crate::cursor_context::find_fn_call_context;
+use crate::cursor_context::{LexedSource, find_fn_call_context};
 use crate::fn_signatures::ExternCallee;
 
 /// Resolve signature help for a cursor position.
@@ -24,11 +24,12 @@ pub fn signature_help(
     source: &str,
     offset: usize,
 ) -> Option<SignatureHelp> {
-    let ctx = find_fn_call_context(source, offset)?;
+    let ctx = find_fn_call_context(&LexedSource::new(source), offset)?;
     // Builtins are always bare names; extern signatures are keyed by their
     // typed `alias::name` parts, so the two never shadow each other.
     let sig_info = match ctx.callee.as_bare() {
-        Some(name) => analysis.fn_signatures.get(name.as_str()),
+        Some(name) => graphcal_compiler::builtin::BuiltinFn::parse(name.as_str())
+            .and_then(|function| analysis.fn_signatures.get(&function)),
         None => ExternCallee::from_call_path(&ctx.callee)
             .and_then(|callee| analysis.extern_fn_signatures.get(&callee)),
     }?;

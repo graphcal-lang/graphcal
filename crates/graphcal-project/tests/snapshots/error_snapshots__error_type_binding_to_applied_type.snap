@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+invalid type-level binding value for `Element`
+    Diagnostic severity: error
+Begin snippet for type_binding_to_applied_type.gcl starting at line 7, column 1
+
+snippet line 7: }
+snippet line 8: include holder(type Element: Vec3<Length, Eci>, value: Vec3<Length, Eci>(x: 1.0 m, y: 2.0 m, z: 3.0 m)) as h;
+    label at line 8, columns 30 to 46: expected a compatible type-level binding argument
+diagnostic help: type bindings accept the name of a declared type, such as `type Element: Item`; an applied generic type cannot be bound
+diagnostic code: graphcal::M016

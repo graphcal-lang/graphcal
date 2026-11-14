@@ -1,3 +1,4 @@
+use crate::ir::entry::ValueOrigin;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::attribute::AttributeError;
@@ -109,25 +110,17 @@ fn validate_declared_shape(
 /// annotation.
 fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
-    name: &DeclName,
+    origin: ValueOrigin,
     identity: &ResolvedDeclName,
     annotation: &crate::tir::typed::CheckedTypeAnnotation,
     hir_expr: &crate::hir::expr::Expr,
 ) -> Result<(), Outcome<SemanticError>> {
     let type_ann_span = &annotation.span;
     let declared = annotation.checked().declared();
-    if ctx
-        .env
-        .dag
-        .semantic_instances()
-        .iter()
-        .flat_map(|instance| &instance.output_projections)
-        .any(|projection| {
-            crate::ir::instance::InstanceProjection::exposure(projection).selected() == Some(name)
-        })
-    {
-        // Projection bodies are generated from the already checked instance
-        // interface. Retain that proof rather than treating them as unchecked.
+    if origin == ValueOrigin::IncludeAlias {
+        // Include-alias bodies are generated from the already checked
+        // instance interface. Retain that proof rather than treating them as
+        // unchecked.
         return ctx
             .observations
             .record(
@@ -311,7 +304,6 @@ fn check_ineffective_conversions_inner(
         | ExprKind::EpochLiteral(_)
         | ExprKind::ZonedDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
-        | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)
@@ -703,6 +695,7 @@ impl crate::tir::typed::InstantiatedTir {
             cancellation,
         )?;
         let bodies = graph.join(
+            &tir.dags,
             canonical.map_ref(|canonical| canonical.bodies.clone()),
             checked.map_ref(|checked| checked.bodies.clone()),
         );
@@ -943,7 +936,7 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<Semanti
         };
         check_decl_expr_type(
             ctx,
-            entry.name(),
+            ValueOrigin::Source,
             &entry.identity(),
             &entry.type_ann,
             default,
@@ -981,7 +974,7 @@ fn check_dimensions_dag(
         validate_declared_shape(&ctx, &entry.type_ann)?;
         check_decl_expr_type(
             &ctx,
-            entry.name(),
+            entry.origin,
             &entry.identity(),
             &entry.type_ann,
             &entry.expr,
@@ -992,7 +985,7 @@ fn check_dimensions_dag(
         validate_declared_shape(&ctx, &entry.type_ann)?;
         check_decl_expr_type(
             &ctx,
-            entry.name(),
+            entry.origin,
             &entry.identity(),
             &entry.type_ann,
             &entry.definition,

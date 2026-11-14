@@ -2,8 +2,8 @@
 //! binder payloads.
 
 use crate::resolved_name::{
-    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
-    ResolvedIndexVariant, ResolvedStructTypeName, ResolvedUnitName,
+    ResolvedConstructorName, ResolvedDeclName, ResolvedIndexName, ResolvedIndexVariant,
+    ResolvedUnitName,
 };
 use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
 
@@ -361,7 +361,6 @@ pub enum ExprKind<C: Completeness = Strict> {
     EpochLiteral(EpochLiteral),
     /// An IANA timezone literal validated and canonicalized during HIR lowering.
     IanaTimeZoneLiteral(IanaTimeZoneId),
-    TypeSystemRef(Spanned<TypeSystemRef>),
     GraphRef(Spanned<C::DeclRef>),
     ConstRef(Spanned<ConstRef<C::DeclRef>>),
     LocalRef(Spanned<LocalId>),
@@ -478,31 +477,6 @@ pub struct UnfoldRecurrence {
     pub previous_state: LocalDef,
     pub previous_index: LocalDef,
     pub current_index: LocalDef,
-}
-
-/// Type-system identifier used as a value expression, usually in include bindings.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeSystemRef {
-    Type(ResolvedStructTypeName),
-    Dimension(ResolvedDimName),
-    Index(ResolvedIndexName),
-    IndexVariant(ResolvedIndexVariant),
-}
-
-impl TypeSystemRef {
-    #[must_use]
-    pub(crate) fn surface_description(&self) -> String {
-        match self {
-            Self::Type(name) => format!("type `{}`", name.as_str()),
-            Self::Dimension(name) => format!("dimension `{}`", name.as_str()),
-            Self::Index(name) => format!("index `{}`", name.as_str()),
-            Self::IndexVariant(variant) => format!(
-                "index label `{}#{}`",
-                variant.index().as_str(),
-                variant.variant()
-            ),
-        }
-    }
 }
 
 /// Resolved constant-like expression target.

@@ -52,9 +52,9 @@ macro_rules! define_time_scales {
                 Self::ALL_NAMES.join(", ")
             }
 
-            /// Returns the string name of this time scale.
+            /// The source spelling of this time scale.
             #[must_use]
-            const fn name(self) -> &'static str {
+            pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $name),+
                 }
@@ -63,7 +63,7 @@ macro_rules! define_time_scales {
 
         impl fmt::Display for TimeScale {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(self.name())
+                f.write_str(self.as_str())
             }
         }
 

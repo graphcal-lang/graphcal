@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::dag_id::DagId;
 
@@ -42,6 +43,21 @@ impl SlotBody for CheckedDag {
     }
 }
 
+/// Identity of one arrangement of a registry's local bodies.
+///
+/// Process-unique and minted again whenever the local bodies change, so a
+/// [`LocalDagFacts`] table pairs only with the arrangement it was built for.
+/// A clone keeps the identity: it has the same arrangement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LocalLayout(u64);
+
+impl LocalLayout {
+    fn fresh() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        Self(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 /// Where the DAG at one position lives.
 #[derive(Debug, Clone, Copy)]
 enum Slot {
@@ -65,6 +81,8 @@ enum Slot {
 /// order.
 #[derive(Debug, Clone)]
 pub struct DagSlots<L> {
+    /// The arrangement of `locals`; see [`LocalLayout`].
+    layout: LocalLayout,
     locals: Vec<L>,
     /// The position of each local body.
     local_positions: Vec<DagPosition>,
@@ -98,6 +116,7 @@ impl<L: SlotBody> DagSlots<L> {
     pub(super) fn new(root: L) -> Self {
         let root_id = root.slot_id().clone();
         Self {
+            layout: LocalLayout::fresh(),
             locals: vec![root],
             local_positions: vec![DagPosition::ROOT],
             shared: Vec::new(),
@@ -126,6 +145,7 @@ impl<L: SlotBody> DagSlots<L> {
         let dag_id = dag.slot_id().clone();
         let position = self.next_position(&dag_id)?;
         let index = self.locals.len();
+        self.layout = LocalLayout::fresh();
         self.locals.push(dag);
         self.local_positions.push(position);
         self.slots.push(Slot::Local(index));
@@ -285,6 +305,7 @@ impl<L: SlotBody> DagSlots<L> {
                 let dag_id = local.slot_id().clone();
                 self.shared_order.remove(&dag_id);
                 let local_index = self.locals.len();
+                self.layout = LocalLayout::fresh();
                 self.locals.push(local);
                 self.local_positions.push(position);
                 self.local_order.insert(dag_id, local_index);
@@ -376,11 +397,14 @@ impl<L: SlotBody> std::ops::Index<&DagId> for DagSlots<L> {
 /// One fact for each local body of one [`DagSlots`] registry, aligned with
 /// its local bodies.
 ///
-/// Only [`DagSlots::map_local`] creates a table, and its methods keep the
-/// alignment, so a table pairs with its registry's local bodies without a
-/// lookup.
+/// A table is branded with the arrangement of the local bodies it was built
+/// for, and its methods keep the alignment, so it pairs with its registry's
+/// local bodies without a lookup. Pairing it with another arrangement (another
+/// registry, or the same one after a local body was added) panics instead of
+/// silently pairing facts with the wrong bodies.
 #[derive(Debug, Clone)]
 pub struct LocalDagFacts<T> {
+    layout: LocalLayout,
     facts: Vec<T>,
 }
 
@@ -404,34 +428,71 @@ impl<L: SlotBody> DagSlots<L> {
         // The visiting order is a permutation of the local indices.
         facts.sort_by_key(|(index, _)| *index);
         Ok(LocalDagFacts {
+            layout: self.layout,
             facts: facts.into_iter().map(|(_, value)| value).collect(),
         })
+    }
+
+    /// The table of `facts`, one for each local body in local-index order.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `facts` does not hold exactly one fact per local body.
+    pub(super) fn aligned_facts<T>(&self, facts: Vec<T>) -> LocalDagFacts<T> {
+        assert_eq!(
+            facts.len(),
+            self.locals.len(),
+            "a fact table must hold one fact per local body"
+        );
+        LocalDagFacts {
+            layout: self.layout,
+            facts,
+        }
+    }
+
+    /// The facts of `facts`, which must be built for this arrangement of
+    /// local bodies.
+    fn facts_of<'a, T>(&self, facts: &'a LocalDagFacts<T>) -> &'a [T] {
+        self.check_layout(facts.layout);
+        &facts.facts
+    }
+
+    fn check_layout(&self, layout: LocalLayout) {
+        assert_eq!(
+            layout, self.layout,
+            "fact table built for another arrangement of local bodies"
+        );
     }
 
     /// Every local body with its fact from `facts`, in visiting order.
     ///
     /// # Panics
     ///
-    /// Panics when `facts` was mapped from another registry with fewer
-    /// local bodies.
+    /// Panics when `facts` was built for another arrangement of local bodies.
     pub fn with_local_facts<'a, T>(
         &'a self,
         facts: &'a LocalDagFacts<T>,
     ) -> impl Iterator<Item = (&'a L, &'a T)> {
+        let facts = self.facts_of(facts);
         std::iter::once(0)
             .chain(self.local_order.values().copied())
-            .map(|index| (&self.locals[index], &facts.facts[index]))
+            .map(|index| (&self.locals[index], &facts[index]))
     }
 
     /// Replace each fact of `facts` with the result of pairing it with its
     /// local body.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `facts` was built for another arrangement of local bodies.
     pub fn map_local_facts<T, U>(
         &self,
         facts: LocalDagFacts<T>,
         mut map: impl FnMut(&L, T) -> U,
     ) -> LocalDagFacts<U> {
-        debug_assert_eq!(self.locals.len(), facts.facts.len());
+        self.check_layout(facts.layout);
         LocalDagFacts {
+            layout: self.layout,
             facts: self
                 .locals
                 .iter()
@@ -443,14 +504,19 @@ impl<L: SlotBody> DagSlots<L> {
 
     /// The local body with this identity and its fact, when the DAG is
     /// local; `None` for an imported or unknown DAG.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `facts` was built for another arrangement of local bodies.
     #[must_use]
     pub fn local_with_fact<'a, T>(
         &'a self,
         facts: &'a LocalDagFacts<T>,
         dag_id: &DagId,
     ) -> Option<(&'a L, &'a T)> {
+        let facts = self.facts_of(facts);
         match self.slots[self.position(dag_id)?.index()] {
-            Slot::Local(index) => Some((&self.locals[index], &facts.facts[index])),
+            Slot::Local(index) => Some((&self.locals[index], &facts[index])),
             Slot::Shared(_) => None,
         }
     }
@@ -461,37 +527,49 @@ impl<L: SlotBody> DagSlots<L> {
     /// # Panics
     ///
     /// Panics when `position` is a position of another program with more
-    /// DAGs.
+    /// DAGs, or when `facts` was built for another arrangement of local
+    /// bodies.
     #[must_use]
     pub fn local_fact_at<'a, T>(
         &self,
         facts: &'a LocalDagFacts<T>,
         position: DagPosition,
     ) -> Option<&'a T> {
+        let facts = self.facts_of(facts);
         match self.slots[position.index()] {
-            Slot::Local(index) => Some(&facts.facts[index]),
+            Slot::Local(index) => Some(&facts[index]),
             Slot::Shared(_) => None,
         }
     }
 
     /// The fact of the local body with this identity.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `facts` was built for another arrangement of local bodies.
     #[must_use]
     pub fn local_fact<'a, T>(&self, facts: &'a LocalDagFacts<T>, dag_id: &DagId) -> Option<&'a T> {
+        let facts = self.facts_of(facts);
         match self.slots[self.position(dag_id)?.index()] {
-            Slot::Local(index) => facts.facts.get(index),
+            Slot::Local(index) => Some(&facts[index]),
             Slot::Shared(_) => None,
         }
     }
 
     /// Replace each local body with the result of pairing it with its fact,
-    /// keeping every DAG's position.
+    /// keeping every DAG's position and the arrangement identity.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `facts` was built for another arrangement of local bodies.
     pub(super) fn zip_locals<T, M: SlotBody>(
         self,
         facts: LocalDagFacts<T>,
         mut pair: impl FnMut(L, T) -> M,
     ) -> DagSlots<M> {
-        debug_assert_eq!(self.locals.len(), facts.facts.len());
+        self.check_layout(facts.layout);
         DagSlots {
+            layout: self.layout,
             locals: self
                 .locals
                 .into_iter()
@@ -509,16 +587,10 @@ impl<L: SlotBody> DagSlots<L> {
 }
 
 impl<T> LocalDagFacts<T> {
-    /// The table of `facts`, one for each local body in local-index order.
-    pub(super) const fn from_aligned(facts: Vec<T>) -> Self {
-        Self { facts }
-    }
-}
-
-impl<T> LocalDagFacts<T> {
     /// Replace each fact.
     pub fn map<U>(self, map: impl FnMut(T) -> U) -> LocalDagFacts<U> {
         LocalDagFacts {
+            layout: self.layout,
             facts: self.facts.into_iter().map(map).collect(),
         }
     }
@@ -530,6 +602,7 @@ impl<T> LocalDagFacts<T> {
     /// Returns the first error `map` returns.
     pub fn try_map<U, E>(self, map: impl FnMut(T) -> Result<U, E>) -> Result<LocalDagFacts<U>, E> {
         Ok(LocalDagFacts {
+            layout: self.layout,
             facts: self.facts.into_iter().map(map).collect::<Result<_, E>>()?,
         })
     }
@@ -545,15 +618,25 @@ impl<T> LocalDagFacts<T> {
         map: impl FnMut(&T) -> Result<U, E>,
     ) -> Result<LocalDagFacts<U>, E> {
         Ok(LocalDagFacts {
+            layout: self.layout,
             facts: self.facts.iter().map(map).collect::<Result<_, E>>()?,
         })
     }
 
     /// Pair each fact with the other table's fact of the same body.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the tables were built for different arrangements of
+    /// local bodies.
     #[must_use]
     pub fn zip<U>(self, other: LocalDagFacts<U>) -> LocalDagFacts<(T, U)> {
-        debug_assert_eq!(self.facts.len(), other.facts.len());
+        assert_eq!(
+            self.layout, other.layout,
+            "fact tables built for different arrangements of local bodies"
+        );
         LocalDagFacts {
+            layout: self.layout,
             facts: self.facts.into_iter().zip(other.facts).collect(),
         }
     }
@@ -565,8 +648,14 @@ impl<T, U> LocalDagFacts<(T, U)> {
     pub fn unzip(self) -> (LocalDagFacts<T>, LocalDagFacts<U>) {
         let (left, right) = self.facts.into_iter().unzip();
         (
-            LocalDagFacts { facts: left },
-            LocalDagFacts { facts: right },
+            LocalDagFacts {
+                layout: self.layout,
+                facts: left,
+            },
+            LocalDagFacts {
+                layout: self.layout,
+                facts: right,
+            },
         )
     }
 }

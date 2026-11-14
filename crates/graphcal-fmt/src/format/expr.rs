@@ -1291,9 +1291,6 @@ pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
         MatchPattern::IndexLabel { index, variant, .. } => {
             RcDoc::text(format!("{}#{}", index.value, variant.value))
         }
-        MatchPattern::Constructor { name, bindings, .. } => {
-            append_pattern_bindings(RcDoc::text(name.value.as_str().to_string()), bindings)
-        }
     }
 }
 
@@ -1345,18 +1342,7 @@ fn format_inline_dag_ref(
 ) -> RcDoc<'static> {
     let binding_docs: Vec<RcDoc<'static>> = args
         .iter()
-        .map(|b| {
-            let marker = match b.category {
-                graphcal_compiler::syntax::ast::InputBindingCategory::Unmarked => "",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Type => "type ",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Dimension => "dim ",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Index => "index ",
-            };
-            RcDoc::text(marker)
-                .append(RcDoc::text(b.name.name.as_str().to_owned()))
-                .append(RcDoc::text(": "))
-                .append(format_delimited_expr(fmt, &b.value))
-        })
+        .map(|b| format_param_binding(fmt, b, format_delimited_expr))
         .collect();
     let path_text = path.display_path();
     RcDoc::text(format!("@{path_text}"))
@@ -1368,6 +1354,39 @@ fn format_inline_dag_ref(
 // ---------------------------------------------------------------------------
 // Type expressions
 // ---------------------------------------------------------------------------
+
+/// Format one DAG input binding: its marker, name, and value in the grammar
+/// the marker selects. `format_value` formats an unmarked value expression.
+pub fn format_param_binding(
+    fmt: &mut Formatter<'_>,
+    binding: &ParamBinding,
+    format_value: fn(&mut Formatter<'_>, &Expr) -> RcDoc<'static>,
+) -> RcDoc<'static> {
+    use graphcal_compiler::syntax::ast::BindingValue;
+    let (marker, value) = match &binding.value {
+        BindingValue::Value(value) => ("", format_value(fmt, value)),
+        BindingValue::Type(type_expr) => ("type ", format_type_expr_inline(fmt, type_expr)),
+        BindingValue::Dimension(dim) => ("dim ", format_dim_expr_inline(dim)),
+        BindingValue::Index(index) => ("index ", format_index_expr_inline(index)),
+    };
+    RcDoc::text(marker)
+        .append(RcDoc::text(binding.name.name.as_str().to_owned()))
+        .append(RcDoc::text(": "))
+        .append(value)
+}
+
+/// Format an index expression: `Name`, `Fin(N)`, or a bare Nat.
+fn format_index_expr_inline(index: &graphcal_compiler::syntax::ast::IndexExpr) -> RcDoc<'static> {
+    match index {
+        graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
+            RcDoc::text(format!("Fin({cardinality})"))
+        }
+        graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
+            RcDoc::text(name.value.display_path())
+        }
+        graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat) => RcDoc::text(nat.to_string()),
+    }
+}
 
 /// Format a type expression.
 pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<'static> {
@@ -1469,15 +1488,7 @@ fn format_builtin_type_former(
 pub fn format_generic_arg_inline(fmt: &mut Formatter<'_>, arg: &GenericArg) -> RcDoc<'static> {
     match arg {
         GenericArg::Type(type_expr) => format_type_expr_inline(fmt, type_expr),
-        GenericArg::Index(index) => match index {
-            graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
-                RcDoc::text(format!("Fin({cardinality})"))
-            }
-            graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
-                RcDoc::text(name.value.display_path())
-            }
-            graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat) => RcDoc::text(nat.to_string()),
-        },
+        GenericArg::Index(index) => format_index_expr_inline(index),
         GenericArg::Nat(nat_expr) => RcDoc::text(nat_expr.to_string()),
         GenericArg::Ambiguous(ambiguous) => RcDoc::text(ambiguous.to_string()),
     }

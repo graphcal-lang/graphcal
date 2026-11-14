@@ -700,7 +700,6 @@ const fn node_kind(category: ValueDeclCategory) -> GraphNodeKind {
 mod tests {
     use super::*;
     use graphcal_compiler::ir::lower::lower;
-    use graphcal_compiler::resolve::ModuleResolver;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::tir::typed::ProjectTypeStore;
 
@@ -711,10 +710,8 @@ mod tests {
         let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
         let src = sources.register("test.gcl", Arc::new(source.to_string()));
-        let ir = lower(&file, "test.gcl", src).unwrap();
-        let resolver =
-            ModuleResolver::without_edges([(ir.dag_id().clone(), file.declarations.as_slice())])
-                .unwrap();
+        let graphcal_compiler::ir::lower::LoweredFile { hir: ir, resolver } =
+            lower(&file, "test.gcl", src).unwrap();
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
         project_types.insert_module(ir.definitions()).unwrap();

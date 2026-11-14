@@ -2,23 +2,35 @@
 //! [`ModuleHandle`] the resolver issued for each of them.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::dag_id::DagId;
 
+/// Table identities are process-unique, so a handle from one table never
+/// addresses an entry of another.
+static NEXT_TABLE: AtomicU64 = AtomicU64::new(0);
+
 /// The position of one module in the resolver that issued it.
 ///
-/// Created only by that resolver, so every lookup by handle is total: a
-/// handle always names a module of the resolver that handed it out, the way
-/// a `DagPosition` names a DAG of its registry.
+/// Created only by that resolver and branded with its identity, so every
+/// lookup by handle is total: a handle always names a module of the resolver
+/// that handed it out, the way a `SourceId` names a source of its registry.
+/// Presenting a handle to another resolver is a compiler bug and panics
+/// instead of reading an unrelated module.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ModuleHandle(usize);
+pub struct ModuleHandle {
+    table: u64,
+    index: usize,
+}
 
 /// Modules keyed by canonical identity, in insertion order.
 ///
-/// Equality ignores the insertion order: two tables are equal when they hold
-/// equal entries for the same identities.
+/// Equality ignores the insertion order and the table identity: two tables
+/// are equal when they hold equal entries for the same identities. A clone
+/// keeps the identity, so it accepts the original's handles.
 #[derive(Debug, Clone)]
 pub(super) struct ModuleTable<E> {
+    identity: u64,
     entries: Vec<(DagId, E)>,
     positions: HashMap<DagId, ModuleHandle>,
 }
@@ -26,6 +38,7 @@ pub(super) struct ModuleTable<E> {
 impl<E> Default for ModuleTable<E> {
     fn default() -> Self {
         Self {
+            identity: NEXT_TABLE.fetch_add(1, Ordering::Relaxed),
             entries: Vec::new(),
             positions: HashMap::new(),
         }
@@ -52,7 +65,7 @@ impl<E> ModuleTable<E> {
 
     /// The entry of `owner` for update, if the table holds it.
     pub(super) fn get_mut(&mut self, owner: &DagId) -> Option<&mut E> {
-        let ModuleHandle(index) = self.handle(owner)?;
+        let index = self.index(self.handle(owner)?);
         self.entries.get_mut(index).map(|(_, entry)| entry)
     }
 
@@ -65,10 +78,14 @@ impl<E> ModuleTable<E> {
     /// place, and return the handle of `owner`.
     pub(super) fn insert(&mut self, owner: DagId, entry: E) -> ModuleHandle {
         if let Some(handle) = self.handle(&owner) {
-            self.entries[handle.0].1 = entry;
+            let index = self.index(handle);
+            self.entries[index].1 = entry;
             return handle;
         }
-        let handle = ModuleHandle(self.entries.len());
+        let handle = ModuleHandle {
+            table: self.identity,
+            index: self.entries.len(),
+        };
         self.positions.insert(owner.clone(), handle);
         self.entries.push((owner, entry));
         handle
@@ -81,12 +98,21 @@ impl<E> ModuleTable<E> {
 
     /// The identity of the module `handle` names.
     pub(super) fn owner(&self, handle: ModuleHandle) -> &DagId {
-        &self.entries[handle.0].0
+        &self.entries[self.index(handle)].0
     }
 
     /// The entry of the module `handle` names.
     pub(super) fn entry(&self, handle: ModuleHandle) -> &E {
-        &self.entries[handle.0].1
+        &self.entries[self.index(handle)].1
+    }
+
+    /// The position of `handle`, which this table must have issued.
+    fn index(&self, handle: ModuleHandle) -> usize {
+        assert_eq!(
+            handle.table, self.identity,
+            "module handle presented to a resolver that did not issue it"
+        );
+        handle.index
     }
 
     /// Every identity, in handle order.
@@ -103,6 +129,7 @@ impl<E> ModuleTable<E> {
     /// handle.
     pub(super) fn map<F>(self, mut f: impl FnMut(E) -> F) -> ModuleTable<F> {
         ModuleTable {
+            identity: self.identity,
             entries: self
                 .entries
                 .into_iter()
@@ -164,6 +191,16 @@ mod tests {
         assert_eq!(mapped.entry(main), &10);
         assert_eq!(mapped.entry(lib), &20);
         assert_eq!(mapped.handle(&dag("lib")), Some(lib));
+    }
+
+    #[test]
+    #[should_panic(expected = "did not issue it")]
+    fn a_handle_of_another_table_is_rejected() {
+        let mut first = ModuleTable::default();
+        first.insert(dag("main"), 1);
+        let mut second = ModuleTable::default();
+        let foreign = second.insert(dag("main"), 1);
+        let _ = first.entry(foreign);
     }
 
     #[test]

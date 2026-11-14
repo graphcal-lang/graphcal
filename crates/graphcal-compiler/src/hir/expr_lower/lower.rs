@@ -3,10 +3,9 @@
 use crate::dag_id::DagId;
 use crate::desugar::desugared_ast as ast;
 use crate::exact_rational::ExactRational;
-use crate::resolve::error::{ModuleResolveError, NameCategory};
-use crate::resolve::namespace::Namespace;
+use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::ResolvedDeclName;
-use crate::syntax::ast::{InputBindingCategory, PowerExponent, UnresolvedRef};
+use crate::syntax::ast::{PowerExponent, UnresolvedRef};
 use crate::syntax::local_name::LocalName;
 use crate::syntax::names::NamePath;
 use crate::syntax::non_empty::NonEmpty;
@@ -179,21 +178,20 @@ pub fn lower_assert_body(
         .map_err(|source| ExprLowerError::ExpressionIdentity { source, span })
 }
 
+/// The declared name a `type` or `dim` binding binds its input to.
 fn static_binding_value_path(
     binding: &ast::ParamBinding,
-    owner: &DagId,
+    kind: crate::static_interface::StaticInputKind,
 ) -> Result<NamePath, ExprLowerError> {
-    match &binding.value.kind {
-        ast::ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => Ok(path.to_name_path()),
-        _ => Err(ExprLowerError::ModuleResolve {
-            source: ModuleResolveError::UnknownName {
-                owner: owner.clone(),
-                category: NameCategory::Namespace(Namespace::Static),
-                name: binding.name.name.atom().clone(),
-            },
-            span: binding.value.span,
-        }),
-    }
+    binding
+        .value
+        .static_name()
+        .map(|name| name.value.clone())
+        .ok_or_else(|| ExprLowerError::InvalidStaticBindingValue {
+            kind,
+            name: binding.name.name.atom().clone(),
+            span: binding.value.span(),
+        })
 }
 
 impl ExprLowerer<'_> {
@@ -282,7 +280,15 @@ impl ExprLowerer<'_> {
             ast::ExprKind::Match { scrutinee, arms } => std::iter::once(scrutinee.as_ref())
                 .chain(arms.iter().map(|arm| &arm.body))
                 .collect(),
-            ast::ExprKind::InlineDagRef { args, .. } => args.iter().map(|arg| &arg.value).collect(),
+            ast::ExprKind::InlineDagRef { args, .. } => args
+                .iter()
+                .filter_map(|arg| match &arg.value {
+                    ast::BindingValue::Value(value) => Some(value),
+                    ast::BindingValue::Type(_)
+                    | ast::BindingValue::Dimension(_)
+                    | ast::BindingValue::Index(_) => None,
+                })
+                .collect(),
             #[expect(
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
@@ -717,29 +723,29 @@ impl ExprLowerer<'_> {
         let mut static_bindings = StaticSubstitution::default();
         for binding in bindings {
             let input_path = NamePath::local(binding.name.name.atom().clone());
-            match binding.category {
-                InputBindingCategory::Unmarked => {
-                    params.push((
-                        self.resolve_param_binding_target(target, binding)?,
-                        &binding.value,
-                    ));
+            match &binding.value {
+                ast::BindingValue::Value(value) => {
+                    params.push((self.resolve_param_binding_target(target, binding)?, value));
                 }
-                InputBindingCategory::Type => {
+                ast::BindingValue::Type(_) => {
                     let resolver = self.ctx.scope.resolver;
                     let input = spanned(
                         resolver.resolve_struct_type_path(target, &input_path),
                         binding.name.span,
                     )?
                     .into_resolved();
-                    let value_path = static_binding_value_path(binding, self.ctx.scope.owner)?;
+                    let value_path = static_binding_value_path(
+                        binding,
+                        crate::static_interface::StaticInputKind::Type,
+                    )?;
                     let value = spanned(
                         resolver.resolve_struct_type_path(self.ctx.scope.owner, &value_path),
-                        binding.value.span,
+                        binding.value.span(),
                     )?
                     .into_resolved();
                     static_bindings.types.insert(input, value);
                 }
-                InputBindingCategory::Dimension => {
+                ast::BindingValue::Dimension(_) => {
                     let input = spanned(
                         self.ctx
                             .scope
@@ -748,7 +754,10 @@ impl ExprLowerer<'_> {
                         binding.name.span,
                     )?
                     .into_resolved();
-                    let value_path = static_binding_value_path(binding, self.ctx.scope.owner)?;
+                    let value_path = static_binding_value_path(
+                        binding,
+                        crate::static_interface::StaticInputKind::Dimension,
+                    )?;
                     let value = match self
                         .ctx
                         .scope
@@ -762,19 +771,19 @@ impl ExprLowerer<'_> {
                                 .resolve_dimension_path(&value_path)
                                 .ok_or(ExprLowerError::ModuleResolve {
                                     source,
-                                    span: binding.value.span,
+                                    span: binding.value.span(),
                                 })?
                         }
                         Err(source) => {
                             return Err(ExprLowerError::ModuleResolve {
                                 source,
-                                span: binding.value.span,
+                                span: binding.value.span(),
                             });
                         }
                     };
                     static_bindings.dimensions.insert(input, value);
                 }
-                InputBindingCategory::Index => {
+                ast::BindingValue::Index(index) => {
                     let input = spanned(
                         self.ctx
                             .scope
@@ -783,8 +792,8 @@ impl ExprLowerer<'_> {
                         binding.name.span,
                     )?
                     .into_resolved();
-                    let value = match binding.value.index_binding_arg() {
-                        Some(ast::IndexExpr::Name(path)) => self
+                    let value = match index {
+                        ast::IndexExpr::Name(path) => self
                             .ctx
                             .scope
                             .resolver
@@ -793,21 +802,23 @@ impl ExprLowerer<'_> {
                             .map(InstanceIndexBindingTarget::Declared)
                             .map_err(|source| ExprLowerError::ModuleResolve {
                                 source,
-                                span: binding.value.span,
+                                span: binding.value.span(),
                             })?,
-                        Some(ast::IndexExpr::Finite {
+                        ast::IndexExpr::Finite {
                             cardinality: ast::NatExpr::Literal(cardinality, _),
                             ..
-                        }) => crate::semantic::index_def::FiniteIndex::try_from_u64(cardinality)
+                        } => crate::semantic::index_def::FiniteIndex::try_from_u64(*cardinality)
                             .map(InstanceIndexBindingTarget::Finite)
                             .map_err(|_| ExprLowerError::InvalidStaticBindingValue {
+                                kind: crate::static_interface::StaticInputKind::Index,
                                 name: binding.name.name.atom().clone(),
-                                span: binding.value.span,
+                                span: binding.value.span(),
                             })?,
                         _ => {
                             return Err(ExprLowerError::InvalidStaticBindingValue {
+                                kind: crate::static_interface::StaticInputKind::Index,
                                 name: binding.name.name.atom().clone(),
-                                span: binding.value.span,
+                                span: binding.value.span(),
                             });
                         }
                     };
@@ -1001,29 +1012,6 @@ impl ExprLowerer<'_> {
         pattern: &ast::MatchPattern,
     ) -> Result<MatchPattern, ExprLowerError> {
         match pattern {
-            ast::MatchPattern::Constructor {
-                name,
-                bindings,
-                span,
-            } => Ok(MatchPattern::Constructor {
-                constructor: Spanned::new(
-                    self.ctx
-                        .scope
-                        .resolver
-                        .resolve_constructor_path(
-                            self.ctx.scope.owner,
-                            &NamePath::local(name.value.atom().clone()),
-                        )
-                        .map(crate::resolve::symbols::SymbolRef::into_resolved)
-                        .map_err(|source| ExprLowerError::ModuleResolve {
-                            source,
-                            span: name.span,
-                        })?,
-                    name.span,
-                ),
-                bindings: self.lower_pattern_bindings(bindings)?,
-                span: *span,
-            }),
             ast::MatchPattern::IndexLabel {
                 index,
                 variant,

@@ -133,10 +133,8 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TirDraft, crate::source
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = make_src(source);
-    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(ir.dag_id().clone(), &file.declarations);
-    let resolver = modules.build().unwrap();
+    let crate::ir::lower::LoweredFile { hir: ir, resolver } =
+        crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
@@ -4483,7 +4481,7 @@ plot real_plot = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [real_plot, my_polt] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownPlotReference { owner_kind: "figure", name, .. }), .. }) if name.to_string() == "my_polt"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownPlotReference { owner_kind: crate::declaration_kind::DeclarationKind::Figure, name, .. }), .. }) if name.to_string() == "my_polt"),
         "got: {err:?}"
     );
 }
@@ -4502,7 +4500,7 @@ figure outer_figure = { plots: [inner] };";
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Name(NameError::CompositionReferencesNonPlot {
-                    actual_kind: "figure",
+                    actual_kind: crate::declaration_kind::DeclarationKind::Figure,
                     ..
                 }),
                 ..

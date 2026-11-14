@@ -12,7 +12,7 @@ use crate::expression_source::ExpressionSourceError;
 use crate::generic_param::{
     GenericApplicationTarget, GenericArgArity, render_accepted_constraints,
 };
-use crate::hir::expr::{TypeSystemRef, UnappliedFunctionRef};
+use crate::hir::expr::UnappliedFunctionRef;
 use crate::hir::types::IndexRef;
 use crate::resolve::category::DeclSymbolKind;
 use crate::resolved_name::ResolvedConstructorName;
@@ -148,19 +148,19 @@ pub enum NameError {
     },
     #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
     UnknownPlotReference {
-        owner_kind: &'static str,
+        owner_kind: crate::declaration_kind::DeclarationKind,
         owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
     },
     #[error("`{name}` is a {actual_kind}, not a plot")]
     CompositionReferencesNonPlot {
-        owner_kind: &'static str,
-        actual_kind: &'static str,
+        owner_kind: crate::declaration_kind::DeclarationKind,
+        actual_kind: crate::declaration_kind::DeclarationKind,
         name: ScopedName,
     },
     #[error("{owner_kind} `{owner}` lists plot `{name}` more than once")]
     DuplicatePlotReference {
-        owner_kind: &'static str,
+        owner_kind: crate::declaration_kind::DeclarationKind,
         owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
     },
@@ -244,11 +244,6 @@ pub enum NameError {
     DuplicateLocalBinding { name: LocalName },
     #[error("local binding `{name}` shadows a visible Term")]
     LocalBindingShadowsTerm { name: LocalName },
-    #[error(
-        "{} cannot be used as a value",
-        reference.surface_description()
-    )]
-    TypeSystemRefAsValue { reference: TypeSystemRef },
     #[error("{function}() expects {arity} arguments, got {got}")]
     WrongOptionalArity {
         function: BuiltinFn,
@@ -309,7 +304,6 @@ impl DiagnosticKind for NameError {
             Self::UnsupportedFunctionGenericArgs { .. } => "graphcal::N032",
             Self::DuplicateLocalBinding { .. } => "graphcal::N033",
             Self::LocalBindingShadowsTerm { .. } => "graphcal::N034",
-            Self::TypeSystemRefAsValue { .. } => "graphcal::N035",
             Self::WrongOptionalArity { .. } => "graphcal::N036",
             Self::UnitNameIsLocal { .. } => "graphcal::N037",
         }
@@ -362,7 +356,6 @@ impl DiagnosticKind for NameError {
             | Self::UnsupportedFunctionGenericArgs { .. }
             | Self::DuplicateLocalBinding { .. }
             | Self::LocalBindingShadowsTerm { .. }
-            | Self::TypeSystemRefAsValue { .. }
             | Self::WrongOptionalArity { .. } => Some("error here".to_owned()),
         }
     }
@@ -408,7 +401,6 @@ impl DiagnosticKind for NameError {
             | Self::UnsupportedFunctionGenericArgs { .. }
             | Self::DuplicateLocalBinding { .. }
             | Self::LocalBindingShadowsTerm { .. }
-            | Self::TypeSystemRefAsValue { .. }
             | Self::WrongOptionalArity { .. } => None,
         }
     }
@@ -456,7 +448,6 @@ impl DiagnosticKind for NameError {
             | Self::UnsupportedFunctionGenericArgs { .. }
             | Self::DuplicateLocalBinding { .. }
             | Self::LocalBindingShadowsTerm { .. }
-            | Self::TypeSystemRefAsValue { .. }
             | Self::WrongOptionalArity { .. } => Vec::new(),
         }
     }

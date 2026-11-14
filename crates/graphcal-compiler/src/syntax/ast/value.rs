@@ -18,7 +18,7 @@ use crate::syntax::non_empty::{AtLeastTwo, NonEmpty};
 use crate::syntax::phase::{Desugared, Phase, Raw};
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::ContextualKeyword;
-use crate::syntax::type_name::{ConstructorName, FieldName};
+use crate::syntax::type_name::FieldName;
 
 /// Expression-level sugar — only legal in [`Raw`].
 ///
@@ -201,15 +201,75 @@ pub enum InputBindingCategory {
 #[phase_lift(from = Raw, to = Desugared)]
 #[fe(phase = Raw)]
 pub struct ParamBinding<P: Phase = Raw> {
-    pub category: InputBindingCategory,
     /// Target name in the invoked DAG's selected namespace.
     pub name: Ident,
-    /// Authored binding value. The category fixes how this syntax is validated;
+    /// Authored binding value, parsed with the grammar its marker selects;
     /// resolution never retries a different target namespace.
-    pub value: Expr<P>,
+    pub value: BindingValue<P>,
     /// Span covering the marker (when present), name, and value.
     #[fe(skip)]
     pub(crate) span: Span,
+}
+
+impl<P: Phase> ParamBinding<P> {
+    /// The source category its marker selects.
+    #[must_use]
+    pub const fn category(&self) -> InputBindingCategory {
+        self.value.category()
+    }
+}
+
+/// The value of one input binding, sorted by its marker at parse time.
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
+#[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
+pub enum BindingValue<P: Phase = Raw> {
+    /// An unmarked parameter binding: a value expression.
+    Value(Expr<P>),
+    /// `type T: <type>`.
+    Type(TypeExpr<P>),
+    /// `dim D: <dimension>`.
+    Dimension(DimExpr),
+    /// `index I: <index>`.
+    Index(IndexExpr),
+}
+
+impl<P: Phase> BindingValue<P> {
+    /// The source category of this value.
+    #[must_use]
+    pub const fn category(&self) -> InputBindingCategory {
+        match self {
+            Self::Value(_) => InputBindingCategory::Unmarked,
+            Self::Type(_) => InputBindingCategory::Type,
+            Self::Dimension(_) => InputBindingCategory::Dimension,
+            Self::Index(_) => InputBindingCategory::Index,
+        }
+    }
+
+    /// Source span of the value.
+    #[must_use]
+    pub const fn span(&self) -> Span {
+        match self {
+            Self::Value(expr) => expr.span,
+            Self::Type(type_expr) => type_expr.span,
+            Self::Dimension(dim) => dim.span,
+            Self::Index(index) => index.span(),
+        }
+    }
+
+    /// The declared static name a `type`, `dim`, or `index` binding names,
+    /// if its value is a lone (possibly module-qualified) name: `Item`,
+    /// `units.Speed`. Applied types, dimension products and powers, indexed
+    /// or constrained types, and `Fin(N)` are not names.
+    #[must_use]
+    pub const fn static_name(&self) -> Option<&Spanned<NamePath>> {
+        match self {
+            Self::Type(type_expr) => type_expr.as_lone_name(),
+            Self::Dimension(dim) => dim.as_lone_name(),
+            Self::Index(IndexExpr::Name(name)) => Some(name),
+            Self::Value(_) | Self::Index(IndexExpr::Finite { .. } | IndexExpr::BareNat(_)) => None,
+        }
+    }
 }
 /// The kind of a domain constraint bound: `min` or `max`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FormatEquivalent)]
@@ -347,6 +407,20 @@ pub struct TypeExpr<P: Phase = Raw> {
 }
 
 impl<P: Phase> TypeExpr<P> {
+    /// The name this type expression consists of, if it is a lone,
+    /// unindexed, unconstrained name: `Item` or `module.Item`.
+    #[must_use]
+    pub const fn as_lone_name(&self) -> Option<&Spanned<NamePath>> {
+        match &self.element.kind {
+            TypeExprKind::DimExpr(dim)
+                if self.indexes.is_none() && self.element.constraints.is_empty() =>
+            {
+                dim.as_lone_name()
+            }
+            _ => None,
+        }
+    }
+
     /// An unindexed type expression.
     #[must_use]
     pub(crate) const fn unindexed(element: ElementTypeExpr<P>) -> Self {
@@ -452,6 +526,28 @@ pub struct DimExpr {
     pub terms: Vec<DimExprItem>,
     #[fe(skip)]
     pub(crate) span: Span,
+}
+
+impl DimExpr {
+    /// The name this dimension expression consists of, if it is a single
+    /// name without an exponent: `Length` or `module.Speed`.
+    #[must_use]
+    pub const fn as_lone_name(&self) -> Option<&Spanned<NamePath>> {
+        match self.terms.as_slice() {
+            [
+                DimExprItem {
+                    op: MulDivOp::Mul,
+                    term:
+                        DimTerm {
+                            name: DimTermName::Path(path),
+                            power: None,
+                            ..
+                        },
+                },
+            ] => Some(path),
+            _ => None,
+        }
+    }
 }
 
 /// One term in a dimension expression with its combining operator.
@@ -620,105 +716,6 @@ impl<P: Phase> Expr<P> {
 
     const fn take_kind(&mut self) -> ExprKind<P> {
         std::mem::replace(&mut self.kind, ExprKind::Number(0.0))
-    }
-
-    /// Reclassify an include-binding RHS that has index-argument syntax.
-    ///
-    /// Include bindings are parsed uniformly as expressions because the target
-    /// namespace is known only after the dependency is loaded. This adapter is
-    /// the syntax boundary where a bare path or contextual `Fin(nat_expr)` call
-    /// regains its typed [`IndexExpr`] shape before semantic binding
-    /// classification.
-    #[must_use]
-    pub fn index_binding_arg(&self) -> Option<IndexExpr> {
-        match &self.kind {
-            ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => {
-                Some(IndexExpr::Name(path.clone().into_spanned_name_path()))
-            }
-            ExprKind::FnCall {
-                callee,
-                generic_args,
-                args,
-            } => {
-                let constructor = callee.as_bare()?;
-                if !ContextualKeyword::Fin.matches(constructor.name.as_str())
-                    || !generic_args.is_empty()
-                {
-                    return None;
-                }
-                let [cardinality] = args.as_slice() else {
-                    return None;
-                };
-                Some(IndexExpr::Finite {
-                    cardinality: nat_expr_from_binding_expr(cardinality)?,
-                    span: self.span,
-                })
-            }
-            ExprKind::ConstructorCall {
-                callee,
-                generic_args,
-                fields,
-            } if generic_args.is_empty() && fields.is_empty() => {
-                let constructor = callee.as_bare()?;
-                (!ContextualKeyword::Fin.matches(constructor.name.as_str()))
-                    .then(|| IndexExpr::Name(callee.clone().into_spanned_name_path()))
-            }
-            _ => None,
-        }
-    }
-}
-
-fn nat_expr_from_binding_expr<P: Phase>(expr: &Expr<P>) -> Option<NatExpr> {
-    match &expr.kind {
-        ExprKind::Integer(value) => u64::try_from(*value)
-            .ok()
-            .map(|value| NatExpr::Literal(value, expr.span)),
-        ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => {
-            path.as_bare().cloned().map(NatExpr::Var)
-        }
-        ExprKind::BinOp { op, lhs, rhs } => {
-            let lhs = nat_expr_from_binding_expr(lhs)?;
-            let rhs = nat_expr_from_binding_expr(rhs)?;
-            match op {
-                BinOp::Add => Some(NatExpr::add(lhs, rhs, expr.span)),
-                BinOp::Mul => Some(NatExpr::mul(lhs, rhs, expr.span)),
-                BinOp::Sub
-                | BinOp::Div
-                | BinOp::Mod
-                | BinOp::Pow(_)
-                | BinOp::Eq
-                | BinOp::Ne
-                | BinOp::Lt
-                | BinOp::Gt
-                | BinOp::Le
-                | BinOp::Ge
-                | BinOp::And
-                | BinOp::Or => None,
-            }
-        }
-        ExprKind::UnresolvedRef(UnresolvedRef::IndexLabel { .. })
-        | ExprKind::Number(_)
-        | ExprKind::Bool(_)
-        | ExprKind::StringLiteral(_)
-        | ExprKind::GraphRef(_)
-        | ExprKind::UnaryOp { .. }
-        | ExprKind::FnCall { .. }
-        | ExprKind::If { .. }
-        | ExprKind::QuantityLiteral { .. }
-        | ExprKind::Convert { .. }
-        | ExprKind::DisplayTimezone { .. }
-        | ExprKind::FieldAccess { .. }
-        | ExprKind::ConstructorCall { .. }
-        | ExprKind::MapLiteral { .. }
-        | ExprKind::ForComp { .. }
-        | ExprKind::IndexAccess { .. }
-        | ExprKind::Scan { .. }
-        | ExprKind::Unfold { .. }
-        | ExprKind::KeyForm { .. }
-        | ExprKind::Match { .. }
-        | ExprKind::InlineDagRef { .. }
-        | ExprKind::TodoHole(_)
-        | ExprKind::Sugar(_) => None,
     }
 }
 
@@ -1492,24 +1489,16 @@ impl<'a, B> IntoIterator for &'a PatternBindings<B> {
 }
 
 /// A match pattern: `Impulsive(delta_v: dv)`, `Nominal`, `Maneuver#Departure`.
+///
+/// The punctuation alone selects the variant: a `#` makes an index-label
+/// pattern, anything else is a constructor path. HIR lowering resolves the
+/// path in the matching namespace.
 #[derive(Debug, Clone, FormatEquivalent)]
 pub enum MatchPattern {
-    /// Syntactic path pattern before semantic categorization.
-    ///
-    /// The parser emits this for both constructor-looking and index-label-looking
-    /// patterns. Name resolution may rewrite it to [`Self::Constructor`] or
-    /// [`Self::IndexLabel`] only when it can prove that categorization from the
-    /// local symbol context. Qualified paths that require module-aware lookup
-    /// remain syntactic paths instead of being half-resolved.
+    /// Constructor pattern written as a bare or module-qualified path:
+    /// `Impulsive(delta_v: dv)` or `Nominal`.
     Path {
         path: IdentPath,
-        bindings: PatternBindings<PatternBinding>,
-        #[fe(skip)]
-        span: Span,
-    },
-    /// Tagged-union constructor pattern: `Impulsive(delta_v: dv)` or `Nominal`.
-    Constructor {
-        name: Spanned<ConstructorName>,
         bindings: PatternBindings<PatternBinding>,
         #[fe(skip)]
         span: Span,
@@ -1517,8 +1506,8 @@ pub enum MatchPattern {
     /// Named-index label pattern: `Maneuver#Departure`.
     ///
     /// Index labels are fieldless, so this variant deliberately has no
-    /// binding payload. This variant is semantic: producers should construct it
-    /// only after proving that the path denotes an index variant.
+    /// binding payload. The parser builds it whenever the path is followed by
+    /// `#`; HIR lowering resolves the index and label.
     IndexLabel {
         index: Spanned<NamePath>,
         variant: Spanned<IndexVariantName>,
@@ -1531,16 +1520,14 @@ impl MatchPattern {
     #[must_use]
     pub(crate) const fn span(&self) -> Span {
         match self {
-            Self::Path { span, .. }
-            | Self::Constructor { span, .. }
-            | Self::IndexLabel { span, .. } => *span,
+            Self::Path { span, .. } | Self::IndexLabel { span, .. } => *span,
         }
     }
 
     #[must_use]
     pub fn bindings(&self) -> &[PatternBinding] {
         match self {
-            Self::Path { bindings, .. } | Self::Constructor { bindings, .. } => bindings.as_slice(),
+            Self::Path { bindings, .. } => bindings.as_slice(),
             Self::IndexLabel { .. } => &[],
         }
     }

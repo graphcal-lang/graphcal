@@ -24,7 +24,17 @@ use super::model::{HirDag, IncludedPlotEntry, ParsedExpectedFailMetadata, Unfroz
 
 use super::static_definitions::StaticDefinitionEvaluator;
 
-/// Lower an AST into a [`HirDag`].
+/// One file's [`HirDag`] with the resolver that issued its module handle.
+///
+/// The HIR is usable only with this resolver, so [`lower`] returns them
+/// together instead of dropping the resolver it built.
+#[derive(Debug)]
+pub struct LoweredFile {
+    pub hir: HirDag,
+    pub resolver: crate::resolve::ModuleResolver,
+}
+
+/// Lower an AST into a [`HirDag`] and the resolver it was lowered with.
 ///
 /// This combines:
 /// 1. Name resolution (`resolve`) — checks duplicates, extracts deps
@@ -36,7 +46,7 @@ use super::static_definitions::StaticDefinitionEvaluator;
 /// Returns a [`SemanticError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 /// `name` is the virtual relative path that names the module.
-pub fn lower(ast: &File, name: &str, src: SourceId) -> Result<HirDag, SemanticError> {
+pub fn lower(ast: &File, name: &str, src: SourceId) -> Result<LoweredFile, SemanticError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(name))
         .map_err(|error| {
             SemanticError::internal_error(
@@ -74,7 +84,9 @@ pub fn lower(ast: &File, name: &str, src: SourceId) -> Result<HirDag, SemanticEr
         &dag_id,
         &mut definitions,
     )?;
-    unresolved.freeze(&dag_id, &mut definitions, src)
+    let hir = unresolved.freeze(&dag_id, &mut definitions, src)?;
+    drop(definitions);
+    Ok(LoweredFile { hir, resolver })
 }
 
 /// Create a definition evaluator over `sources`, reporting a broken prelude
@@ -592,7 +604,7 @@ mod tests {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = crate::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
-        lower(&file, "test.gcl", make_src(source))
+        lower(&file, "test.gcl", make_src(source)).map(|lowered| lowered.hir)
     }
 
     #[test]
@@ -664,7 +676,7 @@ mod tests {
         let hir_source = make_src(source);
         let file =
             crate::desugar::desugared_ast::File::from(Parser::new(source).parse_file().unwrap());
-        let hir = lower(&file, "test.gcl", hir_source).unwrap();
+        let hir = lower(&file, "test.gcl", hir_source).unwrap().hir;
         let identity = crate::resolved_name::ResolvedStructTypeName::for_test(
             hir.dag_id().clone(),
             crate::syntax::type_name::StructTypeName::expect_valid("Box"),

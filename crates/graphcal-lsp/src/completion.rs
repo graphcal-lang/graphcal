@@ -4,14 +4,13 @@ use std::borrow::Cow;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::syntax::builtin_type_name::BuiltinTypeName;
-use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::token::{ContextualKeyword, Token};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use crate::analysis::AnalysisResult;
 use crate::cursor_context::{
-    CompletionContext, CoordinateIndexCompletionContext, ImportItemCompletionContext,
+    CompletionContext, CoordinateIndexCompletionContext, ImportItemCompletionContext, LexedSource,
     determine_completion_context, determine_coordinate_index_completion_context,
 };
 use crate::symbol_table::{DefinitionInfo, SymbolCategory};
@@ -62,7 +61,8 @@ pub fn completion(
     source: &str,
     offset: usize,
 ) -> Option<Vec<CompletionItem>> {
-    if let Some(context) = determine_coordinate_index_completion_context(source, offset) {
+    let lexed = LexedSource::new(source);
+    if let Some(context) = determine_coordinate_index_completion_context(&lexed, offset) {
         let keywords = match context {
             CoordinateIndexCompletionContext::Constructor => {
                 &[ContextualKeyword::Range, ContextualKeyword::Linspace][..]
@@ -73,10 +73,10 @@ pub fn completion(
         return Some(keyword_items(keywords));
     }
 
-    let context = determine_completion_context(source, offset);
+    let context = determine_completion_context(&lexed, offset);
     let items = match context {
         CompletionContext::ImportItem(context) => complete_import_items(analysis, &context),
-        CompletionContext::GraphRef => complete_graph_refs(analysis, source, offset),
+        CompletionContext::GraphRef => complete_graph_refs(analysis, &lexed, offset),
         CompletionContext::TypeAnnotation => complete_types(analysis),
         CompletionContext::ConversionTarget => complete_conversion_targets(analysis),
         CompletionContext::TopLevel => complete_top_level(),
@@ -217,10 +217,11 @@ enum DagHeader {
 
 /// Derive the current DAG owner from the latest token stream without relying
 /// on declaration spans from a possibly older successful parse.
-fn current_graph_owner(root: &DagId, source: &str, offset: usize) -> Option<DagId> {
+fn current_graph_owner(root: &DagId, lexed: &LexedSource<'_>, offset: usize) -> Option<DagId> {
+    let source = lexed.text();
     let mut braces = Vec::new();
     let mut dag_header = DagHeader::None;
-    for &(token, span) in tokenize(source).tokens() {
+    for &(token, span) in lexed.tokens() {
         if span.offset() >= offset {
             break;
         }
@@ -279,10 +280,10 @@ fn current_graph_owner(root: &DagId, source: &str, offset: usize) -> Option<DagI
 /// reason — offering identifiers that cannot compile is a usability trap.
 fn complete_graph_refs(
     analysis: &AnalysisResult,
-    source: &str,
+    lexed: &LexedSource<'_>,
     offset: usize,
 ) -> Vec<CompletionItem> {
-    let Some(expected_owner) = current_graph_owner(analysis.symbol_table.owner(), source, offset)
+    let Some(expected_owner) = current_graph_owner(analysis.symbol_table.owner(), lexed, offset)
     else {
         return Vec::new();
     };
