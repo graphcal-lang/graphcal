@@ -1918,8 +1918,10 @@ fn same_leaf_imported_dimensions_resolve_qualified_in_declarations() {
         "unbound_qualifier",
         &format!("{modules}dim D = zzz::Length * Time;\n"),
     );
+    // The qualifier names no module alias: the resolver's error, as in a
+    // node annotation, not an unknown dimension (RES-14).
     assert!(
-        !ok && stderr.contains("D004") && stderr.contains("zzz::Length"),
+        !ok && !stderr.contains("D004") && stderr.contains("`zzz`"),
         "stderr: {stderr}"
     );
 

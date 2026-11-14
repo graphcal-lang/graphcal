@@ -302,3 +302,33 @@ fn specialized_type_projection_follows_the_projected_dimension() {
     let result = eval(&root);
     assert!((si_value(&result, "speed") - 3.0).abs() < 1e-12);
 }
+
+/// RES-14: a private dimension or unit of another module, used inside a
+/// `dim` / `unit` / `index` definition, is reported as private (as it is in a
+/// node), not as unknown.
+#[test]
+fn private_names_in_static_definitions_are_reported_as_private() {
+    let lib = "dim Hidden = Length;\nunit priv: Length = 3.0 m;\n";
+    for (main, expected) in [
+        (
+            "import p.lib as l;\ndim D2 = l::Hidden / Time;\n",
+            "private dimension `Hidden`",
+        ),
+        (
+            "import p.lib as l;\npub(bind) index Axis: l::Hidden;\n",
+            "private dimension `Hidden`",
+        ),
+        (
+            "import p.lib as l;\nunit u: Length = 2.0 l::priv;\n",
+            "private unit `priv`",
+        ),
+        (
+            "import p.lib as l;\nindex Axis = linspace(0.0 l::priv, 1.0 m, points: 3);\n",
+            "private unit `priv`",
+        ),
+    ] {
+        let (_dir, root) = write_project("p", &[("lib.gcl", lib), ("main.gcl", main)], "main.gcl");
+        let error = eval_error(&root);
+        assert!(error.contains(expected), "{main:?}: {error}");
+    }
+}

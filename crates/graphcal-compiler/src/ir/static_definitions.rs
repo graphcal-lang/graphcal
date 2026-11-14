@@ -30,6 +30,7 @@ use crate::hir::const_lower::{
 use crate::ir::module_definitions::StaticDefinitions;
 use crate::ir::prelude_definitions::PreludeDefinitionError;
 use crate::resolve::ModuleResolver;
+use crate::resolve::error::ModuleResolveError;
 use crate::resolve::prelude::PreludeTypeScope;
 use crate::resolved_name::{ResolvedDimName, ResolvedIndexName, ResolvedUnitName};
 use crate::semantic::dimension_table::{BaseDimensionInfo, DimensionFormattingRegistry};
@@ -43,6 +44,7 @@ use crate::semantic::unit_scale::{
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::index::IndexError;
+use crate::semantic_error::module::ModuleError;
 use crate::semantic_error::name::NameError;
 use crate::source_id::SourceId;
 use crate::syntax::ast::{BindableVisibility, UnitConstness};
@@ -75,7 +77,13 @@ pub enum DefinitionEvaluatorError {
 #[derive(Debug)]
 pub enum DimExprFailure {
     /// A written reference names no visible dimension.
-    Unknown(DimRef),
+    Unknown(Spanned<DimRef>),
+    /// A written reference names a dimension it cannot use, such as a
+    /// private dimension of another module.
+    Inaccessible {
+        error: ModuleResolveError,
+        span: Span,
+    },
     /// Exponent arithmetic overflowed.
     Overflow,
     /// A referenced dimension's own definition is invalid.
@@ -348,18 +356,30 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     /// Only a declaration of a source module (or the prelude) has a
     /// definition; a member of an included instance's namespace is not a
     /// Static name of the including module.
-    #[must_use]
-    pub fn resolve_dimension(&self, owner: &DagId, reference: &DimRef) -> Option<ResolvedDimName> {
+    ///
+    /// `Ok(None)` means the reference names no dimension defined here. Only
+    /// an unknown name falls back to the prelude.
+    ///
+    /// # Errors
+    ///
+    /// Returns the resolver's error when the reference names a dimension it
+    /// cannot use, such as a private one of another module.
+    pub fn resolve_dimension(
+        &self,
+        owner: &DagId,
+        reference: &DimRef,
+    ) -> Result<Option<ResolvedDimName>, ModuleResolveError> {
         let path = reference.to_name_path();
-        self.resolver
-            .resolve_dimension_path(owner, &path)
-            .map_or_else(
-                |_| self.prelude.resolve_dimension_path(&path),
-                |symbol| {
-                    Some(symbol.into_resolved())
-                        .filter(|identity| self.has_source(identity.owner()))
-                },
-            )
+        match self.resolver.resolve_dimension_path(owner, &path) {
+            Ok(symbol) => {
+                Ok(Some(symbol.into_resolved())
+                    .filter(|identity| self.has_source(identity.owner())))
+            }
+            Err(ModuleResolveError::UnknownName { .. }) => {
+                Ok(self.prelude.resolve_dimension_path(&path))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Whether `identity` has a definition this evaluator can produce: a
@@ -378,24 +398,37 @@ impl<'a> StaticDefinitionEvaluator<'a> {
     ///
     /// A runtime unit never crosses a pure `import` boundary: spelled
     /// through an imported module alias, it resolves to nothing.
-    #[must_use]
-    pub fn resolve_unit(&self, owner: &DagId, reference: &UnitRef) -> Option<ResolvedUnitName> {
+    ///
+    /// `Ok(None)` means the reference names no unit usable here. Only an
+    /// unknown name falls back to the prelude.
+    ///
+    /// # Errors
+    ///
+    /// Returns the resolver's error when the reference names a unit it
+    /// cannot use, such as a private one of another module.
+    pub fn resolve_unit(
+        &self,
+        owner: &DagId,
+        reference: &UnitRef,
+    ) -> Result<Option<ResolvedUnitName>, ModuleResolveError> {
         let through_import = reference.owner().is_some_and(|qualifier| {
             self.resolver.module_alias_role(
                 owner,
                 &crate::syntax::module_name::ModuleAliasName::classify(qualifier.first().clone()),
             ) == Some(crate::resolve::scope::ModuleAliasRole::ImportedDag)
         });
-        self.resolver
+        match self
+            .resolver
             .resolve_unit_path(owner, &reference.to_name_path())
-            .map_or_else(
-                |_| self.prelude.resolve_unit_ref(reference),
-                |symbol| {
-                    (self.has_source(symbol.resolved().owner())
-                        && (!through_import || symbol.kind().is_const()))
-                    .then(|| symbol.into_resolved())
-                },
-            )
+        {
+            Ok(symbol) => Ok((self.has_source(symbol.resolved().owner())
+                && (!through_import || symbol.kind().is_const()))
+            .then(|| symbol.into_resolved())),
+            Err(ModuleResolveError::UnknownName { .. }) => {
+                Ok(self.prelude.resolve_unit_ref(reference))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Evaluate one canonical dimension.
@@ -826,7 +859,9 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         let template_owner = projection.template().owner().clone();
         let mut bound = HashMap::new();
         for port in projection.ports() {
-            let Some(target) =
+            // An unknown or inaccessible binding target is left opaque; the
+            // include's binding validation reports it at the binding.
+            let Ok(Some(target)) =
                 self.resolve_dimension(owner, &port.target().clone().classify_leaf())
             else {
                 continue;
@@ -884,12 +919,23 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 continue;
             };
             let reference: DimRef = path.value.clone().classify_leaf();
-            let Some(identity) = self.resolve_dimension(owner, &reference) else {
-                return Err(DimExprFailure::Unknown(reference));
+            let identity = match self.resolve_dimension(owner, &reference) {
+                Ok(Some(identity)) => identity,
+                Ok(None) => {
+                    return Err(DimExprFailure::Unknown(Spanned::new(reference, path.span)));
+                }
+                Err(error) => {
+                    return Err(DimExprFailure::Inaccessible {
+                        error,
+                        span: path.span,
+                    });
+                }
             };
             let value = match overrides.get(&identity) {
                 Some(Some(value)) => value.clone(),
-                Some(None) => return Err(DimExprFailure::Unknown(reference)),
+                Some(None) => {
+                    return Err(DimExprFailure::Unknown(Spanned::new(reference, path.span)));
+                }
                 None => self
                     .dimension_in(&identity, view, site)
                     .map_err(|error| DimExprFailure::Definition(Box::new(error)))?,
@@ -1050,7 +1096,10 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 ));
             }
             for term in &def.unit_expr.terms {
-                let info = match self.resolve_unit(owner, &term.name.value) {
+                let info = match self
+                    .resolve_unit(owner, &term.name.value)
+                    .map_err(|error| unit_access_error(error, src, term.name.span))?
+                {
                     Some(target) => Some(self.unit_from(&target, Some(site))?),
                     None => None,
                 };
@@ -1066,7 +1115,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
             }
         }
         let (base_unit_dimension, base_scale) = self
-            .resolve_unit_expr(owner, &def.unit_expr, Some(site))?
+            .resolve_unit_expr(owner, &def.unit_expr, Some(site), src)?
             .map_err(|error| unit_resolve_error(error, src, def.unit_expr.span))?;
         if base_unit_dimension != dim {
             return Err(SemanticError::located(
@@ -1190,10 +1239,14 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         owner: &DagId,
         expr: &UnitExpr,
         site: Option<CycleSite<'a>>,
+        src: SourceId,
     ) -> Result<Result<(Dimension, PositiveFiniteScale), UnitResolveError>, SemanticError> {
         let mut infos = HashMap::new();
         for term in &expr.terms {
-            if let Some(target) = self.resolve_unit(owner, &term.name.value) {
+            if let Some(target) = self
+                .resolve_unit(owner, &term.name.value)
+                .map_err(|error| unit_access_error(error, src, term.name.span))?
+            {
                 let info = self.unit_from(&target, site)?;
                 infos.insert(term.name.value.clone(), info);
             }
@@ -1248,7 +1301,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 IndexKind::Concrete(ConcreteIndexKind::Named { variants: unique })
             }
             IndexDeclKind::Range { start, end, step } => {
-                let units = self.coordinate_units(owner, [&**start, &**end, &**step])?;
+                let units = self.coordinate_units(owner, [&**start, &**end, &**step], src)?;
                 let resolve = |unit: &UnitExpr| resolve_unit_expr_with(unit, |r| units.get(r));
                 let registry = self.display_registry(owner);
                 let typing = ConstTyping {
@@ -1267,7 +1320,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 self.coordinate_index(owner, &index.name.value, &axis, src, decl_span)?
             }
             IndexDeclKind::Linspace { start, end, points } => {
-                let units = self.coordinate_units(owner, [&**start, &**end])?;
+                let units = self.coordinate_units(owner, [&**start, &**end], src)?;
                 let resolve = |unit: &UnitExpr| resolve_unit_expr_with(unit, |r| units.get(r));
                 let registry = self.display_registry(owner);
                 let typing = ConstTyping {
@@ -1305,6 +1358,7 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         &mut self,
         owner: &DagId,
         exprs: [&ast::Expr; N],
+        src: SourceId,
     ) -> Result<HashMap<UnitRef, UnitInfo>, SemanticError> {
         fn unit_exprs<'e>(expr: &'e ast::Expr, found: &mut Vec<&'e UnitExpr>) {
             crate::stack::with_stack_growth(|| match &expr.kind {
@@ -1324,7 +1378,10 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         }
         let mut infos = HashMap::new();
         for term in found.into_iter().flat_map(|unit| &unit.terms) {
-            if let Some(target) = self.resolve_unit(owner, &term.name.value) {
+            if let Some(target) = self
+                .resolve_unit(owner, &term.name.value)
+                .map_err(|error| unit_access_error(error, src, term.name.span))?
+            {
                 infos.insert(term.name.value.clone(), self.unit(&target)?);
             }
         }
@@ -1390,15 +1447,20 @@ fn missing_definition_internal_error(detail: &str, src: SourceId) -> SemanticErr
 }
 
 /// Render a dimension-expression failure at its declaration.
+/// Render a dimension-expression failure; `span` is the whole expression,
+/// where an exponent overflow is reported.
 fn dim_expr_error(failure: DimExprFailure, src: SourceId, span: Span) -> SemanticError {
     match failure {
         DimExprFailure::Unknown(name) => SemanticError::located(
             src,
-            span,
+            name.span,
             DimensionError::UnknownDimension {
-                name: name.to_name_path(),
+                name: name.value.to_name_path(),
             },
         ),
+        DimExprFailure::Inaccessible { error, span } => {
+            SemanticError::located(src, span, ModuleError::resolution(error))
+        }
         DimExprFailure::Overflow => {
             SemanticError::located(src, span, DimensionError::DimensionOverflow)
         }
@@ -1413,6 +1475,12 @@ fn scale_error(
     span: Span,
 ) -> SemanticError {
     SemanticError::located(src, span, DimensionError::InvalidUnitScale { site, error })
+}
+
+/// Report a unit reference that names a unit it cannot use, such as a private
+/// unit of another module, at the reference.
+fn unit_access_error(error: ModuleResolveError, src: SourceId, span: Span) -> SemanticError {
+    SemanticError::located(src, span, ModuleError::resolution(error))
 }
 
 /// Convert a typed unit-resolution failure into a spanned diagnostic.
@@ -1722,6 +1790,8 @@ mod tests {
     ) -> Result<Dimension, SemanticError> {
         let identity = evaluator
             .resolve_dimension(owner, &DimRef::local(DimName::expect_valid(name)))
+            .ok()
+            .flatten()
             .unwrap_or_else(|| panic!("`{name}` must resolve"));
         evaluator.dimension(&identity)
     }
@@ -1837,6 +1907,7 @@ mod tests {
             evaluator
                 .resolve_dimension(&lib, &DimRef::local(DimName::expect_valid(name)))
                 .unwrap()
+                .unwrap()
         };
         let q = identity(&evaluator, "Q");
         let p = identity(&evaluator, "P");
@@ -1882,6 +1953,7 @@ mod tests {
         let lib = Project::id("lib");
         let q = evaluator
             .resolve_dimension(&lib, &DimRef::local(DimName::expect_valid("Q")))
+            .unwrap()
             .unwrap();
         let expr = DimExpr {
             terms: vec![ast::DimExprItem {
@@ -1909,7 +1981,7 @@ mod tests {
         let hidden = HashMap::from([(q, None)]);
         assert!(matches!(
             evaluator.evaluate_dim_expr_with_overrides(&lib, &expr, &hidden),
-            Err(DimExprFailure::Unknown(name)) if name.to_string() == "Q"
+            Err(DimExprFailure::Unknown(name)) if name.value.to_string() == "Q"
         ));
     }
 
@@ -1936,8 +2008,18 @@ mod tests {
             )
         };
 
-        assert!(evaluator.resolve_unit(&main, &qualified("furl")).is_some());
-        assert!(evaluator.resolve_unit(&main, &qualified("dyn")).is_none());
+        assert!(
+            evaluator
+                .resolve_unit(&main, &qualified("furl"))
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            evaluator
+                .resolve_unit(&main, &qualified("dyn"))
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
