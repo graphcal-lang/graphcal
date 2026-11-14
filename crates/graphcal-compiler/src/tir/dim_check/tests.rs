@@ -4481,7 +4481,7 @@ plot real_plot = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [real_plot, my_polt] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownPlotReference { owner_kind: "figure", name, .. }), .. }) if name.to_string() == "my_polt"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownPlotReference { owner_kind: crate::declaration_kind::DeclarationKind::Figure, name, .. }), .. }) if name.to_string() == "my_polt"),
         "got: {err:?}"
     );
 }
@@ -4500,7 +4500,7 @@ figure outer_figure = { plots: [inner] };";
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Name(NameError::CompositionReferencesNonPlot {
-                    actual_kind: "figure",
+                    actual_kind: crate::declaration_kind::DeclarationKind::Figure,
                     ..
                 }),
                 ..

@@ -7,6 +7,7 @@
 //! was lowered; property values are type-checked here (string literal vs.
 //! dimensionless number vs. boolean).
 
+use crate::declaration_kind::DeclarationKind;
 use crate::outcome::Outcome;
 use crate::semantic::checked_type::Symbolic;
 use crate::semantic_error::dimension::DimensionError;
@@ -99,8 +100,11 @@ fn check_plot_references(
 ) -> Result<(), SemanticError> {
     let owners = dag
         .figures()
-        .map(|f| ("figure", f.name(), &f.plot_names))
-        .chain(dag.layers().map(|l| ("layer", l.name(), &l.plot_names)));
+        .map(|f| (DeclarationKind::Figure, f.name(), &f.plot_names))
+        .chain(
+            dag.layers()
+                .map(|l| (DeclarationKind::Layer, l.name(), &l.plot_names)),
+        );
     for (owner_kind, owner, plot_names) in owners {
         for (i, reference) in plot_names.iter().enumerate() {
             let local = reference.value.as_bare();
@@ -108,9 +112,9 @@ fn check_plot_references(
                 || dag.included_plots.iter().any(|p| p.name == reference.value);
             if !is_known_plot {
                 let actual_kind = if dag.figures().any(|f| Some(f.name()) == local) {
-                    Some("figure")
+                    Some(DeclarationKind::Figure)
                 } else if dag.layers().any(|l| Some(l.name()) == local) {
-                    Some("layer")
+                    Some(DeclarationKind::Layer)
                 } else {
                     None
                 };

@@ -148,19 +148,19 @@ pub enum NameError {
     },
     #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
     UnknownPlotReference {
-        owner_kind: &'static str,
+        owner_kind: crate::declaration_kind::DeclarationKind,
         owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
     },
     #[error("`{name}` is a {actual_kind}, not a plot")]
     CompositionReferencesNonPlot {
-        owner_kind: &'static str,
-        actual_kind: &'static str,
+        owner_kind: crate::declaration_kind::DeclarationKind,
+        actual_kind: crate::declaration_kind::DeclarationKind,
         name: ScopedName,
     },
     #[error("{owner_kind} `{owner}` lists plot `{name}` more than once")]
     DuplicatePlotReference {
-        owner_kind: &'static str,
+        owner_kind: crate::declaration_kind::DeclarationKind,
         owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
     },
