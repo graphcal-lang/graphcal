@@ -702,6 +702,7 @@ impl crate::tir::typed::InstantiatedTir {
             cancellation,
         )?;
         let bodies = graph.join(
+            &tir.dags,
             canonical.map_ref(|canonical| canonical.bodies.clone()),
             checked.map_ref(|checked| checked.bodies.clone()),
         );

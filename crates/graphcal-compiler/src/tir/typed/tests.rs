@@ -2072,7 +2072,7 @@ fn instance_graph_splits_canonical_bodies_from_materialized_instances() {
         })
         .unwrap();
     // The joined table pairs every local body with its own fact.
-    let joined = graph.join(canonical, instances);
+    let joined = graph.join(&tir.dags, canonical, instances);
     assert_eq!(tir.dags.with_local_facts(&joined).count(), 4);
     assert!(
         tir.dags
@@ -2162,6 +2162,13 @@ fn imported_slots_keep_their_position_when_localized() {
     assert!(tir.dags.shared(leaf_id).is_none());
     assert_eq!(tir.dags.local_iter().count(), 2);
     assert_eq!(tir.dags.len(), 2);
+
+    // The facts mapped before localization no longer match the local
+    // bodies, so pairing them fails loudly instead of truncating.
+    let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tir.dags.map_local_facts(facts, |_, fact| fact)
+    }));
+    assert!(stale.is_err());
 }
 
 #[test]
