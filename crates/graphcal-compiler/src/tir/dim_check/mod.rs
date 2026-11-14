@@ -311,7 +311,6 @@ fn check_ineffective_conversions_inner(
         | ExprKind::EpochLiteral(_)
         | ExprKind::ZonedDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
-        | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)

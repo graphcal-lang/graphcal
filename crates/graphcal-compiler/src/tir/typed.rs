@@ -1525,7 +1525,6 @@ impl HirPolicyChecker<'_> {
             | crate::hir::expr::ExprKind::EpochLiteral(_)
             | crate::hir::expr::ExprKind::ZonedDateTimeLiteral(_)
             | crate::hir::expr::ExprKind::IanaTimeZoneLiteral(_)
-            | crate::hir::expr::ExprKind::TypeSystemRef(_)
             | crate::hir::expr::ExprKind::ConstRef(_)
             | crate::hir::expr::ExprKind::LocalRef(_) => Ok(()),
             crate::hir::expr::ExprKind::QuantityLiteral { unit, .. } => {

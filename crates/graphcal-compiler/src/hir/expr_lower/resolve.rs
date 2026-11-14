@@ -237,8 +237,10 @@ impl<'a> ExprLowerer<'a> {
     /// 1. Lexical locals (for/scan/unfold/match bindings)
     /// 2. Built-in Term constants (`PI`, `E`, ...)
     /// 3. Constructors (a bare constructor name is a nullary call)
-    /// 4. Type-system names (struct types, dimensions, indexes, variants)
-    /// 5. Declarations (const/node/param)
+    /// 4. Declarations (const/node/param), which a bare name cannot read
+    ///
+    /// Struct types, dimensions and indexes live in other namespaces, so a
+    /// bare static name in value position is an unknown Term name.
     ///
     /// A time-scale spelling participates only after Term lookup fails, to
     /// produce a targeted wrong-namespace diagnostic rather than resolving a

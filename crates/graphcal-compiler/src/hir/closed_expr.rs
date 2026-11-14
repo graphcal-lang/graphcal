@@ -95,7 +95,6 @@ const fn validate_literal_node(expr: &Expr<Draft>) -> Result<(), ClosedExpressio
         }
         ExprKind::Error(no_error) => no_error.absurd(),
         ExprKind::StringLiteral(_)
-        | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)

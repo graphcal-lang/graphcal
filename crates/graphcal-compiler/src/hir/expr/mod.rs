@@ -34,7 +34,7 @@ pub use model::{
     AssertBody, ConstRef, Expr, ExprKind, ExternFnRef, FieldInit, ForBinding, ForBindingIndex,
     FunctionRef, IndexArg, IndexVariantRef, LocalDef, LocalId, MapEntry, MapEntryKey, MatchArm,
     MatchPattern, ParamBinding, PatternBinding, ResolvedUnitExpr, ResolvedUnitExprItem,
-    ResolvedUnitRef, TodoHole, TypeSystemRef, UnappliedFunctionRef, UnfoldRecurrence,
+    ResolvedUnitRef, TodoHole, UnappliedFunctionRef, UnfoldRecurrence,
 };
 pub use model::{Completeness, Draft, NoErrorNode, Strict};
 pub(crate) use refine::{Refinement, refine_assert_body, refine_expr};

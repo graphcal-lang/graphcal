@@ -9,7 +9,6 @@ use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::dimension_mismatch::{
     MismatchOperand, MismatchRule, OperandExpectation,
 };
-use crate::semantic_error::name::NameError;
 use crate::semantic_error::structure::StructError;
 use crate::semantic_error::structure::UnknownLocal;
 
@@ -54,16 +53,6 @@ impl Infer<'_> {
                         )),
                         found: Box::new(MismatchOperand::ContextualStringLiteral),
                         help: Box::new(MismatchRule::StringLiteralContext),
-                    },
-                )
-                .into());
-            }
-            ExprKind::TypeSystemRef(name) => {
-                return Err(SemanticError::located(
-                    self.env.src,
-                    name.span,
-                    NameError::TypeSystemRefAsValue {
-                        reference: name.value.clone(),
                     },
                 )
                 .into());

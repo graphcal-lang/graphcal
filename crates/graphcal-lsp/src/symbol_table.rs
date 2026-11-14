@@ -403,15 +403,6 @@ impl<'a> HirRefCollector<'a> {
                     Self::reference(table, local.span, key.clone());
                 }
             }
-            hir::expr::ExprKind::TypeSystemRef(type_ref) => {
-                let target = match &type_ref.value {
-                    hir::expr::TypeSystemRef::Type(name) => SymbolKey::StructType(name.clone()),
-                    hir::expr::TypeSystemRef::Dimension(name) => SymbolKey::Dimension(name.clone()),
-                    hir::expr::TypeSystemRef::Index(name) => SymbolKey::Index(name.clone()),
-                    hir::expr::TypeSystemRef::IndexVariant(variant) => Self::variant_key(variant),
-                };
-                Self::reference(table, type_ref.span, target);
-            }
             hir::expr::ExprKind::VariantLiteral(variant) => {
                 Self::variant_reference(variant, table);
             }

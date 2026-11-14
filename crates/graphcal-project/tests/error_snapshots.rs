@@ -719,6 +719,15 @@ fn error_prelude_dimension_as_value() {
     insta::assert_snapshot!(rendered);
 }
 
+/// A static name in value position is an unknown Term name: there is no
+/// separate type-system-as-value diagnostic.
+#[test]
+fn error_index_name_as_value() {
+    let source = "index I = { a, b };\nnode x: Length = 2.0 * I;\n";
+    let rendered = render_error(source, "index_name_as_value.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 #[test]
 fn error_index_label_as_type() {
     let source = include_str!("../../../tests/fixtures/invalid/index_label_as_type.gcl");

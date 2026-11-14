@@ -141,7 +141,6 @@ where
         ExprKind::EpochLiteral(value) => ExprKind::EpochLiteral(value),
         ExprKind::ZonedDateTimeLiteral(value) => ExprKind::ZonedDateTimeLiteral(value),
         ExprKind::IanaTimeZoneLiteral(value) => ExprKind::IanaTimeZoneLiteral(value),
-        ExprKind::TypeSystemRef(value) => ExprKind::TypeSystemRef(value),
         ExprKind::GraphRef(Spanned { value, span }) => {
             ExprKind::GraphRef(Spanned::new(refinement.decl_ref(value), span))
         }
