@@ -62,8 +62,16 @@ fn field_kind(selector: u8) -> StructFieldKind {
     }
 }
 
+/// A raw plugin return, with the slots and shape it was built from (the
+/// evaluator's `HostArray` does not expose them outside its crate).
+struct Returned {
+    value: HostFnValue,
+    slots: Vec<f64>,
+    shape: Vec<usize>,
+}
+
 /// The declared result kind and the raw value a plugin returned for it.
-fn result_and_value(input: &mut Input<'_>) -> Option<(Kind, HostFnValue)> {
+fn result_and_value(input: &mut Input<'_>) -> Option<(Kind, Returned)> {
     let declared = match input.byte() % 3 {
         0 => ResultKind::Value(ParamKind::Scalar(scalar_kind(input.byte()))),
         1 => {
@@ -90,12 +98,35 @@ fn result_and_value(input: &mut Input<'_>) -> Option<(Kind, HostFnValue)> {
         .map(|_| usize::from(input.byte()) % 9)
         .collect::<Vec<_>>();
     let slots = std::mem::replace(input, Input(&[])).slots();
-    let raw = match form {
+    let value = match form {
         0 => HostFnValue::F64(slots.first().copied().unwrap_or_default()),
-        1 => HostFnValue::Array(HostArray::try_new(shape, slots).ok()?),
-        _ => HostFnValue::Record(slots),
+        1 => HostFnValue::Array(HostArray::try_new(shape.clone(), slots.clone()).ok()?),
+        _ => HostFnValue::Record(slots.clone()),
     };
-    Some((declared, raw))
+    Some((
+        declared,
+        Returned {
+            value,
+            slots,
+            shape,
+        },
+    ))
+}
+
+/// The slot an accepted `Bool` came from must encode it (either signed zero
+/// encodes `false`).
+fn assert_bool_round_trips(value: bool, slot: f64) {
+    let expected = if value { 1.0 } else { 0.0 };
+    assert!(slot == expected, "Bool {value} accepted from slot {slot}");
+}
+
+/// The slot an accepted quantity came from must be its exact bits.
+fn assert_quantity_round_trips(value: f64, slot: f64) {
+    assert_eq!(
+        value.to_bits(),
+        slot.to_bits(),
+        "quantity {value} accepted from slot {slot}"
+    );
 }
 
 /// The slot an accepted `Int` came from must encode it exactly.
@@ -114,40 +145,56 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     let mut input = Input(data);
-    let Some((declared, raw)) = result_and_value(&mut input) else {
+    let Some((declared, returned)) = result_and_value(&mut input) else {
         return;
     };
-    let Ok(decoded) = decode_result(&declared, &raw) else {
+    let Ok(decoded) = decode_result(&declared, &returned.value) else {
         return;
     };
 
-    match (decoded, &raw) {
-        (ValidatedHostResult::Bool(_), HostFnValue::F64(slot)) => {
-            assert!(*slot == 0.0 || *slot == 1.0, "Bool slot {slot} accepted");
+    match (decoded, &returned.value) {
+        (ValidatedHostResult::Bool(value), HostFnValue::F64(slot)) => {
+            assert_bool_round_trips(value, *slot);
         }
         (ValidatedHostResult::Int(value), HostFnValue::F64(slot)) => {
             assert_int_round_trips(value, *slot);
         }
         (ValidatedHostResult::Quantity { value, .. }, HostFnValue::F64(slot)) => {
-            assert_eq!(value.get().to_bits(), slot.to_bits());
+            assert_quantity_round_trips(value.get(), *slot);
         }
         (ValidatedHostResult::Array(array), HostFnValue::Array(_)) => {
-            let expected = array.shape().iter().product::<usize>();
-            let len = match array.values() {
-                ValidatedHostArrayValues::Quantity { values, .. } => values.len(),
-                ValidatedHostArrayValues::Bool(values) => values.len(),
-                ValidatedHostArrayValues::Int(values) => values.len(),
-            };
-            assert_eq!(len, expected, "array values must fill its shape");
+            assert_eq!(array.shape(), returned.shape, "the array keeps its shape");
+            let slots = &returned.slots;
+            match array.values() {
+                ValidatedHostArrayValues::Quantity { values, .. } => {
+                    assert_eq!(values.len(), slots.len());
+                    for (value, slot) in values.iter().zip(slots) {
+                        assert_quantity_round_trips(value.get(), *slot);
+                    }
+                }
+                ValidatedHostArrayValues::Bool(values) => {
+                    assert_eq!(values.len(), slots.len());
+                    for (value, slot) in values.iter().zip(slots) {
+                        assert_bool_round_trips(*value, *slot);
+                    }
+                }
+                ValidatedHostArrayValues::Int(values) => {
+                    assert_eq!(values.len(), slots.len());
+                    for (value, slot) in values.iter().zip(slots) {
+                        assert_int_round_trips(*value, *slot);
+                    }
+                }
+            }
         }
         (ValidatedHostResult::Struct { record, fields }, HostFnValue::Record(slots)) => {
             assert_eq!(fields.len(), record.fields().len());
+            assert_eq!(fields.len(), slots.len());
             for (field, slot) in fields.iter().zip(slots) {
                 match field.value() {
-                    ValidatedHostFieldValue::Bool(_) => assert!(*slot == 0.0 || *slot == 1.0),
+                    ValidatedHostFieldValue::Bool(value) => assert_bool_round_trips(*value, *slot),
                     ValidatedHostFieldValue::Int(value) => assert_int_round_trips(*value, *slot),
                     ValidatedHostFieldValue::Quantity(value) => {
-                        assert_eq!(value.get().to_bits(), slot.to_bits());
+                        assert_quantity_round_trips(value.get(), *slot);
                     }
                 }
             }
