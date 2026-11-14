@@ -143,7 +143,6 @@ impl ModelConstructorSchema {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelUnitSchema {
     label: String,
-    scale_to_si: f64,
 }
 
 impl ModelUnitSchema {
@@ -151,12 +150,6 @@ impl ModelUnitSchema {
     #[must_use]
     pub fn label(&self) -> &str {
         &self.label
-    }
-
-    /// Multiplicative scale from this unit to SI.
-    #[must_use]
-    pub const fn scale_to_si(&self) -> f64 {
-        self.scale_to_si
     }
 }
 
@@ -413,10 +406,7 @@ fn model_quantity_schema(
             )
         })
         .flatten()
-        .map(|label| ModelUnitSchema {
-            label,
-            scale_to_si: 1.0,
-        });
+        .map(|label| ModelUnitSchema { label });
     ModelQuantitySchema {
         dimension: dimension.clone(),
         canonical_unit,
