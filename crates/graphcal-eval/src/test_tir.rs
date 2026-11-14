@@ -4,7 +4,6 @@
 use std::sync::Arc;
 
 use graphcal_compiler::ir::lower::lower;
-use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
@@ -32,10 +31,8 @@ pub(crate) fn checked_tir_from_source(
     let file = desugared;
     let mut sources = SourceRegistry::new();
     let src = sources.register("test.gcl", Arc::new(source.to_string()));
-    let ir = lower(&file, "test.gcl", src).unwrap();
-    let resolver =
-        ModuleResolver::without_edges([(ir.dag_id().clone(), file.declarations.as_slice())])
-            .unwrap();
+    let graphcal_compiler::ir::lower::LoweredFile { hir: ir, resolver } =
+        lower(&file, "test.gcl", src).unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();

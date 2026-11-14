@@ -520,7 +520,9 @@ fn repeated_store_insertion_preserves_canonical_definition_handles() {
     let file = crate::desugar::desugared_ast::File::from(raw_file);
     let src = crate::source_registry::SourceRegistry::new()
         .register("store.gcl", Arc::new(source.to_string()));
-    let ir = crate::ir::lower::lower(&file, "store.gcl", src).unwrap();
+    let ir = crate::ir::lower::lower(&file, "store.gcl", src)
+        .unwrap()
+        .hir;
     let owner = ir.dag_id().clone();
     let index_name = ResolvedIndexName::for_test(
         owner.clone(),
@@ -760,7 +762,7 @@ fn lower_store_hir(source: &str) -> crate::ir::model::HirDag {
     let file = crate::desugar::desugared_ast::File::from(raw);
     let src = crate::source_registry::SourceRegistry::new()
         .register("same.gcl", Arc::new(source.to_string()));
-    crate::ir::lower::lower(&file, "same.gcl", src).unwrap()
+    crate::ir::lower::lower(&file, "same.gcl", src).unwrap().hir
 }
 
 #[test]
@@ -1046,10 +1048,8 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
         .register("test.gcl", Arc::new(source.to_string()));
     let root_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
-    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(root_id.clone(), &file.declarations);
-    let resolver = modules.build().unwrap();
+    let crate::ir::lower::LoweredFile { hir: ir, resolver } =
+        crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
@@ -1220,10 +1220,8 @@ fn module_aware_type_resolve_records_semantic_deps() {
         .register("test.gcl", Arc::new(source.to_string()));
     let dag_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
-    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(dag_id.clone(), &file.declarations);
-    let resolver = modules.build().unwrap();
+    let crate::ir::lower::LoweredFile { hir: ir, resolver } =
+        crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();

@@ -133,10 +133,8 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TirDraft, crate::source
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = make_src(source);
-    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(ir.dag_id().clone(), &file.declarations);
-    let resolver = modules.build().unwrap();
+    let crate::ir::lower::LoweredFile { hir: ir, resolver } =
+        crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
