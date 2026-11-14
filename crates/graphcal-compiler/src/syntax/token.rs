@@ -378,6 +378,15 @@ impl ContextualKeyword {
     pub fn matches(self, spelling: &str) -> bool {
         spelling == self.as_str()
     }
+
+    /// The contextual keyword spelled `spelling`, if any.
+    #[must_use]
+    pub fn parse(spelling: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|keyword| keyword.matches(spelling))
+    }
 }
 
 impl std::fmt::Display for ContextualKeyword {
