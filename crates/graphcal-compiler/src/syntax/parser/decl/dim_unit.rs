@@ -126,15 +126,14 @@ impl Parser<'_> {
         self.expect(Token::Colon)?;
         let dim_type = self.parse_dim_expr()?;
 
-        if self.lexer.peek() != Some(&Token::Eq) {
-            // Non-base units need a scale body; use `base unit` for a canonical unit.
-            return Err(Self::unexpected(
-                Expected::UnitDefinition,
-                Token::Semicolon,
-                name.span,
-            ));
+        // Non-base units need a scale body; use `base unit` for a canonical unit.
+        match self.lexer.next_token() {
+            Some((Token::Eq, _)) => {}
+            Some((token, span)) => {
+                return Err(Self::unexpected(Expected::UnitDefinition, token, span));
+            }
+            None => return Err(self.unexpected_eof(Expected::UnitDefinition)),
         }
-        self.lexer.next_token();
         let definition = self.parse_unit_def()?;
         let body = match constness {
             UnitConstness::Const => UnitBody::Const(definition),

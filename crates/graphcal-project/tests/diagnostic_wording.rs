@@ -69,3 +69,18 @@ fn map_entries_of_different_types_report_the_map_rule() {
     let source = "index P = { A, B };\nnode x: Length[P] = { P#A: 1.0 m, P#B: 2.0 s };\n";
     insta::assert_snapshot!(render_error(source, "map_entries.gcl"));
 }
+
+/// FE-15: parse diagnostics name what was actually found, where it was found.
+#[test]
+fn parse_diagnostics_report_what_was_found() {
+    for (name, source) in [
+        ("unit_missing_eq", "unit kfoot: Length 304.8 m;\n"),
+        ("exponent_out_of_range", "node x: Length = 1.0 m^99999999999;\n"),
+        ("misplaced_pub", "pub param x: Length = 1.0 m;\n"),
+    ] {
+        insta::assert_snapshot!(
+            format!("parse_diagnostic_{name}"),
+            render_error(source, &format!("{name}.gcl"))
+        );
+    }
+}

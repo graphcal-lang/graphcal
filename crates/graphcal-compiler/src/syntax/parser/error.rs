@@ -309,7 +309,21 @@ const fn plural(count: usize, singular: &'static str, plural: &'static str) -> &
 impl fmt::Display for ParseErrorKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnexpectedToken { found, .. } => write!(f, "unexpected token `{found}`"),
+            Self::UnexpectedToken { found, .. } => match found {
+                Found::Token(_) | Found::Name(_) | Found::Path(_) => {
+                    write!(f, "unexpected token `{found}`")
+                }
+                // The other findings are not tokens and quote themselves.
+                Found::EndOfFile
+                | Found::Pub
+                | Found::PubBind
+                | Found::EntryCount(_)
+                | Found::EmptyBody
+                | Found::RecordStyleField
+                | Found::NonDagImport
+                | Found::Attributes
+                | Found::EmptyAxisList => write!(f, "unexpected {found}"),
+            },
             Self::SliceAxisMismatch { found, .. } => write!(f, "unexpected token `{found}`"),
             Self::UnexpectedEof { .. } => f.write_str("unexpected end of file"),
             Self::InvalidNumber { .. } => f.write_str("invalid number literal"),
