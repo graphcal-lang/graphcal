@@ -17,29 +17,17 @@ use proptest::prelude::*;
 pub struct GenerationLimits {
     /// Maximum expression-tree depth.
     pub expression_depth: u8,
-    /// Maximum declarations rendered into one generated file.
-    pub declarations_per_file: u8,
-    /// Maximum source files in one generated project.
-    pub files: u8,
-    /// Maximum named variants in one index.
-    pub index_variants: u8,
 }
 
 impl GenerationLimits {
     /// Conservative bounds suitable for pull-request tests and fuzz targets.
     pub const SMOKE: Self = Self {
         expression_depth: 4,
-        declarations_per_file: 16,
-        files: 3,
-        index_variants: 4,
     };
 
     /// Deeper bounds for long local or nightly fuzz campaigns.
     pub const DEEP: Self = Self {
         expression_depth: 7,
-        declarations_per_file: 32,
-        files: 5,
-        index_variants: 8,
     };
 }
 
