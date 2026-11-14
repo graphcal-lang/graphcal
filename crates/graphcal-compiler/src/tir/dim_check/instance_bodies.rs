@@ -179,7 +179,7 @@ fn check_instance_defaults(
         if !inherited {
             check_decl_expr_type(
                 ctx,
-                entry.name(),
+                crate::ir::entry::ValueOrigin::Source,
                 &entry.identity(),
                 &entry.type_ann,
                 default,

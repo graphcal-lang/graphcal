@@ -524,6 +524,7 @@ fn entry<E>(
             Decl::Const(ConstEntry {
                 doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
+                origin: crate::ir::entry::ValueOrigin::Source,
                 type_ann: InScope::new(c.type_ann.clone(), dag_id.clone()),
                 expr: InScope::new(c.value.clone(), dag_id.clone()),
                 span: decl.span,
@@ -534,6 +535,7 @@ fn entry<E>(
             Decl::Node(NodeEntry {
                 doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
+                origin: crate::ir::entry::ValueOrigin::Source,
                 type_ann: InScope::new(n.type_ann.clone(), dag_id.clone()),
                 definition: InScope::new(n.value.clone(), dag_id.clone()),
                 span: decl.span,

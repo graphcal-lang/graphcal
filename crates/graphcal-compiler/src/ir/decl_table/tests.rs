@@ -41,6 +41,7 @@ fn node(spelling: &str, declaration_owner: DagId) -> Decl<Bare> {
     Decl::Node(NodeEntry {
         doc: None,
         identity: ResolvedDeclName::for_test(declaration_owner, name(spelling)),
+        origin: crate::ir::entry::ValueOrigin::Source,
         type_ann: (),
         definition: (),
         span: Span::new(0, 0),
@@ -161,6 +162,7 @@ fn try_map_transforms_by_rank_and_preserves_order() {
                     Decl::Node(entry) => Decl::Node(NodeEntry {
                         doc: entry.doc,
                         identity: entry.identity,
+                        origin: entry.origin,
                         type_ann: (),
                         definition: position,
                         span: entry.span,
