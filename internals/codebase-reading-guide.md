@@ -2206,9 +2206,9 @@ figure, static or live, is themed.
 498. `crates/graphcal-project/src/project_compiler/pipeline.rs`
 499. `crates/graphcal-project/src/project_compiler/session.rs`
 500. `crates/graphcal-project/src/prepare/prepared/model_axis.rs`
-501. `crates/graphcal-project/src/prepare/prepared/binding_compile.rs`
-502. `crates/graphcal-project/src/prepare/prepared/model_port.rs`
-503. `crates/graphcal-project/src/prepare/prepared/model_unit.rs`
+501. `crates/graphcal-project/src/prepare/prepared/model_unit.rs`
+502. `crates/graphcal-project/src/prepare/prepared/binding_compile.rs`
+503. `crates/graphcal-project/src/prepare/prepared/model_port.rs`
 504. `crates/graphcal-project/src/prepare/prepared/model_value.rs`
 505. `crates/graphcal-project/src/prepare/prepared.rs`
 506. `crates/graphcal-project/src/prepare/prepared/model_session.rs`

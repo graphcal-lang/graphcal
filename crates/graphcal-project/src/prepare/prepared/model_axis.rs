@@ -13,7 +13,7 @@ use graphcal_model_protocol::{
     IndexName, LabelError, ModuleName, PackageName, UnsupportedReason, VariantName,
 };
 
-use super::{ModelIndexKind, ModelIndexSchema};
+use crate::prepare::model_schema::{ModelIndexKind, ModelIndexSchema};
 
 /// Why the protocol cannot carry a port's type: a stable reason and a
 /// human-readable message.

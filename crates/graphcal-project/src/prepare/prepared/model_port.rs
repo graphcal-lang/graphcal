@@ -3,11 +3,19 @@
 use graphcal_compiler::outcome::Outcome;
 use graphcal_eval::eval::runtime::{FailureOrigin, RootFailure, RootOutcome};
 
-use super::{
-    Arc, CheckedType, CompileError, DeclName, Error, HashSet, ModelSchemaGraph, ModelValueSchema,
-    ParameterBindingRow, ParameterPosition, PreparedProject, ResolvedDeclName, Span, TimeScale,
-    Value,
-};
+use super::binding_compile::ParameterBindingRow;
+use super::{ParameterPosition, PreparedProject};
+use crate::compile_error::CompileError;
+use crate::prepare::model_schema::{ModelSchemaGraph, ModelValueSchema};
+use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic::checked_type::CheckedType;
+use graphcal_compiler::semantic::time_scale::TimeScale;
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::span::Span;
+use graphcal_eval::eval::types::Value;
+use std::collections::HashSet;
+use std::sync::Arc;
+use thiserror::Error;
 
 /// Inclusive lower and upper bounds for one external input family.
 ///

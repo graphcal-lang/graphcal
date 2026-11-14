@@ -9,11 +9,12 @@
 
 use std::fmt::Write as _;
 
+use super::PreparedProject;
 use super::binding_compile::{
     StructuredBindingError, StructuredBindingErrorKind, StructuredBindingPathSegment,
     StructuredValueExpr, structured_error,
 };
-use super::{ModelIndexKind, ModelIndexSchema, ModelValueSchema, PreparedProject};
+use crate::prepare::model_schema::{ModelIndexKind, ModelIndexSchema, ModelValueSchema};
 
 /// The labels a table spells for the entries of one axis.
 enum AxisLabels<'a> {

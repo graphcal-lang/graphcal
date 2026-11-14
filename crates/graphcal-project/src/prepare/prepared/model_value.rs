@@ -28,8 +28,9 @@ use graphcal_model_protocol::{
 };
 use thiserror::Error;
 
+use super::PreparedProject;
 use super::model_port::OutputProjectionError;
-use super::{ModelValueSchema, PreparedProject};
+use crate::prepare::model_schema::ModelValueSchema;
 
 /// One constructor of an algebraic port with its field codecs.
 #[derive(Debug, Clone)]
