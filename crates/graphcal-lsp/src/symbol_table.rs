@@ -298,6 +298,10 @@ impl<'a> HirRefCollector<'a> {
         });
     }
 
+    /// Register an expression-scoped local variable: build its `SymbolKey`,
+    /// insert a `LocalVar` definition into the table, and record the key for
+    /// the local's later references. Used by expression forms such as `for`,
+    /// `scan`, and `unfold`.
     fn define_local(
         &mut self,
         local: &hir::expr::LocalDef,
@@ -896,7 +900,7 @@ pub struct ReferenceInfo {
 #[derive(Debug, Clone)]
 pub struct InlayHintEntry {
     /// Key into [`SymbolTable::definitions`] for this declaration. Shared
-    /// via `Rc` with [`SymbolTable::defs_by_name_span`] so each key is
+    /// via `Arc` with [`SymbolTable::defs_by_name_span`] so each key is
     /// allocated once and refcounted across the two sorted indices.
     pub key: Arc<SymbolId>,
     /// LSP position of the declaration's name start.
@@ -2273,12 +2277,9 @@ fn collect_selected_names(
     }
 }
 
-/// Register an expression-scoped local variable: build the `SymbolId`,
-/// insert a `LocalVar` definition into the table, and bind the name in the
-/// current scope. Used by expression forms such as `Scan` and `Unfold`.
+/// The symbol of each generic parameter in scope, by name.
 type GenericParamSymbolScope = HashMap<GenericParamName, SymbolId>;
 
-/// Collect references from a type expression outside a generic declaration.
 /// Whether a lowered body may contain `todo<T> { … }` holes (constant and
 /// node formulas).
 #[derive(Debug, Clone, Copy)]
@@ -2287,6 +2288,7 @@ enum BodyHoles {
     Allowed,
 }
 
+/// Collect references from a type expression outside a generic declaration.
 fn collect_type_expr_refs(
     type_expr: &graphcal_compiler::desugar::desugared_ast::TypeExpr,
     table: &mut SymbolTable,

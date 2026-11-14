@@ -1024,10 +1024,12 @@ async fn analyze_store_publish_once(
 ///
 /// Mid-edit buffers fail to parse more often than not (the parser has no
 /// error recovery), so replacing the cached analysis with an empty symbol
-/// table would make completion/hover/goto go dark ~300 ms after every
-/// keystroke (#834). Instead, only the diagnostics are refreshed; symbol
-/// queries keep answering from the last successfully analyzed state (whose
-/// `source` snapshot they remain consistent with).
+/// table would make completion and signature help go dark ~300 ms after
+/// every keystroke (#834). Instead, only the diagnostics are refreshed;
+/// coordinate-free features (completion, signature help) keep answering
+/// from the last successfully analyzed state. Coordinate features (hover,
+/// goto, references, inlay hints) answer only for the text the analysis
+/// covers, so they return nothing until the buffer parses again.
 fn store_analysis(docs: &mut HashMap<Url, StoredDocument>, uri: &Url, analysis: AnalysisResult) {
     if !analysis.buffer_parsed
         && let Some(prev) = docs.get_mut(uri)
@@ -3817,8 +3819,8 @@ node bad: Mass = mass + length;
 
     /// Issue #834: a parse-failure analysis (the normal state mid-keystroke)
     /// must not replace the cached symbol state with an empty table —
-    /// completion/hover/goto keep answering from the last good analysis
-    /// while only the diagnostics refresh.
+    /// completion and signature help keep answering from the last good
+    /// analysis while only the diagnostics refresh.
     #[test]
     fn parse_failure_keeps_last_good_symbol_state() {
         let uri = untitled_uri();
