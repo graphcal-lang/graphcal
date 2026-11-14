@@ -208,7 +208,7 @@ pub enum VisibilityError {
     /// vacuous for A8 — their substitution is total — so they never
     /// trigger this error.
     #[error(
-        "include overrides {overridden_kind} `{overridden}` but does not re-bind `{orphan_decl}`, whose default mentions `{detail}`"
+        "include overrides {overridden_kind} `{overridden}` but does not re-bind `{orphan_decl}`, whose default mentions {detail}"
     )]
     IncludeMustReconcileOverride {
         overridden: NameAtom,

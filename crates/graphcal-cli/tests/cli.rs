@@ -6081,8 +6081,8 @@ fn eval_plot_mismatched_channel_axes_is_an_error() {
     assert!(
         stderr.contains("graphcal::D034")
             && stderr.contains("incompatible index axes")
-            && stderr.contains("mismatch.Step")
-            && stderr.contains("mismatch.Pair"),
+            && stderr.contains("`x` ranges over `Step`")
+            && stderr.contains("`y` ranges over `Pair`"),
         "expected a static axes mismatch report: {stderr}"
     );
     assert!(

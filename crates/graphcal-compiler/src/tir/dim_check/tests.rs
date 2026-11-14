@@ -4285,8 +4285,8 @@ plot p = {
     assert!(matches!(
         error,
         SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. })
-            if channels.iter().any(|channel| channel.to_string().contains("test.Step"))
-                && channels.iter().any(|channel| channel.to_string().contains("test.Pair"))
+            if channels.iter().any(|channel| channel.to_string() == "`x` ranges over `Step`")
+                && channels.iter().any(|channel| channel.to_string() == "`y` ranges over `Pair`")
     ));
 }
 

@@ -8,7 +8,6 @@ use thiserror::Error;
 
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::generic_param::{GenericArgArity, GenericParamId};
-use crate::hir::expr::LocalId;
 use crate::hir::nominal_cycle::TypeReferenceSite;
 use crate::nat::NatPolyForm;
 use crate::resolved_name::ResolvedStructTypeName;
@@ -33,7 +32,14 @@ impl std::fmt::Display for SymbolicGenericArgument {
         match self {
             Self::Index(index) => index.fmt(f),
             Self::Nat(form) => f.write_str(&form.format()),
-            Self::Type(ty) => write!(f, "{ty:?}"),
+            // The payload carries no module display aliases, so dimensions
+            // are spelled in base dimensions (`Length / Time`).
+            Self::Type(ty) => f.write_str(&ty.format(
+                &crate::semantic::dimension_table::DimensionFormattingRegistry::new(
+                    std::collections::BTreeMap::new(),
+                    [],
+                ),
+            )),
         }
     }
 }
@@ -205,7 +211,7 @@ pub enum UnknownStructTypeName {
 impl std::fmt::Display for UnknownStructTypeName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Resolved(name) => name.fmt(f),
+            Self::Resolved(name) => name.to_unowned_def_name().fmt(f),
             Self::Checked(name) => name.fmt(f),
         }
     }
@@ -225,20 +231,23 @@ pub enum FieldlessOperand {
 impl std::fmt::Display for FieldlessOperand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NonStruct(found) => found.fmt(f),
-            Self::RequiredType(name) => write!(f, "required type `{name}` has no fields"),
-            Self::Union(name) => write!(f, "union type `{name}` (use `match` to access fields)"),
+            Self::NonStruct(found) => write!(f, "non-struct value `{found}`"),
+            Self::RequiredType(name) => {
+                write!(f, "a value of required type `{name}`, which has no fields")
+            }
+            Self::Union(name) => write!(
+                f,
+                "a value of union type `{name}`; use `match` to access its fields"
+            ),
         }
     }
 }
 
-/// A local the checker could not find: a source-named local or a lowered
-/// local slot.
+/// A local the checker could not find, by its source name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnknownLocal {
     Named(LocalName),
     Unbound(crate::syntax::names::NameAtom),
-    Slot(LocalId),
 }
 
 impl std::fmt::Display for UnknownLocal {
@@ -246,7 +255,6 @@ impl std::fmt::Display for UnknownLocal {
         match self {
             Self::Named(name) => name.fmt(f),
             Self::Unbound(name) => name.fmt(f),
-            Self::Slot(local) => write!(f, "#{}", local.index()),
         }
     }
 }
@@ -285,7 +293,7 @@ pub enum StructError {
         expected: TypeSpelling,
         found: TypeSpelling,
     },
-    #[error("cannot access field of non-struct value `{name}`")]
+    #[error("cannot access field of {name}")]
     NotAStruct { name: FieldlessOperand },
     #[error("unknown local variable `{name}`")]
     UnknownLocalRef { name: UnknownLocal },

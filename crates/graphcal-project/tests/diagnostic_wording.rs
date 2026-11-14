@@ -75,11 +75,55 @@ fn map_entries_of_different_types_report_the_map_rule() {
 fn parse_diagnostics_report_what_was_found() {
     for (name, source) in [
         ("unit_missing_eq", "unit kfoot: Length 304.8 m;\n"),
-        ("exponent_out_of_range", "node x: Length = 1.0 m^99999999999;\n"),
+        (
+            "exponent_out_of_range",
+            "node x: Length = 1.0 m^99999999999;\n",
+        ),
         ("misplaced_pub", "pub param x: Length = 1.0 m;\n"),
     ] {
         insta::assert_snapshot!(
             format!("parse_diagnostic_{name}"),
+            render_error(source, &format!("{name}.gcl"))
+        );
+    }
+}
+
+/// TIR-13: diagnostics spell names as written and quote each name once,
+/// never showing a local slot or an owner-qualified internal identity.
+#[test]
+fn diagnostics_do_not_show_internal_representations() {
+    for (name, source) in [
+        (
+            "invalid_index_variable",
+            "type Wrap {\n    Wrap(n: Int),\n}\n\nparam v: Dimensionless[Fin(4)] = for i: Fin(4) { 1.0 };\nnode w: Wrap = Wrap(n: 2);\nnode bad: Dimensionless = match @w {\n    Wrap(n: k) => @v[k],\n};\n",
+        ),
+        (
+            "plot_channel_axes",
+            "pub index Mode = { Normal, Boost };\npub index Phase = { Launch, Cruise };\nparam a: Dimensionless[Mode] = { Mode#Normal: 1.0, Mode#Boost: 2.0 };\nparam b: Dimensionless[Phase] = { Phase#Launch: 1.0, Phase#Cruise: 2.0 };\nplot p = {\n    mark: point,\n    encode: {\n        x: @a,\n        y: @b,\n    },\n};\n",
+        ),
+        (
+            "domain_on_struct",
+            "type P {\n    P(x: Length),\n}\n\nnode p: P(min: 1.0 m) = P(x: 2.0 m);\n",
+        ),
+        (
+            "field_of_union",
+            "type M {\n    A(x: Length),\n    B,\n}\nnode m: M = B;\nnode y: Length = @m.x;\n",
+        ),
+        (
+            "positional_constructor",
+            "type P {\n    P(x: Length),\n}\nnode p: P = P(2.0 m);\n",
+        ),
+        (
+            "non_exhaustive_map",
+            "index Mode = { Normal, Boost };\nindex Phase = { Launch, Cruise };\nnode x: Dimensionless[Mode, Phase] = {\n    (Mode#Normal, Phase#Launch): 1.0,\n    (Mode#Normal, Phase#Cruise): 1.0,\n    (Mode#Boost, Phase#Launch): 1.0,\n};\n",
+        ),
+        (
+            "unreconciled_override",
+            "pub index Other = { X, Y };\n\ndag lib {\n    pub(bind) index I = { A, B };\n    param w: Dimensionless[I] = { I#A: 1.0, I#B: 2.0 };\n    pub node out: Dimensionless = sum(@w);\n}\n\ninclude lib(index I: Other) as l;\nnode r: Dimensionless = @l::out;\n",
+        ),
+    ] {
+        insta::assert_snapshot!(
+            format!("internal_representation_{name}"),
             render_error(source, &format!("{name}.gcl"))
         );
     }

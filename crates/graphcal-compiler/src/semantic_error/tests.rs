@@ -326,9 +326,10 @@ fn structure_payloads_render_their_names_as_before() {
         StructTypeName::expect_valid("Pair"),
     );
     let checked = StructTypeRef::from_resolved(resolved.clone());
+    // A diagnostic spells the type as written, never as `owner.Type`.
     assert_eq!(
-        UnknownStructTypeName::Resolved(resolved.clone()).to_string(),
-        resolved.to_string()
+        UnknownStructTypeName::Resolved(resolved).to_string(),
+        "Pair"
     );
     assert_eq!(
         UnknownStructTypeName::Checked(checked.clone()).to_string(),
@@ -339,11 +340,11 @@ fn structure_payloads_render_their_names_as_before() {
             name: FieldlessOperand::RequiredType(checked.clone()),
         }
         .to_string(),
-        "cannot access field of non-struct value `required type `Pair` has no fields`"
+        "cannot access field of a value of required type `Pair`, which has no fields"
     );
     assert_eq!(
         FieldlessOperand::Union(checked).to_string(),
-        "union type `Pair` (use `match` to access fields)"
+        "a value of union type `Pair`; use `match` to access its fields"
     );
     assert_eq!(
         UnknownLocal::Unbound(crate::syntax::names::NameAtom::parse("x").unwrap()).to_string(),
@@ -487,9 +488,9 @@ fn domain_payloads_render_their_subjects_as_before() {
         )
     );
     let targets = [
-        (UnconstrainableType::Bool, "Bool"),
-        (UnconstrainableType::Complex, "Complex"),
-        (UnconstrainableType::Key, "Key"),
+        (UnconstrainableType::Bool, "`Bool`"),
+        (UnconstrainableType::Complex, "`Complex`"),
+        (UnconstrainableType::Key, "`Key`"),
         (
             UnconstrainableType::Struct(StructTypeName::expect_valid("Sat")),
             "struct `Sat`",

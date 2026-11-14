@@ -52,7 +52,8 @@ pub enum ModuleError {
     #[error("cannot project `{name}` from a configured DAG instance")]
     IncludeItemNotProjectable { name: NameAtom },
     #[error(
-        "cannot project constructor `{constructor}` because its owning type `{owner_type}` is rebound"
+        "cannot project constructor `{constructor}` because its owning type `{}` is rebound",
+        owner_type.to_unowned_def_name()
     )]
     IncludeConstructorOwnerRebound {
         constructor: ConstructorName,

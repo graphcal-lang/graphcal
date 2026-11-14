@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+plot encoding channels range over incompatible index axes
+    Diagnostic severity: error
+Begin snippet for plot_channel_axes.gcl starting at line 8, column 1
+
+snippet line 8:         x: @a,
+snippet line 9:         y: @b,
+    label at line 9, columns 12 to 13: this channel cannot align with the shared plot rows
+snippet line 10:     },
+diagnostic help: `x` ranges over `Mode`, `y` ranges over `Phase`; every channel must range over a subset of one channel's axes
+diagnostic code: graphcal::D034

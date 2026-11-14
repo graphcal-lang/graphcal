@@ -145,14 +145,6 @@ impl Completeness for Strict {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalId(pub(in crate::hir) u32);
 
-impl LocalId {
-    /// Numeric index unique within one lowered expression tree.
-    #[must_use]
-    pub(crate) const fn index(self) -> u32 {
-        self.0
-    }
-}
-
 /// A lexical local binding introduced by an expression form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDef {

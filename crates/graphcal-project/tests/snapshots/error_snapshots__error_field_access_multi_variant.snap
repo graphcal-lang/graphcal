@@ -1,9 +1,8 @@
 ---
 source: crates/graphcal-project/tests/error_snapshots.rs
-assertion_line: 265
 expression: rendered
 ---
-cannot access field of non-struct value `union type `ManeuverKind` (use `match` to access fields)`
+cannot access field of a value of union type `ManeuverKind`; use `match` to access its fields
     Diagnostic severity: error
 Begin snippet for field_access_multi_variant.gcl starting at line 8, column 1
 

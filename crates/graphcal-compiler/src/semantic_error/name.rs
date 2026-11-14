@@ -234,7 +234,10 @@ pub enum NameError {
     ExpressionIdentity { source: ExpressionSourceError },
     #[error("unknown match pattern `{path}`")]
     UnknownPattern { path: NamePath },
-    #[error("constructor `{constructor}` requires named field arguments")]
+    #[error(
+        "constructor `{}` requires named field arguments",
+        constructor.to_unowned_def_name()
+    )]
     PositionalArgumentsOnConstructor {
         constructor: ResolvedConstructorName,
     },

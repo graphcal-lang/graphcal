@@ -65,29 +65,59 @@ pub struct PlotChannelAxes {
     pub axes: Vec<IndexTypeRef<Symbolic>>,
 }
 
-impl std::fmt::Display for PlotChannelAxes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "`{}` ranges over ", self.channel)?;
-        if self.axes.is_empty() {
-            return f.write_str("no index");
+impl PlotChannelAxes {
+    /// Render the channel's axes, owner-qualifying a declared axis only when
+    /// `qualify` says its source spelling alone would be ambiguous.
+    fn render(&self, qualify: &dyn Fn(&IndexTypeRef<Symbolic>) -> bool) -> String {
+        let axes = self
+            .axes
+            .iter()
+            .map(|index| match index.declared_resolved() {
+                Some(declared) if qualify(index) => format!("`{declared}`"),
+                _ => format!("`{}`", index.display_name()),
+            })
+            .collect::<Vec<_>>();
+        if axes.is_empty() {
+            format!("`{}` ranges over no index", self.channel)
+        } else {
+            format!("`{}` ranges over {}", self.channel, axes.join(" × "))
         }
-        for (position, index) in self.axes.iter().enumerate() {
-            if position > 0 {
-                f.write_str(" × ")?;
-            }
-            match index.declared_resolved() {
-                Some(declared) => declared.fmt(f)?,
-                None => index.display_name().fmt(f)?,
-            }
-        }
-        Ok(())
     }
 }
 
+/// One channel alone, with every axis in its source spelling.
+impl std::fmt::Display for PlotChannelAxes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.render(&|_| false))
+    }
+}
+
+/// All channels of one mismatch. Axes are spelled as written, except that two
+/// distinct axes with one spelling (`a::Axis` and `b::Axis`) are qualified by
+/// their owners so the diagnostic does not contradict itself.
 fn format_channel_axes(channels: &[PlotChannelAxes]) -> String {
+    let mut owners_by_spelling: std::collections::HashMap<
+        &crate::syntax::index_name::IndexName,
+        std::collections::HashSet<&crate::resolved_name::ResolvedIndexName>,
+    > = std::collections::HashMap::new();
+    for index in channels.iter().flat_map(|channel| &channel.axes) {
+        if let (Some(spelling), Some(identity)) = (index.declared_name(), index.declared_resolved())
+        {
+            owners_by_spelling
+                .entry(spelling)
+                .or_default()
+                .insert(identity);
+        }
+    }
+    let qualify = |index: &IndexTypeRef<Symbolic>| {
+        index
+            .declared_name()
+            .and_then(|spelling| owners_by_spelling.get(spelling))
+            .is_some_and(|owners| owners.len() > 1)
+    };
     channels
         .iter()
-        .map(ToString::to_string)
+        .map(|channel| channel.render(&qualify))
         .collect::<Vec<_>>()
         .join(", ")
 }
