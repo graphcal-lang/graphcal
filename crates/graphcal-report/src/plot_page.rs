@@ -6,40 +6,20 @@ use crate::escape::{escape_json_for_script, html_escape};
 use crate::vega::RenderedFigure;
 use crate::vega_assets;
 
-/// How a generated page obtains the Vega runtime scripts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VegaScriptSource {
-    /// Embed the vendored bundles: the page is self-contained and works
-    /// offline and from `file://` paths.
-    Inline,
-    /// Reference the pinned jsDelivr CDN bundles: a small page that needs
-    /// network access to render.
-    Cdn,
-}
-
-/// The `<head>` script elements loading the Vega stack.
-pub(crate) fn vega_script_tags(source: VegaScriptSource) -> String {
-    match source {
-        VegaScriptSource::Inline => format!(
-            "<!-- vega {} / vega-lite {} / vega-embed {} — BSD-3-Clause, (c) University of \
-             Washington Interactive Data Lab and contributors -->\n  \
-             <script>{}</script>\n  <script>{}</script>\n  <script>{}</script>",
-            vega_assets::VEGA_VERSION,
-            vega_assets::VEGA_LITE_VERSION,
-            vega_assets::VEGA_EMBED_VERSION,
-            vega_assets::VEGA_JS,
-            vega_assets::VEGA_LITE_JS,
-            vega_assets::VEGA_EMBED_JS,
-        ),
-        VegaScriptSource::Cdn => format!(
-            "<script src=\"https://cdn.jsdelivr.net/npm/vega@{}/build/vega.min.js\"></script>\n  \
-             <script src=\"https://cdn.jsdelivr.net/npm/vega-lite@{}/build/vega-lite.min.js\"></script>\n  \
-             <script src=\"https://cdn.jsdelivr.net/npm/vega-embed@{}/build/vega-embed.min.js\"></script>",
-            vega_assets::VEGA_VERSION,
-            vega_assets::VEGA_LITE_VERSION,
-            vega_assets::VEGA_EMBED_VERSION,
-        ),
-    }
+/// The `<head>` script elements embedding the vendored Vega stack, so the
+/// page is self-contained and works offline and from `file://` paths.
+pub(crate) fn vega_script_tags() -> String {
+    format!(
+        "<!-- vega {} / vega-lite {} / vega-embed {} — BSD-3-Clause, (c) University of \
+         Washington Interactive Data Lab and contributors -->\n  \
+         <script>{}</script>\n  <script>{}</script>\n  <script>{}</script>",
+        vega_assets::VEGA_VERSION,
+        vega_assets::VEGA_LITE_VERSION,
+        vega_assets::VEGA_EMBED_VERSION,
+        vega_assets::VEGA_JS,
+        vega_assets::VEGA_LITE_JS,
+        vega_assets::VEGA_EMBED_JS,
+    )
 }
 
 /// Render all figures as a single HTML page using Vega-Embed.
@@ -47,10 +27,7 @@ pub(crate) fn vega_script_tags(source: VegaScriptSource) -> String {
 /// # Errors
 ///
 /// Returns an error if any figure's spec cannot be serialized to JSON.
-pub fn render_html(
-    figures: &[RenderedFigure],
-    scripts: VegaScriptSource,
-) -> Result<String, serde_json::Error> {
+pub fn render_html(figures: &[RenderedFigure]) -> Result<String, serde_json::Error> {
     use std::fmt::Write;
     let mut divs = String::new();
     for (i, fig) in figures.iter().enumerate() {
@@ -67,7 +44,7 @@ pub fn render_html(
 "#,
         );
     }
-    let script_tags = vega_script_tags(scripts);
+    let script_tags = vega_script_tags();
     Ok(format!(
         r#"<!DOCTYPE html>
 <html>
@@ -118,11 +95,13 @@ mod tests {
             name: "legitimate title".to_string(),
             spec: json!({"title": "</script><script>alert(1)</script>"}),
         }];
-        let html = render_html(&rendered, VegaScriptSource::Cdn).unwrap();
+        let html = render_html(&rendered).unwrap();
         // The raw `</script>` from the JSON payload must not appear verbatim
         // inside the emitted `<script>` block; the `<` must be escaped to `\u003c`.
+        // The vendored Vega bundles also mention `vegaEmbed`; the figure's
+        // own call is the one with a `#graphcal-plot-` target.
         let script_block = html
-            .split("vegaEmbed")
+            .split("vegaEmbed('#graphcal-plot-")
             .nth(1)
             .expect("expected a vegaEmbed script block");
         assert!(
@@ -142,17 +121,8 @@ mod tests {
             name: "p".to_string(),
             spec: json!({"mark": "line"}),
         }];
-        let html = render_html(&rendered, VegaScriptSource::Inline).unwrap();
+        let html = render_html(&rendered).unwrap();
         assert!(!html.contains("cdn.jsdelivr.net"));
         assert!(html.contains(vega_assets::VEGA_EMBED_JS));
-    }
-
-    #[test]
-    fn cdn_page_references_pinned_versions() {
-        let html = render_html(&[], VegaScriptSource::Cdn).unwrap();
-        assert!(html.contains(&format!(
-            "https://cdn.jsdelivr.net/npm/vega@{}/build/vega.min.js",
-            vega_assets::VEGA_VERSION
-        )));
     }
 }
