@@ -46,6 +46,18 @@ jobs:
           - target: generated_project
             cache_tag: generated-project
             max_len: 4096
+          - target: model_request
+            cache_tag: model-request
+            max_len: 262144
+          - target: json_parameters
+            cache_tag: json-parameters
+            max_len: 65536
+          - target: plugin_result
+            cache_tag: plugin-result
+            max_len: 65536
+          - target: report_bundle
+            cache_tag: report-bundle
+            max_len: 262144
     env:
       FUZZ_TARGET: ${{ matrix.target }}
       MAX_LEN: ${{ matrix.max_len }}
