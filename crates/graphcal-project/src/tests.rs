@@ -1679,16 +1679,21 @@ fn structural_index_binding_cardinality_must_be_closed() {
     ));
     assert!(matches!(
         compile_and_eval(&program("4294967296 * 4294967296")).unwrap_err(),
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Index(kind @ IndexError::NatOverflow { .. }), .. }), .. })
-            if kind.to_string().contains("type-level Nat arithmetic overflow")
+        CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Index(IndexError::FinCardinalityMultiplicationOverflow),
+                ..
+            }),
+            ..
+        })
     ));
-    // A closed part that overflows is reported even after a name, like a
-    // `Fin(...)` written in a declaration.
+    // A closed part that overflows is reported even after a name, with the
+    // same code as a `Fin(...)` written in a declaration.
     assert!(matches!(
         compile_and_eval(&program("N + 4294967296 * 4294967296")).unwrap_err(),
         CompileError::Eval(RenderedSemanticError {
             error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                kind: SemanticErrorKind::Index(IndexError::NatOverflow { .. }),
+                kind: SemanticErrorKind::Index(IndexError::FinCardinalityMultiplicationOverflow),
                 ..
             }),
             ..
@@ -6267,37 +6272,30 @@ fn project_selective_includes_still_reject_duplicate_local_names() {
 
 #[test]
 fn project_module_includes_still_reject_duplicate_default_aliases() {
-    let (_dir, root) = write_same_leaf_include_project(
+    // Two module aliases of one name are a duplicate name (N001) reported at
+    // the second alias, for includes and imports alike (RES-13).
+    for declarations in [
         "include app.analysis.shared(input: 2.0);\n\
          include app.presentation.shared(input: 5.0);\n",
-    );
-
-    match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
-        Err(CompileError::Eval(RenderedSemanticError {
-            error:
-                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                    kind: SemanticErrorKind::Module(ModuleError::DuplicateModuleName { name, .. }),
-                    ..
-                }),
-            ..
-        })) => {
-            assert_eq!(name.as_str(), "shared");
+        "import app.analysis.shared;\n\
+         import app.presentation.shared;\n",
+    ] {
+        let (_dir, root) = write_same_leaf_include_project(declarations);
+        match compile_and_eval_project(&root, &HashMap::new(), None, &fs()) {
+            Err(CompileError::Eval(RenderedSemanticError {
+                error:
+                    SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                        primary,
+                        kind: SemanticErrorKind::Name(NameError::DuplicateName { name, first }),
+                        ..
+                    }),
+                ..
+            })) => {
+                assert_eq!(name.to_string(), "shared", "{declarations}");
+                assert!(first.offset() < primary.offset(), "{declarations}");
+            }
+            other => panic!("expected N001 for {declarations:?}, got {other:?}"),
         }
-        Err(CompileError::Eval(RenderedSemanticError {
-            error:
-                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-                    kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }),
-                    ..
-                }),
-            ..
-        })) => {
-            let message = kind.to_string();
-            assert!(
-                message.contains("duplicate module") && message.contains("shared"),
-                "unexpected duplicate-alias diagnostic: {message}",
-            );
-        }
-        other => panic!("expected a duplicate module alias diagnostic, got {other:?}"),
     }
 }
 

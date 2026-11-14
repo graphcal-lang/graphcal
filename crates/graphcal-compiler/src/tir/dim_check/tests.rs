@@ -2465,13 +2465,14 @@ param p: MkPos = 1.0;";
 }
 
 #[test]
-fn check_index_as_type_application_head_reports_wrong_universe() {
+fn check_index_as_type_application_head_reports_index_as_type() {
+    // The same N021 as `param x: M`, not a module-resolution catch-all.
     let source = "\
 pub index M = { A };
 param x: M<Length> = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("`M` is an index, not a type")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(kind @ NameError::IndexAsType { .. }), .. }) if kind.to_string() == "index `M` cannot be used as a type"),
         "got: {err:?}"
     );
 }
@@ -4285,8 +4286,8 @@ plot p = {
     assert!(matches!(
         error,
         SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. })
-            if channels.iter().any(|channel| channel.to_string().contains("test.Step"))
-                && channels.iter().any(|channel| channel.to_string().contains("test.Pair"))
+            if channels.iter().any(|channel| channel.to_string() == "`x` ranges over `Step`")
+                && channels.iter().any(|channel| channel.to_string() == "`y` ranges over `Pair`")
     ));
 }
 

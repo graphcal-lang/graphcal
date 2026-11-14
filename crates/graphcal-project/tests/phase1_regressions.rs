@@ -221,12 +221,28 @@ plot p = {
 
     let error = compile_and_eval_project(&root, &HashMap::new(), None, &RealFileSystem::default())
         .unwrap_err();
-    assert!(matches!(
-        error,
-        CompileError::Eval(RenderedSemanticError { error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. }), .. })
-            if channels.iter().any(|channel| channel.to_string().contains("owner_dims.a.Axis"))
-                && channels.iter().any(|channel| channel.to_string().contains("owner_dims.b.Axis"))
-    ));
+    assert!(
+        matches!(
+            &error,
+            CompileError::Eval(RenderedSemanticError {
+                error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(
+                        DimensionError::PlotEncodingAxisMismatch { .. }
+                    ),
+                    ..
+                }),
+                ..
+            })
+        ),
+        "expected D034, got {error:?}"
+    );
+    // The two axes share a spelling, so the help qualifies their owners
+    // rather than contradicting itself with `Axis` and `Axis`.
+    let help = miette::Diagnostic::help(&error).unwrap().to_string();
+    assert!(
+        help.contains("`owner_dims.a.Axis`") && help.contains("`owner_dims.b.Axis`"),
+        "{help}"
+    );
 }
 
 #[test]

@@ -355,7 +355,6 @@ bindings happen to be equal.
 | Code | Description |
 |------|-------------|
 | A001 | Assertion failure (LSP diagnostic) |
-| A002 | Assumed assertion failed (CLI, lists affected nodes) |
 | A003 | Cannot reference assert with `@` sigil |
 | A004 | Assert body must evaluate to `Bool` |
 | A005 | Unknown assert in `#[assumes(...)]` |

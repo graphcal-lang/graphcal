@@ -7,8 +7,6 @@ use crate::semantic_error::dimension_mismatch::{
     MismatchOperand, MismatchRule, OperandExpectation,
 };
 use crate::semantic_error::index::IndexError;
-use crate::semantic_error::structure::StructError;
-use crate::semantic_error::structure::UnknownLocal;
 use crate::source_id::SourceId;
 
 use crate::diagnostic_anchor::DiagnosticAnchor;
@@ -259,6 +257,17 @@ impl Infer<'_> {
     }
 }
 
+/// A local reference whose lowered slot is not bound in the checking
+/// environment. Lowering resolves every local name to a binder that encloses
+/// it, so this is a compiler bug rather than a user error.
+pub(super) fn unbound_local_slot(src: SourceId, span: Span) -> SemanticError {
+    SemanticError::internal_error(
+        "a lowered local reference has no enclosing binder",
+        src,
+        DiagnosticAnchor::Source(span),
+    )
+}
+
 fn finite_axis_form(
     index: &IndexTypeRef<Symbolic>,
     declared_definition: Option<&crate::semantic::index_def::IndexDef>,
@@ -323,14 +332,7 @@ impl Infer<'_> {
                 }
                 IndexArg::Var(local) => {
                     let Some(var_type) = self.locals.get(local.value) else {
-                        return Err(SemanticError::located(
-                            self.env.src,
-                            local.span,
-                            StructError::UnknownLocalRef {
-                                name: UnknownLocal::Slot(local.value),
-                            },
-                        )
-                        .into());
+                        return Err(unbound_local_slot(self.env.src, local.span).into());
                     };
                     match var_type {
                         // Loop variables are keys of their axes: accept on axis
@@ -372,11 +374,13 @@ impl Infer<'_> {
                             )
                             .into());
                         }
-                        _ => {
+                        other => {
                             return Err(SemanticError::located(
                                 self.env.src,
                                 local.span,
-                                IndexError::InvalidIndexVariable { local: local.value },
+                                IndexError::InvalidIndexVariable {
+                                    found: other.spelling(&self.env.registry.dimensions),
+                                },
                             )
                             .into());
                         }

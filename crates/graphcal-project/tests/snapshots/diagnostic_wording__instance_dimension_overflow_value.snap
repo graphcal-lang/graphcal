@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(projected_value, \"ovf_value.gcl\")"
+---
+dimension exponent overflow
+    Diagnostic severity: error
+Begin snippet for ovf_value.gcl starting at line 6, column 1
+
+snippet line 6: }
+snippet line 7: include lib(dim D: Vol, x: 1.0 m^3)::{ y };
+    label at line 7, columns 1 to 43: overflow here
+diagnostic help: dimension exponents are stored as `i32`; reduce the magnitude of the exponent
+diagnostic code: graphcal::D010

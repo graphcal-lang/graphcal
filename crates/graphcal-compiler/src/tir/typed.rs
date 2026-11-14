@@ -560,9 +560,15 @@ fn resolve_signature(
 /// exactly as the instance output itself is specialized.
 struct DeclTypeResolver<'a> {
     types: &'a ProjectTypeStore,
-    /// The substitution of the instance each projected name comes from.
-    projection_substitutions:
-        HashMap<&'a DeclName, &'a crate::ir::static_substitution::StaticSubstitution>,
+    /// The substitution of the instance each projected name comes from, with
+    /// the span of the include that projects it.
+    projection_substitutions: HashMap<
+        &'a DeclName,
+        (
+            &'a crate::ir::static_substitution::StaticSubstitution,
+            crate::syntax::span::Span,
+        ),
+    >,
     /// The type view and complete substitution of each such instance.
     views: HashMap<
         &'a crate::ir::static_substitution::StaticSubstitution,
@@ -591,11 +597,16 @@ impl<'a> DeclTypeResolver<'a> {
                     .filter_map(|projection| {
                         crate::ir::instance::InstanceProjection::exposure(projection).selected()
                     })
-                    .map(|exposed| (exposed, record.instance.substitution()))
+                    .map(|exposed| {
+                        (
+                            exposed,
+                            (record.instance.substitution(), record.include_span),
+                        )
+                    })
             })
             .collect::<HashMap<_, _>>();
         let mut views = HashMap::new();
-        for substitution in projection_substitutions.values() {
+        for (substitution, _) in projection_substitutions.values() {
             let complete =
                 complete_substitution::CompleteSubstitution::try_new(substitution, types)
                     .map_err(|error| error.into_graphcal(src))?;
@@ -621,10 +632,14 @@ impl<'a> DeclTypeResolver<'a> {
         let instance = self
             .projection_substitutions
             .get(&identity.to_unowned_def_name())
-            .and_then(|substitution| self.views.get(substitution));
+            .and_then(|(substitution, include_span)| {
+                self.views
+                    .get(substitution)
+                    .map(|instance| (instance, *include_span))
+            });
         match instance {
-            Some((view, complete)) => {
-                resolve_instance_decl_type(decl_type, complete, view, self.src)
+            Some(((view, complete), include_span)) => {
+                resolve_instance_decl_type(decl_type, complete, view, self.src, include_span)
             }
             None => {
                 type_expr::resolve_hir_decl_type_with_project_types(decl_type, self.src, self.types)
@@ -688,15 +703,18 @@ fn instance_type_view<'s>(
 }
 
 /// Resolve a template annotation in `view` (from [`instance_type_view`]) and
-/// specialize it through the include's `substitution`.
+/// specialize it through the include's `substitution`, reporting an exponent
+/// overflow of the specialization at `site` in `src`.
 fn resolve_instance_decl_type(
     decl_type: &crate::hir::types::DeclType,
     substitution: &complete_substitution::CompleteSubstitution<'_>,
     view: &ProjectTypeStore,
     src: SourceId,
+    site: crate::syntax::span::Span,
 ) -> Result<ResolvedDeclType, SemanticError> {
     let template_type = type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, view)?;
-    specialization::specialize_type(&template_type, substitution, src)
+    specialization::specialize_type(&template_type, substitution)
+        .map_err(specialization::specialization_overflow(src, site))
 }
 
 /// Declaration domain bounds keyed by the canonical declaration they bound.
@@ -1262,6 +1280,7 @@ impl<'d, 'c> TypeDefCollector<'d, 'c> {
                     substitution,
                     view,
                     definition_src,
+                    annotation.span,
                 )?,
                 None => resolve_hir_decl_type(&annotation.decl_type, definition_src, ctx)?,
             };

@@ -3,13 +3,13 @@
     "code": "graphcal::D010",
     "labels": [
       {
-        "length": 252,
+        "length": 27,
         "location": {
           "column": 1,
-          "line": 1,
+          "line": 11,
           "source": "<root>/tests/fixtures/invalid/instance_dimension_overflow.gcl"
         },
-        "offset": 0,
+        "offset": 224,
         "primary": false
       }
     ],

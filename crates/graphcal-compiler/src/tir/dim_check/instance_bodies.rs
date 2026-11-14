@@ -193,7 +193,9 @@ fn check_instance_defaults(
             template_bodies.nominal_uses(id),
         )?;
         let checked_type = template_entry.type_ann.checked().declared().to_symbolic();
-        let specialized = specialize_expression_type(&checked_type, substitution, ctx.env.src)?;
+        let specialized = specialize_expression_type(&checked_type, substitution).map_err(
+            crate::tir::typed::specialization::specialization_overflow(ctx.env.src, default.span),
+        )?;
         let expected = entry.type_ann.checked().declared();
         if specialized != expected.to_symbolic() {
             return Err(SemanticError::located(

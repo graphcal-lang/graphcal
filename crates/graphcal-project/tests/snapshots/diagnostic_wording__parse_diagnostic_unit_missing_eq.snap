@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+unexpected token `number`
+    Diagnostic severity: error
+Begin snippet for unit_missing_eq.gcl starting at line 1, column 1
+
+snippet line 1: unit kfoot: Length 304.8 m;
+    label at line 1, columns 20 to 24: here
+diagnostic help: expected `=` followed by a unit definition (use `base unit` for a no-body declaration)
+diagnostic code: graphcal::P001

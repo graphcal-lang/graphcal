@@ -286,14 +286,29 @@ impl<Ns: NameNamespace> StaticProjection<Ns> {
 pub struct DimensionProjection {
     projection: StaticProjection<DimNameNamespace>,
     ports: Vec<DimensionPortBinding>,
+    /// The selection item that projects the dimension, in the including
+    /// module's source.
+    selected_at: Span,
 }
 
 impl DimensionProjection {
     pub(super) const fn new(
         projection: StaticProjection<DimNameNamespace>,
         ports: Vec<DimensionPortBinding>,
+        selected_at: Span,
     ) -> Self {
-        Self { projection, ports }
+        Self {
+            projection,
+            ports,
+            selected_at,
+        }
+    }
+
+    /// The selection item that projects the dimension, in the including
+    /// module's source.
+    #[must_use]
+    pub const fn selected_at(&self) -> Span {
+        self.selected_at
     }
 
     /// The template's own dimension the projection specializes.

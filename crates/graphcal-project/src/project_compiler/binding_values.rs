@@ -78,9 +78,7 @@ fn closed_binding_cardinality(
         Err(overflow) => Err(SemanticError::located(
             file_src,
             overflow.span,
-            IndexError::NatOverflow {
-                error: graphcal_compiler::nat::NatOverflowError,
-            },
+            IndexError::fin_cardinality_overflow(overflow.op),
         )),
     }
 }

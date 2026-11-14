@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+domain constraints are not valid on struct `P` types
+    Diagnostic severity: error
+Begin snippet for domain_on_struct.gcl starting at line 4, column 1
+
+snippet line 4: 
+snippet line 5: node p: P(min: 1.0 m) = P(x: 2.0 m);
+    label at line 5, columns 1 to 36: constraints not valid here
+diagnostic help: domain constraints (min/max) are only valid on quantity, Int, and Datetime types
+diagnostic code: graphcal::C004

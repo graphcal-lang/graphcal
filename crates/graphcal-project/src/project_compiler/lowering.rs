@@ -1210,8 +1210,13 @@ fn effective_index_binding_contract(
                             sites.importer_src,
                             binding_span,
                             DimensionError::UnknownDimension {
-                                name: name.to_name_path(),
+                                name: name.value.to_name_path(),
                             },
+                        ),
+                        DimExprFailure::Inaccessible { error, .. } => SemanticError::located(
+                            sites.importer_src,
+                            binding_span,
+                            ModuleError::resolution(error),
                         ),
                         DimExprFailure::Overflow => SemanticError::located(
                             sites.importer_src,

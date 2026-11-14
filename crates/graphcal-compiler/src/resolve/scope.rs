@@ -369,24 +369,28 @@ pub(super) fn module_alias(
 ///
 /// A declaration whose alias cannot be claimed is skipped and its error
 /// returned, in declaration order: [`ModuleResolveError::DuplicateImportName`]
-/// when an alias collides with a local declaration or an earlier plugin
-/// alias, and [`ModuleResolveError::DuplicatePluginFunction`] for a function
+/// when an alias collides with a local declaration or an earlier alias of any
+/// form, and [`ModuleResolveError::DuplicatePluginFunction`] for a function
 /// declared twice in one plugin block.
 pub(super) fn declare_aliases(
     scope: &mut ModuleScope,
     symbols: &ModuleSymbols,
     declarations: &[ast::Declaration],
 ) -> Vec<ModuleResolveError> {
+    let mut claimed = HashMap::new();
     declarations
         .iter()
-        .filter_map(|decl| declare_alias(scope, symbols, decl).err())
+        .filter_map(|decl| declare_alias(scope, &mut claimed, symbols, decl).err())
         .collect()
 }
 
 /// Claim the alias one declaration introduces, if any (see
-/// [`declare_aliases`]).
+/// [`declare_aliases`]). `claimed` holds the aliases earlier declarations
+/// claimed, so two aliases of one name are rejected at the second one, even
+/// when both re-spell the same local `dag`.
 fn declare_alias(
     scope: &mut ModuleScope,
+    claimed: &mut HashMap<ModuleAliasName, Span>,
     symbols: &ModuleSymbols,
     decl: &ast::Declaration,
 ) -> Result<(), ModuleResolveError> {
@@ -407,16 +411,12 @@ fn declare_alias(
             ast::DeclKind::PluginImport(plugin) => (plugin.alias.clone(), false),
             _ => return Ok(()),
         };
-        let plugin_alias = match &decl.kind {
-            ast::DeclKind::PluginImport(_) => scope.plugin_aliases.get(&alias.value),
-            _ => None,
-        };
         let names_local_dag = respells_path && symbols.declares_dag(alias.value.atom());
         if let Some(first) = symbols
             .occupant(Namespace::Term, alias.value.atom())
             .filter(|_| !names_local_dag)
             .map(|occupant| occupant.span)
-            .or_else(|| plugin_alias.map(|target| target.span))
+            .or_else(|| claimed.get(&alias.value).copied())
         {
             return Err(ModuleResolveError::DuplicateImportName {
                 owner: owner.clone(),
@@ -426,6 +426,7 @@ fn declare_alias(
                 duplicate: alias.span,
             });
         }
+        claimed.insert(alias.value.clone(), alias.span);
         if let ast::DeclKind::PluginImport(plugin) = &decl.kind {
             let mut functions = HashMap::new();
             for function in &plugin.functions {

@@ -414,7 +414,6 @@ fn structured_data(error: &CompileError) -> Option<RepairData> {
             UnknownLocal::Unbound(name) => {
                 Some(auto_import_data(name.as_str(), AutoImportCategory::Term))
             }
-            UnknownLocal::Slot(_) => None,
         },
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }),

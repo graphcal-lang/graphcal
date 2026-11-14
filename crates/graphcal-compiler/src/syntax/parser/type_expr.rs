@@ -628,8 +628,15 @@ impl Parser<'_> {
         match self.lexer.next_token() {
             Some((Token::Number, span)) => {
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value: i32 = text.parse().map_err(|_| {
-                    Self::invalid_number(InvalidNumberReason::ExpectedInteger, span)
+                let value: i32 = text.parse().map_err(|error: std::num::ParseIntError| {
+                    let reason = match error.kind() {
+                        std::num::IntErrorKind::PosOverflow
+                        | std::num::IntErrorKind::NegOverflow => {
+                            InvalidNumberReason::ExponentOutOfRange
+                        }
+                        _ => InvalidNumberReason::ExpectedInteger,
+                    };
+                    Self::invalid_number(reason, span)
                 })?;
                 Ok((neg, value, span))
             }

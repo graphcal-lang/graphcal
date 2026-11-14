@@ -65,29 +65,59 @@ pub struct PlotChannelAxes {
     pub axes: Vec<IndexTypeRef<Symbolic>>,
 }
 
-impl std::fmt::Display for PlotChannelAxes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "`{}` ranges over ", self.channel)?;
-        if self.axes.is_empty() {
-            return f.write_str("no index");
+impl PlotChannelAxes {
+    /// Render the channel's axes, owner-qualifying a declared axis only when
+    /// `qualify` says its source spelling alone would be ambiguous.
+    fn render(&self, qualify: &dyn Fn(&IndexTypeRef<Symbolic>) -> bool) -> String {
+        let axes = self
+            .axes
+            .iter()
+            .map(|index| match index.declared_resolved() {
+                Some(declared) if qualify(index) => format!("`{declared}`"),
+                _ => format!("`{}`", index.display_name()),
+            })
+            .collect::<Vec<_>>();
+        if axes.is_empty() {
+            format!("`{}` ranges over no index", self.channel)
+        } else {
+            format!("`{}` ranges over {}", self.channel, axes.join(" × "))
         }
-        for (position, index) in self.axes.iter().enumerate() {
-            if position > 0 {
-                f.write_str(" × ")?;
-            }
-            match index.declared_resolved() {
-                Some(declared) => declared.fmt(f)?,
-                None => index.display_name().fmt(f)?,
-            }
-        }
-        Ok(())
     }
 }
 
+/// One channel alone, with every axis in its source spelling.
+impl std::fmt::Display for PlotChannelAxes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.render(&|_| false))
+    }
+}
+
+/// All channels of one mismatch. Axes are spelled as written, except that two
+/// distinct axes with one spelling (`a::Axis` and `b::Axis`) are qualified by
+/// their owners so the diagnostic does not contradict itself.
 fn format_channel_axes(channels: &[PlotChannelAxes]) -> String {
+    let mut owners_by_spelling: std::collections::HashMap<
+        &crate::syntax::index_name::IndexName,
+        std::collections::HashSet<&crate::resolved_name::ResolvedIndexName>,
+    > = std::collections::HashMap::new();
+    for index in channels.iter().flat_map(|channel| &channel.axes) {
+        if let (Some(spelling), Some(identity)) = (index.declared_name(), index.declared_resolved())
+        {
+            owners_by_spelling
+                .entry(spelling)
+                .or_default()
+                .insert(identity);
+        }
+    }
+    let qualify = |index: &IndexTypeRef<Symbolic>| {
+        index
+            .declared_name()
+            .and_then(|spelling| owners_by_spelling.get(spelling))
+            .is_some_and(|owners| owners.len() > 1)
+    };
     channels
         .iter()
-        .map(ToString::to_string)
+        .map(|channel| channel.render(&qualify))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -596,7 +626,7 @@ impl DiagnosticKind for DimensionError {
             Self::RuntimeExponentForDimensionedBase => Some("use an exact integer such as `2` or a parenthesized rational such as `(3/2)`".to_owned()),
             Self::ConversionDimensionMismatch { .. } => Some("the `->` conversion operator can only change units within the same dimension".to_owned()),
             Self::NestedConversion => Some("an expression carries at most one `->` target; remove the inner conversion — only the outermost target takes effect".to_owned()),
-            Self::IneffectiveConversion => Some("a conversion only affects how a declaration's final value is displayed; move it to the top level of the declaration (or a selected `if`/`match` branch, constructor field, map entry, for-comprehension body, or scan/unfold init), or remove it".to_owned()),
+            Self::IneffectiveConversion => Some("a conversion only affects how a declaration's final value is displayed; move it to the top level of the declaration (or a selected `if`/`match` branch, constructor field, map entry, for-comprehension body, `scan` source, or `scan`/`unfold` init or step body), or remove it".to_owned()),
             Self::AffineProneUnitDefinition { .. } => Some("common units of this dimension (e.g. \u{b0}C, \u{b0}F for Temperature) are affine scales with an offset; a purely multiplicative `unit` definition would display silently wrong values. Keep values in the base unit, or model the offset explicitly in your expressions".to_string()),
             Self::InvalidTimezone { tzdb_version, .. } => Some(format!("use a name present in Graphcal's bundled IANA tzdb {tzdb_version}, such as \"UTC\", \"America/New_York\", or \"Asia/Tokyo\"")),
             Self::InvalidDatetimeLiteral { reason, .. } if reason.is_leap_second() => Some("leap seconds are not supported in any time scale; to name the instant of a UTC leap second, write it in TAI, for example `epoch<TAI>(\"2017-01-01T00:00:36\")` for `2016-12-31T23:59:60Z`".to_owned()),

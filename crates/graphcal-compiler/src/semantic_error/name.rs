@@ -234,7 +234,10 @@ pub enum NameError {
     ExpressionIdentity { source: ExpressionSourceError },
     #[error("unknown match pattern `{path}`")]
     UnknownPattern { path: NamePath },
-    #[error("constructor `{constructor}` requires named field arguments")]
+    #[error(
+        "constructor `{}` requires named field arguments",
+        constructor.to_unowned_def_name()
+    )]
     PositionalArgumentsOnConstructor {
         constructor: ResolvedConstructorName,
     },
@@ -362,9 +365,9 @@ impl DiagnosticKind for NameError {
 
     fn help(&self) -> Option<String> {
         match self {
-            Self::DuplicateName { .. } => Some("each name must be unique within a file".to_owned()),
+            Self::DuplicateName { .. } => Some("each name must be unique within its file or `dag` body".to_owned()),
             Self::DuplicateConstructorField { .. } => Some("constructor field names must be unique; remove or rename one declaration".to_owned()),
-            Self::BuiltinNameShadowed { .. } => Some("choose a different name; prelude dimensions, built-in types, prelude units, and built-in numeric constants cannot be redefined in their namespaces".to_owned()),
+            Self::BuiltinNameShadowed { .. } => Some("choose a different name; names the language reserves (prelude dimensions, types and units, built-in functions and constants, time scales, and keywords such as `scan`) cannot be redeclared".to_owned()),
             Self::InvalidPlotProperty { context, .. } => Some(context.valid_properties()),
             Self::UnknownPlotReference { .. } => Some("`plots:` entries must name `plot` declarations visible in this file".to_owned()),
             Self::CompositionReferencesNonPlot { actual_kind, owner_kind, .. } => Some(format!("{owner_kind}s compose `plot` declarations; they cannot nest other {actual_kind}s")),

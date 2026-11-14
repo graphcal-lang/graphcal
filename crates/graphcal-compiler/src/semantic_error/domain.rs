@@ -143,12 +143,12 @@ pub enum UnconstrainableType {
 impl std::fmt::Display for UnconstrainableType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Bool => f.write_str("Bool"),
-            Self::Complex => f.write_str("Complex"),
-            Self::Key => f.write_str("Key"),
+            Self::Bool => f.write_str("`Bool`"),
+            Self::Complex => f.write_str("`Complex`"),
+            Self::Key => f.write_str("`Key`"),
             Self::Struct(name) => write!(f, "struct `{name}`"),
             Self::GenericTypeParam(param) => write!(f, "generic Type parameter `{param}`"),
-            Self::Checked(ty) => ty.fmt(f),
+            Self::Checked(ty) => write!(f, "`{ty}`"),
         }
     }
 }
@@ -288,7 +288,7 @@ pub enum DomainError {
         min: Box<DomainBoundSpelling>,
         max: Box<DomainBoundSpelling>,
     },
-    #[error("domain constraints are not valid on `{type_kind}` types")]
+    #[error("domain constraints are not valid on {type_kind} types")]
     InvalidDomainTarget { type_kind: UnconstrainableType },
     #[error("domain bound type mismatch on Int `{name}`: {bound_name} bound has type {bound_type}")]
     IntDomainBoundTypeMismatch {

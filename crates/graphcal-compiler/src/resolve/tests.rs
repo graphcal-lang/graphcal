@@ -1367,6 +1367,26 @@ fn alias_respelling_its_local_dag_is_that_dags_own_name() {
 }
 
 #[test]
+fn two_aliases_of_one_name_collide_at_the_second() {
+    for source in [
+        "dag d {}\ninclude d() as x;\ninclude d() as x;",
+        "dag d {}\ninclude d();\ninclude d();",
+        "dag d {}\nimport d as x;\ninclude d() as x;",
+        "import app.lib;\ninclude app.lib();",
+        "import app.lib as x;\nimport plugin \"p.wasm\" as x { fn f(x: Dimensionless) -> Dimensionless; }",
+    ] {
+        let (_, first, duplicate) =
+            duplicate_term_alias(source).unwrap_or_else(|| panic!("{source:?} should be rejected"));
+        assert!(first.offset() < duplicate.offset(), "{source:?}");
+        assert_eq!(
+            source[first.offset()..first.offset() + first.len()],
+            source[duplicate.offset()..duplicate.offset() + duplicate.len()],
+            "{source:?}"
+        );
+    }
+}
+
+#[test]
 fn local_and_selected_bindings_to_same_dag_are_one_callable() {
     let root_id = DagId::root_in_package("test", "self");
     let helper_id =

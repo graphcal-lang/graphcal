@@ -11,5 +11,5 @@ snippet line 2: type M { Mk(v: Dimensionless) }
     label at line 2, column 6: first defined here
 snippet line 3: pub index M = { A, B };
     label at line 3, column 11: duplicate definition here
-diagnostic help: each name must be unique within a file
+diagnostic help: each name must be unique within its file or `dag` body
 diagnostic code: graphcal::N001

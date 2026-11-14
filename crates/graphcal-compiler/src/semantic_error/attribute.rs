@@ -160,7 +160,7 @@ impl DiagnosticKind for AttributeError {
             Self::InvalidAssumesArgument => Some("name assertions directly, for example `#[assumes(first_check, second_check)]`".to_owned()),
             Self::LazyNotSupported => Some("remove `#[lazy]`; Graphcal currently evaluates nodes eagerly".to_owned()),
             Self::InvalidHiddenTarget { .. } => Some("`#[hidden]` suppresses a plot's standalone output; it is only valid on `plot` declarations".to_owned()),
-            Self::UnknownAttribute { .. } => Some("recognized attributes are `#[assumes(...)]`, `#[expected_fail]`, `#[hidden]`, and `#[lazy]`".to_owned()),
+            Self::UnknownAttribute { .. } => Some("recognized attributes are `#[assumes(...)]`, `#[expected_fail]`, and `#[hidden]`".to_owned()),
             Self::InvalidExpectedFailTarget { .. } => Some("`#[expected_fail]` is only valid on `assert` declarations".to_owned()),
             Self::ExpectedFailInvalidArg => None,
             Self::ExpectedFailNotIndexed => Some("use `#[expected_fail]` without arguments for non-indexed assertions".to_owned()),
