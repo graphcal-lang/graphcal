@@ -1,8 +1,5 @@
-//! Phase 0 regression tests from `.local/2026-05-31_code-review-report.md`.
-//!
-//! These tests assert the desired safety behavior. Regressions that are not fixed
-//! yet remain marked `#[should_panic]`; active fixes should remove that attribute
-//! and make the assertion pass normally.
+//! Regressions for re-exports, include bindings and instances, literal and
+//! unit-scale validation, self-imports, and extern declarations.
 #![cfg(test)]
 
 use graphcal_project::load_error::LoadError;

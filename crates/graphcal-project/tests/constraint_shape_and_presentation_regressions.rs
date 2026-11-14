@@ -1,4 +1,5 @@
-//! Regression tests for `.local/2026-08-08_chunk-5-code-review.md`.
+//! Regressions for constraints at call and include boundaries, numeric and
+//! shape limits, and presentation (display unit) provenance.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;

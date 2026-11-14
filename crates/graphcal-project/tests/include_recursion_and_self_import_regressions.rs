@@ -1,7 +1,5 @@
-//! Regressions from the Chunk 6 loader/orchestration review.
-//!
-//! Each ignored test describes the intended behavior before its implementing
-//! phase lands. Later stack branches remove the corresponding `#[ignore]`.
+//! Regressions for nested inline module paths, recursive include detection,
+//! and the pure-import policy of inline self-imports.
 #![cfg(test)]
 
 use std::collections::HashMap;

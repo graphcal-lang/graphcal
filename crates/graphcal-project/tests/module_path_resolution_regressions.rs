@@ -1,5 +1,5 @@
-//! Regression tests for the Phase 4 resolver refactor
-//! (`.local/2026-09-26_invariant-complexity-implementation-plan.md` §7).
+//! Regressions for module-path resolution: file submodules versus inline DAGs,
+//! alias qualifiers, local-DAG include selection, and instance runtime units.
 #![cfg(test)]
 
 use std::collections::HashMap;
