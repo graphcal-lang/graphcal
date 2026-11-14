@@ -962,7 +962,10 @@ fn collect_binding_value_refs(
             UnresolvedSymbol::StructType
         }
         BindingValue::Index(_) => UnresolvedSymbol::Index,
-        BindingValue::Dimension(_) => UnresolvedSymbol::Dimension,
+        BindingValue::Dimension(dim) => {
+            collect_dim_expr_refs(dim, table);
+            return;
+        }
     };
     if let Some(name) = binding.value.static_name() {
         table.references.push(ReferenceInfo {

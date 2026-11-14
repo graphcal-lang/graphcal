@@ -210,6 +210,31 @@ figure f = { plots: [p] };
     }
 }
 
+/// Every term of a multi-term `dim` binding value is a reference, not only a
+/// lone name.
+#[test]
+fn multi_term_dimension_binding_references_every_term() {
+    let source = r"
+dim Speed = Length / Time;
+dim Rate = Speed / Time;
+dag lib {
+    pub(bind) dim D;
+    param x: D;
+}
+include lib(dim D: Speed / Time, x: 1.0 m / s^2)::{ x as y };
+";
+    let table = table_for(source);
+    let speed = definition_key(&table, SymbolCategory::Dimension, "Speed");
+    let binding = source.find("dim D: Speed / Time").unwrap();
+    let speed_offset = binding + "dim D: ".len();
+    assert_eq!(reference_key(&table, speed_offset), Some(speed));
+    let time_offset = binding + "dim D: Speed / ".len();
+    assert!(
+        table.find_reference_at(time_offset).is_some(),
+        "missing reference at the second term"
+    );
+}
+
 #[test]
 fn unfold_axis_and_three_locals_are_navigable() {
     let source = r"
