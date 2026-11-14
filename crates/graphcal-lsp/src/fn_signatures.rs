@@ -129,3 +129,6 @@ pub fn builtin_kernel_signature_info(
             .collect(),
     }
 }
+
+#[cfg(test)]
+mod tests;

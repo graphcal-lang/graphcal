@@ -272,6 +272,35 @@ pub(crate) fn test_plugin_host() -> &'static graphcal_plugin_host::PluginHost {
     HOST.get_or_init(graphcal_plugin_host::PluginHost::new)
 }
 
+/// Use an `untitled:` URI so `build_project` falls through to the in-memory
+/// `LoadedProject::from_source` branch (disk-less analysis).
+#[cfg(test)]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "test-only helper shared with other modules' tests; cargo-hawk rejects `pub` for test-only items"
+)]
+pub(crate) fn untitled_uri() -> tower_lsp::lsp_types::Url {
+    tower_lsp::lsp_types::Url::parse("untitled:test.gcl").unwrap()
+}
+
+/// A temporary directory holding `files` at their relative paths.
+#[cfg(test)]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "test-only helper shared with other modules' tests; cargo-hawk rejects `pub` for test-only items"
+)]
+pub(crate) fn write_project(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, content) in files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+    dir
+}
+
 /// Run the analysis pipeline, producing an `AnalysisResult`.
 ///
 /// The pipeline has two stages:
@@ -841,3 +870,6 @@ mod view_tests {
         assert!(run.analysis.has_no_diagnostics());
     }
 }
+
+#[cfg(test)]
+mod tests;

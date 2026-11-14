@@ -267,6 +267,7 @@ mod tests {
 
     use graphcal_compiler::dimension::Dimension;
     use graphcal_compiler::syntax::index_name::{IndexName, IndexVariantName};
+    use graphcal_compiler::syntax::type_name::{FieldName, StructTypeName};
     use indexmap::IndexMap;
 
     use super::*;
@@ -341,5 +342,250 @@ mod tests {
             "{formatted}"
         );
         assert!(formatted.ends_with("... }"), "{formatted}");
+    }
+
+    fn empty_render_context() -> graphcal_eval::eval::RenderContext {
+        graphcal_eval::eval::RenderContext::new(
+            BTreeMap::new(),
+            graphcal_compiler::semantic::time_zone::TimeZoneRegistry::bundled(),
+        )
+    }
+
+    fn quantity(si_value: f64) -> Value {
+        Value::Quantity {
+            si_value: graphcal_compiler::finite_value::FiniteQuantity::try_new(si_value).unwrap(),
+            dimension: Dimension::dimensionless(),
+            display_unit: None,
+        }
+    }
+
+    fn test_owner() -> graphcal_compiler::dag_id::DagId {
+        graphcal_compiler::dag_id::DagId::root_in_package("test", "<lsp-format-test>")
+    }
+
+    fn test_struct(type_name: StructTypeName, fields: IndexMap<FieldName, Value>) -> Value {
+        let constructor = graphcal_compiler::syntax::type_name::record_constructor_name(&type_name);
+        Value::struct_with_owner(test_owner(), type_name, constructor, fields)
+    }
+
+    fn test_indexed(index_name: IndexName, entries: IndexMap<IndexVariantName, Value>) -> Value {
+        let entries = entries
+            .into_iter()
+            .map(|(variant, value)| {
+                (
+                    graphcal_compiler::syntax::index_name::IndexEntryKey::named(variant),
+                    value,
+                )
+            })
+            .collect();
+        Value::indexed_with_owner(test_owner(), index_name, entries)
+    }
+
+    #[test]
+    fn format_quantity_dimensionless() {
+        let render = empty_render_context();
+        assert_eq!(format_value_inline(&quantity(2.72), &render), "2.72");
+        assert_eq!(format_value_inline(&quantity(42.0), &render), "42");
+    }
+
+    #[test]
+    fn format_bool() {
+        let render = empty_render_context();
+        assert_eq!(format_value_inline(&Value::Bool(true), &render), "true");
+        assert_eq!(format_value_inline(&Value::Bool(false), &render), "false");
+    }
+
+    #[test]
+    fn format_int() {
+        let render = empty_render_context();
+        assert_eq!(format_value_inline(&Value::Int(7), &render), "7");
+    }
+
+    #[test]
+    fn format_struct_with_fields() {
+        let render = empty_render_context();
+        let mut fields = IndexMap::new();
+        fields.insert(FieldName::expect_valid("dv1"), quantity(100.0));
+        fields.insert(FieldName::expect_valid("dv2"), quantity(200.0));
+        let val = test_struct(StructTypeName::expect_valid("TransferResult"), fields);
+        assert_eq!(
+            format_value_inline(&val, &render),
+            "TransferResult(dv1: 100, dv2: 200)"
+        );
+    }
+
+    #[test]
+    fn format_struct_empty_fields() {
+        let render = empty_render_context();
+        let val = test_struct(StructTypeName::expect_valid("Nominal"), IndexMap::new());
+        assert_eq!(format_value_inline(&val, &render), "Nominal");
+    }
+
+    #[test]
+    fn format_struct_multi_variant() {
+        let render = empty_render_context();
+        let mut fields = IndexMap::new();
+        fields.insert(FieldName::expect_valid("thrust"), quantity(0.5));
+        fields.insert(FieldName::expect_valid("duration"), quantity(3600.0));
+        let val = test_struct(StructTypeName::expect_valid("LowThrust"), fields);
+        assert_eq!(
+            format_value_inline(&val, &render),
+            "LowThrust(thrust: 0.5, duration: 3600)"
+        );
+    }
+
+    #[test]
+    fn format_indexed() {
+        let render = empty_render_context();
+        let mut entries = IndexMap::new();
+        entries.insert(IndexVariantName::expect_valid("A"), quantity(1.0));
+        entries.insert(IndexVariantName::expect_valid("B"), quantity(2.0));
+        entries.insert(IndexVariantName::expect_valid("C"), quantity(3.0));
+        let val = test_indexed(IndexName::expect_valid("Phase"), entries);
+        assert_eq!(format_value_inline(&val, &render), "{ A: 1, B: 2, C: 3 }");
+    }
+
+    #[test]
+    fn format_indexed_empty() {
+        let render = empty_render_context();
+        let val = test_indexed(IndexName::expect_valid("Phase"), IndexMap::new());
+        assert_eq!(format_value_inline(&val, &render), "{}");
+    }
+
+    #[test]
+    fn format_indexed_truncation() {
+        let render = empty_render_context();
+        let mut entries = IndexMap::new();
+        // Create entries with long names to trigger truncation at 80 chars
+        entries.insert(
+            IndexVariantName::expect_valid("LongVariantAlpha"),
+            quantity(1.23456),
+        );
+        entries.insert(
+            IndexVariantName::expect_valid("LongVariantBeta"),
+            quantity(2.34567),
+        );
+        entries.insert(
+            IndexVariantName::expect_valid("LongVariantGamma"),
+            quantity(3.45678),
+        );
+        entries.insert(
+            IndexVariantName::expect_valid("LongVariantDelta"),
+            quantity(4.56789),
+        );
+        let val = test_indexed(IndexName::expect_valid("Idx"), entries);
+        let result = format_value_inline(&val, &render);
+        assert!(
+            result.len() <= INLAY_HINT_MAX_LEN + 10,
+            "result too long: {result}"
+        );
+        assert!(result.ends_with("... }"), "expected truncation: {result}");
+    }
+
+    #[test]
+    fn format_struct_inside_indexed() {
+        let render = empty_render_context();
+        let mut fields = IndexMap::new();
+        fields.insert(FieldName::expect_valid("x"), quantity(1.0));
+        let struct_val = test_struct(StructTypeName::expect_valid("Point"), fields);
+        let mut entries = IndexMap::new();
+        entries.insert(IndexVariantName::expect_valid("A"), struct_val);
+        let val = test_indexed(IndexName::expect_valid("Idx"), entries);
+        assert_eq!(format_value_inline(&val, &render), "{ A: Point(x: 1) }");
+    }
+
+    #[test]
+    fn format_nested_indexed_tuple_keyed() {
+        let render = empty_render_context();
+        let mut inner_a = IndexMap::new();
+        inner_a.insert(IndexVariantName::expect_valid("X"), quantity(1.0));
+        inner_a.insert(IndexVariantName::expect_valid("Y"), quantity(2.0));
+        let mut inner_b = IndexMap::new();
+        inner_b.insert(IndexVariantName::expect_valid("X"), quantity(3.0));
+        inner_b.insert(IndexVariantName::expect_valid("Y"), quantity(4.0));
+        let mut entries = IndexMap::new();
+        entries.insert(
+            IndexVariantName::expect_valid("A"),
+            test_indexed(IndexName::expect_valid("Col"), inner_a),
+        );
+        entries.insert(
+            IndexVariantName::expect_valid("B"),
+            test_indexed(IndexName::expect_valid("Col"), inner_b),
+        );
+        let val = test_indexed(IndexName::expect_valid("Row"), entries);
+        assert_eq!(
+            format_value_inline(&val, &render),
+            "{ (A, X): 1, (A, Y): 2, (B, X): 3, (B, Y): 4 }"
+        );
+    }
+
+    #[test]
+    fn format_triple_nested_indexed() {
+        let render = empty_render_context();
+        // 3-level nesting: Scenario[Phase[Maneuver[quantity]]]
+        let mut inner_most = IndexMap::new();
+        inner_most.insert(IndexVariantName::expect_valid("Dep"), quantity(100.0));
+        let mut mid = IndexMap::new();
+        mid.insert(
+            IndexVariantName::expect_valid("Launch"),
+            test_indexed(IndexName::expect_valid("Maneuver"), inner_most),
+        );
+        let mut outer = IndexMap::new();
+        outer.insert(
+            IndexVariantName::expect_valid("Nom"),
+            test_indexed(IndexName::expect_valid("Phase"), mid),
+        );
+        let val = test_indexed(IndexName::expect_valid("Scenario"), outer);
+        assert_eq!(
+            format_value_inline(&val, &render),
+            "{ (Nom, Launch, Dep): 100 }"
+        );
+    }
+
+    #[test]
+    fn format_nested_indexed_truncation() {
+        let render = empty_render_context();
+        let mut inner_a = IndexMap::new();
+        inner_a.insert(
+            IndexVariantName::expect_valid("LongNameAlpha"),
+            quantity(1.23456),
+        );
+        inner_a.insert(
+            IndexVariantName::expect_valid("LongNameBeta"),
+            quantity(2.34567),
+        );
+        inner_a.insert(
+            IndexVariantName::expect_valid("LongNameGamma"),
+            quantity(3.45678),
+        );
+        let mut inner_b = IndexMap::new();
+        inner_b.insert(
+            IndexVariantName::expect_valid("LongNameAlpha"),
+            quantity(4.56789),
+        );
+        inner_b.insert(
+            IndexVariantName::expect_valid("LongNameBeta"),
+            quantity(5.6789),
+        );
+        inner_b.insert(
+            IndexVariantName::expect_valid("LongNameGamma"),
+            quantity(6.7891),
+        );
+        let mut entries = IndexMap::new();
+        entries.insert(
+            IndexVariantName::expect_valid("LongOuter1"),
+            test_indexed(IndexName::expect_valid("Inner"), inner_a),
+        );
+        entries.insert(
+            IndexVariantName::expect_valid("LongOuter2"),
+            test_indexed(IndexName::expect_valid("Inner"), inner_b),
+        );
+        let val = test_indexed(IndexName::expect_valid("Outer"), entries);
+        let result = format_value_inline(&val, &render);
+        assert!(
+            result.len() <= INLAY_HINT_MAX_LEN + 10,
+            "result too long: {result}"
+        );
+        assert!(result.ends_with("... }"), "expected truncation: {result}");
     }
 }

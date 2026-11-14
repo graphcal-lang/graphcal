@@ -57,3 +57,6 @@ pub fn signature_help(
         active_parameter: Some(active_param),
     })
 }
+
+#[cfg(test)]
+mod tests;

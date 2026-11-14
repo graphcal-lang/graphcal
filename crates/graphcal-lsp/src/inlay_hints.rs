@@ -62,3 +62,6 @@ pub fn inlay_hints(analysis: &AnalysisResult, range: Range) -> Option<Vec<InlayH
 
     if hints.is_empty() { None } else { Some(hints) }
 }
+
+#[cfg(test)]
+mod tests;
