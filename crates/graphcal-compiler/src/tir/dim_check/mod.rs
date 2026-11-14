@@ -485,18 +485,13 @@ fn broadcast_operand_element<'a>(
 }
 
 /// Structurally fold a tolerance expression to its written literal value
-/// when the sign is statically known: a numeric literal (`0.1`, `5`,
-/// `0.1 m` — unit scales are always positive, so the written value carries
+/// when the sign is statically known: a numeric literal (`0.1`, `0.1 m` —
+/// unit scales are always positive, so the written value carries
 /// the sign), optionally under unary negation. Returns `None` for anything
 /// computed at runtime; those are sign-checked by the evaluator instead.
 fn statically_known_tolerance(expr: &crate::hir::expr::Expr) -> Option<f64> {
     match expr.kind() {
         crate::hir::expr::ExprKind::Number(n) => Some(*n),
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "tolerance literals are small integers"
-        )]
-        crate::hir::expr::ExprKind::Integer(i) => Some(*i as f64),
         crate::hir::expr::ExprKind::QuantityLiteral { value, .. } => Some(*value),
         crate::hir::expr::ExprKind::UnaryOp {
             op: crate::syntax::ast::UnaryOp::Neg,
