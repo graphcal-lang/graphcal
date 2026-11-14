@@ -564,15 +564,17 @@ include_param_bindings
             { ",", include_param_binding }, [ "," ] ], ")";
 
 (* Binding names are semantically unique within one list. Their order has no
-   effect. An unmarked binding selects exactly a param Term. Static ports require
-   an explicit `type`, `dim`, or `index` marker; there is deliberately no
-   `param` marker. The shared parser retains the RHS as expr until the selected
-   target category is known. *)
+   effect. An unmarked binding selects exactly a param Term and takes a value
+   expression. Static ports require an explicit `type`, `dim`, or `index`
+   marker, which selects the grammar of the value; there is deliberately no
+   `param` marker. A static binding value must name a declared type,
+   dimension, or index (or be `Fin(N)` for an index); other well-formed type
+   and dimension expressions are rejected semantically. *)
 include_param_binding
-   = [ input_binding_category ], IDENT, ":", expr;
-
-input_binding_category
-   = "type" | "dim" | "index";
+   = IDENT, ":", expr
+   | "type", IDENT, ":", type_expr
+   | "dim", IDENT, ":", dim_expr
+   | "index", IDENT, ":", index_expr;
 
 (* --- dag --- *)
 (* DAG blocks define reusable, parameterized computation. They

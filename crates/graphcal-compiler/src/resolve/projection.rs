@@ -8,9 +8,7 @@ use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
 use crate::semantic::index_def::FiniteIndex;
-use crate::syntax::ast::{
-    BindableVisibility, ExprKind, ImportKind, InputBindingCategory, UnresolvedRef,
-};
+use crate::syntax::ast::{BindableVisibility, ImportKind, InputBindingCategory};
 use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::{IndexName, IndexNameNamespace};
@@ -49,11 +47,11 @@ impl ModuleResolver {
         let has_static_bindings = include
             .param_bindings
             .iter()
-            .any(|binding| binding.category != InputBindingCategory::Unmarked);
+            .any(|binding| binding.category() != InputBindingCategory::Unmarked);
         let has_dimension_bindings = include
             .param_bindings
             .iter()
-            .any(|binding| binding.category == InputBindingCategory::Dimension);
+            .any(|binding| binding.category() == InputBindingCategory::Dimension);
         let instance = owner.instance_child(include.instance_scope());
         for item in items {
             let category = match item.namespace {
@@ -64,13 +62,12 @@ impl ModuleResolver {
             };
             let binding = category.and_then(|category| {
                 include.param_bindings.iter().find(|binding| {
-                    binding.category == category && binding.name.name == item.name.name
+                    binding.category() == category && binding.name.name == item.name.name
                 })
             });
-            let binding_path = binding.and_then(|binding| match &binding.value.kind {
-                ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => Some(path.to_name_path()),
-                _ => None,
-            });
+            let binding_path = binding
+                .and_then(|binding| binding.value.static_name())
+                .map(|name| name.value.clone());
             let visibility = BindableVisibility::from(item.visibility);
             let local = item.local_name_atom().clone();
             let source = item.name.name.atom();
@@ -264,7 +261,7 @@ impl ModuleResolver {
                     };
                     let owner_type = &constructor.data().owner_type;
                     if include.param_bindings.iter().any(|binding| {
-                        binding.category == InputBindingCategory::Type
+                        binding.category() == InputBindingCategory::Type
                             && binding.name.name.atom() == owner_type.atom()
                     }) {
                         return Err(ModuleResolveError::ConstructorOwnerRebound {
@@ -347,13 +344,16 @@ fn dimension_port_bindings(include: &ast::IncludeDecl) -> Vec<DimensionPortBindi
     include
         .param_bindings
         .iter()
-        .filter(|binding| binding.category == InputBindingCategory::Dimension)
-        .filter_map(|binding| match &binding.value.kind {
-            ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => Some(DimensionPortBinding::new(
-                DimName::classify(binding.name.name.atom().clone()),
-                path.to_name_path(),
-            )),
-            _ => None,
+        .filter_map(|binding| match &binding.value {
+            ast::BindingValue::Dimension(dim) => dim.as_lone_name().map(|name| {
+                DimensionPortBinding::new(
+                    DimName::classify(binding.name.name.atom().clone()),
+                    name.value.clone(),
+                )
+            }),
+            ast::BindingValue::Value(_)
+            | ast::BindingValue::Type(_)
+            | ast::BindingValue::Index(_) => None,
         })
         .collect()
 }
@@ -362,12 +362,15 @@ fn dimension_port_bindings(include: &ast::IncludeDecl) -> Vec<DimensionPortBindi
 /// `Fin(N)`.
 ///
 /// Any other value is rejected by the include's binding validation.
-fn finite_index_binding(value: &ast::Expr) -> Option<FiniteIndex> {
-    match value.index_binding_arg()? {
-        ast::IndexExpr::Finite { cardinality, .. } => {
-            FiniteIndex::try_from_u64(concrete_nat_value(&cardinality)?).ok()
+fn finite_index_binding(value: &ast::BindingValue) -> Option<FiniteIndex> {
+    match value {
+        ast::BindingValue::Index(ast::IndexExpr::Finite { cardinality, .. }) => {
+            FiniteIndex::try_from_u64(concrete_nat_value(cardinality)?).ok()
         }
-        ast::IndexExpr::Name(_) | ast::IndexExpr::BareNat(_) => None,
+        ast::BindingValue::Index(ast::IndexExpr::Name(_) | ast::IndexExpr::BareNat(_))
+        | ast::BindingValue::Value(_)
+        | ast::BindingValue::Type(_)
+        | ast::BindingValue::Dimension(_) => None,
     }
 }
 

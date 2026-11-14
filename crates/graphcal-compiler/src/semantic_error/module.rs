@@ -94,7 +94,10 @@ pub enum ModuleError {
         expected: &'static str,
     },
     #[error("invalid type-level binding value for `{name}`")]
-    InvalidTypeLevelBindingValue { name: NameAtom },
+    InvalidTypeLevelBindingValue {
+        kind: crate::static_interface::StaticInputKind,
+        name: NameAtom,
+    },
     #[error("index binding `{dep_index}: {value}`: `{value}` is not a known index")]
     IndexBindingNotAnIndex {
         dep_index: IndexName,
@@ -219,7 +222,11 @@ impl DiagnosticKind for ModuleError {
             Self::UnknownParamBinding { .. } => Some("param bindings must reference `param` declarations in the imported file".to_owned()),
             Self::BindingNotAParam { .. } => Some("only `param` declarations can be overridden in import bindings".to_owned()),
             Self::DagInputCategoryMismatch { .. } => Some("the binding marker selects exactly one input category; correct the marker or target name".to_owned()),
-            Self::InvalidTypeLevelBindingValue { name, .. } => Some(format!("index bindings accept a compatible index name or structural axis such as `index {name}: Fin(3)`; type and dimension bindings use the explicit `type` and `dim` markers")),
+            Self::InvalidTypeLevelBindingValue { kind, name } => Some(match kind {
+                crate::static_interface::StaticInputKind::Index => format!("index bindings accept a compatible index name or structural axis such as `index {name}: Fin(3)`"),
+                crate::static_interface::StaticInputKind::Type => format!("type bindings accept the name of a declared type, such as `type {name}: Item`; an applied generic type cannot be bound"),
+                crate::static_interface::StaticInputKind::Dimension => format!("dimension bindings accept the name of a declared dimension, such as `dim {name}: Length`; declare a derived dimension under a name (`dim Speed = Length / Time;`) to bind it"),
+            }),
             Self::IndexBindingNotAnIndex { .. } => Some("the right-hand side must name a compatible index visible in the including DAG or use a structural Fin(N) axis".to_owned()),
             Self::IndexKindMismatch { .. } => Some("unconstrained required indexes accept named or Fin(N) axes; concrete named indexes remain named-only, and coordinate indexes remain coordinate-only".to_owned()),
             Self::ImportRuntimeItem { .. } => Some("`import` only allows compile-time items (const, dimension, unit, type, index, dag); use `include` for runtime nodes and params".to_owned()),

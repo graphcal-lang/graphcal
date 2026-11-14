@@ -1,13 +1,16 @@
-//! Importer-side values of type-level include bindings (`Index: Target`,
-//! `Type: Target`), read from their desugared source expressions.
+//! Importer-side values of type-level include bindings (`index I: Target`,
+//! `type T: Target`, `dim D: Target`), read from their parsed values.
 
-use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind};
+use graphcal_compiler::desugar::desugared_ast::{BindingValue, IndexExpr};
 use graphcal_compiler::semantic::index_def::IndexBindingTarget;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::module::ModuleError;
 use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::static_interface::StaticInputKind;
 use graphcal_compiler::syntax::index_name::IndexName;
+use graphcal_compiler::syntax::names::NameAtom;
+use graphcal_compiler::syntax::span::Span;
 
 use crate::compile_error::PipelineError;
 
@@ -16,34 +19,35 @@ use crate::compile_error::PipelineError;
 /// The source expression crosses into the typed include core as either a
 /// declared index name or a validated structural finite identity.
 pub(super) fn extract_index_binding_target(
-    expr: &Expr,
+    index: &IndexExpr,
+    span: Span,
     dep_index_name: &IndexName,
     file_src: SourceId,
 ) -> Result<IndexBindingTarget, PipelineError> {
-    use graphcal_compiler::desugar::desugared_ast::IndexExpr;
     use graphcal_compiler::semantic::index_def::FiniteIndex;
 
     let invalid_binding = || {
         PipelineError::Semantic(SemanticError::located(
             file_src,
-            expr.span,
+            span,
             ModuleError::InvalidTypeLevelBindingValue {
+                kind: StaticInputKind::Index,
                 name: dep_index_name.atom().clone(),
             },
         ))
     };
-    match expr.index_binding_arg().ok_or_else(invalid_binding)? {
+    match index {
         IndexExpr::Name(path) => path
             .value
             .as_bare()
             .map(|name| IndexBindingTarget::Declared(IndexName::classify(name.clone())))
             .ok_or_else(invalid_binding),
         IndexExpr::Finite { cardinality, .. } => {
-            let cardinality = closed_binding_cardinality(&cardinality, file_src)?;
+            let cardinality = closed_binding_cardinality(cardinality, file_src)?;
             let finite = FiniteIndex::try_from_u64(cardinality).map_err(|error| {
                 PipelineError::Semantic(SemanticError::located(
                     file_src,
-                    expr.span,
+                    span,
                     IndexError::InvalidFiniteIndexCardinality { error },
                 ))
             })?;
@@ -81,38 +85,28 @@ fn closed_binding_cardinality(
     }
 }
 
-/// Extract a `PascalCase` type name from a binding expression.
+/// The importer-side static name a `type` or `dim` binding names.
 ///
-/// Type bindings use the form `DepType: ImporterType` — the RHS is a bare
-/// `PascalCase` identifier (an unresolved reference path in the desugared
-/// AST) or a zero-arg `ConstructorCall` for constructor-shaped RHSs.
-pub(super) fn extract_type_name_from_binding_expr(
-    expr: &Expr,
-    dep_type_name: &graphcal_compiler::syntax::names::NameAtom,
+/// An include binding names a declared type or dimension of the importer by
+/// a bare name; anything else (an applied type, a dimension product, a
+/// qualified path) is not a bindable value here.
+pub(super) fn static_binding_name<'v>(
+    value: &'v BindingValue,
+    kind: StaticInputKind,
+    dep_name: &NameAtom,
     file_src: SourceId,
-) -> Result<String, PipelineError> {
-    let invalid_binding = || {
-        PipelineError::Semantic(SemanticError::located(
-            file_src,
-            expr.span,
-            ModuleError::InvalidTypeLevelBindingValue {
-                name: dep_type_name.clone(),
-            },
-        ))
-    };
-    match &expr.kind {
-        ExprKind::UnresolvedRef(graphcal_compiler::syntax::ast::UnresolvedRef::Path(path)) => path
-            .as_bare()
-            .map(|ident| ident.name.to_string())
-            .ok_or_else(invalid_binding),
-        ExprKind::ConstructorCall {
-            callee,
-            generic_args,
-            fields,
-        } if generic_args.is_empty() && fields.is_empty() => callee
-            .as_bare()
-            .map(|ident| ident.name.to_string())
-            .ok_or_else(invalid_binding),
-        _ => Err(invalid_binding()),
-    }
+) -> Result<&'v NameAtom, PipelineError> {
+    value
+        .static_name()
+        .and_then(|name| name.value.as_bare())
+        .ok_or_else(|| {
+            PipelineError::Semantic(SemanticError::located(
+                file_src,
+                value.span(),
+                ModuleError::InvalidTypeLevelBindingValue {
+                    kind,
+                    name: dep_name.clone(),
+                },
+            ))
+        })
 }

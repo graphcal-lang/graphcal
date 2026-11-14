@@ -1195,19 +1195,50 @@ fn parse_include_dotted_path_with_param_bindings() {
 }
 
 #[test]
-fn include_binding_recovers_finite_index_argument_shape() {
+fn include_index_binding_is_parsed_as_an_index_expression() {
     let file = Parser::new("include scale(index Axis: Fin(1 + 2)) as scaled;")
         .parse_file()
         .unwrap();
     let DeclKind::Include(include) = &file.declarations[0].kind else {
         panic!("expected Include");
     };
-    let Some(crate::syntax::ast::IndexExpr::Finite { cardinality, .. }) =
-        include.param_bindings[0].value.index_binding_arg()
+    let crate::syntax::ast::BindingValue::Index(crate::syntax::ast::IndexExpr::Finite {
+        cardinality,
+        ..
+    }) = &include.param_bindings[0].value
     else {
         panic!("expected finite index binding argument");
     };
     assert_eq!(cardinality.to_string(), "1 + 2");
+}
+
+/// Each marker selects its own grammar: a `type` binding takes a type
+/// expression (generic applications included) and a `dim` binding a
+/// dimension expression, instead of a value expression reclassified later.
+#[test]
+fn include_static_bindings_are_parsed_with_their_marker_grammar() {
+    use crate::syntax::ast::BindingValue;
+    let file = Parser::new(
+        "include holder(type Element: Vec3<Length, Eci>, dim D: Length / Time, \
+         type Item: Marker, x: 1.0) as h;",
+    )
+    .parse_file()
+    .unwrap();
+    let DeclKind::Include(include) = &file.declarations[0].kind else {
+        panic!("expected Include");
+    };
+    let [applied, product, named, value] = include.param_bindings.as_slice() else {
+        panic!("expected four bindings");
+    };
+    assert!(matches!(&applied.value, BindingValue::Type(_)));
+    assert!(applied.value.static_name().is_none());
+    assert!(matches!(&product.value, BindingValue::Dimension(_)));
+    assert!(product.value.static_name().is_none());
+    assert_eq!(
+        named.value.static_name().map(|name| name.value.to_string()),
+        Some("Marker".to_string())
+    );
+    assert!(matches!(&value.value, BindingValue::Value(_)));
 }
 
 #[test]

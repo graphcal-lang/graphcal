@@ -168,10 +168,13 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
                 got: *got,
             },
         ),
-        ExprLowerError::InvalidStaticBindingValue { name, span } => SemanticError::located(
+        ExprLowerError::InvalidStaticBindingValue { kind, name, span } => SemanticError::located(
             src,
             *span,
-            ModuleError::InvalidTypeLevelBindingValue { name: name.clone() },
+            ModuleError::InvalidTypeLevelBindingValue {
+                kind: *kind,
+                name: name.clone(),
+            },
         ),
         ExprLowerError::TodoHoleNotAllowed { span } => {
             SemanticError::located(src, *span, GraphError::TodoHoleOutsideFormula)

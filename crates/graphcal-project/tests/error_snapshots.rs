@@ -719,6 +719,28 @@ fn error_prelude_dimension_as_value() {
     insta::assert_snapshot!(rendered);
 }
 
+/// A `type` binding is parsed as a type expression, so an applied generic
+/// type reaches the targeted type-binding diagnostic instead of a parse error.
+#[test]
+fn error_type_binding_to_applied_type() {
+    let source = "type Eci { Eci }\n\
+        type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }\n\
+        dag holder {\n    pub(bind) type Element;\n    param value: Element;\n    pub node out: Element = @value;\n}\n\
+        include holder(type Element: Vec3<Length, Eci>, value: Vec3<Length, Eci>(x: 1.0 m, y: 2.0 m, z: 3.0 m)) as h;\n";
+    let rendered = render_error(source, "type_binding_to_applied_type.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+/// A `dim` binding is parsed as a dimension expression, so a derived
+/// dimension gets dimension-binding help rather than index-binding help.
+#[test]
+fn error_dim_binding_to_dimension_product() {
+    let source = "dag holder {\n    pub(bind) dim D;\n    param value: D;\n    pub node out: D = @value;\n}\n\
+        include holder(dim D: Length / Time, value: 1.0 m/s) as h;\n";
+    let rendered = render_error(source, "dim_binding_to_dimension_product.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 /// A static name in value position is an unknown Term name: there is no
 /// separate type-system-as-value diagnostic.
 #[test]

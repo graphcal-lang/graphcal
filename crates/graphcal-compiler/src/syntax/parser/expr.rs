@@ -1856,7 +1856,7 @@ mod tests {
                 assert_eq!(args.len(), 1);
                 assert_eq!(args[0].name.name.as_str(), "x");
                 assert!(
-                    matches!(&args[0].value.kind, ExprKind::GraphRef(id) if id.to_scoped_name().leaf().as_str() == "p")
+                    matches!(&args[0].value, crate::syntax::ast::BindingValue::Value(value) if matches!(&value.kind, ExprKind::GraphRef(id) if id.to_scoped_name().leaf().as_str() == "p"))
                 );
                 assert_eq!(output.value.as_str(), "result");
             }

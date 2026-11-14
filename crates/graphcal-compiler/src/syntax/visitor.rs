@@ -15,7 +15,7 @@
 //! override only the leaf methods they care about.
 
 use crate::syntax::ast::{
-    Expr, ExprKind, GenericArg, IndexArg, RawExprSugar, TypeExpr, TypeExprKind,
+    BindingValue, Expr, ExprKind, GenericArg, IndexArg, RawExprSugar, TypeExpr, TypeExprKind,
 };
 use crate::syntax::non_empty::NonEmpty;
 use crate::syntax::phase::{Desugared, Phase, Raw};
@@ -199,14 +199,19 @@ pub trait ExprVisitor<P: VisitablePhase> {
         Ok(())
     }
 
-    /// Called for `InlineDagRef`. Default: recurse into binding value expressions.
+    /// Called for `InlineDagRef`. Default: recurse into value expressions
+    /// and type-binding values.
     fn visit_inline_dag_ref(
         &mut self,
         _expr: &Expr<P>,
         args: &[crate::syntax::ast::ParamBinding<P>],
     ) -> Result<(), Self::Error> {
         for arg in args {
-            self.visit_expr(&arg.value)?;
+            match &arg.value {
+                BindingValue::Value(value) => self.visit_expr(value)?,
+                BindingValue::Type(type_expr) => self.visit_type_expr(type_expr)?,
+                BindingValue::Dimension(_) | BindingValue::Index(_) => {}
+            }
         }
         Ok(())
     }
