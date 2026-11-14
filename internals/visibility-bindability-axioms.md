@@ -376,8 +376,10 @@ import pkg.types.{ pub dim Length, pub dim Mass, helper };
 ```
 
 Only `origin`, `Length`, and `Mass` become public in this example. `helper`
-and both qualified aliases remain private. `pub import ...`, `pub include
-...`, and their `pub(bind)` variants are parse errors.
+and both qualified aliases remain private. A whole-DAG import alias becomes
+public only with a leading `pub` (`pub import pkg.types as types`); `pub
+include ...`, `pub` on a selective import, and every `pub(bind)` variant are
+parse errors.
 
 Selective public items feed A9 Case 2 (V006). The check ranges only over
 signatures of explicitly `pub`-marked items after include substitutions.

@@ -38,8 +38,9 @@ pub struct LoweredFile {
 ///
 /// This combines:
 /// 1. Name resolution (`resolve`) — checks duplicates, extracts deps
-/// 2. Registry construction — registers dimensions, units, indexes, structs from declarations
-/// 3. Function registration — registers user-defined functions into the registry
+/// 2. Static definitions — evaluates the dimensions, units, indexes, and
+///    nominal types the module declares
+/// 3. Declaration lowering — lowers the module's declarations into HIR
 ///
 /// # Errors
 ///
