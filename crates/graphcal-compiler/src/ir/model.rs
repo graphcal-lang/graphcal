@@ -133,9 +133,11 @@ pub struct RequestedPlot {
 ///
 /// Contains everything downstream stages need:
 /// - The module's owner-qualified dimension, unit, index, and nominal definitions
-/// - Declarations (consts, params, nodes) with their expressions
-/// - Dependency graphs for const and runtime evaluation ordering
-/// - Source-order tracking for deterministic output
+/// - Declarations (consts, params, nodes) with their expressions, in source
+///   order for deterministic output
+/// - Include instances, imported bindings, and extern function signatures
+///
+/// Evaluation ordering is derived later, from the typed declarations.
 #[derive(Debug)]
 pub struct HirDag {
     /// Canonical identity carried by the body itself, so storage and consumers

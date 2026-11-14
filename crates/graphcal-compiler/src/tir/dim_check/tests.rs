@@ -3132,10 +3132,56 @@ fn domain_bound_quantity_literal_matches() {
     check(source).unwrap();
 }
 
+/// The written integer literal of an `Int` bound on a `Dimensionless`
+/// domain, or a panic naming the unexpected outcome.
+fn int_bound_on_dimensionless_literal(source: &str) -> Option<i64> {
+    match check(source) {
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Domain(DomainError::IntBoundOnDimensionlessDomain {
+                    literal, ..
+                }),
+            ..
+        })) => literal,
+        other => panic!("expected IntBoundOnDimensionlessDomain, got: {other:?}"),
+    }
+}
+
 #[test]
-fn domain_bound_dimensionless_accepts_int() {
-    // Bare Int literal is accepted as a Dimensionless bound (existing behavior).
+fn domain_bound_dimensionless_rejects_int_literal() {
+    // Bounds are comparisons, and `Int` is never compared with a quantity (#2234).
     let source = "param r: Dimensionless(min: 0, max: 1) = 0.5;";
+    assert_eq!(int_bound_on_dimensionless_literal(source), Some(0));
+}
+
+#[test]
+fn domain_bound_dimensionless_rejects_negated_int_literal() {
+    let source = "param r: Dimensionless(min: -3, max: 1.0) = 0.5;";
+    assert_eq!(int_bound_on_dimensionless_literal(source), Some(-3));
+}
+
+#[test]
+fn domain_bound_dimensionless_rejects_computed_int() {
+    let source = "const node LOW: Int = 2;\nparam r: Dimensionless(min: 0.0, max: @LOW) = 0.5;";
+    assert_eq!(int_bound_on_dimensionless_literal(source), None);
+}
+
+#[test]
+fn domain_bound_dimensionless_field_rejects_int_literal() {
+    let source = "type Ratio { Ratio(r: Dimensionless(max: 1)) }\nnode x: Ratio = Ratio(r: 0.5);";
+    assert_eq!(int_bound_on_dimensionless_literal(source), Some(1));
+}
+
+#[test]
+fn domain_bound_generic_field_specialized_to_dimensionless_rejects_int() {
+    let source = "type Box<D: Dim> { Box(x: D(min: 0)) }\nnode b: Box<Dimensionless> = Box<Dimensionless>(x: 0.5);";
+    assert_eq!(int_bound_on_dimensionless_literal(source), Some(0));
+}
+
+#[test]
+fn domain_bound_dimensionless_accepts_converted_int() {
+    let source =
+        "const node LOW: Int = 2;\nparam r: Dimensionless(min: 0.0, max: to_float(@LOW)) = 0.5;";
     check(source).unwrap();
 }
 

@@ -12,7 +12,8 @@ use crate::semantic::index_def::FiniteIndex;
 /// Canonical importer-side target of one instance index binding.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum InstanceIndexBindingTarget {
-    /// A declared index owned by the importing DAG.
+    /// A declared index visible to the importing DAG: its own or one it
+    /// imports.
     Declared(ResolvedIndexName),
     /// A structural finite index supplied directly at the instance boundary.
     Finite(FiniteIndex),

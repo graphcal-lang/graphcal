@@ -257,7 +257,6 @@ impl<'t> super::linear_algebra::LinearOperands<ScopedNode<'t>> for Operands<'_, 
     }
 }
 
-/// Evaluate an operation whose result is a real quantity.
 /// Plugin-call arguments are operands read at the kind their checked node
 /// carries.
 impl<'t> ArgumentReader<ScopedNode<'t>> for Operands<'_, 't> {

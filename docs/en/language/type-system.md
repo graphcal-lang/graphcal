@@ -757,7 +757,8 @@ T(min: expr, max: expr)[I]        // constrained indexed type (element-wise)
 Here `T` must be a quantity type, `Int`, or `Datetime<S>`, and `I` is an
 index axis. Both `min` and `max` are optional—you can specify one or both.
 Bounds are inclusive compile-time constant expressions. Each bound must have
-the type required by `T`; in particular, `Int` bounds are exactly `Int`, and
+the type required by `T`; in particular, `Int` bounds are exactly `Int`,
+`Dimensionless` bounds are `Dimensionless` numbers (`0.0`, not `0`), and
 datetime bounds are exactly the target `Datetime<S>` scale.
 
 ### Supported Types

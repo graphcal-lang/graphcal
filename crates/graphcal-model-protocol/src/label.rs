@@ -110,7 +110,8 @@ label_type!(
     "module name"
 );
 label_type!(
-    /// The declared name of a categorical index.
+    /// The declared name of an index: a named (categorical) or a coordinate
+    /// index. Structural `Fin(n)` axes have no name.
     IndexName,
     "index name"
 );

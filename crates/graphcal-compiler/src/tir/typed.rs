@@ -1715,10 +1715,8 @@ impl HirPolicyChecker<'_> {
     }
 }
 
-/// Augment runtime deps with transitive dependencies through dynamic units.
-///
-/// When a param/node expression references a dynamic unit (via a unit
-/// literal or conversion), the `@`-references in that unit's scale
+/// Dependency collection: declared dependencies, constructed types, and the
+/// reads that dynamic unit scales add to their users.
 mod collect;
 pub(crate) use collect::dynamic_unit_scale_reads;
 use collect::{

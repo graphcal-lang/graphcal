@@ -412,12 +412,18 @@ disappear [`Environment.supplied`; the §7 theorems hold for any set of
 supplied members].
 
 ```gcl
+pub index Step = range(0.0 s, 3.0 s, step: 1.0 s);
+param initial_state: Dimensionless = 1.0;
+param k: Dimensionless = 0.5;
 param state: Dimensionless[Step] = unfold(Step, @initial_state, |s, prev_t, t| s + @action[prev_t]);
 node action: Dimensionless[Step] = for t: Step { -@k * @state[t] };
 ```
 
-With `state` supplied as `2, 1, 0.5, 0.25`, `action` is `−1, −0.5, −0.25, −0.125`.
-[`Examples.supplied_statuses`]
+`Step` is `pub` because a param's type is part of the DAG's public interface
+(V003 otherwise). With `state` supplied as `2, 1, 0.5, 0.25`, `action` is
+`−1, −0.5, −0.25, −0.125`. [`Examples.supplied_statuses`] Here `state` can be
+supplied only by an include binding or a DAG call argument: `--param` and
+`--params-json` have no way to spell a value on a `range` axis yet (#1370).
 
 ### 4.5 No early reads
 

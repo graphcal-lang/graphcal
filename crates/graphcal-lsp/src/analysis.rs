@@ -52,8 +52,8 @@ pub struct AnalysisResult {
     /// Diagnostics to publish, grouped by the URI they belong to. The active
     /// document's URI is always present (with an empty Vec when clean) so a
     /// previously-published diagnostic can be cleared. Shared via `Arc` so
-    /// `store_and_publish` can hand a snapshot to the publish loop without
-    /// deep-cloning the map on every analysis cycle.
+    /// the server's stored document can keep a snapshot for publishing
+    /// without deep-cloning the map on every analysis cycle.
     pub diagnostics: Arc<HashMap<Url, Vec<Diagnostic>>>,
     /// Computed values from evaluation, keyed by runtime declaration identity.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
@@ -77,8 +77,9 @@ pub struct AnalysisResult {
     /// not parse, so the symbol-dependent fields are empty placeholders and
     /// only `diagnostics` is meaningful. [`store_analysis`] keeps the
     /// previous good symbol state in that case (#834) — mid-edit buffers are
-    /// unparsable more often than not, and completion/hover/goto should keep
-    /// answering from the last successfully analyzed state.
+    /// unparsable more often than not, and completion and signature help
+    /// keep answering from the last successfully analyzed state (coordinate
+    /// features such as hover and goto wait for a buffer that parses).
     pub buffer_parsed: bool,
     /// Whether the project loaded and passed the compiler's checks; runtime
     /// (evaluation) diagnostics do not count.

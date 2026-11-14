@@ -361,9 +361,11 @@ ordinary export visibility `V`.
 ### 4.1 Visibility on `include` and `import`
 
 `include` and `import` are use-sites, not declarations — A5 says they
-don't admit bindability (`B ≡ fixed`). The use-site itself also has no
-V-axis. Bare/aliased forms create private qualified bindings; visibility
-may be attached only to bindings explicitly named in a selective list.
+don't admit bindability (`B ≡ fixed`). `include` and selective imports have
+no use-site V-axis: visibility may be attached only to bindings explicitly
+named in a selective list. Bare/aliased forms create private qualified
+bindings; the one exception is a whole-DAG import alias, which a leading
+`pub` makes public.
 
 ```text
 // Private qualified bindings
@@ -376,8 +378,10 @@ import pkg.types.{ pub dim Length, pub dim Mass, helper };
 ```
 
 Only `origin`, `Length`, and `Mass` become public in this example. `helper`
-and both qualified aliases remain private. `pub import ...`, `pub include
-...`, and their `pub(bind)` variants are parse errors.
+and both qualified aliases remain private. A whole-DAG import alias becomes
+public only with a leading `pub` (`pub import pkg.types as types`); `pub
+include ...`, `pub` on a selective import, and every `pub(bind)` variant are
+parse errors.
 
 Selective public items feed A9 Case 2 (V006). The check ranges only over
 signatures of explicitly `pub`-marked items after include substitutions.

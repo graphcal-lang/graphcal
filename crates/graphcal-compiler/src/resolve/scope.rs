@@ -360,8 +360,9 @@ pub(super) fn module_alias(
 /// module's Term namespace whether or not the loader resolves its target to a
 /// registered module, so an alias and a local declaration of the same name are
 /// rejected uniformly. The one exception is an alias that re-spells the local
-/// `dag` its single-segment path names (`include d(...)`, `import d`): it
-/// shares that declaration's name rather than introducing a second one.
+/// `dag` its single-segment path names (`include d(...)`, `import d`): it is
+/// not claimed here, because the module's declaration-name check already
+/// rejects it as a duplicate name (N001) and must be its only report.
 ///
 /// Import and include aliases are installed later, when their loader-resolved
 /// edge registers (see [`ModuleScope::add_imports`]); plugin aliases have no

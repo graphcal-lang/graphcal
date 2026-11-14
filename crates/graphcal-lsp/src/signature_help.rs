@@ -12,13 +12,14 @@ use crate::fn_signatures::ExternCallee;
 ///
 /// Returns function parameter information when the cursor is inside a function
 /// call's argument list, highlighting the active parameter.
+///
+/// `source` is the latest editor text (which may be newer than
+/// `analysis.source`): the call context must reflect the just-typed `(`
+/// or `,`, while the signatures come from the cached analysis.
 #[expect(
     clippy::cast_possible_truncation,
     reason = "active_param is a small index; truncation is harmless"
 )]
-/// `source` is the latest editor text (which may be newer than
-/// `analysis.source`): the call context must reflect the just-typed `(`
-/// or `,`, while the signatures come from the cached analysis.
 pub fn signature_help(
     analysis: &AnalysisResult,
     source: &str,

@@ -75,12 +75,15 @@ lockfile is missing, stale, uses a different Graphcal or standard-library
 version, or references a missing or hash-mismatched cache entry, they fail and
 ask you to run `graphcal deps lock`.
 
-Private Git repositories are supported only when the underlying Git fetch can
-obtain credentials from the current environment. This is intentionally not a
-portable guarantee: SSH may work with a configured key/agent, while HTTPS may
-fail unless a compatible credential helper or non-interactive credential
-provider is available. Do not place credentials directly in `git` URLs in
-`graphcal.toml`. `GRAPHCAL_CACHE_DIR` overrides the cache root.
+Graphcal fetches dependencies with a built-in Git client that ignores your Git
+configuration and Git environment variables: credential helpers,
+`GIT_ASKPASS`/`SSH_ASKPASS`, `insteadOf` rewrites, `core.sshCommand`, and
+`GIT_SSH_COMMAND` have no effect. For a private repository, use an SSH URL:
+Graphcal runs `ssh` (or the program named by `GIT_SSH`), which uses your
+OpenSSH configuration, keys, and agent. A private HTTPS repository can only be
+fetched by typing a username and token at the terminal prompt, so it does not
+work non-interactively, for example in CI. Do not place credentials directly in
+`git` URLs in `graphcal.toml`. `GRAPHCAL_CACHE_DIR` overrides the cache root.
 
 **Examples:**
 

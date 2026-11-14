@@ -11,7 +11,8 @@ use crate::source_id::SourceId;
 
 /// What a domain bound expression must infer to for a given target type.
 pub(super) enum ExpectedBound {
-    /// Bound must be `Quantity(d)`. `Int` is also accepted when `d` is dimensionless.
+    /// Bound must be `Quantity(d)`, also when `d` is dimensionless: an `Int`
+    /// bound is never compared with a quantity value.
     Quantity(Dimension),
     /// Bound must be exactly `Int`, preserving the full `i64` range.
     Int,
@@ -62,12 +63,21 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
 ) -> Result<(), SemanticError> {
     match expected {
         ExpectedBound::Quantity(target_dim) => {
-            let ok = match inferred {
-                CheckedType::Int => target_dim.is_dimensionless(),
-                other => other.quantity_dimension() == Some(target_dim),
-            };
-            if ok {
+            if inferred.quantity_dimension() == Some(target_dim) {
                 return Ok(());
+            }
+            if matches!(inferred, CheckedType::Int) && target_dim.is_dimensionless() {
+                // Located at the bound's value, so an editor can replace a
+                // written literal with its `Dimensionless` spelling.
+                return Err(SemanticError::located(
+                    src,
+                    bound.value.span,
+                    DomainError::IntBoundOnDimensionlessDomain {
+                        name: display_name.clone(),
+                        bound_name: bound.kind,
+                        literal: written_int_literal(&bound.value),
+                    },
+                ));
             }
             let bound_dim = inferred.quantity_dimension().map_or_else(
                 || DomainTypeSpelling::Checked(inferred.spelling(&registry.dimensions)),
@@ -117,5 +127,24 @@ pub(super) fn check_one_bound_with_display_name<V: Concreteness>(
                 },
             ))
         }
+    }
+}
+
+/// The value of a bound written as an integer literal, possibly negated
+/// (`0`, `-3`), so a diagnostic can spell the same number as a
+/// `Dimensionless` literal. Other `Int` expressions return `None`.
+fn written_int_literal(expr: &crate::hir::expr::Expr) -> Option<i64> {
+    use crate::desugar::desugared_ast::UnaryOp;
+    use crate::hir::expr::ExprKind;
+    match expr.kind() {
+        ExprKind::Integer(value) => Some(*value),
+        ExprKind::UnaryOp {
+            op: UnaryOp::Neg,
+            operand,
+        } => match operand.kind() {
+            ExprKind::Integer(value) => value.checked_neg(),
+            _ => None,
+        },
+        _ => None,
     }
 }

@@ -123,15 +123,8 @@ impl OpenBuffer {
     }
 }
 
-/// Build a `LoadedProject` from a URI and in-memory text.
-///
-/// For file-backed URIs, loads the project from disk with the in-memory text
-/// overlaid on the root file — and every other open document's latest text
-/// overlaid on its path — via [`graphcal_io::OverlayFileSystem`]. The base
-/// reader is sandboxed to the discovered project root (when a `graphcal.toml`
-/// is reachable from the buffer's directory) — keeping the LSP's filesystem
-/// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
-/// single-file project from the in-memory text alone.
+/// A loaded project, or why it failed to load, with the filesystem inputs
+/// the load read.
 pub struct ProjectBuild {
     pub project: std::result::Result<LoadedProject, Outcome<Box<CompileError>>>,
     pub filesystem_inputs: HashSet<DocumentIdentity>,
@@ -163,6 +156,15 @@ fn standalone_source_name(uri: &Url) -> std::borrow::Cow<'_, str> {
     }
 }
 
+/// Build a `LoadedProject` from a URI and in-memory text.
+///
+/// For file-backed URIs, loads the project from disk with the in-memory text
+/// overlaid on the root file — and every other open document's latest text
+/// overlaid on its path — via [`graphcal_io::OverlayFileSystem`]. The base
+/// reader is sandboxed to the discovered project root (when a `graphcal.toml`
+/// is reachable from the buffer's directory) — keeping the LSP's filesystem
+/// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
+/// single-file project from the in-memory text alone.
 pub fn build_project(
     uri: &Url,
     text: &str,

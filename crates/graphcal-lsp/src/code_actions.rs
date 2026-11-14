@@ -1,6 +1,7 @@
 //! textDocument/codeAction handler.
 //!
 //! Provides quick-fix code actions for compiler diagnostics:
+//! - C011: Write an integer-literal `Dimensionless` domain bound as `Dimensionless`.
 //! - D020: Replace a decimal power exponent with an exactly equivalent rational.
 //! - V002: Add `pub(bind)` to a required `index` / `type` / `dim`.
 //! - V003: Add `pub` to a private item referenced by a public declaration.
@@ -43,6 +44,9 @@ pub fn code_actions(
         match RepairData::recover(diag, published) {
             Some(RepairData::ExactExponent { replacement }) => {
                 actions.push(make_exact_power_action(diag, uri, replacement));
+            }
+            Some(RepairData::DimensionlessBound { replacement }) => {
+                actions.push(make_dimensionless_bound_action(diag, uri, replacement));
             }
             Some(RepairData::AddVisibility { item, visibility }) => {
                 actions.extend(make_add_visibility_action(
@@ -148,6 +152,33 @@ fn make_exact_power_action(
     replacement: String,
 ) -> CodeActionOrCommand {
     let title = format!("Use exact exponent `{replacement}`");
+    let edit = TextEdit {
+        range: diag.range,
+        new_text: replacement,
+    };
+    let mut changes = HashMap::new();
+    changes.insert(uri.clone(), vec![edit]);
+    CodeActionOrCommand::CodeAction(CodeAction {
+        title,
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }),
+        is_preferred: Some(true),
+        ..Default::default()
+    })
+}
+
+/// C011: replace the integer-literal bound the diagnostic spans with its
+/// `Dimensionless` spelling.
+fn make_dimensionless_bound_action(
+    diag: &Diagnostic,
+    uri: &Url,
+    replacement: String,
+) -> CodeActionOrCommand {
+    let title = format!("Write the bound as `{replacement}`");
     let edit = TextEdit {
         range: diag.range,
         new_text: replacement,
@@ -428,6 +459,25 @@ mod tests {
         };
         let edits = &action.edit.as_ref().unwrap().changes.as_ref().unwrap()[&uri];
         crate::test_edits::apply_text_edits(source, edits)
+    }
+
+    /// A C011 quick fix rewrites each integer-literal bound of a
+    /// `Dimensionless` domain as the same `Dimensionless` number.
+    #[test]
+    fn c011_writes_the_int_bound_as_a_dimensionless_literal() {
+        let source = "param r: Dimensionless(min: -3, max: 1.0) = 0.5;\n";
+        let updated = apply_first_quick_fix(source, "graphcal::C011");
+        assert_eq!(
+            updated,
+            "param r: Dimensionless(min: -3.0, max: 1.0) = 0.5;\n"
+        );
+        let uri = Url::parse("untitled:fix.gcl").unwrap();
+        let checked = crate::analysis_pipeline::run_analysis_for_test(&uri, &updated);
+        assert!(
+            checked.has_no_diagnostics(),
+            "{updated}: {:?}",
+            checked.diagnostics
+        );
     }
 
     /// A V002 in one of two DAGs that each declare `Phase` edits the
