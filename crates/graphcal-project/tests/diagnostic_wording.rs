@@ -128,3 +128,25 @@ fn diagnostics_do_not_show_internal_representations() {
         );
     }
 }
+
+/// TIR-14: help texts describe the language as it is.
+#[test]
+fn help_texts_match_the_language() {
+    for (name, source) in [
+        (
+            "unknown_local",
+            "param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };\nnode xs: Dimensionless[Fin(3)] = for i: Fin(3) { @v[j] };\n",
+        ),
+        ("builtin_function_name", "node sum: Length = 1.0 m;\n"),
+        ("time_scale_name", "pub index UTC = { A, B };\n"),
+    ] {
+        insta::assert_snapshot!(
+            format!("help_text_{name}"),
+            render_error(source, &format!("{name}.gcl"))
+        );
+    }
+    // N001's help says names are unique within a file or `dag` body: an
+    // inline DAG may reuse a name of its enclosing file.
+    let inline_reuse = "node x: Length = 1.0 m;\ndag d {\n    pub node x: Length = 2.0 m;\n}\nnode y: Length = @d()::x;\n";
+    assert!(compile_and_eval_named(inline_reuse, "inline_reuse.gcl").is_ok());
+}

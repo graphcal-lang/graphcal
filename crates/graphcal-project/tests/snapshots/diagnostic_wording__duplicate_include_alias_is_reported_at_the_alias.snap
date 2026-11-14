@@ -12,5 +12,5 @@ snippet line 2: include d() as x;
 snippet line 3: include d() as x;
     label at line 3, column 16: duplicate definition here
 snippet line 4: node z: Length = @x::y;
-diagnostic help: each name must be unique within a file
+diagnostic help: each name must be unique within its file or `dag` body
 diagnostic code: graphcal::N001

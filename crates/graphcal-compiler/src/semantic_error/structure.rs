@@ -483,7 +483,7 @@ impl DiagnosticKind for StructError {
             Self::ExtraFields { .. } => Some("only fields declared in the struct type are allowed".to_owned()),
             Self::NotAStruct { .. } => Some("field access `.field` is only valid on struct values".to_owned()),
             Self::RecursiveType { .. } => Some("the size of every value must follow from its type; model a sequence of items as an indexed value such as `Item[I]` instead".to_owned()),
-            Self::UnknownLocalRef { .. } => Some("local variables are introduced by `for`, `scan`, `unfold`, `match`, or function parameters".to_owned()),
+            Self::UnknownLocalRef { .. } => Some("local variables are introduced by `for` bindings, `scan` and `unfold` step parameters, and `match` patterns".to_owned()),
         }
     }
 

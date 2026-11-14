@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+unknown local variable `j`
+    Diagnostic severity: error
+Begin snippet for unknown_local.gcl starting at line 1, column 1
+
+snippet line 1: param v: Dimensionless[Fin(3)] = for i: Fin(3) { 1.0 };
+snippet line 2: node xs: Dimensionless[Fin(3)] = for i: Fin(3) { @v[j] };
+    label at line 2, column 53: not found
+diagnostic help: local variables are introduced by `for` bindings, `scan` and `unfold` step parameters, and `match` patterns
+diagnostic code: graphcal::S008

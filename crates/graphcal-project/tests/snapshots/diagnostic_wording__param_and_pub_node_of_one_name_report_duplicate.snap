@@ -10,5 +10,5 @@ snippet line 1: param x: Length = 1.0 m;
     label at line 1, column 7: first defined here
 snippet line 2: pub node x: Length = @x * 2.0;
     label at line 2, column 10: duplicate definition here
-diagnostic help: each name must be unique within a file
+diagnostic help: each name must be unique within its file or `dag` body
 diagnostic code: graphcal::N001
