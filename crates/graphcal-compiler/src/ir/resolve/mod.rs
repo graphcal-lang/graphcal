@@ -742,19 +742,7 @@ fn validate_private_in_public(
                 }
             }
             DeclKind::Unit(u) => collect_dim_refs(&u.dim_type, &mut refs),
-            DeclKind::Type(t) => {
-                // Each constructor payload field type is part of the
-                // type's signature for A9 dependency tracking.
-                if let TypeDeclBody::Constructors(members) = &t.body {
-                    for member in members {
-                        if let Some(fields) = &member.payload {
-                            for field in fields {
-                                collect_type_refs(&field.type_ann, &mut refs);
-                            }
-                        }
-                    }
-                }
-            }
+            DeclKind::Type(t) => collect_type_signature_refs(t, &mut refs),
             DeclKind::Index(index) => {
                 if let IndexDeclKind::RequiredCoordinate { dimension } = &index.kind {
                     collect_dim_refs(dimension, &mut refs);
@@ -787,6 +775,37 @@ fn validate_private_in_public(
         )?;
     }
     Ok(())
+}
+
+/// Collect the references of a `type` declaration's signature: each
+/// constructor payload field type is part of it for A9 dependency tracking.
+///
+/// A payload name that spells one of the type's own generic parameters names
+/// that parameter, not a module-level declaration. A parameter that shadows a
+/// declaration is rejected on its own (N027), so blaming the declaration's
+/// visibility would give advice that cannot work.
+fn collect_type_signature_refs(
+    type_decl: &crate::desugar::desugared_ast::TypeDecl,
+    refs: &mut Vec<(crate::syntax::names::NamePath, Span)>,
+) {
+    let mut payload_refs = Vec::new();
+    if let TypeDeclBody::Constructors(members) = &type_decl.body {
+        for field in members
+            .iter()
+            .flat_map(|member| member.payload.iter().flatten())
+        {
+            collect_type_refs(&field.type_ann, &mut payload_refs);
+        }
+    }
+    let generic_params: HashSet<&NameAtom> = type_decl
+        .generic_params
+        .iter()
+        .map(|parameter| parameter.name.value.atom())
+        .collect();
+    refs.extend(payload_refs.into_iter().filter(|(path, _)| {
+        path.as_bare()
+            .is_none_or(|name| !generic_params.contains(name))
+    }));
 }
 
 /// Recursively collect type-system references from a [`TypeExpr`].

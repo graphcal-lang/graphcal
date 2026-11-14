@@ -36,3 +36,12 @@ fn duplicate_include_alias_is_reported_at_the_alias() {
     let source = "dag d { pub node y: Length = 1.0 m; }\ninclude d() as x;\ninclude d() as x;\nnode z: Length = @x::y;\n";
     insta::assert_snapshot!(render_error(source, "dupinc.gcl"));
 }
+
+/// RES-17: a generic parameter that shadows a private declaration is the
+/// shadowing error (N027), not a visibility error whose "add `pub`" advice
+/// cannot work.
+#[test]
+fn generic_parameter_shadowing_a_private_static_reports_shadowing() {
+    let source = "type T { T(x: Length) }\npub type Box<T: Type> { Box(value: T) }\nnode b: Box<Dimensionless> = Box<Dimensionless>(value: 1.0);\n";
+    insta::assert_snapshot!(render_error(source, "shadow.gcl"));
+}
