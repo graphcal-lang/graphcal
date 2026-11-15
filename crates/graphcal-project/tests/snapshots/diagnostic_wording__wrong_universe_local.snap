@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(local, \"wrong_universe_local.gcl\")"
+---
+`Axis` is an index, not a dimension
+    Diagnostic severity: error
+Begin snippet for wrong_universe_local.gcl starting at line 1, column 1
+
+snippet line 1: index Axis = { X, Y };
+snippet line 2: dim D = Axis;
+    label at line 2, columns 9 to 12: error here
+diagnostic code: graphcal::M036

@@ -1164,17 +1164,13 @@ fn resolve_optional<T>(result: Result<T, ModuleResolveError>) -> LookupCandidate
 
 fn type_position_wrong_universe(source: ModuleResolveError) -> ModuleResolveError {
     match source {
-        ModuleResolveError::WrongUniverseName {
-            owner,
-            name,
-            actual,
-            ..
-        } => ModuleResolveError::WrongUniverseName {
-            owner,
-            name,
-            expected: SurfaceNameKind::Type,
-            actual,
-        },
+        ModuleResolveError::WrongUniverseName { name, actual, .. } => {
+            ModuleResolveError::WrongUniverseName {
+                name,
+                expected: SurfaceNameKind::Type,
+                actual,
+            }
+        }
         other => other,
     }
 }

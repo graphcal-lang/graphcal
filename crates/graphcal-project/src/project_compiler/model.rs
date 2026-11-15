@@ -171,14 +171,7 @@ pub(super) struct IncludeInstanceRequest<'a> {
 #[derive(Debug, Clone)]
 pub(super) struct ProjectModuleBinding {
     pub(super) target: graphcal_compiler::dag_id::DagId,
-    pub(super) span: Span,
     pub(super) role: graphcal_compiler::resolve::scope::ModuleAliasRole,
-}
-
-impl ProjectModuleBinding {
-    pub(super) const fn span(&self) -> Span {
-        self.span
-    }
 }
 
 /// The canonical constant each imported lexical name binds, with the span
@@ -215,5 +208,19 @@ impl ImportContext<'_> {
             module_map: HashMap::new(),
             include_instances: Vec::new(),
         }
+    }
+
+    /// Record the module alias one import or module-form include introduces.
+    ///
+    /// The resolver's scope construction (`declare_aliases`) has already
+    /// rejected a repeated alias in this body with N001 before any import is
+    /// processed, so a second binding of one alias is an internal invariant
+    /// violation, not a user error.
+    pub(super) fn bind_module(&mut self, alias: ModuleAliasName, binding: ProjectModuleBinding) {
+        let previous = self.module_map.insert(alias, binding);
+        assert!(
+            previous.is_none(),
+            "module alias bound twice in one body; the resolver must reject duplicate aliases first"
+        );
     }
 }

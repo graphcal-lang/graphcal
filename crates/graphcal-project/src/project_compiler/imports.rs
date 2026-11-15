@@ -811,21 +811,10 @@ pub(super) fn process_include<'a>(
     // an opaque private instance scope instead (#1132).
     let instance_scope = include_decl.instance_scope();
     if let ScopeSegment::Named(prefix) = &instance_scope {
-        if let Some(first) = ctx.module_map.get(prefix) {
-            return Err(PipelineError::Semantic(SemanticError::located(
-                file_src,
-                include_decl.path.span(),
-                ModuleError::DuplicateModuleName {
-                    name: prefix.clone(),
-                    first: first.span(),
-                },
-            )));
-        }
-        ctx.module_map.insert(
+        ctx.bind_module(
             prefix.clone(),
             ProjectModuleBinding {
                 target: import_dag_id.clone(),
-                span: include_decl.path.span(),
                 role: graphcal_compiler::resolve::scope::ModuleAliasRole::IncludedInstance,
             },
         );
@@ -1194,16 +1183,6 @@ pub(super) fn process_pure_import<'a>(
                 || derive_module_name_from_import_path(import_path),
                 |alias_ident| alias_ident.value.clone(),
             );
-            if let Some(first) = ctx.module_map.get(&module_name) {
-                return Err(PipelineError::Semantic(SemanticError::located(
-                    file_src,
-                    import_path.span(),
-                    ModuleError::DuplicateModuleName {
-                        name: module_name.clone(),
-                        first: first.span(),
-                    },
-                )));
-            }
             validate_qualified_static_import_references(
                 importer,
                 dependency,
@@ -1214,11 +1193,10 @@ pub(super) fn process_pure_import<'a>(
             )?;
 
             let role = graphcal_compiler::resolve::scope::ModuleAliasRole::ImportedDag;
-            ctx.module_map.insert(
+            ctx.bind_module(
                 module_name.clone(),
                 ProjectModuleBinding {
                     target: module_target.clone(),
-                    span: import_path.span(),
                     role,
                 },
             );

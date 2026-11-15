@@ -565,14 +565,10 @@ fn value_schema_view(
 ) -> ValueSchemaView {
     match schema {
         ModelValueSchema::Quantity(quantity) => ValueSchemaView::Quantity {
-            unit: quantity
-                .canonical_unit()
-                .map(|unit| unit.label().to_string()),
+            unit: quantity.canonical_unit().map(str::to_owned),
         },
         ModelValueSchema::Complex(quantity) => ValueSchemaView::Complex {
-            unit: quantity
-                .canonical_unit()
-                .map(|unit| unit.label().to_string()),
+            unit: quantity.canonical_unit().map(str::to_owned),
         },
         ModelValueSchema::Bool => ValueSchemaView::Boolean,
         ModelValueSchema::Int => ValueSchemaView::Integer,
@@ -637,9 +633,7 @@ fn control_view(port: &ParameterPort, prepared: &PreparedProject) -> ControlView
                 _ => (None, None),
             };
             ControlView::Quantity {
-                unit: quantity
-                    .canonical_unit()
-                    .map(|unit| unit.label().to_string()),
+                unit: quantity.canonical_unit().map(str::to_owned),
                 lower_si,
                 upper_si,
             }

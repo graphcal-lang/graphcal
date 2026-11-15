@@ -37,6 +37,31 @@ fn duplicate_include_alias_is_reported_at_the_alias() {
     insta::assert_snapshot!(render_error(source, "dupinc.gcl"));
 }
 
+/// Two includes with one alias inside a `dag` body are the same N001 (the
+/// resolver rejects the repeat before any module binding is recorded).
+#[test]
+fn duplicate_include_alias_in_a_dag_body_is_reported_at_the_alias() {
+    let source = "dag d { pub node y: Length = 1.0 m; }\ndag outer {\n    include d() as x;\n    include d() as x;\n    pub node z: Length = @x::y;\n}\n";
+    insta::assert_snapshot!(render_error(source, "dupinc_body.gcl"));
+}
+
+/// #2345: a name in the wrong universe (M036) is reported by the path the
+/// user wrote, without an owner module: an include instance's owner is an
+/// internal identity, and a local name's owner adds nothing.
+#[test]
+fn wrong_universe_name_does_not_name_an_owner_module() {
+    let through_include = "dag inner { pub(bind) index Axis; pub type T { T(x: Dimensionless) } }\ninclude inner(index Axis: Fin(2)) as inst;\ndim D = inst::T;\n";
+    insta::assert_snapshot!(
+        "wrong_universe_through_include",
+        render_error(through_include, "wrong_universe_include.gcl")
+    );
+    let local = "index Axis = { X, Y };\ndim D = Axis;\n";
+    insta::assert_snapshot!(
+        "wrong_universe_local",
+        render_error(local, "wrong_universe_local.gcl")
+    );
+}
+
 /// RES-17: a generic parameter that shadows a private declaration is the
 /// shadowing error (N027), not a visibility error whose "add `pub`" advice
 /// cannot work.

@@ -534,7 +534,6 @@ impl ModuleResolver {
             }
             if let Some(actual) = self.visible_surface_kind(owner, Ns::NAMESPACE, atom, false)? {
                 return Err(ModuleResolveError::WrongUniverseName {
-                    owner: owner.clone(),
                     name: path.clone(),
                     expected: Ns::SURFACE_KIND,
                     actual,
@@ -572,7 +571,6 @@ impl ModuleResolver {
             self.visible_surface_kind(&target_ref.owner, Ns::NAMESPACE, leaf, requires_public)?
         {
             return Err(ModuleResolveError::WrongUniverseName {
-                owner: target_ref.owner,
                 name: path.clone(),
                 expected: Ns::SURFACE_KIND,
                 actual,

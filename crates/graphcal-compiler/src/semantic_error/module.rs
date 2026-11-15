@@ -75,8 +75,6 @@ pub enum ModuleError {
         file_path: DagReference,
         mismatch: ImportItemCategoryMismatch,
     },
-    #[error("duplicate module name `{name}`")]
-    DuplicateModuleName { name: ModuleAliasName, first: Span },
     #[error("unknown module `{name}`")]
     UnknownModule { name: ModuleAliasName },
     #[error("unknown param `{name}` in import binding for `{file_path}`")]
@@ -139,7 +137,6 @@ impl DiagnosticKind for ModuleError {
             Self::DuplicateIncludeSelection { .. } => "graphcal::M027",
             Self::ImportNameNotFound { .. } => "graphcal::M003",
             Self::ImportCategoryMismatch { .. } => "graphcal::M022",
-            Self::DuplicateModuleName { .. } => "graphcal::M005",
             Self::UnknownModule { .. } => "graphcal::M006",
             Self::UnknownParamBinding { .. } => "graphcal::M009",
             Self::BindingNotAParam { .. } => "graphcal::M010",
@@ -182,7 +179,6 @@ impl DiagnosticKind for ModuleError {
             }
             Self::ImportNameNotFound { .. } => Some("not found in imported file".to_owned()),
             Self::ImportCategoryMismatch { .. } => Some("wrong import category".to_owned()),
-            Self::DuplicateModuleName { .. } => Some("duplicate module import".to_owned()),
             Self::UnknownModule { .. } => Some("unknown module".to_owned()),
             Self::UnknownParamBinding { .. } => Some("not a param in the imported file".to_owned()),
             Self::BindingNotAParam { actual_kind, .. } => {
@@ -216,7 +212,6 @@ impl DiagnosticKind for ModuleError {
             Self::DuplicateIncludeSelection { .. } => Some("select each producer at most once in an include list".to_owned()),
             Self::ImportNameNotFound { .. } => Some("check that the name is declared in the imported file".to_owned()),
             Self::ImportCategoryMismatch { .. }
-            | Self::DuplicateModuleName { .. }
             | Self::ModuleResolution { .. }
             | Self::AmbiguousModulePath { .. } => None,
             Self::UnknownModule { .. } => Some("module-qualified references start with a local name introduced by `import`; call an aliased module through that alias, for example `import pkg.module as m; @m(...)::out`".to_owned()),
@@ -259,10 +254,6 @@ impl DiagnosticKind for ModuleError {
             Self::DuplicateIncludeSelection { first, .. } => vec![SecondaryLabel {
                 span: *first,
                 text: "first selected here".to_owned(),
-            }],
-            Self::DuplicateModuleName { first, .. } => vec![SecondaryLabel {
-                span: *first,
-                text: "first imported here".to_owned(),
             }],
         }
     }
