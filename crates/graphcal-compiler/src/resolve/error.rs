@@ -173,9 +173,12 @@ pub enum ModuleResolveError {
         span: Span,
     },
     /// A name exists, but in a semantic universe that is not valid here.
-    #[error("in module `{owner}`, `{name}` is {actual}, not {expected}")]
+    ///
+    /// `name` is the path as written at the use site, so the message names
+    /// no owning module: an include instance's owner is an internal identity
+    /// with no source spelling, and a local name's owner is redundant.
+    #[error("`{name}` is {actual}, not {expected}")]
     WrongUniverseName {
-        owner: DagId,
         name: NamePath,
         expected: SurfaceNameKind,
         actual: SurfaceNameKind,
