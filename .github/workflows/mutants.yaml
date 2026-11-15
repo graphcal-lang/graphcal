@@ -128,7 +128,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         if: runner.environment == 'github-hosted'
 
-      - uses: taiki-e/install-action@v2.90.1
+      - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
@@ -230,7 +230,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         if: runner.environment == 'github-hosted'
 
-      - uses: taiki-e/install-action@v2.90.1
+      - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
