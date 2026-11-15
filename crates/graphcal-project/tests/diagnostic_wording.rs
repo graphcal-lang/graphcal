@@ -37,6 +37,14 @@ fn duplicate_include_alias_is_reported_at_the_alias() {
     insta::assert_snapshot!(render_error(source, "dupinc.gcl"));
 }
 
+/// Two includes with one alias inside a `dag` body are the same N001 (the
+/// resolver rejects the repeat before any module binding is recorded).
+#[test]
+fn duplicate_include_alias_in_a_dag_body_is_reported_at_the_alias() {
+    let source = "dag d { pub node y: Length = 1.0 m; }\ndag outer {\n    include d() as x;\n    include d() as x;\n    pub node z: Length = @x::y;\n}\n";
+    insta::assert_snapshot!(render_error(source, "dupinc_body.gcl"));
+}
+
 /// RES-17: a generic parameter that shadows a private declaration is the
 /// shadowing error (N027), not a visibility error whose "add `pub`" advice
 /// cannot work.
