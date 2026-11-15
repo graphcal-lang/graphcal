@@ -716,7 +716,6 @@ fn quantity_bound_spelling(
     use graphcal_compiler::hir::expr::ExprKind;
     match expr.kind() {
         ExprKind::Number(n) => DomainBoundSpelling::Number(*n),
-        ExprKind::Integer(n) => DomainBoundSpelling::Integer(*n),
         ExprKind::QuantityLiteral { value, unit } => DomainBoundSpelling::Quantity {
             value: *value,
             unit: unit.clone(),
