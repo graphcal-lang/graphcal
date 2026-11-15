@@ -15,8 +15,7 @@ mod prepared;
 
 pub use model_schema::{
     ModelAlgebraicTypeSchema, ModelConstructorSchema, ModelFieldSchema, ModelIndexKind,
-    ModelIndexSchema, ModelQuantitySchema, ModelSchemaGraph, ModelTypeId, ModelUnitSchema,
-    ModelValueSchema,
+    ModelIndexSchema, ModelQuantitySchema, ModelSchemaGraph, ModelTypeId, ModelValueSchema,
 };
 pub use prepared::{
     ExternalValue, FixedParameters, InclusiveBounds, InclusiveBoundsError, ModelDefinitionError,

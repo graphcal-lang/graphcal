@@ -139,25 +139,11 @@ impl ModelConstructorSchema {
     }
 }
 
-/// Canonical boundary unit attached to a quantity schema.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelUnitSchema {
-    label: String,
-}
-
-impl ModelUnitSchema {
-    /// Canonical source-like unit label.
-    #[must_use]
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-}
-
 /// One real or complex physical quantity family.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelQuantitySchema {
     dimension: graphcal_compiler::dimension::Dimension,
-    canonical_unit: Option<ModelUnitSchema>,
+    canonical_unit: Option<String>,
 }
 
 impl ModelQuantitySchema {
@@ -167,10 +153,10 @@ impl ModelQuantitySchema {
         &self.dimension
     }
 
-    /// Canonical SI boundary unit for dimensioned quantities.
+    /// Canonical SI boundary unit label for dimensioned quantities.
     #[must_use]
-    pub const fn canonical_unit(&self) -> Option<&ModelUnitSchema> {
-        self.canonical_unit.as_ref()
+    pub fn canonical_unit(&self) -> Option<&str> {
+        self.canonical_unit.as_deref()
     }
 }
 
@@ -405,8 +391,7 @@ fn model_quantity_schema(
                 &tir.registry().dimensions.base_unit_symbols(),
             )
         })
-        .flatten()
-        .map(|label| ModelUnitSchema { label });
+        .flatten();
     ModelQuantitySchema {
         dimension: dimension.clone(),
         canonical_unit,
