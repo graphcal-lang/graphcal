@@ -10,7 +10,7 @@ In this release, an `Int` can scale a quantity in `*` and `/`, and a `Dimensionl
 Most of the other changes come from the 2026-11-06 codebase review (#2241). They close silent-misbehavior holes in includes, units, datetimes, numerics, the package loader, plugins, and the model protocol. They also remove quadratic and exponential slowdowns, make output deterministic, and make LSP edits safer.
 The workspace toolchain moves to Rust 1.100.0, and Rust-heavy CI jobs now run on Namespace runners.
 
-**Some existing Graphcal source programs need to be modified.** Each affected program fails to compile with a dedicated diagnostic, and none changes its result silently. See [Breaking Changes](#breaking-changes). The lockfile format, the model protocol, and the model client's Rust API also change; see [Lockfile, Model Protocol, and Client Changes](#lockfile-model-protocol-and-client-changes).
+**Some existing Graphcal source programs need to be modified.** Each program that needs a change fails to compile with a dedicated diagnostic; see [Breaking Changes](#breaking-changes). Some bug fixes change results without a compile error: a file-root include that was silently dropped now runs and reports its assertions, TAI→UTC readings in the 36 s before a leap second move by 1 s, and `sum()`, integer powers, complex `*`, `cross()`, and datetime differences and shifts can change in the last bits. See [Numerical Accuracy](#numerical-accuracy). The lockfile format, the model protocol, and the model client's Rust API also change; see [Lockfile, Model Protocol, and Client Changes](#lockfile-model-protocol-and-client-changes).
 
 ### Breaking Changes
 
