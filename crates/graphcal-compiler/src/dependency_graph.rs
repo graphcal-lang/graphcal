@@ -116,12 +116,6 @@ impl<K: Clone + Eq + Hash, E: Clone> DependencyGraph<K, E> {
         self.positions.contains_key(key)
     }
 
-    /// Number of nodes.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.keys.len()
-    }
-
     /// Whether the graph has no nodes.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
@@ -401,12 +395,6 @@ impl<K> TopoOrder<K> {
         &self.order
     }
 
-    /// Number of ordered nodes.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.order.len()
-    }
-
     /// Whether the graph had no nodes.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
@@ -472,12 +460,6 @@ impl<K, E> Cycle<K, E> {
     /// on the next, and the last depends on the entry.
     pub fn path(&self) -> impl Iterator<Item = &K> + Clone {
         std::iter::once(&self.entry).chain(&self.rest)
-    }
-
-    /// Number of distinct nodes on the cycle. Always at least 1.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.rest.len().saturating_add(1)
     }
 
     /// Always `false`: a cycle has at least one node.
@@ -594,7 +576,7 @@ mod tests {
         // A dependency on a key that is not a node is not recorded.
         assert!(!graph.add_labelled_dependency_between("a", "missing", ()));
         assert!(!graph.add_labelled_dependency_between("missing", "a", ()));
-        assert_eq!(graph.len(), 2);
+        assert_eq!(graph.keys.len(), 2);
         let order = graph.into_topo_order().unwrap().map(|key| key.len());
         assert_eq!(order.as_slice(), [1, 1]);
         let mut cyclic = DependencyGraph::<String, u8>::new();
@@ -613,10 +595,10 @@ mod tests {
     fn empty_graph_has_an_empty_order() {
         let graph = DependencyGraph::<u32>::new();
         assert!(graph.is_empty());
-        assert_eq!(graph.len(), 0);
+        assert_eq!(graph.keys.len(), 0);
         let order = graph.into_topo_order().expect("acyclic");
         assert!(order.is_empty());
-        assert_eq!(order.len(), 0);
+        assert_eq!(order.as_slice().len(), 0);
         assert_eq!(order.as_slice(), [] as [u32; 0]);
     }
 
@@ -624,7 +606,7 @@ mod tests {
     fn independent_nodes_keep_insertion_order() {
         let graph = graph(&["c", "a", "b"], &[]);
         assert!(!graph.is_empty());
-        assert_eq!(graph.len(), 3);
+        assert_eq!(graph.keys.len(), 3);
         let order = graph.into_topo_order().expect("acyclic");
         assert!(!order.is_empty());
         assert_eq!(order.into_vec(), ["c", "a", "b"]);
@@ -662,7 +644,7 @@ mod tests {
     fn duplicate_nodes_and_edges_are_ignored() {
         let mut graph = graph(&["a", "b"], &[("b", "a"), ("b", "a")]);
         graph.add_node("a");
-        assert_eq!(graph.len(), 2);
+        assert_eq!(graph.keys.len(), 2);
         assert!(graph.contains(&"a"));
         assert!(!graph.contains(&"c"));
         assert_eq!(order(graph), ["a", "b"]);
@@ -673,7 +655,7 @@ mod tests {
         let mut graph = DependencyGraph::new();
         graph.add_dependency("x", "y");
         graph.add_node("z");
-        assert_eq!(graph.len(), 3);
+        assert_eq!(graph.keys.len(), 3);
         // Insertion order is x, y, z; only y and z are initially ready.
         assert_eq!(order(graph), ["y", "z", "x"]);
     }
@@ -683,7 +665,7 @@ mod tests {
         let graph = graph(&["a", "b"], &[("b", "b")]);
         let cycle = graph.into_topo_order().expect_err("cyclic");
         assert_eq!(cycle.entry(), &"b");
-        assert_eq!(cycle.len(), 1);
+        assert_eq!(cycle.rest.len() + 1, 1);
         assert!(!cycle.is_empty());
         assert_eq!(cycle.path().copied().collect::<Vec<_>>(), ["b"]);
     }
@@ -715,7 +697,7 @@ mod tests {
         );
         let cycle = graph.into_topo_order().expect_err("cyclic");
         assert_eq!(cycle.entry(), &"c");
-        assert_eq!(cycle.len(), 2);
+        assert_eq!(cycle.rest.len() + 1, 2);
         assert_eq!(cycle.into_path(), ["c", "b"]);
     }
 
@@ -752,7 +734,7 @@ mod tests {
             .expect_err("cyclic")
             .map(str::len);
         assert_eq!(cycle.entry(), &1);
-        assert_eq!(cycle.len(), 3);
+        assert_eq!(cycle.rest.len() + 1, 3);
     }
 
     #[test]
@@ -783,13 +765,13 @@ mod tests {
             graph.add_dependency(node, node + 1);
         }
         let order = graph.clone().into_topo_order().expect("acyclic");
-        assert_eq!(order.len(), 200_001);
+        assert_eq!(order.as_slice().len(), 200_001);
         assert_eq!(order.as_slice().first(), Some(&depth));
 
         graph.add_dependency(depth, 0);
         let cycle = graph.into_topo_order().expect_err("cyclic");
         assert_eq!(cycle.entry(), &0);
-        assert_eq!(cycle.len(), 200_001);
+        assert_eq!(cycle.rest.len() + 1, 200_001);
     }
 
     proptest! {
@@ -812,7 +794,7 @@ mod tests {
             let edge_set = edges.iter().copied().collect::<HashSet<_>>();
             match graph.clone().into_topo_order() {
                 Ok(order) => {
-                    prop_assert_eq!(order.len(), node_count);
+                    prop_assert_eq!(order.as_slice().len(), node_count);
                     let rank = order
                         .iter()
                         .enumerate()
@@ -825,7 +807,7 @@ mod tests {
                 }
                 Err(cycle) => {
                     let path = cycle.clone().into_path();
-                    prop_assert_eq!(path.len(), cycle.len());
+                    prop_assert_eq!(path.len(), cycle.rest.len() + 1);
                     prop_assert_eq!(path.iter().collect::<HashSet<_>>().len(), path.len());
                     for (position, node) in path.iter().enumerate() {
                         let next = path[(position + 1) % path.len()];
@@ -836,7 +818,7 @@ mod tests {
             // Both orders agree on acyclicity and on the reported cycle.
             match (graph.clone().into_topo_order(), graph.clone().into_depth_first_order()) {
                 (Ok(kahn), Ok(depth_first)) => {
-                    prop_assert_eq!(depth_first.len(), node_count);
+                    prop_assert_eq!(depth_first.as_slice().len(), node_count);
                     let rank = depth_first
                         .iter()
                         .enumerate()
@@ -846,7 +828,7 @@ mod tests {
                     for (dependent, dependency) in &edges {
                         prop_assert!(rank[dependency] < rank[dependent]);
                     }
-                    prop_assert_eq!(kahn.len(), depth_first.len());
+                    prop_assert_eq!(kahn.as_slice().len(), depth_first.as_slice().len());
                 }
                 (Err(kahn), Err(depth_first)) => prop_assert_eq!(kahn, depth_first),
                 (kahn, depth_first) => {

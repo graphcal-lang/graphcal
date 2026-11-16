@@ -854,12 +854,6 @@ define_builtin_names! {
 }
 
 impl AggregationFn {
-    /// Number of runtime arguments.
-    #[must_use]
-    pub const fn arity(self) -> usize {
-        self.signature().arity()
-    }
-
     /// Source-like signature used at LSP/display boundaries.
     #[must_use]
     pub const fn signature(self) -> &'static DisplaySignature {
@@ -931,12 +925,6 @@ define_builtin_names! {
 }
 
 impl LinearAlgebraFn {
-    /// Number of runtime arguments.
-    #[must_use]
-    pub const fn arity(self) -> usize {
-        self.signature().arity()
-    }
-
     /// Source-like signature used at LSP/display boundaries.
     #[must_use]
     #[expect(
@@ -1393,11 +1381,11 @@ mod tests {
                 }
                 (BuiltinFn::Aggregation(f), BuiltinEntry::Signature(signature)) => {
                     assert_eq!(signature, f.signature());
-                    assert_eq!(entry.documented_arity(), Some(f.arity()));
+                    assert_eq!(entry.documented_arity(), Some(f.signature().arity()));
                 }
                 (BuiltinFn::LinearAlgebra(f), BuiltinEntry::Signature(signature)) => {
                     assert_eq!(signature, f.signature());
-                    assert_eq!(entry.documented_arity(), Some(f.arity()));
+                    assert_eq!(entry.documented_arity(), Some(f.signature().arity()));
                 }
                 (BuiltinFn::Datetime(f), BuiltinEntry::Bespoke(arity)) => {
                     assert_eq!(arity, f.arity());

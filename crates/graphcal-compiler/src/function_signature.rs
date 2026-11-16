@@ -1265,12 +1265,6 @@ impl QuantitySignature {
     pub const fn result(&self) -> &DimMonomial {
         &self.result
     }
-
-    /// Number of parameters.
-    #[must_use]
-    pub const fn arity(&self) -> usize {
-        self.params.len()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1436,7 +1430,7 @@ mod tests {
         let all_quantity = super::FunctionSignature::same_dim(&["a", "b"]);
         let viewed = QuantitySignature::try_new(all_quantity.clone()).unwrap();
         assert_eq!(viewed.signature(), &all_quantity);
-        assert_eq!(viewed.arity(), 2);
+        assert_eq!(viewed.params().len(), 2);
         assert_eq!(viewed.params()[1].name(), &fn_param("b"));
         assert_eq!(
             viewed.params()[1].monomial().as_bare_var().unwrap().index(),

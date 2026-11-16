@@ -5,7 +5,7 @@ use std::ops::Deref;
 use thiserror::Error;
 
 use crate::builtin::{BuiltinFn, ComplexFn, DatetimeFn};
-use crate::expression_source::{ExpressionSourceError, ExpressionSourceMap};
+use crate::expression_source::ExpressionSourceError;
 use crate::hir::expr::{CheckedExpr, ConstRef, Draft, Expr, ExprKind, visit_expr};
 use crate::syntax::ast::UnaryOp;
 
@@ -43,11 +43,6 @@ impl ClosedExpr {
         Ok(Self {
             expression: CheckedExpr::finish(expression)?,
         })
-    }
-
-    #[must_use]
-    pub fn source_map(&self) -> &ExpressionSourceMap {
-        self.expression.source_map()
     }
 }
 
@@ -134,7 +129,10 @@ mod tests {
         let second = ClosedExpr::try_new(literal()).unwrap();
         assert_ne!(first.id(), second.id());
         visit_expr(&first, &mut |node| {
-            assert_eq!(first.source_map().span(node.id()).unwrap(), node.span);
+            assert_eq!(
+                first.expression.source_map().span(node.id()).unwrap(),
+                node.span
+            );
         });
         let nested = Expr::new(
             ExprKind::UnaryOp {

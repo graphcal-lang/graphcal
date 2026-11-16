@@ -352,12 +352,6 @@ impl EpochLiteral {
         })
     }
 
-    /// The source civil coordinates.
-    #[must_use]
-    pub const fn civil(self) -> CivilDateTimeLiteral {
-        self.civil
-    }
-
     /// The time scale the coordinates are interpreted in.
     #[must_use]
     pub const fn scale(self) -> TimeScale {
@@ -565,7 +559,7 @@ mod tests {
         for scale in TimeScale::ALL {
             let literal = EpochLiteral::resolve(civil, scale).unwrap();
             assert_eq!(literal.scale(), scale);
-            assert_eq!(literal.civil(), civil);
+            assert_eq!(literal.civil, civil);
             assert_eq!(
                 literal.epoch(),
                 hifitime::Epoch::maybe_from_gregorian(

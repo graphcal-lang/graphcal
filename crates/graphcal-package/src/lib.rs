@@ -2035,11 +2035,6 @@ impl LockedDependencyCycle {
     pub const fn start(&self) -> &PackageInstanceId {
         &self.start
     }
-
-    /// Packages after [`Self::start`] and before the closing edge back to it.
-    pub fn successors(&self) -> impl ExactSizeIterator<Item = &PackageInstanceId> {
-        self.successors.iter()
-    }
 }
 
 impl fmt::Display for LockedDependencyCycle {
@@ -3808,7 +3803,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             error,
             LockValidationError::DependencyCycle { cycle }
                 if cycle.start() == &id(&format!("pkg-node-{cycle_start}"))
-                    && cycle.successors().cloned().eq(std::iter::once(id("pkg-node-7999")))
+                    && cycle.successors.iter().cloned().eq(std::iter::once(id("pkg-node-7999")))
         ));
     }
 

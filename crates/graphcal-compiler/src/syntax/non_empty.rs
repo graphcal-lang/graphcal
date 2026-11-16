@@ -91,18 +91,6 @@ impl<T> AtLeastTwo<T> {
 }
 
 impl<T> AtLeastTwo<T> {
-    /// Borrow the elements as a slice.
-    #[must_use]
-    pub fn as_slice(&self) -> &[T] {
-        &self.items
-    }
-
-    /// The first element.
-    #[must_use]
-    pub fn first(&self) -> &T {
-        &self.items[0]
-    }
-
     /// Map owned items while preserving the two-or-more invariant.
     #[must_use]
     pub fn map<U>(self, f: impl FnMut(T) -> U) -> AtLeastTwo<U> {
@@ -417,9 +405,9 @@ mod tests {
         assert_eq!(pair.clone().zip_exact(vec![3]), Err(vec![3]));
         assert_eq!(pair.clone().zip_exact(vec![3, 4, 5]), Err(vec![3, 4, 5]));
         let zipped = pair.zip_exact(vec!['a', 'b']).unwrap();
-        assert_eq!(zipped.as_slice(), &[(1, 'a'), (2, 'b')]);
+        assert_eq!(zipped.items.as_slice(), &[(1, 'a'), (2, 'b')]);
         let mapped = zipped.map(|(n, _)| n * 10);
-        assert_eq!(*mapped.first(), 10);
+        assert_eq!(mapped.items[0], 10);
         assert_eq!(mapped[1], 20);
         assert_eq!(mapped.into_iter().collect::<Vec<_>>(), vec![10, 20]);
     }

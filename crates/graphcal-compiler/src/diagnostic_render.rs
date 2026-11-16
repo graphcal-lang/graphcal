@@ -58,11 +58,6 @@ impl<K> RenderableDiagnostic<K> {
         &self.kind
     }
 
-    /// The span the diagnostic is primarily about.
-    pub const fn primary(&self) -> Span {
-        self.primary
-    }
-
     /// The registered source the diagnostic's spans index into.
     pub const fn registered_source(&self) -> &RegisteredSource {
         &self.source
@@ -792,7 +787,7 @@ mod tests {
             RegisteredSource::detached("main.gcl", Arc::clone(&text)),
         );
         assert!(matches!(rendered.kind(), ParseErrorKind::UnknownToken));
-        assert_eq!(rendered.primary(), Span::new(3, 1));
+        assert_eq!(rendered.primary, Span::new(3, 1));
         assert_eq!(rendered.registered_source().name(), "main.gcl");
     }
 
