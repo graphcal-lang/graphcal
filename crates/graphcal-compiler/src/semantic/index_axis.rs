@@ -260,17 +260,6 @@ impl IndexAxis {
         }
     }
 
-    /// The key of the entry at `position`, when the axis has one.
-    #[must_use]
-    pub fn key(&self, position: usize) -> Option<Cow<'_, IndexEntryKey>> {
-        match &self.0.content.keys {
-            AxisKeys::Positional(len) => {
-                (position < len.get()).then(|| Cow::Owned(position_key(position)))
-            }
-            AxisKeys::Named { keys, .. } => keys.as_slice().get(position).map(Cow::Borrowed),
-        }
-    }
-
     /// Whether both axes have the same keys in the same order.
     #[must_use]
     pub fn same_keys(&self, other: &Self) -> bool {
@@ -395,9 +384,7 @@ mod tests {
         assert_eq!(axis.len(), size);
         let last = IndexEntryKey::position(size as u64 - 1);
         assert_eq!(axis.position(&last), Some(size - 1));
-        assert_eq!(axis.key(size - 1).as_deref(), Some(&last));
         assert_eq!(axis.position(&IndexEntryKey::position(size as u64)), None);
-        assert_eq!(axis.key(size), None);
         assert_eq!(axis.keys().len(), size);
     }
 
@@ -428,7 +415,6 @@ mod tests {
             .map(|coordinate| coordinate.get())
             .collect::<Vec<_>>();
         assert_eq!(coordinates, vec![0.0, 1.0, 2.0]);
-        assert_eq!(axis.key(2).as_deref(), Some(&IndexEntryKey::position(2)));
         assert_eq!(axis.keys().len(), 3);
         assert_eq!(
             IndexAxis::named_for_test(owner(), "Phase", &["A"]).coordinates(),

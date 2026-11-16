@@ -191,12 +191,6 @@ impl StaticDefinitions {
         self.base_dimensions.iter()
     }
 
-    /// Look up one of this module's dimensions.
-    #[must_use]
-    pub fn dimension(&self, identity: &ResolvedDimName) -> Option<&Dimension> {
-        self.dimensions.get(identity)
-    }
-
     /// Look up one of this module's units.
     #[must_use]
     pub fn unit(&self, identity: &ResolvedUnitName) -> Option<&UnitInfo> {
@@ -279,8 +273,11 @@ mod tests {
             statics.insert_dimension(foreign.clone(), Dimension::dimensionless()),
             Err(ForeignDefinitionError::Dimension { identity, .. }) if identity == foreign
         ));
-        assert_eq!(statics.dimension(&local), Some(&Dimension::dimensionless()));
-        assert_eq!(statics.dimension(&foreign), None);
+        assert_eq!(
+            statics.dimensions.get(&local),
+            Some(&Dimension::dimensionless())
+        );
+        assert_eq!(statics.dimensions.get(&foreign), None);
         assert!(matches!(
             statics.insert_port_generic_dimension(foreign.clone(), Dimension::dimensionless()),
             Err(ForeignDefinitionError::Dimension { identity, .. }) if identity == foreign

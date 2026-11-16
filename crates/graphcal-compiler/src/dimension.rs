@@ -115,18 +115,6 @@ impl BaseDimId {
             Self::UserDefined(name) => name.as_str(),
         }
     }
-
-    /// The unqualified source name that makes this base dimension visible in
-    /// its defining scope (`Length`, or the user-defined leaf).
-    #[must_use]
-    pub fn source_name(&self) -> crate::syntax::dimension::DimName {
-        match self {
-            Self::Prelude(dimension) => {
-                crate::syntax::dimension::DimName::expect_valid(dimension.as_str())
-            }
-            Self::UserDefined(name) => name.to_unowned_def_name(),
-        }
-    }
 }
 
 /// A physical dimension represented as a sparse vector of rational exponents
@@ -548,8 +536,6 @@ mod tests {
             Dimension::base(length()).owner_qualified().to_string(),
             "Length"
         );
-        assert_eq!(info_id.source_name().as_str(), "Information");
-        assert_eq!(length().source_name().as_str(), "Length");
     }
 
     #[test]

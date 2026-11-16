@@ -71,27 +71,6 @@ pub fn format_unit_terms_with_config(
     }
 }
 
-/// Format a `UnitExpr` in canonical normalized form for display labels.
-///
-/// Combines repeated unit names into a single term with the summed exponent
-/// (positive in the numerator, negative in the denominator), drops any units
-/// whose exponents cancel to zero, and sorts both numerator and denominator
-/// alphabetically so the result is order-independent.
-///
-/// Issue #577: the non-canonical `format_unit_expr` rendered `m/s/s` as
-/// `m/s * s`, which is mathematically `m`. Display labels for computed values
-/// must not lie about the engineering units, so the eval pipeline routes
-/// through this function instead.
-pub fn format_unit_expr_canonical(
-    expr: &crate::syntax::ast::UnitExpr,
-) -> Result<String, CanonicalUnitFormatError> {
-    format_unit_terms_canonical(
-        expr.terms
-            .iter()
-            .map(|item| (item.op, item.name.value.to_string(), item.effective_power())),
-    )
-}
-
 /// Normalize and format already-selected unit term spellings.
 pub fn format_unit_terms_canonical(
     terms: impl IntoIterator<Item = (crate::syntax::ast::MulDivOp, String, Rational)>,
@@ -156,52 +135,59 @@ pub fn format_unit_terms_canonical(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::syntax::ast::{MulDivOp, UnitExpr, UnitExprItem};
-    use crate::syntax::dimension::{UnitName, UnitRef};
-    use crate::syntax::span::Span;
-    use crate::syntax::span::Spanned;
-
-    fn unit_term(op: MulDivOp, name: &str, power: Option<i32>) -> UnitExprItem {
-        UnitExprItem {
-            op,
-            name: Spanned::new(
-                UnitRef::local(UnitName::expect_valid(name)),
-                Span::new(0, 0),
-            ),
-            power: power.map(|power| Rational::integer(power).unwrap()),
-        }
-    }
-
-    fn unit_expr(terms: Vec<UnitExprItem>) -> UnitExpr {
-        UnitExpr {
-            terms,
-            span: Span::new(0, 0),
-        }
-    }
+    use crate::syntax::ast::MulDivOp;
 
     #[test]
     fn canonical_combines_repeated_denominator_terms() {
         // Issue #577: `m/s/s` previously rendered as `m/s * s` (≡ `m`).
-        let expr = unit_expr(vec![
-            unit_term(MulDivOp::Mul, "m", None),
-            unit_term(MulDivOp::Div, "s", None),
-            unit_term(MulDivOp::Div, "s", None),
-        ]);
-        assert_eq!(format_unit_expr_canonical(&expr).unwrap(), "m/s^2");
+        let terms = [
+            (
+                MulDivOp::Mul,
+                "m".to_string(),
+                Rational::integer(1).unwrap(),
+            ),
+            (
+                MulDivOp::Div,
+                "s".to_string(),
+                Rational::integer(1).unwrap(),
+            ),
+            (
+                MulDivOp::Div,
+                "s".to_string(),
+                Rational::integer(1).unwrap(),
+            ),
+        ];
+        assert_eq!(format_unit_terms_canonical(terms).unwrap(), "m/s^2");
     }
 
     #[test]
     fn canonical_parenthesizes_multi_denominator() {
         // `kg * m^2 / A / s^3` must render with the denominator grouped so the
         // string parses back to the same dimensional monomial.
-        let expr = unit_expr(vec![
-            unit_term(MulDivOp::Mul, "kg", None),
-            unit_term(MulDivOp::Mul, "m", Some(2)),
-            unit_term(MulDivOp::Div, "A", None),
-            unit_term(MulDivOp::Div, "s", Some(3)),
-        ]);
+        let terms = [
+            (
+                MulDivOp::Mul,
+                "kg".to_string(),
+                Rational::integer(1).unwrap(),
+            ),
+            (
+                MulDivOp::Mul,
+                "m".to_string(),
+                Rational::integer(2).unwrap(),
+            ),
+            (
+                MulDivOp::Div,
+                "A".to_string(),
+                Rational::integer(1).unwrap(),
+            ),
+            (
+                MulDivOp::Div,
+                "s".to_string(),
+                Rational::integer(3).unwrap(),
+            ),
+        ];
         assert_eq!(
-            format_unit_expr_canonical(&expr).unwrap(),
+            format_unit_terms_canonical(terms).unwrap(),
             "kg * m^2 / (A * s^3)"
         );
     }
@@ -209,11 +195,19 @@ mod tests {
     #[test]
     fn canonical_cancels_to_dimensionless() {
         // `s/s` cancels to nothing.
-        let expr = unit_expr(vec![
-            unit_term(MulDivOp::Mul, "s", None),
-            unit_term(MulDivOp::Div, "s", None),
-        ]);
-        assert_eq!(format_unit_expr_canonical(&expr).unwrap(), "");
+        let terms = [
+            (
+                MulDivOp::Mul,
+                "s".to_string(),
+                Rational::integer(1).unwrap(),
+            ),
+            (
+                MulDivOp::Div,
+                "s".to_string(),
+                Rational::integer(1).unwrap(),
+            ),
+        ];
+        assert_eq!(format_unit_terms_canonical(terms).unwrap(), "");
     }
 
     #[test]
