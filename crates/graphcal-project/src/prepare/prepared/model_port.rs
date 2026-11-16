@@ -117,12 +117,6 @@ impl ParameterPort {
         self.position
     }
 
-    /// Fully concrete Graphcal declared type.
-    #[must_use]
-    pub const fn declared_type(&self) -> &CheckedType {
-        &self.declared_type
-    }
-
     /// Recursive concrete value schema.
     #[must_use]
     pub const fn value_schema(&self) -> &ModelValueSchema {
@@ -157,12 +151,6 @@ impl ModelOutputPort {
     #[must_use]
     pub const fn name(&self) -> &DeclName {
         &self.name
-    }
-
-    /// Fully concrete Graphcal output type.
-    #[must_use]
-    pub const fn declared_type(&self) -> &CheckedType {
-        &self.declared_type
     }
 
     /// Recursive concrete value schema.

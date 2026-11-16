@@ -87,12 +87,6 @@ impl PluginHost {
         self.limits
     }
 
-    /// The process-level limits applied to completed cache entries.
-    #[must_use]
-    pub const fn cache_limits(&self) -> PluginCacheLimits {
-        self.cache_limits
-    }
-
     /// Load and validate a plugin module, reusing a cached success or failure
     /// when the same bytes (by SHA-256) were loaded before.
     ///

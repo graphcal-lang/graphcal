@@ -103,12 +103,6 @@ impl<K, E> SparseMonomial<K, E> {
         }
     }
 
-    /// Number of factors.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.factors.len()
-    }
-
     /// Whether this is the unit monomial (no factors).
     #[must_use]
     pub fn is_empty(&self) -> bool {

@@ -38,13 +38,7 @@ pub struct UnknownIanaTimeZoneError {
     name: String,
 }
 
-impl UnknownIanaTimeZoneError {
-    /// The source spelling that failed lookup.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
+impl UnknownIanaTimeZoneError {}
 
 /// The IANA timezone registry bundled with the Graphcal toolchain.
 ///

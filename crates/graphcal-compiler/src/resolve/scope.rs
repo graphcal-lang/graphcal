@@ -74,12 +74,6 @@ impl ModuleAliasTarget {
         &self.target
     }
 
-    /// Visibility rule for names reached through this alias.
-    #[must_use]
-    pub const fn access(&self) -> Access {
-        self.access
-    }
-
     /// Whether this alias names an imported DAG or an included instance.
     #[must_use]
     pub const fn role(&self) -> ModuleAliasRole {
@@ -134,18 +128,6 @@ pub struct ModuleScope {
 }
 
 impl ModuleScope {
-    /// Module aliases introduced by whole-module imports/includes.
-    #[must_use]
-    pub const fn module_aliases(&self) -> &HashMap<ModuleAliasName, ModuleAliasTarget> {
-        &self.module_aliases
-    }
-
-    /// Extern-plugin aliases introduced by `import plugin` declarations.
-    #[must_use]
-    pub const fn plugin_aliases(&self) -> &HashMap<ModuleAliasName, PluginAliasTarget> {
-        &self.plugin_aliases
-    }
-
     /// The import binding occupying `(namespace, atom)`, if any.
     pub(super) fn occupant(&self, namespace: Namespace, atom: &NameAtom) -> Option<Occupant> {
         match namespace {

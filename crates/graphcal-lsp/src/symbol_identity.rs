@@ -147,11 +147,6 @@ impl ExternFunctionId {
     }
 
     #[must_use]
-    pub const fn owner(&self) -> &DagId {
-        &self.owner
-    }
-
-    #[must_use]
     pub const fn plugin(&self) -> &ModuleAliasName {
         &self.plugin
     }

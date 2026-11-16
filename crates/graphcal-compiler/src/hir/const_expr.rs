@@ -358,12 +358,6 @@ impl ConstInt {
         Self { kind, span }
     }
 
-    /// The node shape.
-    #[must_use]
-    pub const fn kind(&self) -> &ConstIntKind {
-        &self.kind
-    }
-
     /// Source span of the whole node.
     #[must_use]
     pub const fn span(&self) -> Span {
@@ -420,12 +414,6 @@ impl<P: ConstPosition> ConstReal<P> {
     #[must_use]
     pub(crate) const fn new(kind: ConstRealKind<P>, span: Span) -> Self {
         Self { kind, span }
-    }
-
-    /// The node shape.
-    #[must_use]
-    pub const fn kind(&self) -> &ConstRealKind<P> {
-        &self.kind
     }
 
     /// Source span of the whole node.

@@ -200,12 +200,6 @@ impl<C: Completeness> Expr<C> {
     pub const fn kind(&self) -> &ExprKind<C> {
         &self.kind
     }
-
-    /// Consume the node for reconstruction. The identity, if any, is dropped.
-    #[must_use]
-    pub fn into_kind(self) -> ExprKind<C> {
-        *self.kind
-    }
 }
 
 impl<C: Completeness<Id = ()>> Expr<C> {

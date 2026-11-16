@@ -64,12 +64,6 @@ impl MaterializedShape {
         Ok(Self { axes, total })
     }
 
-    /// Concrete axis cardinalities in outer-to-inner type order.
-    #[must_use]
-    pub const fn axes(&self) -> &NonEmpty<IndexCardinality> {
-        &self.axes
-    }
-
     /// Number of indexed axes.
     #[must_use]
     pub const fn rank(&self) -> usize {

@@ -62,12 +62,6 @@ impl UnknownAttributeName {
         Self { raw: raw.into() }
     }
 
-    /// The unrecognized attribute name text.
-    #[must_use]
-    pub fn raw(&self) -> &str {
-        &self.raw
-    }
-
     /// Consume and return the unrecognized attribute name text.
     #[must_use]
     pub fn into_raw(self) -> String {

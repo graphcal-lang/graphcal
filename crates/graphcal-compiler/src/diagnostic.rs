@@ -33,15 +33,6 @@ impl<K> Diagnostic<K> {
     pub const fn new(src: SourceId, primary: Span, kind: K) -> Self {
         Self { src, primary, kind }
     }
-
-    /// Re-type the payload, keeping the location.
-    pub fn map_kind<L>(self, map: impl FnOnce(K) -> L) -> Diagnostic<L> {
-        Diagnostic {
-            src: self.src,
-            primary: self.primary,
-            kind: map(self.kind),
-        }
-    }
 }
 
 /// An additional labelled span in the same source as the primary span.

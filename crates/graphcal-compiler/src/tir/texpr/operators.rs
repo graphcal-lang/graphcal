@@ -613,23 +613,6 @@ pub enum LinearAlgebraCall<C> {
 }
 
 impl<C> LinearAlgebraCall<C> {
-    /// The function this call applies.
-    #[must_use]
-    pub const fn function(&self) -> LinearAlgebraFn {
-        match self {
-            Self::Dot { .. } => LinearAlgebraFn::Dot,
-            Self::Matmul { .. } => LinearAlgebraFn::Matmul,
-            Self::Transpose(_) => LinearAlgebraFn::Transpose,
-            Self::Trace(_) => LinearAlgebraFn::Trace,
-            Self::Norm(_) => LinearAlgebraFn::Norm,
-            Self::Cross { .. } => LinearAlgebraFn::Cross,
-            Self::Outer { .. } => LinearAlgebraFn::Outer,
-            Self::Solve { .. } => LinearAlgebraFn::Solve,
-            Self::Inverse(_) => LinearAlgebraFn::Inverse,
-            Self::Determinant(_) => LinearAlgebraFn::Determinant,
-        }
-    }
-
     /// The call of `function` on `args`, if they are as many as it takes.
     #[must_use]
     pub fn try_new(function: LinearAlgebraFn, args: Vec<C>) -> Option<Self> {

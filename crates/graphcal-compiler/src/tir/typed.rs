@@ -136,12 +136,6 @@ pub struct SignatureResolvedHirDag {
 }
 
 impl SignatureResolvedHirDag {
-    /// Borrow the canonical DAG identity.
-    #[must_use]
-    pub const fn dag_id(&self) -> &crate::dag_id::DagId {
-        self.hir.dag_id()
-    }
-
     /// The HIR body other than its declarations.
     const fn hir(&self) -> &HirDag {
         &self.hir

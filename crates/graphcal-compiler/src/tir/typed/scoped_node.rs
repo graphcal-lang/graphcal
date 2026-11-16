@@ -12,13 +12,11 @@ use std::collections::BTreeSet;
 
 use crate::builtin::AggregationFn;
 use crate::dag_id::DagId;
-use crate::expression_id::ExprId;
 use crate::hir::expr::{
     ExternFnRef, IndexVariantRef, LocalDef, LocalId, LocalUnit, ResolvedUnitExpr,
     ResolvedUnitExprItem, ResolvedUnitRef, UnfoldRecurrence,
 };
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
-use crate::semantic::checked_type::CheckedType;
 use crate::semantic::index_axis::IndexAxis;
 use crate::semantic::key_value::{FinKeyShift, KeyValue};
 use crate::semantic::struct_value::StructValue;
@@ -223,21 +221,9 @@ pub enum ScopedIndexArg<'t> {
 }
 
 impl<'t> Scoped<'t, TExpr> {
-    /// The HIR occurrence this node checks.
-    #[must_use]
-    pub const fn id(self) -> &'t ExprId {
-        self.get().id()
-    }
-
     #[must_use]
     pub const fn span(self) -> Span {
         self.get().span()
-    }
-
-    /// The checked type of the value this node evaluates to.
-    #[must_use]
-    pub const fn ty(self) -> &'t CheckedType {
-        self.get().ty()
     }
 
     /// This node's form, with its children in this node's scope and its

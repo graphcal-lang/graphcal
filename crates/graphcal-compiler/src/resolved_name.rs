@@ -121,12 +121,6 @@ impl<Ns: NameNamespace> ResolvedName<Ns> {
     pub fn to_unowned_def_name(&self) -> NameDef<Ns> {
         self.name.clone()
     }
-
-    /// Consume this value and return the canonical owner plus leaf atom.
-    #[must_use]
-    pub fn into_parts(self) -> (DagId, NameAtom) {
-        (self.owner, self.name.into_atom())
-    }
 }
 
 impl<Ns: NameNamespace> std::fmt::Display for ResolvedName<Ns> {

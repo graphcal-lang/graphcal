@@ -216,12 +216,6 @@ pub struct ModelAlgebraicTypeSchema {
 }
 
 impl ModelAlgebraicTypeSchema {
-    /// Concrete nominal type identity represented by this definition.
-    #[must_use]
-    pub const fn id(&self) -> &ModelTypeId {
-        &self.id
-    }
-
     /// Constructors in source order.
     #[must_use]
     pub fn constructors(&self) -> &[ModelConstructorSchema] {

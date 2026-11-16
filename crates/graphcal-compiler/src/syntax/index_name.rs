@@ -114,12 +114,6 @@ impl QualifiedIndexVariantName {
     pub const fn index(&self) -> &IndexName {
         &self.index
     }
-
-    /// The variant/constructor part of the qualified variant.
-    #[must_use]
-    pub const fn variant(&self) -> &IndexVariantName {
-        &self.variant
-    }
 }
 
 impl std::fmt::Display for QualifiedIndexVariantName {

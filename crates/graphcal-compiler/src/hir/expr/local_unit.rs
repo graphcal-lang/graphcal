@@ -40,14 +40,6 @@ impl LocalUnit {
         }
     }
 
-    /// A handle naming an arbitrary definition, for tests outside the
-    /// compiler.
-    #[cfg(any(test, feature = "test-identities"))]
-    #[must_use]
-    pub const fn for_test(spelling: SyntaxUnitRef, definition: ResolvedUnitName) -> Self {
-        Self::new(spelling, definition)
-    }
-
     /// The source spelling, including any module alias, for diagnostics and
     /// display labels.
     #[must_use]

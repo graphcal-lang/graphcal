@@ -80,27 +80,12 @@ impl<'project, Host, Mode: CancellationMode> ProjectCompiler<'project, Host, Mod
     }
 }
 
-impl<'project, Mode>
-    ProjectCompiler<'project, graphcal_eval::host_fns::HostFunctionRegistry, Mode>
-{
+impl<Mode> ProjectCompiler<'_, graphcal_eval::host_fns::HostFunctionRegistry, Mode> {
     /// Replace callable host functions for checking and runtime preparation.
     #[must_use]
     pub fn host_fns(mut self, host: &graphcal_eval::host_fns::HostFunctionRegistry) -> Self {
         self.host = host.clone();
         self
-    }
-
-    /// Switch to signature-only host metadata for static checking.
-    #[must_use]
-    pub fn host_metadata(
-        self,
-        host: &graphcal_eval::host_fns::HostFunctionMetadata,
-    ) -> ProjectCompiler<'project, graphcal_eval::host_fns::HostFunctionMetadata, Mode> {
-        ProjectCompiler {
-            project: self.project,
-            mode: self.mode,
-            host: host.clone(),
-        }
     }
 
     pub(crate) const fn callable_host(&self) -> &graphcal_eval::host_fns::HostFunctionRegistry {
@@ -126,16 +111,6 @@ impl<Mode: CancellationMode>
 impl<Mode: CancellationMode>
     ProjectCompiler<'_, graphcal_eval::host_fns::HostFunctionMetadata, Mode>
 {
-    /// Lower and check against signature-only host metadata.
-    ///
-    /// # Errors
-    ///
-    /// Returns a compile or plugin-signature diagnostic, or (for a cancellable
-    /// session) cancellation.
-    pub fn check(self) -> Result<CheckedProject, Mode::Failure<CompileError>> {
-        let metadata = self.host.clone();
-        self.lower()?.check_with_host_metadata(&metadata)
-    }
 }
 
 /// Lower every module of `project` into the authoritative HIR boundary.
@@ -182,19 +157,6 @@ impl<Mode: CancellationMode> HirProject<'_, Mode> {
             pipeline::check_hir_project(self, host_metadata, cancellation)
                 .map_err(|outcome| outcome.map_failed(|error| error.render(&sources)))
         })
-    }
-
-    /// Consume HIR and check it against one executable host registry.
-    ///
-    /// # Errors
-    ///
-    /// Returns a static-check or host-signature diagnostic, or (for a
-    /// cancellable session) cancellation.
-    pub fn check_with_host_fns(
-        self,
-        host_fns: &graphcal_eval::host_fns::HostFunctionRegistry,
-    ) -> Result<CheckedProject, Mode::Failure<CompileError>> {
-        self.check_with_host_metadata(&host_fns.metadata())
     }
 }
 

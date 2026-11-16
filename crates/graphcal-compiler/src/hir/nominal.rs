@@ -517,21 +517,7 @@ impl NominalTypeRegistry {
         self.definitions.get(identity)
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&ResolvedStructTypeName, &Arc<NominalTypeDef>)> {
-        self.definitions.iter()
-    }
-
     pub fn values(&self) -> impl Iterator<Item = &Arc<NominalTypeDef>> {
         self.definitions.values()
-    }
-
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.definitions.len()
-    }
-
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.definitions.is_empty()
     }
 }

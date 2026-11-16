@@ -83,11 +83,6 @@ impl PlotAxisAlignmentError {
     pub const fn channel(self) -> usize {
         self.channel
     }
-
-    #[must_use]
-    pub const fn row_channel(self) -> usize {
-        self.row_channel
-    }
 }
 
 /// Align canonical channel axes onto the axes of the widest channel.

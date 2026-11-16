@@ -89,13 +89,7 @@ pub struct ParameterValue {
     binding: RuntimeParameterBinding,
 }
 
-impl ParameterValue {
-    /// Parameter position this value was validated for.
-    #[must_use]
-    pub const fn position(&self) -> ParameterPosition {
-        self.position
-    }
-}
+impl ParameterValue {}
 
 /// Builder for one prepared-project binding row.
 pub struct ParameterBindingBuilder<'project> {
