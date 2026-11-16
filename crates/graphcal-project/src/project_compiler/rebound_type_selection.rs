@@ -18,8 +18,6 @@ use graphcal_compiler::syntax::names::{NameAtom, NamePath};
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 
-use crate::compile_error::PipelineError;
-
 use super::model::IncludeInstanceRequest;
 
 /// The template one include instantiates, with the declarations and scope its
@@ -44,7 +42,7 @@ pub(super) fn check_rebound_type_selection(
     request: &IncludeInstanceRequest,
     importer_src: SourceId,
     include_span: Span,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     let rebound = request.static_bindings.substitution();
     if rebound.is_empty() {
         return Ok(());
@@ -129,9 +127,9 @@ pub(super) fn check_rebound_type_selection(
     };
     let item = first.item().clone();
     let types = NonEmpty::new(dependency(first), rest.iter().map(dependency).collect());
-    Err(PipelineError::Semantic(SemanticError::located(
+    Err(SemanticError::located(
         importer_src,
         include_span,
         VisibilityError::IncludeMustSelectReboundType { item, types, form },
-    )))
+    ))
 }

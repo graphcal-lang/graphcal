@@ -2,8 +2,9 @@
 
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::outcome::{Cancellable, CancellationMode, Outcome, Uncancellable};
+use graphcal_compiler::semantic_error::SemanticError;
 
-use crate::compile_error::{CompileError, PipelineError};
+use crate::compile_error::CompileError;
 use crate::loader::loaded_project::LoadedProject;
 
 pub use super::checked_project::CheckedProject;
@@ -69,8 +70,9 @@ impl<'project, Host, Mode: CancellationMode> ProjectCompiler<'project, Host, Mod
     pub fn lower(self) -> Result<HirProject<'project, Mode>, Mode::Failure<CompileError>> {
         let Self { project, mode, .. } = self;
         mode.clone().run(|cancellation| {
-            lower_project(project, mode, cancellation)
-                .map_err(|outcome| outcome.map_failed(|error| error.render(project.sources())))
+            lower_project(project, mode, cancellation).map_err(|outcome| {
+                outcome.map_failed(|error| CompileError::semantic(error, project.sources()))
+            })
         })
     }
 
@@ -118,7 +120,7 @@ fn lower_project<'project, Mode>(
     project: &'project LoadedProject,
     mode: Mode,
     cancellation: &CancellationToken,
-) -> Result<HirProject<'project, Mode>, Outcome<PipelineError>> {
+) -> Result<HirProject<'project, Mode>, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let root_source = project.root_file().source_id();
     let module_resolver =
@@ -154,8 +156,9 @@ impl<Mode: CancellationMode> HirProject<'_, Mode> {
         let mode = self.mode.clone();
         let sources = std::sync::Arc::clone(&self.sources);
         mode.run(|cancellation| {
-            pipeline::check_hir_project(self, host_metadata, cancellation)
-                .map_err(|outcome| outcome.map_failed(|error| error.render(&sources)))
+            pipeline::check_hir_project(self, host_metadata, cancellation).map_err(|outcome| {
+                outcome.map_failed(|error| CompileError::semantic(error, &sources))
+            })
         })
     }
 }

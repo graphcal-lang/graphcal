@@ -24,8 +24,6 @@ use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::type_name::StructTypeName;
 
-use crate::compile_error::PipelineError;
-
 /// One include's authored Static bindings, keyed by template-side name in
 /// authored order, that bind every required Static port of the template.
 /// Resolution visits them in that order, so the first diagnostic is the first
@@ -54,7 +52,7 @@ impl CoveredStaticBindings {
         dims: IndexMap<DimName, DimName>,
         file_src: SourceId,
         include_span: Span,
-    ) -> Result<Self, PipelineError> {
+    ) -> Result<Self, SemanticError> {
         validate_required_static_bindings(dep, &types, &dims, &indexes, file_src, include_span)?;
         Ok(Self {
             indexes,
@@ -76,7 +74,7 @@ impl CoveredStaticBindings {
         self,
         resolution: &impl StaticBindingResolution,
         include_span: Span,
-    ) -> Result<IncludeStaticBindings, PipelineError> {
+    ) -> Result<IncludeStaticBindings, SemanticError> {
         let Self {
             indexes,
             index_spans,
@@ -97,7 +95,7 @@ impl CoveredStaticBindings {
                     },
                 ))
             })
-            .collect::<Result<_, PipelineError>>()?;
+            .collect::<Result<_, SemanticError>>()?;
         let types = types
             .iter()
             .map(|(port, target)| resolution.struct_type(port, target, include_span))
@@ -128,7 +126,7 @@ pub(super) trait StaticBindingResolution {
         port: &IndexName,
         authored: &IndexBindingTarget,
         span: Span,
-    ) -> Result<(ResolvedIndexName, InstanceIndexBindingTarget), PipelineError>;
+    ) -> Result<(ResolvedIndexName, InstanceIndexBindingTarget), SemanticError>;
 
     /// The type port `port` and its target `target`, bound at `span`.
     ///
@@ -140,7 +138,7 @@ pub(super) trait StaticBindingResolution {
         port: &StructTypeName,
         target: &StructTypeName,
         span: Span,
-    ) -> Result<(ResolvedStructTypeName, ResolvedStructTypeName), PipelineError>;
+    ) -> Result<(ResolvedStructTypeName, ResolvedStructTypeName), SemanticError>;
 
     /// The dimension port `port` and its target `target`, bound at `span`.
     ///
@@ -152,7 +150,7 @@ pub(super) trait StaticBindingResolution {
         port: &DimName,
         target: &DimName,
         span: Span,
-    ) -> Result<(ResolvedDimName, ResolvedDimName), PipelineError>;
+    ) -> Result<(ResolvedDimName, ResolvedDimName), SemanticError>;
 }
 
 /// Check that authored bindings bind every required Static port `dep`
@@ -169,7 +167,7 @@ pub(super) fn validate_required_static_bindings(
     index_bindings: &IndexMap<IndexName, IndexBindingTarget>,
     file_src: SourceId,
     include_span: Span,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     let mut missing = dep
         .static_declarations()
         .filter(|(kind, name, role)| {
@@ -197,11 +195,11 @@ pub(super) fn validate_required_static_bindings(
     let Some((kind, name)) = missing.into_iter().next() else {
         return Ok(());
     };
-    Err(PipelineError::Semantic(SemanticError::located(
+    Err(SemanticError::located(
         file_src,
         include_span,
         IndexError::RequiredStaticInputNotBound { kind, name },
-    )))
+    ))
 }
 
 /// One include's Static bindings, resolved once at the include site.

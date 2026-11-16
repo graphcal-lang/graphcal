@@ -12,8 +12,6 @@ use graphcal_compiler::syntax::index_name::IndexName;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::span::Span;
 
-use crate::compile_error::PipelineError;
-
 /// Resolve the importer-side argument of an index-port binding.
 ///
 /// The source expression crosses into the typed include core as either a
@@ -23,18 +21,18 @@ pub(super) fn extract_index_binding_target(
     span: Span,
     dep_index_name: &IndexName,
     file_src: SourceId,
-) -> Result<IndexBindingTarget, PipelineError> {
+) -> Result<IndexBindingTarget, SemanticError> {
     use graphcal_compiler::semantic::index_def::FiniteIndex;
 
     let invalid_binding = || {
-        PipelineError::Semantic(SemanticError::located(
+        SemanticError::located(
             file_src,
             span,
             ModuleError::InvalidTypeLevelBindingValue {
                 kind: StaticInputKind::Index,
                 name: dep_index_name.atom().clone(),
             },
-        ))
+        )
     };
     match index {
         IndexExpr::Name(path) => path
@@ -45,11 +43,11 @@ pub(super) fn extract_index_binding_target(
         IndexExpr::Finite { cardinality, .. } => {
             let cardinality = closed_binding_cardinality(cardinality, file_src)?;
             let finite = FiniteIndex::try_from_u64(cardinality).map_err(|error| {
-                PipelineError::Semantic(SemanticError::located(
+                SemanticError::located(
                     file_src,
                     span,
                     IndexError::InvalidFiniteIndexCardinality { error },
-                ))
+                )
             })?;
             Ok(IndexBindingTarget::Finite(finite))
         }
@@ -93,18 +91,18 @@ pub(super) fn static_binding_name<'v>(
     kind: StaticInputKind,
     dep_name: &NameAtom,
     file_src: SourceId,
-) -> Result<&'v NameAtom, PipelineError> {
+) -> Result<&'v NameAtom, SemanticError> {
     value
         .static_name()
         .and_then(|name| name.value.as_bare())
         .ok_or_else(|| {
-            PipelineError::Semantic(SemanticError::located(
+            SemanticError::located(
                 file_src,
                 value.span(),
                 ModuleError::InvalidTypeLevelBindingValue {
                     kind,
                     name: dep_name.clone(),
                 },
-            ))
+            )
         })
 }

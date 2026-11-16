@@ -68,62 +68,6 @@ impl From<CompileError> for Outcome<CompileError> {
     }
 }
 
-/// A failure inside the project pipeline.
-///
-/// Semantic errors name their source only by id; they become a renderable
-/// [`CompileError`] at the project's public boundary, where the registry that
-/// issued the id is at hand ([`Self::render`]).
-#[derive(Debug)]
-pub(crate) enum PipelineError {
-    /// A failure that is already renderable on its own.
-    Compile(CompileError),
-    /// A semantic or evaluation error about a registered source.
-    Semantic(SemanticError),
-}
-
-impl PipelineError {
-    /// Render this failure against the registry that issued its source ids.
-    #[must_use]
-    pub(crate) fn render(self, sources: &SourceRegistry) -> CompileError {
-        match self {
-            Self::Compile(error) => error,
-            Self::Semantic(error) => CompileError::semantic(error, sources),
-        }
-    }
-}
-
-impl From<CompileError> for PipelineError {
-    fn from(error: CompileError) -> Self {
-        Self::Compile(error)
-    }
-}
-
-impl From<SemanticError> for PipelineError {
-    fn from(error: SemanticError) -> Self {
-        Self::Semantic(error)
-    }
-}
-
-impl From<LoadError> for PipelineError {
-    fn from(error: LoadError) -> Self {
-        Self::Compile(CompileError::Load(error))
-    }
-}
-
-impl From<BindingError> for PipelineError {
-    fn from(error: BindingError) -> Self {
-        Self::Compile(CompileError::Binding(error))
-    }
-}
-
-/// A cancellable pipeline operation that fails with a [`PipelineError`]
-/// reports it as [`Outcome::Failed`].
-impl From<PipelineError> for Outcome<PipelineError> {
-    fn from(error: PipelineError) -> Self {
-        Self::Failed(error)
-    }
-}
-
 impl CompileError {
     /// Render a semantic error against the project sources that issued its
     /// source id.
