@@ -1833,21 +1833,6 @@ impl Lockfile {
         Ok(())
     }
 
-    /// Build a contextual package graph from this already validated lockfile.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LockValidationError`] if the lockfile is structurally invalid
-    /// for the provided active versions.
-    pub fn package_graph(
-        &self,
-        active_graphcal_version: &str,
-        active_stdlib_version: &str,
-    ) -> Result<PackageGraph, LockValidationError> {
-        self.validated(active_graphcal_version, active_stdlib_version)
-            .map(ValidatedLockfile::package_graph)
-    }
-
     /// Serialize the lockfile in deterministic TOML form.
     #[must_use]
     pub fn to_deterministic_toml(&self) -> String {
@@ -2159,25 +2144,6 @@ pub enum LockValidationError {
     },
 }
 
-/// Validate and bind a lockfile to every materialized package manifest.
-///
-/// # Errors
-///
-/// Returns [`LockValidationError`] unless lock entries and manifests form a
-/// total bijection with identical package names, source directories, and
-/// dependency alias sets, and every dependency target satisfies its manifest
-/// source contract.
-pub fn validate_lock_against_manifests(
-    lockfile: &Lockfile,
-    manifests: &BTreeMap<PackageInstanceId, PackageManifest>,
-    active_graphcal_version: &str,
-    active_stdlib_version: &str,
-) -> Result<ValidatedPackageGraph, LockValidationError> {
-    lockfile
-        .validated(active_graphcal_version, active_stdlib_version)?
-        .bind_manifests(manifests)
-}
-
 impl ValidatedLockfile<'_> {
     /// Bind every reachable lock entry to exactly one materialized manifest.
     ///
@@ -2280,8 +2246,8 @@ impl ValidatedLockfile<'_> {
 /// A package graph whose lock entries are totally matched to materialized
 /// manifests.
 ///
-/// Construction is only available through [`validate_lock_against_manifests`]
-/// or [`ValidatedLockfile::bind_manifests`], so consumers cannot resolve
+/// Construction is only available through
+/// [`ValidatedLockfile::bind_manifests`], so consumers cannot resolve
 /// modules through source metadata that differs from the manifest used for
 /// integrity verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3895,8 +3861,9 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 BTreeMap::new(),
             ),
         ])
-        .package_graph(GRAPHCAL_VERSION, STDLIB_VERSION)
-        .unwrap();
+        .validated(GRAPHCAL_VERSION, STDLIB_VERSION)
+        .unwrap()
+        .package_graph();
 
         let orbital_units = graph
             .resolve_package_selector(&id("pkg-orbital"), &selector("units"))
@@ -3926,8 +3893,9 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 BTreeMap::new(),
             ),
         ])
-        .package_graph(GRAPHCAL_VERSION, STDLIB_VERSION)
-        .unwrap();
+        .validated(GRAPHCAL_VERSION, STDLIB_VERSION)
+        .unwrap()
+        .package_graph();
 
         let selected = graph
             .resolve_package_selector(&id("pkg-mission"), &selector("mission"))
@@ -3965,8 +3933,9 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 BTreeMap::new(),
             ),
         ])
-        .package_graph(GRAPHCAL_VERSION, STDLIB_VERSION)
-        .unwrap();
+        .validated(GRAPHCAL_VERSION, STDLIB_VERSION)
+        .unwrap()
+        .package_graph();
 
         let err = graph
             .resolve_package_selector(&id("pkg-mission"), &selector("units"))
@@ -4418,9 +4387,10 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     #[test]
     fn lockfile_manifest_validation_is_total_and_bijective() {
         let (lock, manifests) = matched_lock_and_manifests();
-        let validated =
-            validate_lock_against_manifests(&lock, &manifests, GRAPHICAL_VERSION, STDLIB_VERSION)
-                .unwrap();
+        let validated = lock
+            .validated(GRAPHICAL_VERSION, STDLIB_VERSION)
+            .and_then(|lock| lock.bind_manifests(&manifests))
+            .unwrap();
         assert_eq!(validated.root(), &id("pkg-mission"));
         assert_eq!(
             validated.manifest(&id("pkg-units")).unwrap().name,
@@ -4430,12 +4400,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         let mut missing_manifest = manifests.clone();
         missing_manifest.remove(&id("pkg-units"));
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &missing_manifest,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&missing_manifest)),
             Err(LockValidationError::MissingPackageManifest { package })
                 if package == id("pkg-units")
         ));
@@ -4451,12 +4416,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             },
         );
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &extra_manifest,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&extra_manifest)),
             Err(LockValidationError::ManifestWithoutLockedPackage { package })
                 if package == id("pkg-extra")
         ));
@@ -4464,12 +4424,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         let mut wrong_name = manifests.clone();
         wrong_name.get_mut(&id("pkg-mission")).unwrap().name = pkg("other");
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &wrong_name,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&wrong_name)),
             Err(LockValidationError::LockedManifestNameMismatch { package, .. })
                 if package == id("pkg-mission")
         ));
@@ -4480,24 +4435,14 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             .unwrap()
             .source_dir = source_dir("unhashed");
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &wrong_source_dir,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&wrong_source_dir)),
             Err(LockValidationError::LockedManifestSourceDirectoryMismatch { package, .. })
                 if package == id("pkg-units")
         ));
 
         let (missing_edge, missing_edge_manifests) = missing_direct_edge_fixture(&lock, &manifests);
         assert!(matches!(
-            validate_lock_against_manifests(
-                &missing_edge,
-                &missing_edge_manifests,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            missing_edge.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&missing_edge_manifests)),
             Err(LockValidationError::MissingDependencyEdge { dependency, .. })
                 if dependency == dep("units")
         ));
@@ -4509,12 +4454,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             .dependencies
             .clear();
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &undeclared_edge,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&undeclared_edge)),
             Err(LockValidationError::UndeclaredDependencyEdge { dependency, .. })
                 if dependency == dep("units")
         ));
@@ -4562,9 +4502,10 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             ),
         ]);
 
-        let err =
-            validate_lock_against_manifests(&lock, &manifests, GRAPHICAL_VERSION, STDLIB_VERSION)
-                .unwrap_err();
+        let err = lock
+            .validated(GRAPHICAL_VERSION, STDLIB_VERSION)
+            .and_then(|lock| lock.bind_manifests(&manifests))
+            .unwrap_err();
 
         assert!(matches!(
             err,
