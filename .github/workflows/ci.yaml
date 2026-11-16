@@ -67,7 +67,7 @@ jobs:
       # cargo-hawk binaries link against one exact rustc and refuse any other.
       # Keep this equal to the `channel` in astral-sh/hawk's rust-toolchain.toml
       # for the pinned cargo-hawk release, independent of our own toolchain.
-      HAWK_RUSTC: 1.99.0
+      HAWK_RUSTC: 1.100.0
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -87,7 +87,7 @@ jobs:
 
       - uses: taiki-e/install-action@v2.90.1
         with:
-          tool: cargo-hawk@0.1.15
+          tool: cargo-hawk@0.1.18
 
       - uses: $/.github/actions/report-engine-tools
 
