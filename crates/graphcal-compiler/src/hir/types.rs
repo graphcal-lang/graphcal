@@ -227,30 +227,6 @@ pub enum NatExpr {
     Mul(AtLeastTwo<Self>, Span),
 }
 
-impl std::fmt::Display for NatExpr {
-    /// Diagnostic spelling (`N + 1`, `2 * N`).
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn join(
-            f: &mut std::fmt::Formatter<'_>,
-            operands: &AtLeastTwo<NatExpr>,
-            separator: &str,
-        ) -> std::fmt::Result {
-            for (position, operand) in operands.iter().enumerate() {
-                if position > 0 {
-                    f.write_str(separator)?;
-                }
-                write!(f, "{operand}")?;
-            }
-            Ok(())
-        }
-        match self {
-            Self::Literal(value, _) => write!(f, "{value}"),
-            Self::Add(operands, _) => join(f, operands, " + "),
-            Self::Mul(operands, _) => join(f, operands, " * "),
-        }
-    }
-}
-
 impl NatExpr {
     /// Source span for the expression.
     #[must_use]

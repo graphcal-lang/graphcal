@@ -92,12 +92,6 @@ impl<Ns: NameNamespace> std::hash::Hash for TypeNameRef<Ns> {
     }
 }
 
-impl<Ns: NameNamespace> From<ResolvedName<Ns>> for TypeNameRef<Ns> {
-    fn from(resolved: ResolvedName<Ns>) -> Self {
-        Self::from_resolved(resolved)
-    }
-}
-
 impl<Ns: NameNamespace> std::fmt::Display for TypeNameRef<Ns> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.name.fmt(f)
@@ -529,12 +523,6 @@ impl IndexTypeRef<Concrete> {
             Self::Declared(reference) => IndexTypeRef::Declared(reference.clone()),
             Self::Finite(index) => IndexTypeRef::Finite(FiniteIndexRef::concrete(*index)),
         }
-    }
-}
-
-impl<V: Concreteness> From<ResolvedIndexName> for IndexTypeRef<V> {
-    fn from(resolved: ResolvedIndexName) -> Self {
-        Self::from_resolved(resolved)
     }
 }
 

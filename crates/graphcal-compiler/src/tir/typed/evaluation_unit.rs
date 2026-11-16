@@ -365,19 +365,12 @@ impl<'t> NominalTypeBody<'t> {
 #[derive(Debug, Clone, Copy)]
 pub struct UnitScaleBody<'t> {
     scope: BodyScope<'t>,
-    spelling: &'t crate::syntax::dimension::UnitRef,
     expression: &'t Expr,
     span: crate::syntax::span::Span,
     source: SourceId,
 }
 
 impl<'t> UnitScaleBody<'t> {
-    /// The spelling under which the unit is registered in its module.
-    #[must_use]
-    pub const fn spelling(self) -> &'t crate::syntax::dimension::UnitRef {
-        self.spelling
-    }
-
     /// The scalar scale expression.
     #[must_use]
     pub const fn expression(self) -> Scoped<'t, Expr> {
@@ -441,7 +434,6 @@ impl CheckedTir {
             .get(unit)
             .map(|scale| UnitScaleBody {
                 scope,
-                spelling: &scale.spelling,
                 expression: &scale.expr,
                 span: scale.span,
                 source: scale.src,

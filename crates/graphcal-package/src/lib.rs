@@ -144,12 +144,6 @@ macro_rules! impl_string_newtype {
                 f.write_str(&self.0)
             }
         }
-
-        impl AsRef<str> for $ty {
-            fn as_ref(&self) -> &str {
-                self.as_str()
-            }
-        }
     };
 }
 
@@ -2025,12 +2019,6 @@ impl SourceTreeHashAlgorithm {
             "legacy-unrecorded-coverage" => Some(Self::LegacyUnrecordedCoverage),
             _ => None,
         }
-    }
-}
-
-impl fmt::Display for SourceTreeHashAlgorithm {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
     }
 }
 

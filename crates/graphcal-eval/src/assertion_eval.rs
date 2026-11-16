@@ -13,7 +13,6 @@ type AssertResult =
 use crate::invariant::Invariant;
 use crate::runtime_value::{IndexedValue, RuntimeValue};
 use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKey};
-use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::hir::expr::{AssertBody, Expr};
 use graphcal_compiler::internal_error::InternalError;
 use graphcal_compiler::outcome::Outcome;
@@ -150,12 +149,6 @@ impl Aborted {
             Self::Internal(error) => Outcome::Failed(SemanticError::Internal(error)),
             Self::Invariant(invariant) => Outcome::Failed(internal(invariant)),
         }
-    }
-}
-
-impl From<Cancelled> for Aborted {
-    fn from(Cancelled: Cancelled) -> Self {
-        Self::Cancelled
     }
 }
 

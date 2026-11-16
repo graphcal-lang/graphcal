@@ -57,18 +57,6 @@ impl From<&str> for DagPackageId {
     }
 }
 
-impl From<String> for DagPackageId {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<Arc<str>> for DagPackageId {
-    fn from(value: Arc<str>) -> Self {
-        Self::new(value)
-    }
-}
-
 impl fmt::Display for DagPackageId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -297,12 +285,6 @@ pub enum DagIdPathError {
     /// The `.gcl` path had an empty file stem.
     #[error("path must have a non-empty file stem before `.gcl`")]
     EmptyFileStem,
-}
-
-impl From<NonEmpty<String>> for NonEmpty<Arc<str>> {
-    fn from(value: NonEmpty<String>) -> Self {
-        value.map(Arc::<str>::from)
-    }
 }
 
 impl<'a> From<NonEmpty<&'a str>> for NonEmpty<Arc<str>> {

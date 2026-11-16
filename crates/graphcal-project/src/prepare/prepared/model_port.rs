@@ -170,18 +170,11 @@ impl ModelOutputPort {
 #[derive(Debug, Clone)]
 pub struct PreparedModel {
     plan_id: u64,
-    inputs: Vec<ParameterPort>,
     outputs: Vec<ModelOutputPort>,
     schema_graph: Arc<ModelSchemaGraph>,
 }
 
 impl PreparedModel {
-    /// Every concrete entry-DAG parameter in source order.
-    #[must_use]
-    pub fn inputs(&self) -> &[ParameterPort] {
-        &self.inputs
-    }
-
     /// Selected concrete public root nodes in source order.
     #[must_use]
     pub fn outputs(&self) -> &[ModelOutputPort] {
@@ -229,7 +222,6 @@ impl PreparedProject {
         }
         Ok(PreparedModel {
             plan_id: self.plan_id,
-            inputs: self.parameter_ports.clone(),
             outputs: self
                 .output_ports
                 .iter()

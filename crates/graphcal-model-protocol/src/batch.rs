@@ -512,12 +512,6 @@ impl ResultBatchBuilder {
         }
     }
 
-    /// The session schema the batch is built for.
-    #[must_use]
-    pub const fn schema(&self) -> &Arc<SessionSchema> {
-        self.values.schema()
-    }
-
     /// Append one row outcome; a success lists one value per read output in
     /// session order.
     ///
