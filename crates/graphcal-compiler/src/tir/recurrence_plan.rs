@@ -53,12 +53,6 @@ impl GroupRead {
     pub const fn target(&self) -> usize {
         self.target
     }
-
-    /// The step the read selects, relative to the reader's step.
-    #[must_use]
-    pub const fn access(&self) -> StepAccess {
-        self.access
-    }
 }
 
 /// One member of an accepted group.
@@ -87,12 +81,6 @@ impl RecurrenceMember {
     #[must_use]
     pub const fn declaration(&self) -> &ResolvedDeclName {
         &self.declaration
-    }
-
-    /// Whether the member is a `for` or an `unfold`.
-    #[must_use]
-    pub const fn shape(&self) -> RecurrenceShape {
-        self.shape
     }
 
     /// The member's distinct reads of other members of the group.

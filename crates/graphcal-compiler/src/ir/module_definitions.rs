@@ -246,12 +246,6 @@ impl ModuleDefinitions {
         })
     }
 
-    /// The module owning every definition.
-    #[must_use]
-    pub const fn owner(&self) -> &DagId {
-        self.statics.owner()
-    }
-
     /// Dimensions, units, indexes, and base-dimension metadata.
     #[must_use]
     pub const fn statics(&self) -> &StaticDefinitions {

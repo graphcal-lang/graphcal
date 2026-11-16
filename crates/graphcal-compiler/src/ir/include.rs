@@ -47,12 +47,6 @@ pub struct SemanticInstanceInput {
 }
 
 impl UnfrozenIR {
-    /// Typed Static ports authored directly by this reusable DAG template.
-    #[must_use]
-    pub fn static_ports(&self) -> &[crate::hir::source_interface::StaticPort] {
-        &self.static_ports
-    }
-
     /// Resolve an exposed plot alias to its canonical template declaration.
     #[must_use]
     pub fn plot_projection_target(&self, name: &DeclName) -> Option<LocalDecl> {

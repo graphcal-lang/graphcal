@@ -212,12 +212,6 @@ impl PluginModule {
             .map(|(_, signature)| signature)
     }
 
-    /// SHA-256 of the module bytes.
-    #[must_use]
-    pub const fn sha256(&self) -> &[u8; 32] {
-        &self.sha256
-    }
-
     /// SHA-256 of the module bytes as lowercase hex, the form pinned in
     /// `graphcal.lock`.
     #[must_use]

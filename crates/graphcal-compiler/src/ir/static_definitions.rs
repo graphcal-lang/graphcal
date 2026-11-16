@@ -331,12 +331,6 @@ impl<'a> StaticDefinitionEvaluator<'a> {
         self.resolver
     }
 
-    /// Metadata of every base dimension evaluated so far.
-    #[must_use]
-    pub const fn base_dimensions(&self) -> &BTreeMap<BaseDimId, BaseDimensionInfo> {
-        &self.base_dimensions
-    }
-
     /// The `type` declaration of a module-owned nominal type, with the
     /// declaring module's diagnostic source.
     #[must_use]
@@ -629,13 +623,6 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                     .map(|(spelling, identity)| (spelling, identity.clone())),
             )
             .collect()
-    }
-
-    /// Format a dimension for a diagnostic in `owner`, using only dimensions
-    /// already evaluated.
-    #[must_use]
-    pub fn format_dimension(&self, owner: &DagId, dimension: &Dimension) -> String {
-        self.display_registry(owner).format_dimension(dimension)
     }
 
     /// Spell a dimension for a diagnostic in `owner`, using only dimensions

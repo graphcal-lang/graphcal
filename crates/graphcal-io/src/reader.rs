@@ -74,18 +74,6 @@ impl OutsideRootError {
         Self { path, root }
     }
 
-    /// The refused path, as requested.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    /// The root of the reader that refused the path.
-    #[must_use]
-    pub fn root(&self) -> &Path {
-        &self.root
-    }
-
     /// Carry this refusal through an [`io::Error`] boundary.
     #[must_use]
     pub fn into_io_error(self) -> io::Error {

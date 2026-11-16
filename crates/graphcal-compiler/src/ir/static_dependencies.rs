@@ -14,9 +14,7 @@ use crate::desugar::desugared_ast::{DeclKind, Declaration, IndexExpr, TypeExpr, 
 use crate::ir::static_substitution::StaticSubstitution;
 use crate::resolve::ModuleResolver;
 use crate::resolved_name::{ResolvedStaticName, ResolvedStructTypeName};
-use crate::static_interface::{
-    StaticImportRejections, StaticInputKind, StaticRole, static_interface,
-};
+use crate::static_interface::{StaticInputKind, StaticRole, static_interface};
 use crate::syntax::ast::{GenericArg, ImportItemNamespace};
 use crate::syntax::names::{NameAtom, NamePath};
 
@@ -466,21 +464,6 @@ pub fn static_import_rejection(
     }
     first_required_static_dependency(module, selected_name, selected_namespace)
         .map(StaticImportRejection::UnresolvedDependency)
-}
-
-/// Classify every name `module` declares for pure-import capability.
-#[must_use]
-pub fn static_import_rejections(module: ModuleDeclarations<'_>) -> StaticImportRejections {
-    StaticImportRejections::new(
-        module
-            .declarations
-            .iter()
-            .flat_map(|declaration| declaration.kind.introduced_names())
-            .filter(|introduced| {
-                static_import_rejection(module, introduced.atom(), introduced.namespace()).is_some()
-            })
-            .map(|introduced| (introduced.namespace(), introduced.atom().clone())),
-    )
 }
 
 fn visit_references(

@@ -769,16 +769,7 @@ pub enum IndexBindingTarget {
     Finite(FiniteIndex),
 }
 
-impl IndexBindingTarget {
-    /// Return the declared target name, when the argument names a declaration.
-    #[must_use]
-    pub const fn declared_name(&self) -> Option<&IndexName> {
-        match self {
-            Self::Declared(name) => Some(name),
-            Self::Finite(_) => None,
-        }
-    }
-}
+impl IndexBindingTarget {}
 
 impl fmt::Display for IndexBindingTarget {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

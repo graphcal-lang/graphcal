@@ -215,33 +215,10 @@ impl HirDag {
         &self.definitions
     }
 
-    /// Diagnostic formatting services for this DAG, given the project's
-    /// base-dimension metadata.
-    #[must_use]
-    pub fn formatting(
-        &self,
-        base_dimensions: std::collections::BTreeMap<
-            crate::dimension::BaseDimId,
-            crate::semantic::dimension_table::BaseDimensionInfo,
-        >,
-    ) -> crate::display::formatting_registry::FormattingRegistry {
-        crate::display::formatting_registry::FormattingRegistry::new(
-            base_dimensions,
-            self.display_dimensions.iter().cloned(),
-        )
-    }
-
     /// Borrow canonical lexical import targets resolved during HIR lowering.
     #[must_use]
     pub const fn imported_bindings(&self) -> &HashMap<ScopedName, ResolvedDeclName> {
         &self.imported_bindings
-    }
-
-    /// Runtime unit definitions after concrete include ownership has been
-    /// assigned.
-    #[must_use]
-    pub fn dynamic_unit_scales(&self) -> &[DynamicUnitScaleEntry] {
-        &self.dynamic_unit_scales
     }
 
     /// Declarations authored directly in this DAG that define its runtime
@@ -249,12 +226,6 @@ impl HirDag {
     #[must_use]
     pub fn source_declarations(&self) -> &[crate::hir::source_interface::SourceDeclaration] {
         &self.source_declarations
-    }
-
-    /// Typed Static interface authored directly in this DAG.
-    #[must_use]
-    pub fn static_ports(&self) -> &[crate::hir::source_interface::StaticPort] {
-        &self.static_ports
     }
 
     /// Extern signatures declared by this DAG's own `import plugin` blocks,

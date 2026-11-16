@@ -71,13 +71,6 @@ pub fn format_unit_terms_with_config(
     }
 }
 
-/// Format a `UnitExpr` as a human-readable label.
-/// E.g., `m`, `km/h`, `kg * m / s^2`
-#[must_use]
-pub fn format_unit_expr(expr: &crate::syntax::ast::UnitExpr) -> String {
-    format_unit_expr_with_config(expr, false)
-}
-
 /// Format a `UnitExpr` in canonical normalized form for display labels.
 ///
 /// Combines repeated unit names into a single term with the summed exponent

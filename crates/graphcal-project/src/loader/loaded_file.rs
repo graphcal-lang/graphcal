@@ -388,13 +388,6 @@ impl<T> LoadedFile<T> {
         &self.dag_id
     }
 
-    /// The module path naming this file within its own package; `None` when
-    /// a component of its path is not a name.
-    #[must_use]
-    pub const fn module_path(&self) -> Option<&ModulePathKey> {
-        self.module_path.as_ref()
-    }
-
     /// Raw source text parsed into this immutable loader artifact.
     #[must_use]
     pub const fn source(&self) -> &Arc<String> {

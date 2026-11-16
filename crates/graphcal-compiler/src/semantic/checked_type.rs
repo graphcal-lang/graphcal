@@ -71,12 +71,6 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
         self.resolved() == other.resolved()
     }
 
-    /// Borrow the leaf string for diagnostic/display-only formatting.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        self.name.as_str()
-    }
-
     /// Clone the leaf definition name for diagnostic/display boundaries.
     #[must_use]
     fn to_unowned_name(&self) -> NameDef<Ns> {
@@ -496,12 +490,6 @@ impl IndexTypeRef<Symbolic> {
     /// Returns an error when the form is a concrete invalid finite structural size.
     pub(crate) fn from_finite_index_form(form: NatPolyForm) -> Result<Self, IndexCardinalityError> {
         FiniteIndexRef::from_form(form).map(Self::Finite)
-    }
-
-    /// Wrap an already validated finite structural reference.
-    #[must_use]
-    pub const fn from_finite_index_ref(reference: FiniteIndexRef) -> Self {
-        Self::Finite(reference)
     }
 
     /// Return the finite structural reference, when this is a compiler-generated finite structural.

@@ -1,6 +1,6 @@
 //! Shared resource policy for project and package artifact ingestion.
 
-use crate::{ByteLimit, SourceTreeHashLimits};
+use crate::ByteLimit;
 
 const MEBIBYTE: u64 = 1024 * 1024;
 
@@ -81,16 +81,6 @@ impl ProjectIngestionPolicy {
     #[must_use]
     pub const fn max_total_bytes(self) -> u64 {
         self.max_total_bytes
-    }
-
-    /// Source-tree limits using this policy's full aggregate ceilings.
-    #[must_use]
-    pub const fn source_tree_limits(self) -> SourceTreeHashLimits {
-        SourceTreeHashLimits::new(
-            self.source_tree_file,
-            self.max_total_bytes,
-            self.max_entries,
-        )
     }
 }
 

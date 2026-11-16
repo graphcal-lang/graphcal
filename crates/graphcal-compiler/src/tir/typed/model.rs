@@ -1,4 +1,3 @@
-use crate::semantic_error::index::IndexError;
 use crate::syntax::non_empty::NonEmpty;
 use indexmap::IndexMap;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -29,17 +28,6 @@ use super::resolved_nominal::{
     ConstrainedField, NominalMember, ResolvedDomainBound, ResolvedNominal,
 };
 use super::resolved_type::ResolvedDeclType;
-
-/// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
-/// into a spanned [`SemanticError`].
-#[must_use]
-pub fn nat_overflow_error(
-    err: crate::nat::NatOverflowError,
-    src: SourceId,
-    span: Span,
-) -> SemanticError {
-    SemanticError::located(src, span, IndexError::NatOverflow { error: err })
-}
 
 /// Authoritative project type-system definitions keyed by
 /// [`ResolvedName`](crate::resolved_name::ResolvedName) identities.

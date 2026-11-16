@@ -89,12 +89,6 @@ impl ViewInstanceId {
     pub const fn from_wire(key: String) -> Self {
         Self(key)
     }
-
-    /// The key as sent.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
 }
 
 impl std::fmt::Display for ViewInstanceId {
@@ -122,12 +116,6 @@ impl ViewIndexId {
             ResolvedIndex::GenericParam(param, _) => key.part('G', &param.to_string()),
         }
         Self(key.finish())
-    }
-
-    /// The key as sent.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
 }
 

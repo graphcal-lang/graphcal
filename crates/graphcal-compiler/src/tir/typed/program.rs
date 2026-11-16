@@ -97,12 +97,6 @@ impl TirDraft {
             .localized_mut(super::dag_position::DagPosition::ROOT)
     }
 
-    /// Borrow the root file's post-resolution formatting services.
-    #[must_use]
-    pub const fn registry(&self) -> &FormattingRegistry {
-        self.core.registry()
-    }
-
     /// Borrow the owner-qualified type store accumulated for this project.
     #[must_use]
     pub fn project_type_store(&self) -> &ProjectTypeStore {
