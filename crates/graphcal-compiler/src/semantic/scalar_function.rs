@@ -75,7 +75,7 @@ impl ScalarFunction {
     /// # Errors
     ///
     /// Returns [`BuiltinEvalError::WrongArity`] when `args` does not contain
-    /// exactly [`Self::arity`] values. The private kernels therefore cannot be
+    /// exactly `self.signature().arity()` values. The private kernels therefore cannot be
     /// called with a slice shape that would panic on indexing.
     pub fn eval(&self, args: &[f64]) -> Result<f64, BuiltinEvalError> {
         match (self.kernel, args) {
