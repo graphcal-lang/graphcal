@@ -108,14 +108,6 @@ impl std::fmt::Display for NameAtom {
     }
 }
 
-impl TryFrom<String> for NameAtom {
-    type Error = NameAtomError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        Self::parse(value)
-    }
-}
-
 impl TryFrom<&str> for NameAtom {
     type Error = NameAtomError;
 

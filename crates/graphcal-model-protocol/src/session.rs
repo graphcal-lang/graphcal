@@ -433,12 +433,6 @@ impl SessionSchema {
         (0..self.inputs.len()).map(move |index| InputSlot { schema, index })
     }
 
-    /// The slot of every read output, in session order.
-    pub fn output_slots(&self) -> impl ExactSizeIterator<Item = OutputSlot> + use<> {
-        let schema = self.id;
-        (0..self.outputs.len()).map(move |index| OutputSlot { schema, index })
-    }
-
     /// The slot of the varied parameter named `name`.
     #[must_use]
     pub fn input_slot(&self, name: &str) -> Option<InputSlot> {

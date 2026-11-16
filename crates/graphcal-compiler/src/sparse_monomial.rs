@@ -88,12 +88,6 @@ impl<K> MonomialFactorError<K> {
     }
 }
 
-impl<K, E> Default for SparseMonomial<K, E> {
-    fn default() -> Self {
-        Self::one()
-    }
-}
-
 impl<K, E> SparseMonomial<K, E> {
     /// The unit monomial (empty product).
     #[must_use]

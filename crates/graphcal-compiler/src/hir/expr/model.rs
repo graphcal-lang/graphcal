@@ -521,17 +521,6 @@ impl FunctionRef {
     }
 }
 
-impl std::fmt::Display for FunctionRef {
-    /// Render source-like function spelling at diagnostic and display boundaries.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Builtin(name) => std::fmt::Display::fmt(name, f),
-            Self::Epoch { scale } => write!(f, "epoch<{}>", scale.value),
-            Self::External(extern_ref) => std::fmt::Display::fmt(extern_ref, f),
-        }
-    }
-}
-
 /// A resolved reference to an extern (plugin) function.
 ///
 /// Carries the canonical plugin identity plus the source alias the call was

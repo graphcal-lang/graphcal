@@ -99,12 +99,6 @@ impl TimeZoneRegistry {
     }
 }
 
-impl Default for TimeZoneRegistry {
-    fn default() -> Self {
-        Self::bundled()
-    }
-}
-
 impl std::fmt::Debug for TimeZoneRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TimeZoneRegistry")

@@ -1,6 +1,6 @@
 //! Index and index-variant names.
 
-use crate::syntax::names::{NameDef, NameNamespace, NamePath};
+use crate::syntax::names::{NameDef, NameNamespace};
 
 /// Index type namespace marker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -62,12 +62,6 @@ impl IndexEntryKey {
     }
 }
 
-impl From<IndexVariantName> for IndexEntryKey {
-    fn from(value: IndexVariantName) -> Self {
-        Self::Named(value)
-    }
-}
-
 impl std::fmt::Display for IndexEntryKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -80,12 +74,6 @@ impl std::fmt::Display for IndexEntryKey {
 /// Name of an index variable declared by an extern signature's `<I: Index>`
 /// binder (parallel to [`crate::syntax::dimension::DimVarName`] for `<D: Dim>`).
 pub type IndexVarName = NameDef<IndexVarNameNamespace>;
-
-impl From<IndexName> for NamePath {
-    fn from(name: IndexName) -> Self {
-        Self::local(name.into_atom())
-    }
-}
 
 impl IndexVariantName {
     /// Pair this variant with its index name for qualified rendering.

@@ -190,14 +190,6 @@ impl CheckedDagRegistry {
     }
 }
 
-impl std::ops::Index<&DagId> for CheckedDagRegistry {
-    type Output = CheckedDag;
-
-    fn index(&self, index: &DagId) -> &Self::Output {
-        &self.dags[index]
-    }
-}
-
 impl UncheckedTir {
     /// Pair every local body with the facts its check published for it: the
     /// only construction of a [`CheckedTir`].

@@ -6,7 +6,7 @@
 //! type instead.
 
 use std::num::NonZeroUsize;
-use std::ops::{Index, IndexMut};
+use std::ops::Index;
 
 use thiserror::Error;
 
@@ -293,20 +293,6 @@ impl<T> NonEmpty<T> {
     }
 }
 
-impl<T> TryFrom<Vec<T>> for NonEmpty<T> {
-    type Error = EmptyVecError;
-
-    fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
-        Self::try_from_vec(value)
-    }
-}
-
-impl<T> From<(T, Vec<T>)> for NonEmpty<T> {
-    fn from((first, rest): (T, Vec<T>)) -> Self {
-        Self::new(first, rest)
-    }
-}
-
 impl<T> From<T> for NonEmpty<T> {
     fn from(first: T) -> Self {
         Self::singleton(first)
@@ -345,20 +331,6 @@ impl<T> Index<usize> for NonEmpty<T> {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.items[index]
-    }
-}
-
-impl<T> IndexMut<usize> for NonEmpty<T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.items[index]
-    }
-}
-
-impl<T, const N: usize> TryFrom<[T; N]> for NonEmpty<T> {
-    type Error = EmptyVecError;
-
-    fn try_from(value: [T; N]) -> Result<Self, Self::Error> {
-        Self::try_from_vec(value.into_iter().collect())
     }
 }
 

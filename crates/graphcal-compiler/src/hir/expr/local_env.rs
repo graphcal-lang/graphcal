@@ -69,9 +69,3 @@ impl<'a, V> LocalEnv<'a, V> {
         }
     }
 }
-
-impl<V> Default for LocalEnv<'_, V> {
-    fn default() -> Self {
-        Self::root()
-    }
-}

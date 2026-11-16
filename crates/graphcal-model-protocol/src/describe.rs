@@ -59,12 +59,6 @@ impl DescribeDocument {
     pub const fn interface(&self) -> &ModelInterface {
         &self.interface
     }
-
-    /// Take the model interface.
-    #[must_use]
-    pub fn into_interface(self) -> ModelInterface {
-        self.interface
-    }
 }
 
 #[derive(Serialize, Deserialize)]
