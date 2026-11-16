@@ -140,29 +140,6 @@ fn prepared_project_binds_complete_recursive_values_and_reuses_the_plan() {
     let first_row = first.finish().unwrap();
     let first_result = prepared.evaluate(&first_row).unwrap();
     assert_eq!(find_int_value(&first_result, "total"), 3);
-    let recursive_model = prepared.model(&[DeclName::expect_valid("echo")]).unwrap();
-    let ModelValueSchema::Algebraic(type_id) = recursive_model.outputs()[0].value_schema() else {
-        panic!("echo schema was not algebraic");
-    };
-    let definition = recursive_model
-        .schema_graph()
-        .definition(type_id)
-        .expect("algebraic schema reference must have a definition");
-    assert_eq!(definition.constructors().len(), 2);
-    assert_eq!(
-        definition.constructors()[1].fields()[0].value(),
-        &ModelValueSchema::Int
-    );
-    let ModelRowOutcome::Success(recursive_outputs) = prepared
-        .evaluate_model_row(&first_row, &recursive_model)
-        .unwrap()
-    else {
-        panic!("recursive model row unexpectedly failed");
-    };
-    assert!(matches!(
-        recursive_outputs.as_slice(),
-        [Value::Struct { .. }]
-    ));
 
     let mut second = prepared.binding_builder();
     second
@@ -256,10 +233,12 @@ fn model_interface_lists_selectively_reexported_nodes_as_outputs() {
         ["first", "failure", "twice", "facade_margin", "last"]
     );
     assert_eq!(interface.output("twice").unwrap().graphcal_type(), "Force");
-    assert!(prepared.model(&[DeclName::expect_valid("twice")]).is_ok());
+    // A private re-export is not an output a session can read.
     assert!(matches!(
-        prepared.model(&[DeclName::expect_valid("hidden_margin")]),
-        Err(ModelDefinitionError::PrivateOutput { .. })
+        prepared.session_schema(&unit_names(&["load"], &["hidden_margin"])),
+        Err(ModelSessionError::Session(
+            graphcal_model_protocol::SessionError::UnknownOutput { .. }
+        ))
     ));
 
     let schema = session_over(&prepared, &["load"], &["twice", "facade_margin", "failure"]);
@@ -693,7 +672,6 @@ fn generic_model_interface_accepts_types_the_batch_protocol_cannot_carry() {
     )
     .unwrap();
     let prepared = prepare_from_project(&project).unwrap();
-    assert!(prepared.model(&[DeclName::expect_valid("same")]).is_ok());
     assert!(matches!(
         prepared
             .model_interface()
@@ -704,8 +682,38 @@ fn generic_model_interface_accepts_types_the_batch_protocol_cannot_carry() {
     ));
 }
 
+/// Evaluate the `ok` output of `prepared` for one bound `x` through a model
+/// session: the output's value, or the row's failure as text.
+fn evaluate_ok_row(prepared: &PreparedProject, x: f64) -> Result<bool, String> {
+    use graphcal_model_protocol::{
+        FiniteF64, InputColumn, RequestBatch, RowFailure, RowOutcome, ValueRef,
+    };
+
+    let schema = session_over(prepared, &["x"], &["ok"]);
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![FiniteF64::new(x).unwrap()])],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    match result.row(0).unwrap() {
+        RowOutcome::Success(values) => {
+            match values.get(schema.output_slot("ok").unwrap()).unwrap() {
+                ValueRef::Bool(value) => Ok(value),
+                other => panic!("`ok` is a Bool, got {other:?}"),
+            }
+        }
+        RowOutcome::Failure(RowFailure::AssertionFailed { assertion, .. }) => Err(assertion),
+        RowOutcome::Failure(RowFailure::EvaluationError { message }) => Err(message),
+        RowOutcome::Failure(other) => panic!("unexpected row failure: {other:?}"),
+    }
+}
+
 /// Evaluate `pipeline.main`'s `ok` model output for one bound `x`.
-fn evaluate_included_model_row(leaf: &str, x: &str) -> ModelRowOutcome {
+fn evaluate_included_model_row(leaf: &str, x: f64) -> Result<bool, String> {
     let (_directory, root) = write_pipeline_project(
         &[
             ("leaf.gcl", leaf),
@@ -720,13 +728,7 @@ fn evaluate_included_model_row(leaf: &str, x: &str) -> ModelRowOutcome {
     );
     let project = crate::loader::load_project(&root, None, &fs()).unwrap();
     let prepared = prepare_from_project(&project).unwrap();
-    let model = prepared.model(&[DeclName::expect_valid("ok")]).unwrap();
-    let mut bindings = prepared.binding_builder();
-    bindings
-        .bind_expression(&DeclName::expect_valid("x"), &parse_expr(x))
-        .unwrap();
-    let row = bindings.finish().unwrap();
-    prepared.evaluate_model_row(&row, &model).unwrap()
+    evaluate_ok_row(&prepared, x)
 }
 
 #[test]
@@ -734,17 +736,12 @@ fn model_row_fails_when_an_included_assertion_fails() {
     let leaf = "param input: Dimensionless;\n\
                 pub node output: Dimensionless = @input;\n\
                 assert positive = @output > 0.0;";
-    assert_eq!(
-        evaluate_included_model_row(leaf, "1.0"),
-        ModelRowOutcome::Success(vec![Value::Bool(true)])
+    assert_eq!(evaluate_included_model_row(leaf, 1.0), Ok(true));
+    let failure = evaluate_included_model_row(leaf, -1.0).unwrap_err();
+    assert!(
+        failure.contains("positive"),
+        "unexpected failure: {failure}"
     );
-    match evaluate_included_model_row(leaf, "-1.0") {
-        ModelRowOutcome::Failure(failure) => assert!(
-            failure.to_string().contains("positive"),
-            "unexpected failure: {failure}"
-        ),
-        ModelRowOutcome::Success(values) => panic!("expected assertion failure, got {values:?}"),
-    }
 }
 
 #[test]
@@ -752,17 +749,12 @@ fn model_row_reports_runtime_errors_inside_included_dags_as_row_failures() {
     let leaf = "param input: Dimensionless;\n\
                 node reciprocal: Dimensionless = 1.0 / @input;\n\
                 pub node output: Dimensionless = @input;";
-    assert_eq!(
-        evaluate_included_model_row(leaf, "1.0"),
-        ModelRowOutcome::Success(vec![Value::Bool(true)])
+    assert_eq!(evaluate_included_model_row(leaf, 1.0), Ok(true));
+    let failure = evaluate_included_model_row(leaf, 0.0).unwrap_err();
+    assert!(
+        failure.contains("division by zero"),
+        "unexpected failure: {failure}"
     );
-    match evaluate_included_model_row(leaf, "0.0") {
-        ModelRowOutcome::Failure(failure) => assert!(
-            failure.to_string().contains("division by zero"),
-            "unexpected failure: {failure}"
-        ),
-        ModelRowOutcome::Success(values) => panic!("expected runtime failure, got {values:?}"),
-    }
 }
 
 /// A project whose root includes `pipeline.leaf` under `include`, where
@@ -805,23 +797,16 @@ fn private_include_failures_are_labelled_by_the_include_scope() {
         let (_directory, root) = write_private_failure_project(include);
         let project = crate::loader::load_project(&root, None, &fs()).unwrap();
         let prepared = prepare_from_project(&project).unwrap();
-        let model = prepared.model(&[DeclName::expect_valid("ok")]).unwrap();
         let mut bindings = prepared.binding_builder();
         bindings
             .bind_expression(&DeclName::expect_valid("x"), &parse_expr("0.0"))
             .unwrap();
         let row = bindings.finish().unwrap();
-        match prepared.evaluate_model_row(&row, &model).unwrap() {
-            ModelRowOutcome::Failure(failure) => assert!(
-                failure
-                    .to_string()
-                    .starts_with(&format!("{label}: division by zero")),
-                "unexpected failure for `{include}`: {failure}"
-            ),
-            ModelRowOutcome::Success(values) => {
-                panic!("expected a runtime failure for `{include}`, got {values:?}")
-            }
-        }
+        let failure = evaluate_ok_row(&prepared, 0.0).unwrap_err();
+        assert!(
+            failure.starts_with(&format!("{label}: division by zero")),
+            "unexpected failure for `{include}`: {failure}"
+        );
 
         let result = prepared.evaluate(&row).unwrap();
         let failed = result

@@ -6,15 +6,13 @@ use graphcal_eval::eval::runtime::{FailureOrigin, RootFailure, RootOutcome};
 use super::binding_compile::ParameterBindingRow;
 use super::{ParameterPosition, PreparedProject};
 use crate::compile_error::CompileError;
-use crate::prepare::model_schema::{ModelSchemaGraph, ModelValueSchema};
+use crate::prepare::model_schema::ModelValueSchema;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::time_scale::TimeScale;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_eval::eval::types::Value;
-use std::collections::HashSet;
-use std::sync::Arc;
 use thiserror::Error;
 
 /// Inclusive lower and upper bounds for one external input family.
@@ -166,99 +164,7 @@ impl ModelOutputPort {
     }
 }
 
-/// Transport-independent typed model selected from one prepared project.
-#[derive(Debug, Clone)]
-pub struct PreparedModel {
-    plan_id: u64,
-    outputs: Vec<ModelOutputPort>,
-    schema_graph: Arc<ModelSchemaGraph>,
-}
-
-impl PreparedModel {
-    /// Selected concrete public root nodes in source order.
-    #[must_use]
-    pub fn outputs(&self) -> &[ModelOutputPort] {
-        &self.outputs
-    }
-
-    /// Algebraic definitions referenced by every input and output schema.
-    #[must_use]
-    pub fn schema_graph(&self) -> &ModelSchemaGraph {
-        &self.schema_graph
-    }
-}
-
 impl PreparedProject {
-    /// Select a transport-independent recursive typed model interface.
-    pub fn model(
-        &self,
-        requested_outputs: &[DeclName],
-    ) -> Result<PreparedModel, ModelDefinitionError> {
-        if requested_outputs.is_empty() {
-            return Err(ModelDefinitionError::NoOutputs);
-        }
-        let mut requested = HashSet::with_capacity(requested_outputs.len());
-        for name in requested_outputs {
-            if !requested.insert(name.clone()) {
-                return Err(ModelDefinitionError::DuplicateOutput { name: name.clone() });
-            }
-            let Some(port) = self.output_ports.iter().find(|port| &port.name == name) else {
-                let actual_kind = self
-                    .tir()
-                    .root()
-                    .declarations()
-                    .find_map(|entry| (entry.name() == name).then_some(entry.category()));
-                return Err(actual_kind.map_or_else(
-                    || ModelDefinitionError::UnknownOutput { name: name.clone() },
-                    |actual_kind| ModelDefinitionError::OutputNotNode {
-                        name: name.clone(),
-                        actual_kind,
-                    },
-                ));
-            };
-            if !port.is_public {
-                return Err(ModelDefinitionError::PrivateOutput { name: name.clone() });
-            }
-        }
-        Ok(PreparedModel {
-            plan_id: self.plan_id,
-            outputs: self
-                .output_ports
-                .iter()
-                .filter(|port| requested.contains(&port.name))
-                .cloned()
-                .collect(),
-            schema_graph: Arc::clone(&self.schema_graph),
-        })
-    }
-
-    /// Evaluate one generic model row without display/plot assembly.
-    pub fn evaluate_model_row(
-        &self,
-        row: &ParameterBindingRow,
-        model: &PreparedModel,
-    ) -> Result<ModelRowOutcome, ModelExecutionError> {
-        if model.plan_id != self.plan_id {
-            return Err(ModelExecutionError::PlanMismatch);
-        }
-        graphcal_compiler::outcome::without_cancellation(|cancellation| {
-            self.evaluate_row(
-                row,
-                &model.outputs,
-                |runtime, position, _| {
-                    let output = &model.outputs[position];
-                    graphcal_eval::eval::public_projection::project(
-                        graphcal_eval::runtime_presentation::PresentedRef::plain(runtime),
-                        &output.declared_type,
-                    )
-                    .map(|(value, _)| value)
-                    .map_err(|invariant| OutputProjectionError::Invariant(invariant).into())
-                },
-                cancellation,
-            )
-        })
-    }
-
     /// Evaluate one row, projecting the value of each of `outputs` with
     /// `project`, which receives the output's position in `outputs` and the
     /// row's `cancellation`. Cancellation requested before every output is
@@ -463,22 +369,4 @@ pub enum ModelExecutionError {
     /// An evaluated row does not fit the session's result batch.
     #[error("internal model session invariant failed: {0}")]
     ResultBatch(#[from] graphcal_model_protocol::OutputValuesError),
-}
-
-/// Why outputs cannot be selected for a prepared model.
-#[derive(Debug, Clone, Error)]
-pub enum ModelDefinitionError {
-    #[error("at least one output is required")]
-    NoOutputs,
-    #[error("selected output `{name}` occurs more than once")]
-    DuplicateOutput { name: DeclName },
-    #[error("entry DAG has no declaration named `{name}`")]
-    UnknownOutput { name: DeclName },
-    #[error("selected output `{name}` is a {actual_kind}, not a node")]
-    OutputNotNode {
-        name: DeclName,
-        actual_kind: graphcal_compiler::declaration_category::DeclCategory,
-    },
-    #[error("selected output `{name}` is private")]
-    PrivateOutput { name: DeclName },
 }
