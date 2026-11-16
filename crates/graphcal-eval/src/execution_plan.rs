@@ -1005,9 +1005,6 @@ pub struct ExecPlan<'p> {
     declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     /// The callable of each DAG of the program, by registry position.
     callables: IndexVec<DagPosition, CallablePlan<'p>>,
-    /// The callee of each call slot of each DAG of the program, by registry
-    /// position, then by slot.
-    calls: IndexVec<DagPosition, Box<[DagPosition]>>,
 }
 
 impl<'p> ExecPlan<'p> {
@@ -1031,13 +1028,6 @@ impl<'p> ExecPlan<'p> {
             .map(prepare)
             .collect::<Result<Vec<_>, _>>()
             .map(IndexVec::from_items)?;
-        let registry = program.tir().dag_registry();
-        let calls = IndexVec::from_items(
-            registry
-                .positioned()
-                .map(|(caller, _)| registry.callee_positions(caller).into())
-                .collect(),
-        );
         let has_unfinished_definitions = declarations.values().any(|declaration| {
             matches!(declaration.body, PlannedBody::Computed(ComputedBody::Todo))
         }) || program
@@ -1051,7 +1041,6 @@ impl<'p> ExecPlan<'p> {
             unfinished_reach: has_unfinished_definitions.then(UnfinishedReachMemo::default),
             declarations,
             callables,
-            calls,
         })
     }
 
@@ -1124,7 +1113,8 @@ impl<'p> ExecPlan<'p> {
     pub fn callees_of(&self, owner: &DagId) -> Option<Vec<&CallablePlan<'p>>> {
         let registry = self.tir().dag_registry();
         registry.get_positioned(owner).map(|(caller, _)| {
-            self.calls[caller]
+            registry
+                .callee_positions(caller)
                 .iter()
                 .map(|&callee| &self.callables[callee])
                 .collect()
@@ -1138,7 +1128,7 @@ impl<'p> ExecPlan<'p> {
     /// has a callable.
     #[must_use]
     pub(crate) fn call(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
-        &self.callables[self.calls[call.caller()][call.get().index()]]
+        &self.callables[call.callee()]
     }
 
     /// Any value declaration of the program.
