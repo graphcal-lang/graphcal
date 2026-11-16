@@ -240,7 +240,7 @@ fn a_target_the_importer_does_not_declare_is_a_user_error() {
     assert!(
         matches!(
             error,
-            PipelineError::Semantic(SemanticError::Located(ref diagnostic))
+            SemanticError::Located(ref diagnostic)
                 if matches!(
                     diagnostic.kind,
                     graphcal_compiler::semantic_error::SemanticErrorKind::Module(

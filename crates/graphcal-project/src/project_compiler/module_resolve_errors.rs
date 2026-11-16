@@ -11,20 +11,14 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::span::Span;
 
-use crate::compile_error::PipelineError;
-
 /// N001 for a resolver duplicate, rendered with its spelled name.
 fn duplicate_name(
     name: DuplicateDeclaration,
     first: Span,
     duplicate: Span,
     src: SourceId,
-) -> PipelineError {
-    PipelineError::Semantic(SemanticError::located(
-        src,
-        duplicate,
-        NameError::DuplicateName { name, first },
-    ))
+) -> SemanticError {
+    SemanticError::located(src, duplicate, NameError::DuplicateName { name, first })
 }
 
 /// N009 for a selective alias that takes a reserved spelling.
@@ -33,7 +27,7 @@ fn reserved_alias(
     name: NameAtom,
     span: Span,
     src: SourceId,
-) -> PipelineError {
+) -> SemanticError {
     let kind = match kind {
         ExportedImportItemKind::Decl(_) => "Term alias",
         ExportedImportItemKind::Constructor => "constructor alias",
@@ -42,17 +36,13 @@ fn reserved_alias(
         ExportedImportItemKind::Type => "type alias",
         ExportedImportItemKind::Index => "index alias",
     };
-    PipelineError::Semantic(SemanticError::located(
-        src,
-        span,
-        NameError::BuiltinNameShadowed { kind, name },
-    ))
+    SemanticError::located(src, span, NameError::BuiltinNameShadowed { kind, name })
 }
 
 pub(super) fn module_resolve_compile_error(
     err: ModuleResolveError,
     src: SourceId,
-) -> PipelineError {
+) -> SemanticError {
     module_resolve_compile_error_at(err, src, src.whole_span())
 }
 
@@ -62,60 +52,54 @@ pub(super) fn module_resolve_compile_error_at(
     err: ModuleResolveError,
     src: SourceId,
     site: Span,
-) -> PipelineError {
+) -> SemanticError {
     match err {
-        ModuleResolveError::PrivateName { owner, name, .. } => {
-            PipelineError::Semantic(SemanticError::located(
-                src,
-                site,
-                VisibilityError::ImportPrivateItem {
-                    name,
-                    file_path: DagReference::Dag(owner),
-                },
-            ))
-        }
+        ModuleResolveError::PrivateName { owner, name, .. } => SemanticError::located(
+            src,
+            site,
+            VisibilityError::ImportPrivateItem {
+                name,
+                file_path: DagReference::Dag(owner),
+            },
+        ),
         ModuleResolveError::PrivateImportItem {
             owner, name, span, ..
-        } => PipelineError::Semantic(SemanticError::located(
+        } => SemanticError::located(
             src,
             span,
             VisibilityError::ImportPrivateItem {
                 name,
                 file_path: DagReference::Dag(owner),
             },
-        )),
+        ),
         ModuleResolveError::WrongImportCategory {
             owner,
             mismatch,
             span,
-        } => PipelineError::Semantic(SemanticError::located(
+        } => SemanticError::located(
             src,
             span,
             ModuleError::ImportCategoryMismatch {
                 file_path: DagReference::Dag(owner),
                 mismatch,
             },
-        )),
+        ),
         ModuleResolveError::IncludeItemNotProjectable { name, span, .. } => {
-            PipelineError::Semantic(SemanticError::located(
-                src,
-                span,
-                ModuleError::IncludeItemNotProjectable { name },
-            ))
+            SemanticError::located(src, span, ModuleError::IncludeItemNotProjectable { name })
         }
         ModuleResolveError::ConstructorOwnerRebound {
             constructor,
             owner_type,
             span,
             ..
-        } => PipelineError::Semantic(SemanticError::located(
+        } => SemanticError::located(
             src,
             span,
             ModuleError::IncludeConstructorOwnerRebound {
                 constructor,
                 owner_type,
             },
-        )),
+        ),
         ModuleResolveError::ReservedImportName {
             kind, name, span, ..
         } => reserved_alias(kind, name, span, src),
@@ -153,10 +137,6 @@ pub(super) fn module_resolve_compile_error_at(
             duplicate,
             src,
         ),
-        other => PipelineError::Semantic(SemanticError::located(
-            src,
-            site,
-            ModuleError::resolution(other),
-        )),
+        other => SemanticError::located(src, site, ModuleError::resolution(other)),
     }
 }

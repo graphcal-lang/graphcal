@@ -7,8 +7,6 @@ use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::syntax::span::Span;
 
-use crate::compile_error::PipelineError;
-
 use super::include_static_bindings::IncludeStaticBindings;
 use super::including_module::IncludingModule;
 use super::model::ReexportedItem;
@@ -123,7 +121,7 @@ pub(super) fn check_generics_leakage(
     bindings: &IncludeStaticBindings,
     importer: &IncludingModule<'_>,
     include_span: Span,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     let IncludingModule {
         interface: importer_interface,
         source: importer_src,
@@ -179,7 +177,7 @@ pub(super) fn check_generics_leakage(
                     .external_surface()
                     .is_static_explicit_export(substituted.atom())
             {
-                return Err(PipelineError::Semantic(SemanticError::located(
+                return Err(SemanticError::located(
                     importer_src,
                     include_span,
                     VisibilityError::GenericsLeakage {
@@ -188,7 +186,7 @@ pub(super) fn check_generics_leakage(
                         leaked_kind: namespace,
                         leaked_name: substituted.atom().clone(),
                     },
-                )));
+                ));
             }
         }
     }

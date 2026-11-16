@@ -14,7 +14,6 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::CheckedTir;
 use graphcal_compiler::tir::typed::declaration_view::{DeclarationView, ValueDeclaration};
 
-use crate::compile_error::PipelineError;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 /// One checked entry-DAG parameter in direct source order.
@@ -121,12 +120,8 @@ fn missing_interface_fact_internal_error(
     message: String,
     source: SourceId,
     span: Span,
-) -> PipelineError {
-    PipelineError::Semantic(SemanticError::internal_error(
-        message,
-        source,
-        DiagnosticAnchor::Source(span),
-    ))
+) -> SemanticError {
+    SemanticError::internal_error(message, source, DiagnosticAnchor::Source(span))
 }
 
 /// Attach checked types and runtime identities to HIR source-interface records.
@@ -135,7 +130,7 @@ pub(super) fn build_checked_entry_interface(
     tir: &CheckedTir,
     external_surface: &ExternalDeclSurface,
     source: SourceId,
-) -> Result<CheckedEntryInterface, PipelineError> {
+) -> Result<CheckedEntryInterface, SemanticError> {
     let mut parameters = Vec::new();
     let mut outputs = Vec::new();
     let mut required_index = None;
