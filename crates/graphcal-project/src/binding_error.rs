@@ -7,10 +7,9 @@ use thiserror::Error;
 
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::closed_expr::ClosedExpressionError;
-use graphcal_compiler::semantic::checked_type::{IndexTypeRef, TypeSpelling};
+use graphcal_compiler::semantic::checked_type::TypeSpelling;
 use graphcal_compiler::semantic_error::domain::DomainViolationDetail;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::IndexVariantName;
 
 /// Why a literal value cannot be normalized onto its declared value schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -29,7 +28,6 @@ pub enum BindingValueKind {
     Quantity,
     Int,
     Bool,
-    Key,
     MapLiteral,
 }
 
@@ -39,7 +37,6 @@ impl std::fmt::Display for BindingValueKind {
             Self::Quantity => "Quantity",
             Self::Int => "Int",
             Self::Bool => "Bool",
-            Self::Key => "Key",
             Self::MapLiteral => "a map literal",
         })
     }
@@ -148,28 +145,6 @@ pub enum BindingError {
         #[label("value for `{name}` is out of its declared domain")]
         span: SourceSpan,
     },
-
-    #[error("a key binding requires a concrete named index")]
-    #[diagnostic(code(graphcal::O011))]
-    KeyIndexNotNamed {
-        name: DeclName,
-        #[source_code]
-        src: RegisteredSource,
-        #[label("this key's index is not a named index")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown category `{variant}` for index `{index}`")]
-    #[diagnostic(code(graphcal::O012))]
-    UnknownCategory {
-        name: DeclName,
-        variant: IndexVariantName,
-        index: IndexTypeRef,
-        #[source_code]
-        src: RegisteredSource,
-        #[label("expects a category of `{index}`")]
-        span: SourceSpan,
-    },
 }
 
 impl BindingError {
@@ -184,9 +159,7 @@ impl BindingError {
             | Self::KindMismatch { src, .. }
             | Self::NonFiniteQuantity { src, .. }
             | Self::BoundMoreThanOnce { src, .. }
-            | Self::DomainViolation { src, .. }
-            | Self::KeyIndexNotNamed { src, .. }
-            | Self::UnknownCategory { src, .. } => Some(src),
+            | Self::DomainViolation { src, .. } => Some(src),
         }
     }
 }

@@ -18,12 +18,12 @@ pub use model_schema::{
     ModelIndexSchema, ModelQuantitySchema, ModelSchemaGraph, ModelTypeId, ModelValueSchema,
 };
 pub use prepared::{
-    ExternalValue, FixedParameters, InclusiveBounds, InclusiveBoundsError, ModelDefinitionError,
-    ModelExecutionError, ModelInterfaceError, ModelOutputPort, ModelRowFailure, ModelRowOutcome,
-    ModelSession, ModelSessionError, ModelUnitError, ParameterBindingBuilder, ParameterBindingRow,
-    ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,
-    PreparedProject, StructuredBindingError, StructuredBindingErrorKind,
-    StructuredBindingPathSegment, StructuredLiteral, StructuredLiteralError, StructuredValueExpr,
+    ExternalValue, FixedParameters, InclusiveBounds, InclusiveBoundsError, ModelExecutionError,
+    ModelInterfaceError, ModelOutputPort, ModelRowFailure, ModelRowOutcome, ModelSession,
+    ModelSessionError, ModelUnitError, ParameterBindingBuilder, ParameterBindingRow,
+    ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedProject,
+    StructuredBindingError, StructuredBindingErrorKind, StructuredBindingPathSegment,
+    StructuredLiteral, StructuredLiteralError, StructuredValueExpr,
 };
 
 /// Prepare a loaded project once for repeated typed evaluation.

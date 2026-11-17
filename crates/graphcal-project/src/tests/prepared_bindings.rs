@@ -230,22 +230,6 @@ fn typed_scalar_bindings_report_typed_binding_errors() {
         .bind_quantity(position("x"), f64::INFINITY)
         .unwrap_err();
     assert_eq!(binding_error_code(&error), "graphcal::O008");
-
-    let error = prepared
-        .binding_builder()
-        .bind_named_key(position("mode"), &IndexVariantName::expect_valid("medium"))
-        .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "unknown category `medium` for index `Mode`"
-    );
-    assert_eq!(binding_error_code(&error), "graphcal::O012");
-
-    let error = prepared
-        .binding_builder()
-        .bind_named_key(position("step"), &IndexVariantName::expect_valid("first"))
-        .unwrap_err();
-    assert_eq!(binding_error_code(&error), "graphcal::O011");
 }
 
 /// P3-3: binding a coordinate-indexed value entry by entry is out of scope;

@@ -47,7 +47,6 @@ use graphcal_compiler::semantic_error::structure::StructError;
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::syntax::attribute::AttributeName;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_eval::eval::{AssertResult, EvalResult, NodeUnavailable, UnitLabel, Value};
 use graphcal_io::RealFileSystem;

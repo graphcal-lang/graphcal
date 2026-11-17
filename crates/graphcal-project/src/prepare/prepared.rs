@@ -10,7 +10,6 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::outcome::{CancellationMode, Outcome, without_cancellation};
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic::checked_type::CheckedType;
-use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::source_id::SourceId;
@@ -18,9 +17,8 @@ use graphcal_compiler::source_registry::RegisteredSource;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::static_interface::StaticInputKind;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_eval::runtime_value::{IndexAxis, KeyValue, RuntimeValue};
+use graphcal_eval::runtime_value::RuntimeValue;
 use miette::{NamedSource, SourceSpan};
 
 use crate::binding_error::{BindingError, BindingValueKind};
@@ -53,9 +51,8 @@ pub use binding_compile::{
     StructuredBindingPathSegment, StructuredLiteral, StructuredLiteralError, StructuredValueExpr,
 };
 pub use model_port::{
-    InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,
-    ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterDomain, ParameterPort,
-    PreparedModel,
+    InclusiveBounds, InclusiveBoundsError, ModelExecutionError, ModelOutputPort, ModelRowFailure,
+    ModelRowOutcome, ParameterDomain, ParameterPort,
 };
 pub use model_session::{FixedParameters, ModelInterfaceError, ModelSession, ModelSessionError};
 pub use model_unit::ModelUnitError;
@@ -201,52 +198,6 @@ impl ParameterBindingBuilder<'_> {
         self.insert(
             position,
             RuntimeParameterBinding::plain(RuntimeValue::Bool(value)),
-        )
-    }
-
-    /// Bind a named-index category by its typed variant identity.
-    pub fn bind_named_key(
-        &mut self,
-        position: ParameterPosition,
-        variant: &IndexVariantName,
-    ) -> Result<(), CompileError> {
-        let port = self.project.port_at(position)?;
-        let CheckedType::Key(index) = &port.declared_type else {
-            return Err(self.project.binding_kind_error(port, BindingValueKind::Key));
-        };
-        // A checked `Key<I>` port type names an index the checked program defines.
-        let Ok(axis) = IndexAxis::resolve(self.project.tir(), index) else {
-            return Err(CompileError::semantic(
-                SemanticError::internal_error(
-                    format!(
-                        "index `{index}` of parameter `{}` is not defined",
-                        port.name
-                    ),
-                    self.project.source,
-                    DiagnosticAnchor::Source(port.span),
-                ),
-                &self.project.sources,
-            ));
-        };
-        if !matches!(axis.kind(), ConcreteIndexKind::Named { .. }) {
-            return Err(self.project.port_error(port, |name, src, span| {
-                BindingError::KeyIndexNotNamed { name, src, span }
-            }));
-        }
-        let Some(key) = KeyValue::for_entry(axis, &IndexEntryKey::named(variant.clone())) else {
-            return Err(self.project.port_error(port, |name, src, span| {
-                BindingError::UnknownCategory {
-                    name,
-                    variant: variant.clone(),
-                    index: index.clone(),
-                    src,
-                    span,
-                }
-            }));
-        };
-        self.insert(
-            position,
-            RuntimeParameterBinding::plain(RuntimeValue::Key(key)),
         )
     }
 }
