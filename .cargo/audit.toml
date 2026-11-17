@@ -1,0 +1,11 @@
+# cargo-audit configuration, read from the project root by every
+# `cargo audit` run (local `just lint` and CI). Keep exceptions narrow: every
+# ignored advisory needs a reason and a tracking issue.
+
+[advisories]
+ignore = [
+  # TODO(#2358): chrono is unmaintained and has no fixed version. Graphcal
+  # does not use it; it comes only through arrow-array, which depends on it
+  # unconditionally. Remove once arrow drops chrono.
+  "RUSTSEC-2026-0543",
+]
