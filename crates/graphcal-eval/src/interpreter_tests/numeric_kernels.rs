@@ -83,6 +83,19 @@ fn integer_literal_power_still_reports_a_genuine_underflow() {
 }
 
 #[test]
+fn exact_and_runtime_exponent_powers_share_one_failure_label() {
+    for (source, node) in [
+        ("node exact: Dimensionless = 10.0 ^ 400;", "exact"),
+        (
+            "param y: Dimensionless = 400.0;\nnode runtime: Dimensionless = 10.0 ^ @y;",
+            "runtime",
+        ),
+    ] {
+        assert_eval_failed(source, node, "power operation produced infinite result");
+    }
+}
+
+#[test]
 fn int_power_of_a_unit_magnitude_base_accepts_a_huge_exponent() {
     let result = compile_and_eval(
         r"

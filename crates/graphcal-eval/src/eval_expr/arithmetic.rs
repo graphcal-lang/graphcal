@@ -86,6 +86,10 @@ pub(super) fn int_power(
         .map_err(|error| ctx.runtime_error(IntegerFailure::from(error), span))
 }
 
+/// Context label of every failed quantity power, whether its exponent is an
+/// exact rational or a runtime value: both are the same `^` operation.
+const POWER_CONTEXT: &str = "power operation";
+
 /// Evaluate an exact rational power without discarding the rational metadata.
 ///
 /// Negative bases have a real result exactly when the reduced denominator is
@@ -101,7 +105,7 @@ pub(super) fn eval_exact_quantity_power(
         .map_err(|error| match error {
             ExactPowerFailure::NoRealValue(error) => ctx.runtime_error(error, span),
             ExactPowerFailure::Arithmetic(error) => ctx.runtime_error(
-                QuantityValidationError::from_arithmetic(error, "power operation"),
+                QuantityValidationError::from_arithmetic(error, POWER_CONTEXT),
                 span,
             ),
         })
@@ -157,7 +161,7 @@ pub(super) fn quantity_power(
 ) -> Result<FiniteQuantity, SemanticError> {
     base.checked_powf(exponent).map_err(|error| {
         ctx.runtime_error(
-            QuantityValidationError::from_arithmetic(error, "arithmetic operation"),
+            QuantityValidationError::from_arithmetic(error, POWER_CONTEXT),
             span,
         )
     })
