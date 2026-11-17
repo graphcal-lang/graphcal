@@ -5,14 +5,14 @@ node launch_tokyo: Datetime = @launch -> "Asia/Tokyo";
 node launch_ny: Datetime = @launch -> "America/New_York";
 
 // Two-arg constructor: civil time + IANA timezone
-param meeting_tokyo: Datetime = datetime("2024-11-05T10:00", "Asia/Tokyo");
+param meeting_tokyo: Datetime = datetime("2024-11-05T10:00:00", "Asia/Tokyo");
 
 // The meeting is at 2024-11-05T01:00:00 UTC (JST = UTC+9)
 // Verify by comparing with a known UTC time
 assert same_instant = datetime("2024-11-05T01:00:00Z") == @meeting_tokyo;
 
 // Two-arg constructor with a different timezone
-param meeting_ny: Datetime = datetime("2024-11-05T10:00", "America/New_York");
+param meeting_ny: Datetime = datetime("2024-11-05T10:00:00", "America/New_York");
 
 // EST = UTC-5 in November, so 10:00 EST = 15:00 UTC
 assert same_instant_ny = datetime("2024-11-05T15:00:00Z") == @meeting_ny;

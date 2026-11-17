@@ -230,11 +230,12 @@ Each constructor has exactly one interpretation source:
   `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)` (RFC 3339 also permits lowercase
   `t` and `z`); numeric offset hours and minutes must be within `00..=23` and
   `00..=59`, respectively;
-- timezone-based `datetime` requires local civil coordinates with no embedded
-  offset, timezone, or time-scale suffix;
-- `epoch<S>` requires local calendar coordinates with no embedded offset,
-  timezone, or time-scale suffix, and `S` must be one supported bare time
-  scale.
+- timezone-based `datetime` requires local civil coordinates in exactly the form
+  `YYYY-MM-DDTHH:MM:SS[.fraction]` (the one-argument form without its offset),
+  with no embedded offset, timezone, or time-scale suffix;
+- `epoch<S>` requires local calendar coordinates in the same
+  `YYYY-MM-DDTHH:MM:SS[.fraction]` form, with no embedded offset, timezone, or
+  time-scale suffix, and `S` must be one supported bare time scale.
 
 Datetime literals are parsed during checking. Invalid calendar dates and
 missing or contradictory interpretation sources are compile errors, not

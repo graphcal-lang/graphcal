@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+invalid datetime literal: expected civil datetime syntax `YYYY-MM-DDTHH:MM:SS[.fraction]` with components in range and nothing before or after it
+    Diagnostic severity: error
+Begin snippet for datetime_epoch_lax_syntax.gcl starting at line 2, column 1
+
+snippet line 2: // the date and the time.
+snippet line 3: node bad: Datetime<TT> = epoch<TT>("2024-11-05 10:00:00");
+    label at line 3, columns 36 to 56: does not satisfy this constructor's datetime literal contract
+diagnostic help: epoch<TT> literal; expected a scale-free civil time `YYYY-MM-DDTHH:MM:SS[.fraction]` without an offset, timezone, or time-scale suffix
+diagnostic code: graphcal::D028

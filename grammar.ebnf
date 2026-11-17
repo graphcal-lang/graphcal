@@ -1021,7 +1021,7 @@ generic_arg
    the built-in scientific-time constructor consumes a static argument:
    `epoch<S>(civil_literal)`, where S is one supported time scale. Civil
    datetime strings require an explicit date and time
-   (`YYYY-MM-DDTHH:MM:SS...`); date-only strings do not implicitly mean
+   (exactly `YYYY-MM-DDTHH:MM:SS[.fraction]`); date-only strings do not implicitly mean
    midnight. Every other non-empty function generic argument list is rejected. *)
 
 expr_list

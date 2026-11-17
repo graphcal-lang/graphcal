@@ -1,0 +1,3 @@
+// Error: epoch coordinates must spell `YYYY-MM-DDTHH:MM:SS`, with `T` between
+// the date and the time.
+node bad: Datetime<TT> = epoch<TT>("2024-11-05 10:00:00");

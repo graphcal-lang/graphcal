@@ -45,6 +45,42 @@ fn prepared_project_binds_coordinate_and_finite_keys() {
 }
 
 #[test]
+fn prepared_bindings_accept_only_canonical_civil_datetime_literals() {
+    let project = crate::loader::LoadedProject::from_source(
+        r#"param local: Datetime = datetime("2024-11-05T10:00:00", "Asia/Tokyo");
+           param scientific: Datetime<TT> = epoch<TT>("2024-11-05T10:00:00");"#,
+        "civil-datetime-bindings.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    for (name, lax, canonical) in [
+        (
+            "local",
+            r#"datetime("2024-11-05T12:00", "Asia/Tokyo")"#,
+            r#"datetime("2024-11-05T12:00:00", "Asia/Tokyo")"#,
+        ),
+        (
+            "scientific",
+            r#"epoch<TT>("2024-11-05 12:00:00")"#,
+            r#"epoch<TT>("2024-11-05T12:00:00.5")"#,
+        ),
+    ] {
+        let name = DeclName::expect_valid(name);
+        let mut bindings = prepared.binding_builder();
+        let error = bindings
+            .bind_expression(&name, &parse_expr(lax))
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("invalid datetime literal"),
+            "`{lax}` was not rejected as a datetime literal: {error}"
+        );
+        bindings
+            .bind_expression(&name, &parse_expr(canonical))
+            .unwrap_or_else(|error| panic!("`{canonical}` was rejected: {error}"));
+    }
+}
+
+#[test]
 fn prepared_binding_literals_use_the_expected_numeric_type_exactly() {
     let project = crate::loader::LoadedProject::from_source(
         "param ratio: Dimensionless; param sample_count: Int;",
