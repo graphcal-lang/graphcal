@@ -240,15 +240,27 @@ impl PackageSourceDirectory {
     }
 }
 
+/// Write validated path components separated by `/`, the spelling of both
+/// the relative filesystem paths and the Git repository URL path.
+fn write_slash_joined<'a>(
+    formatter: &mut fmt::Formatter<'_>,
+    components: impl IntoIterator<Item = &'a str>,
+) -> fmt::Result {
+    for (index, component) in components.into_iter().enumerate() {
+        if index > 0 {
+            formatter.write_str("/")?;
+        }
+        formatter.write_str(component)?;
+    }
+    Ok(())
+}
+
 impl fmt::Display for PackageSourceDirectory {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, component) in self.components.iter().enumerate() {
-            if index > 0 {
-                formatter.write_str("/")?;
-            }
-            formatter.write_str(&component.0)?;
-        }
-        Ok(())
+        write_slash_joined(
+            formatter,
+            self.components.iter().map(|component| component.0.as_str()),
+        )
     }
 }
 
@@ -499,13 +511,10 @@ impl fmt::Display for GitUrl {
 
 impl fmt::Display for GitRepositoryPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, component) in self.components.iter().enumerate() {
-            if index > 0 {
-                formatter.write_str("/")?;
-            }
-            formatter.write_str(&component.0)?;
-        }
-        Ok(())
+        write_slash_joined(
+            formatter,
+            self.components.iter().map(|component| component.0.as_str()),
+        )
     }
 }
 
@@ -1486,13 +1495,10 @@ impl PluginArtifactPath {
 
 impl fmt::Display for PluginArtifactPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, component) in self.components.iter().enumerate() {
-            if index > 0 {
-                formatter.write_str("/")?;
-            }
-            formatter.write_str(&component.0)?;
-        }
-        Ok(())
+        write_slash_joined(
+            formatter,
+            self.components.iter().map(|component| component.0.as_str()),
+        )
     }
 }
 
