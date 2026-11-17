@@ -77,10 +77,7 @@ impl<K: Clone + Eq + Hash, E: Clone> DependencyGraph<K, E> {
     pub fn add_labelled_dependency(&mut self, dependent: K, dependency: K, label: E) {
         let dependent = self.position_of(dependent);
         let dependency = self.position_of(dependency);
-        if self.edges.insert((dependent, dependency)) {
-            self.dependencies[dependent].push((dependency, label));
-            self.dependents[dependency].push(dependent);
-        }
+        self.insert_edge(dependent, dependency, label);
     }
 
     /// Record that the node `dependent` depends on the node `dependency`
@@ -103,11 +100,18 @@ impl<K: Clone + Eq + Hash, E: Clone> DependencyGraph<K, E> {
         ) else {
             return false;
         };
+        self.insert_edge(dependent, dependency, label);
+        true
+    }
+
+    /// Record the edge between the node positions `dependent` and
+    /// `dependency` in all three edge tables at once; recording the same
+    /// edge twice is a no-op that keeps the first label.
+    fn insert_edge(&mut self, dependent: usize, dependency: usize, label: E) {
         if self.edges.insert((dependent, dependency)) {
             self.dependencies[dependent].push((dependency, label));
             self.dependents[dependency].push(dependent);
         }
-        true
     }
 
     /// Whether `key` is a node of this graph.
