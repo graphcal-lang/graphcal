@@ -96,6 +96,30 @@ fn exact_and_runtime_exponent_powers_share_one_failure_label() {
 }
 
 #[test]
+fn quantity_arithmetic_failures_use_the_checked_arithmetic_classification() {
+    for (source, needle) in [
+        (
+            "param big: Dimensionless = 1.0e308;\nnode y: Dimensionless = @big + @big;",
+            "arithmetic operation produced infinite result",
+        ),
+        (
+            "param big: Dimensionless = 1.0e308;\nnode y: Dimensionless = @big * 10.0;",
+            "arithmetic operation produced infinite result",
+        ),
+        (
+            "param tiny: Dimensionless = 1.0e-300;\nnode y: Dimensionless = @tiny / 1.0e300;",
+            "arithmetic operation underflowed to zero",
+        ),
+        (
+            "param zero: Dimensionless = 0.0;\nnode y: Dimensionless = 1.0 / @zero;",
+            "division by zero",
+        ),
+    ] {
+        assert_eval_failed(source, "y", needle);
+    }
+}
+
+#[test]
 fn int_power_of_a_unit_magnitude_base_accepts_a_huge_exponent() {
     let result = compile_and_eval(
         r"

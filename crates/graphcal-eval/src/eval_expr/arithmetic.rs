@@ -1,6 +1,6 @@
 use graphcal_compiler::builtin::IntDivisionFn;
 use graphcal_compiler::exact_rational::ExactRational;
-use graphcal_compiler::finite_value::{ExactPowerFailure, FiniteArithmeticError, FiniteQuantity};
+use graphcal_compiler::finite_value::{ExactPowerFailure, FiniteQuantity};
 use graphcal_compiler::semantic::int_arith;
 use graphcal_compiler::semantic::int_division::{self, IntDivisionError};
 use graphcal_compiler::semantic_error::SemanticError;
@@ -9,7 +9,7 @@ use graphcal_compiler::tir::texpr::operators::{ArithOp, IntArithOp, OrderingOp};
 
 use super::EvalSession;
 use super::numeric::QuantityValidationError;
-use super::runtime_failure::{IntegerFailure, RuntimeFailure};
+use super::runtime_failure::IntegerFailure;
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -120,7 +120,6 @@ pub(super) fn quantity_arith(
     ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<FiniteQuantity, SemanticError> {
-    let context = "arithmetic operation";
     match op {
         ArithOp::Add => l.checked_add(r),
         ArithOp::Sub => l.checked_sub(r),
@@ -128,26 +127,10 @@ pub(super) fn quantity_arith(
         ArithOp::Div => l.checked_div(r),
     }
     .map_err(|error| {
-        let failure = match error {
-            FiniteArithmeticError::DivisionByZero => RuntimeFailure::QuantityDivisionByZero,
-            FiniteArithmeticError::Infinite => {
-                super::numeric::QuantityValidationError::InfiniteResult {
-                    context: context.to_string(),
-                }
-                .into()
-            }
-            FiniteArithmeticError::Underflow => {
-                super::numeric::QuantityValidationError::UnderflowToZero {
-                    context: context.to_string(),
-                }
-                .into()
-            }
-            FiniteArithmeticError::NotANumber => QuantityValidationError::NanResult {
-                context: context.to_string(),
-            }
-            .into(),
-        };
-        ctx.runtime_error(failure, span)
+        ctx.runtime_error(
+            QuantityValidationError::from_arithmetic(error, "arithmetic operation"),
+            span,
+        )
     })
 }
 
