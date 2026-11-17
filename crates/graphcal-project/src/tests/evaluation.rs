@@ -137,19 +137,19 @@ fn invalid_datetime_timezone_is_rejected_in_every_expression_owner() {
     let cases = [
         (
             "param",
-            r#"param bad: Datetime = datetime("2024-11-05T10:00", "Not/A_Timezone");"#,
+            r#"param bad: Datetime = datetime("2024-11-05T10:00:00", "Not/A_Timezone");"#,
         ),
         (
             "node",
-            r#"node bad: Datetime = datetime("2024-11-05T10:00", "Not/A_Timezone");"#,
+            r#"node bad: Datetime = datetime("2024-11-05T10:00:00", "Not/A_Timezone");"#,
         ),
         (
             "const node",
-            r#"const node bad: Datetime = datetime("2024-11-05T10:00", "Not/A_Timezone");"#,
+            r#"const node bad: Datetime = datetime("2024-11-05T10:00:00", "Not/A_Timezone");"#,
         ),
         (
             "nested",
-            r#"node bad: Datetime = to_utc(datetime("2024-11-05T10:00", "Not/A_Timezone"));"#,
+            r#"node bad: Datetime = to_utc(datetime("2024-11-05T10:00:00", "Not/A_Timezone"));"#,
         ),
     ];
 
@@ -179,6 +179,74 @@ fn datetime_constructors_reject_conflicting_or_missing_interpretation_sources() 
             error.to_string().contains("invalid datetime literal"),
             "constructor contract was not checked: {error}"
         );
+    }
+}
+
+/// Civil spellings other than `YYYY-MM-DDTHH:MM:SS[.fraction]` that jiff's
+/// Temporal parser would otherwise read as 2024-11-05T12:00:00.
+const LAX_CIVIL_DATETIME_SPELLINGS: [&str; 11] = [
+    "2024-11-05 12:00:00",
+    "2024-11-05T12:00",
+    "2024-11-05T12",
+    "20241105T120000",
+    "20241105 1200",
+    "20241105T12:00:00",
+    "2024-11-05T12:00:00,5",
+    "+002024-11-05T12:00:00",
+    "-002024-11-05T12:00:00",
+    "2024-11-05T12:00:00[u-ca=hebrew]",
+    "2024-11-05T12:00:00[foo=bar]",
+];
+
+fn civil_datetime_constructors(literal: &str) -> [String; 2] {
+    [
+        format!(r#"node at: Datetime = datetime("{literal}", "Asia/Tokyo");"#),
+        format!(r#"node at: Datetime<TT> = epoch<TT>("{literal}");"#),
+    ]
+}
+
+#[test]
+fn civil_datetime_constructors_reject_lax_spellings() {
+    for source in LAX_CIVIL_DATETIME_SPELLINGS
+        .into_iter()
+        .flat_map(civil_datetime_constructors)
+    {
+        let error = compile_to_tir(&source, "test.gcl").unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                CompileError::Eval(RenderedSemanticError {
+                    error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                        kind: SemanticErrorKind::Dimension(DimensionError::InvalidDatetimeLiteral {
+                            reason: graphcal_compiler::semantic_error::dimension::DatetimeLiteralError::Civil(
+                                graphcal_compiler::datetime_literal::ParseCivilDateTimeLiteralError::InvalidSyntax,
+                            ),
+                            ..
+                        }),
+                        ..
+                    }),
+                    ..
+                })
+            ),
+            "`{source}` was not rejected as non-canonical civil syntax: {error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("`YYYY-MM-DDTHH:MM:SS[.fraction]`"),
+            "`{source}` error does not show the required form: {error}"
+        );
+    }
+}
+
+#[test]
+fn civil_datetime_constructors_accept_the_canonical_spelling() {
+    for source in ["2024-11-05T12:00:00", "2024-11-05T12:00:00.5"]
+        .into_iter()
+        .flat_map(civil_datetime_constructors)
+    {
+        compile_to_tir(&source, "test.gcl")
+            .unwrap_or_else(|error| panic!("`{source}` was rejected: {error}"));
     }
 }
 

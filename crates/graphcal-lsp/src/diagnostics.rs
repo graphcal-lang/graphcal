@@ -1221,6 +1221,24 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn non_canonical_civil_datetime_literals_show_the_required_form() {
+        for source in [
+            "node bad: Datetime<TT> = epoch<TT>(\"2024-11-05 12:00:00\");",
+            "node bad: Datetime = datetime(\"2024-11-05T12:00\", \"UTC\");",
+        ] {
+            let diagnostics = produce_diagnostics(source, "test.gcl");
+            assert!(diagnostics.iter().any(|diagnostic| {
+                matches!(
+                    &diagnostic.code,
+                    Some(NumberOrString::String(code)) if code == "graphcal::D028"
+                ) && diagnostic
+                    .message
+                    .contains("`YYYY-MM-DDTHH:MM:SS[.fraction]`")
+            }));
+        }
+    }
+
+    #[test]
     fn dst_gap_and_fold_have_distinct_check_diagnostics() {
         let cases = [
             (
@@ -1278,7 +1296,7 @@ param event: Datetime<TT>(
 
     #[test]
     fn invalid_datetime_timezone_points_at_the_timezone_argument() {
-        let source = "node bad: Datetime = datetime(\"2024-11-05T10:00\", \"Not/A_Timezone\");";
+        let source = "node bad: Datetime = datetime(\"2024-11-05T10:00:00\", \"Not/A_Timezone\");";
         let diagnostics = produce_diagnostics(source, "test.gcl");
         let diagnostic = diagnostics
             .iter()
@@ -1289,8 +1307,8 @@ param event: Datetime<TT>(
                 )
             })
             .expect("expected D007 timezone diagnostic");
-        assert_eq!(diagnostic.range.start.character, 50);
-        assert_eq!(diagnostic.range.end.character, 66);
+        assert_eq!(diagnostic.range.start.character, 53);
+        assert_eq!(diagnostic.range.end.character, 69);
         assert!(diagnostic.message.contains("bundled IANA tzdb"));
     }
 

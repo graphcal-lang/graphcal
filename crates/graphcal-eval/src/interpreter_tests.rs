@@ -838,7 +838,7 @@ fn eval_generics_milestone() {
 #[test]
 fn datetime_timezone_literals_are_typed_and_canonicalized_before_evaluation() {
     let source = r#"
-node meeting: Datetime = datetime("2024-11-05T10:00", "asia/tokyo");
+node meeting: Datetime = datetime("2024-11-05T10:00:00", "asia/tokyo");
 node displayed: Datetime = @meeting -> "america/new_york";
 "#;
     let tir = compile_to_tir(source, "test.gcl").unwrap();

@@ -1183,6 +1183,20 @@ fn error_datetime_epoch_leap_second() {
 }
 
 #[test]
+fn error_datetime_civil_lax_syntax() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_civil_lax_syntax.gcl");
+    let rendered = render_error(source, "datetime_civil_lax_syntax.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_epoch_lax_syntax() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_epoch_lax_syntax.gcl");
+    let rendered = render_error(source, "datetime_epoch_lax_syntax.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_datetime_utc_difference() {
     let source = include_str!("../../../tests/fixtures/invalid/datetime_utc_difference.gcl");
     let rendered = render_error(source, "datetime_utc_difference.gcl");

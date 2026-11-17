@@ -30,60 +30,85 @@ pub enum ParseOffsetDateTimeLiteralError {
 /// Why a seconds field of 60 is rejected rather than clamped to 59.
 const LEAP_SECOND_MESSAGE: &str = "seconds = 60 (a leap second) is not supported: a Graphcal datetime cannot represent a leap-second instant";
 
-/// Whether a literal that jiff accepted spells its seconds field as `60`.
-///
-/// jiff silently clamps a leap second to `:59`, so the parsed value cannot
-/// tell the two apart; the source spelling is the only witness. A literal
-/// jiff accepted has a time `HH[:]MM[:]SS…` right after its date/time
-/// designator, in either the extended or the basic format.
-fn spells_leap_second(source: &str) -> bool {
-    let Some(time) = source
-        .find(['T', 't', ' '])
-        .and_then(|designator| source.as_bytes().get(designator.saturating_add(1)..))
-    else {
-        return false;
-    };
-    let seconds = if time.get(2) == Some(&b':') {
-        time.get(6..8).filter(|_| time.get(5) == Some(&b':'))
-    } else {
-        time.get(4..6)
-    };
-    seconds == Some(b"60".as_slice())
+/// Why source text is not an RFC 3339 `full-date "T" partial-time` prefix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DateTimePrefixError {
+    /// The text does not start with `YYYY-MM-DDTHH:MM:SS[.fraction]` with
+    /// every component in range.
+    Syntax,
+    /// The prefix is well formed except that its seconds field is `60`.
+    ///
+    /// jiff silently clamps a leap second to `:59`, so the parsed value cannot
+    /// tell the two apart; the source spelling is the only witness.
+    LeapSecond,
 }
 
-fn validate_rfc3339_syntax(source: &str) -> Result<(), ParseOffsetDateTimeLiteralError> {
-    let bytes = source.as_bytes();
-    if bytes.len() < 20
-        || !bytes[..4].iter().all(u8::is_ascii_digit)
-        || bytes[4] != b'-'
-        || bytes[7] != b'-'
-        || !matches!(bytes[10], b'T' | b't')
-        || bytes[13] != b':'
-        || bytes[16] != b':'
-        || !two_ascii_digits_in_range([bytes[5], bytes[6]], 1, 12)
-        || !two_ascii_digits_in_range([bytes[8], bytes[9]], 1, 31)
-        || !two_ascii_digits_in_range([bytes[11], bytes[12]], 0, 23)
-        || !two_ascii_digits_in_range([bytes[14], bytes[15]], 0, 59)
-        || !two_ascii_digits_in_range([bytes[17], bytes[18]], 0, 59)
+/// Split off the RFC 3339 `full-date "T" partial-time` prefix
+/// (`YYYY-MM-DDTHH:MM:SS[.fraction]`) that both datetime literal kinds share,
+/// returning the bytes that follow it.
+fn split_date_time_prefix(source: &str) -> Result<&[u8], DateTimePrefixError> {
+    let [
+        y0,
+        y1,
+        y2,
+        y3,
+        b'-',
+        mo0,
+        mo1,
+        b'-',
+        d0,
+        d1,
+        b'T' | b't',
+        h0,
+        h1,
+        b':',
+        mi0,
+        mi1,
+        b':',
+        s0,
+        s1,
+        rest @ ..,
+    ] = source.as_bytes()
+    else {
+        return Err(DateTimePrefixError::Syntax);
+    };
+    if ![y0, y1, y2, y3].into_iter().all(u8::is_ascii_digit)
+        || !two_ascii_digits_in_range([*mo0, *mo1], 1, 12)
+        || !two_ascii_digits_in_range([*d0, *d1], 1, 31)
+        || !two_ascii_digits_in_range([*h0, *h1], 0, 23)
+        || !two_ascii_digits_in_range([*mi0, *mi1], 0, 59)
     {
-        return Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339);
+        return Err(DateTimePrefixError::Syntax);
     }
-
-    let offset_start = match bytes[19] {
-        b'.' => {
-            let fraction_len = bytes[20..]
+    match [*s0, *s1] {
+        [b'6', b'0'] => return Err(DateTimePrefixError::LeapSecond),
+        seconds if !two_ascii_digits_in_range(seconds, 0, 59) => {
+            return Err(DateTimePrefixError::Syntax);
+        }
+        _ => {}
+    }
+    match rest {
+        [b'.', fraction @ ..] => {
+            let fraction_len = fraction
                 .iter()
                 .take_while(|byte| byte.is_ascii_digit())
                 .count();
-            if fraction_len == 0 {
-                return Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339);
+            match fraction_len {
+                0 => Err(DateTimePrefixError::Syntax),
+                _ => Ok(&fraction[fraction_len..]),
             }
-            20 + fraction_len
         }
-        _ => 19,
-    };
+        _ => Ok(rest),
+    }
+}
 
-    match &bytes[offset_start..] {
+/// Require `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)` exactly.
+fn validate_rfc3339_syntax(source: &str) -> Result<(), ParseOffsetDateTimeLiteralError> {
+    let offset = split_date_time_prefix(source).map_err(|error| match error {
+        DateTimePrefixError::Syntax => ParseOffsetDateTimeLiteralError::InvalidRfc3339,
+        DateTimePrefixError::LeapSecond => ParseOffsetDateTimeLiteralError::LeapSecond,
+    })?;
+    match offset {
         [b'Z' | b'z'] => Ok(()),
         [sign, hour_tens, hour_ones, b':', minute_tens, minute_ones]
             if matches!(sign, b'+' | b'-')
@@ -93,6 +118,18 @@ fn validate_rfc3339_syntax(source: &str) -> Result<(), ParseOffsetDateTimeLitera
             Ok(())
         }
         _ => Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339),
+    }
+}
+
+/// Require `YYYY-MM-DDTHH:MM:SS[.fraction]` exactly: the offset form without
+/// its offset.
+fn validate_civil_syntax(source: &str) -> Result<(), ParseCivilDateTimeLiteralError> {
+    match split_date_time_prefix(source) {
+        Ok([]) => Ok(()),
+        Ok([_, ..]) | Err(DateTimePrefixError::Syntax) => {
+            Err(ParseCivilDateTimeLiteralError::InvalidSyntax)
+        }
+        Err(DateTimePrefixError::LeapSecond) => Err(ParseCivilDateTimeLiteralError::LeapSecond),
     }
 }
 
@@ -116,6 +153,10 @@ pub enum ParseCivilDateTimeLiteralError {
     TimeZoneAnnotation,
     #[error("{LEAP_SECOND_MESSAGE}")]
     LeapSecond,
+    #[error(
+        "expected civil datetime syntax `YYYY-MM-DDTHH:MM:SS[.fraction]` with components in range and nothing before or after it"
+    )]
+    InvalidSyntax,
 }
 
 /// Error returned when resolving local civil coordinates in an IANA timezone.
@@ -176,9 +217,6 @@ impl OffsetDateTimeLiteral {
         if pieces.time_zone_annotation().is_some() {
             return Err(ParseOffsetDateTimeLiteralError::TimeZoneAnnotation);
         }
-        if spells_leap_second(source) {
-            return Err(ParseOffsetDateTimeLiteralError::LeapSecond);
-        }
         validate_rfc3339_syntax(source)?;
         parser.parse_timestamp(source).map(Self).map_err(Into::into)
     }
@@ -200,8 +238,9 @@ impl CivilDateTimeLiteral {
     ///
     /// # Errors
     ///
-    /// Returns an error if `source` is invalid or carries an offset or named
-    /// timezone annotation.
+    /// Returns an error if `source` is invalid, carries an offset or named
+    /// timezone annotation, has no time, or is not spelled exactly
+    /// `YYYY-MM-DDTHH:MM:SS[.fraction]`.
     pub fn parse(source: &str) -> Result<Self, ParseCivilDateTimeLiteralError> {
         let parser = jiff::fmt::temporal::DateTimeParser::new();
         let pieces = parser.parse_pieces(source)?;
@@ -214,9 +253,7 @@ impl CivilDateTimeLiteral {
         let time = pieces
             .time()
             .ok_or(ParseCivilDateTimeLiteralError::MissingTime)?;
-        if spells_leap_second(source) {
-            return Err(ParseCivilDateTimeLiteralError::LeapSecond);
-        }
+        validate_civil_syntax(source)?;
         Ok(Self(pieces.date().to_datetime(time)))
     }
 
@@ -384,11 +421,11 @@ impl std::fmt::Display for DatetimeLiteralExpectation {
                 "one-argument datetime literal; expected RFC 3339 with `Z` or a numeric offset; use `epoch<S>(\"...\")` for scientific time-scale coordinates",
             ),
             Self::ZonedCivilDateTime => f.write_str(
-                "timezone-based datetime literal; expected local civil time without an offset, timezone annotation, or time scale",
+                "timezone-based datetime literal; expected local civil time `YYYY-MM-DDTHH:MM:SS[.fraction]` without an offset, timezone annotation, or time scale",
             ),
             Self::Epoch(scale) => write!(
                 f,
-                "epoch<{scale}> literal; expected a scale-free civil time without an offset, timezone, or time-scale suffix"
+                "epoch<{scale}> literal; expected a scale-free civil time `YYYY-MM-DDTHH:MM:SS[.fraction]` without an offset, timezone, or time-scale suffix"
             ),
         }
     }
@@ -487,8 +524,7 @@ mod tests {
         for source in [
             "2016-12-31T23:59:60",
             "2016-12-31T23:59:60.25",
-            "20161231T235960",
-            "2016-12-31 23:59:60",
+            "2016-12-31t23:59:60",
         ] {
             assert!(
                 matches!(
@@ -498,20 +534,114 @@ mod tests {
                 "expected `{source}` to be rejected as a leap second"
             );
         }
-        // Sixty minutes or hours are ordinary range errors, and `:59` and a
-        // `60` elsewhere in the literal stay valid.
-        for source in [
-            "2016-12-31T23:59:59",
-            "2016-12-31T23:59",
-            "20161231T2359",
-            "2016-12-31T23:59:59.60",
-        ] {
+        // Outside the strict shape a `60` seconds field is a syntax error like
+        // any other non-canonical spelling.
+        assert!(matches!(
+            OffsetDateTimeLiteral::parse("20161231T235960Z"),
+            Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339)
+        ));
+        for source in ["20161231T235960", "2016-12-31 23:59:60"] {
+            assert!(
+                matches!(
+                    CivilDateTimeLiteral::parse(source),
+                    Err(ParseCivilDateTimeLiteralError::InvalidSyntax)
+                ),
+                "expected `{source}` to be rejected as non-canonical syntax"
+            );
+        }
+        // `:59` and a `60` in the fraction stay valid; sixty minutes or hours
+        // are ordinary range errors.
+        for source in ["2016-12-31T23:59:59", "2016-12-31T23:59:59.60"] {
             assert!(
                 CivilDateTimeLiteral::parse(source).is_ok(),
                 "expected `{source}` to be accepted"
             );
         }
         assert!(OffsetDateTimeLiteral::parse("2016-12-31T23:59:59.60Z").is_ok());
+        for source in ["2016-12-31T23:60:00", "2016-12-31T60:00:00"] {
+            assert!(
+                matches!(
+                    CivilDateTimeLiteral::parse(source),
+                    Err(ParseCivilDateTimeLiteralError::Invalid(_)
+                        | ParseCivilDateTimeLiteralError::InvalidSyntax)
+                ),
+                "expected `{source}` to be rejected as out of range"
+            );
+        }
+    }
+
+    #[test]
+    fn civil_literal_accepts_only_the_canonical_shape() {
+        for (source, expected) in [
+            ("2024-11-05T12:00:00", "2024-11-05T12:00:00"),
+            ("2024-11-05t12:00:00", "2024-11-05T12:00:00"),
+            ("2024-11-05T12:00:00.5", "2024-11-05T12:00:00.5"),
+            (
+                "2024-11-05T12:00:00.123456789",
+                "2024-11-05T12:00:00.123456789",
+            ),
+        ] {
+            let parsed = CivilDateTimeLiteral::parse(source)
+                .unwrap_or_else(|error| panic!("expected `{source}` to be accepted: {error}"));
+            assert_eq!(parsed.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn civil_literal_rejects_lax_spellings() {
+        for source in [
+            "2024-11-05 12:00:00",
+            "2024-11-05T12:00",
+            "2024-11-05T12",
+            "20241105T120000",
+            "20241105 1200",
+            "20241105T12:00:00",
+            "2024-11-05T12:00:00,5",
+            "+002024-11-05T12:00:00",
+            "-002024-11-05T12:00:00",
+            "2024-11-05T12:00:00[u-ca=hebrew]",
+            "2024-11-05T12:00:00[foo=bar]",
+        ] {
+            assert!(
+                matches!(
+                    CivilDateTimeLiteral::parse(source),
+                    Err(ParseCivilDateTimeLiteralError::InvalidSyntax)
+                ),
+                "expected `{source}` to be rejected as non-canonical syntax, got {:?}",
+                CivilDateTimeLiteral::parse(source)
+            );
+        }
+        for source in [
+            " 2024-11-05T12:00:00",
+            "2024-11-05T12:00:00 ",
+            "2024-11-05T12:00:00.",
+            "2024-11-05T12:00:00.1234567890",
+        ] {
+            assert!(
+                CivilDateTimeLiteral::parse(source).is_err(),
+                "expected `{source}` to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn civil_literal_keeps_specific_errors_ahead_of_the_shape_check() {
+        assert!(matches!(
+            CivilDateTimeLiteral::parse("20241105T120000Z"),
+            Err(ParseCivilDateTimeLiteralError::Offset)
+        ));
+        assert!(matches!(
+            CivilDateTimeLiteral::parse("2024-11-05 12:00+09:00"),
+            Err(ParseCivilDateTimeLiteralError::Offset)
+        ));
+        assert!(matches!(
+            CivilDateTimeLiteral::parse("2024-11-05 12:00[Asia/Tokyo]"),
+            Err(ParseCivilDateTimeLiteralError::TimeZoneAnnotation)
+        ));
+        assert!(matches!(
+            CivilDateTimeLiteral::parse("20241105"),
+            Err(ParseCivilDateTimeLiteralError::MissingTime)
+        ));
     }
 
     #[test]
