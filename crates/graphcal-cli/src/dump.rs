@@ -179,22 +179,21 @@ fn run_hir(args: &FileArgs) -> Result<DumpStatus, DumpError> {
 }
 
 fn run_tir(args: &FileArgs) -> Result<DumpStatus, DumpError> {
-    let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let (project, host_fns) =
-        crate::load_project_with_plugins(&args.file, args.root.as_deref(), &fs)?;
+        crate::load_rooted_project_with_plugins(&args.file, args.root.as_deref())?;
     let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
     write_debug(checked.tir());
     Ok(DumpStatus::Success)
 }
 
 fn run_plan(args: &FileArgs) -> Result<DumpStatus, DumpError> {
-    let prepared = prepare(&args.file, args.root.as_deref())?;
+    let prepared = crate::prepare_rooted_project(&args.file, args.root.as_deref())?;
     write_debug(&prepared.debug_plan());
     Ok(DumpStatus::Success)
 }
 
 fn run_runtime(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
-    let prepared = prepare(&args.project.file, args.project.root.as_deref())?;
+    let prepared = crate::prepare_rooted_project(&args.project.file, args.project.root.as_deref())?;
     let row = parse_bindings(&prepared, args)?;
     let outcome = prepared.evaluate_runtime(&row)?;
     let status = if outcome.has_errors() {
@@ -207,7 +206,7 @@ fn run_runtime(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
 }
 
 fn run_result(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
-    let prepared = prepare(&args.project.file, args.project.root.as_deref())?;
+    let prepared = crate::prepare_rooted_project(&args.project.file, args.project.root.as_deref())?;
     let row = parse_bindings(&prepared, args)?;
     let result = prepared.evaluate(&row)?;
     let status = if result.has_errors() {
@@ -217,14 +216,6 @@ fn run_result(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
     };
     write_debug(&result);
     Ok(status)
-}
-
-fn prepare(file: &Path, root: Option<&Path>) -> Result<PreparedProject, DumpError> {
-    let fs = build_rooted_filesystem(file, root)?;
-    let (project, host_fns) = crate::load_project_with_plugins(file, root, &fs)?;
-    Ok(ProjectCompiler::new(&project)
-        .host_fns(&host_fns)
-        .prepare()?)
 }
 
 fn parse_bindings(

@@ -1,6 +1,6 @@
 use graphcal_compiler::builtin::IntDivisionFn;
 use graphcal_compiler::exact_rational::ExactRational;
-use graphcal_compiler::finite_value::{ExactPowerFailure, FiniteArithmeticError, FiniteQuantity};
+use graphcal_compiler::finite_value::{ExactPowerFailure, FiniteQuantity};
 use graphcal_compiler::semantic::int_arith;
 use graphcal_compiler::semantic::int_division::{self, IntDivisionError};
 use graphcal_compiler::semantic_error::SemanticError;
@@ -9,7 +9,7 @@ use graphcal_compiler::tir::texpr::operators::{ArithOp, IntArithOp, OrderingOp};
 
 use super::EvalSession;
 use super::numeric::QuantityValidationError;
-use super::runtime_failure::{IntegerFailure, RuntimeFailure};
+use super::runtime_failure::IntegerFailure;
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -86,6 +86,10 @@ pub(super) fn int_power(
         .map_err(|error| ctx.runtime_error(IntegerFailure::from(error), span))
 }
 
+/// Context label of every failed quantity power, whether its exponent is an
+/// exact rational or a runtime value: both are the same `^` operation.
+const POWER_CONTEXT: &str = "power operation";
+
 /// Evaluate an exact rational power without discarding the rational metadata.
 ///
 /// Negative bases have a real result exactly when the reduced denominator is
@@ -101,7 +105,7 @@ pub(super) fn eval_exact_quantity_power(
         .map_err(|error| match error {
             ExactPowerFailure::NoRealValue(error) => ctx.runtime_error(error, span),
             ExactPowerFailure::Arithmetic(error) => ctx.runtime_error(
-                QuantityValidationError::from_arithmetic(error, "power operation"),
+                QuantityValidationError::from_arithmetic(error, POWER_CONTEXT),
                 span,
             ),
         })
@@ -116,7 +120,6 @@ pub(super) fn quantity_arith(
     ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<FiniteQuantity, SemanticError> {
-    let context = "arithmetic operation";
     match op {
         ArithOp::Add => l.checked_add(r),
         ArithOp::Sub => l.checked_sub(r),
@@ -124,26 +127,10 @@ pub(super) fn quantity_arith(
         ArithOp::Div => l.checked_div(r),
     }
     .map_err(|error| {
-        let failure = match error {
-            FiniteArithmeticError::DivisionByZero => RuntimeFailure::QuantityDivisionByZero,
-            FiniteArithmeticError::Infinite => {
-                super::numeric::QuantityValidationError::InfiniteResult {
-                    context: context.to_string(),
-                }
-                .into()
-            }
-            FiniteArithmeticError::Underflow => {
-                super::numeric::QuantityValidationError::UnderflowToZero {
-                    context: context.to_string(),
-                }
-                .into()
-            }
-            FiniteArithmeticError::NotANumber => QuantityValidationError::NanResult {
-                context: context.to_string(),
-            }
-            .into(),
-        };
-        ctx.runtime_error(failure, span)
+        ctx.runtime_error(
+            QuantityValidationError::from_arithmetic(error, "arithmetic operation"),
+            span,
+        )
     })
 }
 
@@ -157,7 +144,7 @@ pub(super) fn quantity_power(
 ) -> Result<FiniteQuantity, SemanticError> {
     base.checked_powf(exponent).map_err(|error| {
         ctx.runtime_error(
-            QuantityValidationError::from_arithmetic(error, "arithmetic operation"),
+            QuantityValidationError::from_arithmetic(error, POWER_CONTEXT),
             span,
         )
     })

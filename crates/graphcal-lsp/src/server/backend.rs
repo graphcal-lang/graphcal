@@ -190,10 +190,8 @@ impl Backend {
         F: FnOnce(CurrentAnalysis) -> Option<R> + Send + 'static,
         R: Send + 'static,
     {
-        let Some((analysis, _)) = self.cached_analysis(uri, is_current_analysis).await else {
-            return Ok(None);
-        };
-        feature_response(run_feature(move |_| f(CurrentAnalysis(analysis))).await)
+        self.with_current_analysis_cancellable(uri, move |analysis, _| f(analysis))
+            .await
     }
 
     /// [`Self::with_current_analysis`] for work that is long enough to

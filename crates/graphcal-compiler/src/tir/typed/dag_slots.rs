@@ -252,6 +252,17 @@ impl<L: SlotBody> DagSlots<L> {
         )
     }
 
+    /// The local bodies owned by the root's file: the root and its nested
+    /// descendants, in [`Self::local_iter`] order.
+    ///
+    /// A local body outside the root's subtree is an imported DAG that
+    /// [`Self::localized_mut`] copied into this table, so it is skipped.
+    pub(crate) fn root_owned_locals(&self) -> impl Iterator<Item = (&DagId, &L)> {
+        let root = self.root_id();
+        self.local_iter()
+            .filter(move |(dag_id, _)| *dag_id == root || dag_id.is_descendant_of(root))
+    }
+
     /// Every local body with its position, in no particular order.
     pub fn local_positioned(&self) -> impl Iterator<Item = (DagPosition, &L)> {
         self.local_positions.iter().copied().zip(&self.locals)
@@ -508,31 +519,8 @@ impl<L: SlotBody> DagSlots<L> {
         dag_id: &DagId,
     ) -> Option<(&'a L, &'a T)> {
         let facts = self.facts_of(facts);
-        match self.slots[self.position(dag_id)?.index()] {
-            Slot::Local(index) => Some((&self.locals[index], &facts[index])),
-            Slot::Shared(_) => None,
-        }
-    }
-
-    /// The fact of the local body at `position`; `None` when the DAG there
-    /// is imported.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `position` is a position of another program with more
-    /// DAGs, or when `facts` was built for another arrangement of local
-    /// bodies.
-    #[must_use]
-    pub fn local_fact_at<'a, T>(
-        &self,
-        facts: &'a LocalDagFacts<T>,
-        position: DagPosition,
-    ) -> Option<&'a T> {
-        let facts = self.facts_of(facts);
-        match self.slots[position.index()] {
-            Slot::Local(index) => Some(&facts[index]),
-            Slot::Shared(_) => None,
-        }
+        let index = self.local_index(dag_id)?;
+        Some((&self.locals[index], &facts[index]))
     }
 
     /// The fact of the local body with this identity.
@@ -543,8 +531,18 @@ impl<L: SlotBody> DagSlots<L> {
     #[must_use]
     pub fn local_fact<'a, T>(&self, facts: &'a LocalDagFacts<T>, dag_id: &DagId) -> Option<&'a T> {
         let facts = self.facts_of(facts);
+        self.local_index(dag_id).map(|index| &facts[index])
+    }
+
+    /// The index of the local body with this identity; `None` for an
+    /// imported or unknown DAG.
+    ///
+    /// Callers pairing the index with a [`LocalDagFacts`] table check that
+    /// table's layout first, so a mismatched table fails loudly even for an
+    /// unknown DAG.
+    fn local_index(&self, dag_id: &DagId) -> Option<usize> {
         match self.slots[self.position(dag_id)?.index()] {
-            Slot::Local(index) => Some(&facts[index]),
+            Slot::Local(index) => Some(index),
             Slot::Shared(_) => None,
         }
     }

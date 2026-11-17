@@ -196,11 +196,11 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
         let inline_dags = dag_bodies
             .iter()
             .map(|(owner, body)| {
-                let unresolved = lower_dag_module_with_imported_bindings(
+                let unresolved = lower_module_with_imported_bindings(
                     body,
+                    src,
                     &ImportedValueNames::default(),
                     HashMap::new(),
-                    src,
                     owner,
                     &mut definitions,
                 )?;
@@ -399,81 +399,6 @@ pub fn lower_module_with_imported_bindings_and_cancellation(
         .collect();
 
     Ok(unfrozen)
-}
-
-/// Lower a `dag { ... }` body as if it were a standalone file.
-///
-/// The dag body is a virtual [`File`] with its own lexical scope. Cross-scope
-/// values must be passed through params or explicit imports; every imported
-/// lexical name maps to its canonical [`ResolvedDeclName`] target.
-///
-/// # Errors
-///
-/// Returns a [`SemanticError`] if declaration collection or type-system construction
-/// fails for the dag body.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn lower_dag_module_with_imported_bindings(
-    dag_body: &File,
-    imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
-    src: SourceId,
-    dag_id: &crate::dag_id::DagId,
-    definitions: &mut StaticDefinitionEvaluator<'_>,
-) -> Result<UnfrozenIR, SemanticError> {
-    crate::outcome::without_cancellation(|cancellation| {
-        lower_dag_module_with_imported_bindings_and_cancellation(
-            ModuleBody {
-                ast: dag_body,
-                interface: &ModuleInterface::new(&dag_body.declarations),
-            },
-            imported_names,
-            imported_bindings,
-            src,
-            dag_id,
-            definitions,
-            cancellation,
-        )
-    })
-}
-
-/// Lower an inline DAG module with cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a [`SemanticError`] for invalid source or cancellation.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn lower_dag_module_with_imported_bindings_and_cancellation(
-    module: ModuleBody<'_>,
-    imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
-    src: SourceId,
-    dag_id: &crate::dag_id::DagId,
-    definitions: &mut StaticDefinitionEvaluator<'_>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<UnfrozenIR, Outcome<SemanticError>> {
-    cancellation.checkpoint()?;
-    let ModuleBody {
-        ast: dag_body,
-        interface,
-    } = module;
-    let resolved =
-        resolve_with_imported_values(dag_body, interface.declared_surface(), src, imported_names)?;
-
-    build_ir_from_resolved(
-        dag_body,
-        src,
-        resolved,
-        imported_bindings,
-        dag_id,
-        definitions,
-        cancellation,
-    )
 }
 
 /// One module body to lower together with the declared interface of the

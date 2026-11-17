@@ -248,14 +248,25 @@ impl IndexAxis {
 
     /// The key at `position`, which must lie on this axis.
     ///
+    /// Callers hold a position already checked against the axis: a key
+    /// value's position, an entry of a value indexed by this axis, or
+    /// `0..len`.
+    ///
     /// # Panics
     ///
-    /// Panics when a named axis has no entry at `position`, like indexing a
+    /// Panics when the axis has no entry at `position`, like indexing a
     /// slice.
     #[must_use]
     pub fn key_at(&self, position: usize) -> Cow<'_, IndexEntryKey> {
         match &self.0.content.keys {
-            AxisKeys::Positional(_) => Cow::Owned(position_key(position)),
+            AxisKeys::Positional(len) => {
+                assert!(
+                    position < len.get(),
+                    "position {position} is off an axis of {} entries",
+                    len.get()
+                );
+                Cow::Owned(position_key(position))
+            }
             AxisKeys::Named { keys, .. } => Cow::Borrowed(&keys.as_slice()[position]),
         }
     }
@@ -384,8 +395,16 @@ mod tests {
         assert_eq!(axis.len(), size);
         let last = IndexEntryKey::position(size as u64 - 1);
         assert_eq!(axis.position(&last), Some(size - 1));
+        assert_eq!(axis.key_at(size - 1).as_ref(), &last);
         assert_eq!(axis.position(&IndexEntryKey::position(size as u64)), None);
         assert_eq!(axis.keys().len(), size);
+    }
+
+    #[test]
+    #[should_panic(expected = "position 3 is off an axis of 3 entries")]
+    fn positional_key_at_rejects_a_position_off_the_axis() {
+        let axis = IndexAxis::finite(FiniteIndex::try_from_u64(3).unwrap());
+        let _ = axis.key_at(3);
     }
 
     #[test]
@@ -415,6 +434,7 @@ mod tests {
             .map(|coordinate| coordinate.get())
             .collect::<Vec<_>>();
         assert_eq!(coordinates, vec![0.0, 1.0, 2.0]);
+        assert_eq!(axis.key_at(2).as_ref(), &IndexEntryKey::position(2));
         assert_eq!(axis.keys().len(), 3);
         assert_eq!(
             IndexAxis::named_for_test(owner(), "Phase", &["A"]).coordinates(),

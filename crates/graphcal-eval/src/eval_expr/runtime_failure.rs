@@ -34,8 +34,6 @@ pub(super) enum RuntimeFailure {
     Quantity(#[from] QuantityValidationError),
     #[error(transparent)]
     Integer(#[from] IntegerFailure),
-    #[error("division by zero")]
-    QuantityDivisionByZero,
     #[error(transparent)]
     Power(#[from] ExactPowerError),
     #[error(transparent)]

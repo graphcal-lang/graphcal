@@ -50,6 +50,7 @@ use graphcal_io::{
 };
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::{LoadedProject, build_rooted_filesystem, load_project};
+use graphcal_project::prepare::PreparedProject;
 use graphcal_project::project_compiler::ProjectCompiler;
 
 use graphcal::format::{
@@ -830,10 +831,7 @@ fn handle_eval(
     plot_output: Option<&PlotOutput>,
     allow_incomplete: bool,
 ) {
-    let outcome = load_rooted_project_with_plugins(file, root).and_then(|(project, host_fns)| {
-        let prepared = ProjectCompiler::new(&project)
-            .host_fns(&host_fns)
-            .prepare()?;
+    let outcome = prepare_rooted_project(file, root).and_then(|prepared| {
         let mut bindings = prepared.binding_builder();
         for (name, value) in &overrides.values {
             value.bind(name, &mut bindings)?;
@@ -1011,6 +1009,16 @@ fn load_rooted_project_with_plugins(
 ) -> Result<(LoadedProject, HostFunctionRegistry), CompileError> {
     let fs = build_rooted_filesystem(file, project_root)?;
     load_project_with_plugins(file, project_root, &fs)
+}
+
+/// Load `file`'s project in its rooted sandbox (see
+/// [`load_rooted_project_with_plugins`]) and prepare it for evaluation.
+fn prepare_rooted_project(
+    file: &Path,
+    project_root: Option<&Path>,
+) -> Result<PreparedProject, CompileError> {
+    let (project, host_fns) = load_rooted_project_with_plugins(file, project_root)?;
+    ProjectCompiler::new(&project).host_fns(&host_fns).prepare()
 }
 
 /// Load a project and build the host function registry backing its extern

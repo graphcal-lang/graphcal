@@ -75,36 +75,24 @@ pub enum PrepareOutcome {
 /// the complete validated snapshot, including pinned plugin binaries.
 #[must_use]
 pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
-    let project = match VirtualProject::try_from(request) {
-        Ok(project) => project,
-        Err(error) => {
-            return PrepareOutcome::Rejected {
-                error: RequestErrorView::from(&error),
-            };
-        }
-    };
-
-    prepare_virtual(&project, BrowserCapabilities::SourcesOnly, ViewDemand::Skip)
+    prepare_request(request, ViewDemand::Skip)
 }
 
 /// [`prepare`], also projecting the entry file's view model for
 /// [`PreparedPlayground::evaluate_view`].
 #[must_use]
 pub fn prepare_view(request: PlaygroundRequest) -> PrepareOutcome {
-    let project = match VirtualProject::try_from(request) {
-        Ok(project) => project,
-        Err(error) => {
-            return PrepareOutcome::Rejected {
-                error: RequestErrorView::from(&error),
-            };
-        }
-    };
+    prepare_request(request, ViewDemand::Project)
+}
 
-    prepare_virtual(
-        &project,
-        BrowserCapabilities::SourcesOnly,
-        ViewDemand::Project,
-    )
+/// Validate a text-only playground request and prepare it with `view`.
+fn prepare_request(request: PlaygroundRequest, view: ViewDemand) -> PrepareOutcome {
+    match VirtualProject::try_from(request) {
+        Ok(project) => prepare_virtual(&project, BrowserCapabilities::SourcesOnly, view),
+        Err(error) => PrepareOutcome::Rejected {
+            error: RequestErrorView::from(&error),
+        },
+    }
 }
 
 /// Prepare an offline report snapshot, including sandboxed Wasm plugins.

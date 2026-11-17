@@ -362,10 +362,9 @@ impl Session {
     /// Returns [`ClientError`] for a handle of another model or a parameter
     /// this session does not vary.
     pub fn input<K: Kind>(&self, input: &InputHandle<K>) -> Result<&SessionInput, ClientError> {
-        input.port().ensure_model(self.model)?;
+        let slot = input.slot_in(self.model, &self.schema)?;
         self.schema
-            .input_slot(input.name().as_str())
-            .and_then(|slot| self.schema.input(slot))
+            .input(slot)
             .ok_or_else(|| ClientError::NotVaried {
                 name: input.name().clone(),
             })
@@ -380,10 +379,9 @@ impl Session {
     /// Returns [`ClientError`] for a handle of another model or an output
     /// this session does not read.
     pub fn output<K: Kind>(&self, output: &OutputHandle<K>) -> Result<&SessionOutput, ClientError> {
-        output.port().ensure_model(self.model)?;
+        let slot = output.slot_in(self.model, &self.schema)?;
         self.schema
-            .output_slot(output.name().as_str())
-            .and_then(|slot| self.schema.output(slot))
+            .output(slot)
             .ok_or_else(|| ClientError::NotRead {
                 name: output.name().clone(),
             })
