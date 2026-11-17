@@ -252,6 +252,17 @@ impl<L: SlotBody> DagSlots<L> {
         )
     }
 
+    /// The local bodies owned by the root's file: the root and its nested
+    /// descendants, in [`Self::local_iter`] order.
+    ///
+    /// A local body outside the root's subtree is an imported DAG that
+    /// [`Self::localized_mut`] copied into this table, so it is skipped.
+    pub(crate) fn root_owned_locals(&self) -> impl Iterator<Item = (&DagId, &L)> {
+        let root = self.root_id();
+        self.local_iter()
+            .filter(move |(dag_id, _)| *dag_id == root || dag_id.is_descendant_of(root))
+    }
+
     /// Every local body with its position, in no particular order.
     pub fn local_positioned(&self) -> impl Iterator<Item = (DagPosition, &L)> {
         self.local_positions.iter().copied().zip(&self.locals)

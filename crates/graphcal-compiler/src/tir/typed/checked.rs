@@ -157,9 +157,10 @@ impl CheckedDagRegistry {
         self.dags.get(dag_id)
     }
 
-    /// Iterate over the identities and bodies this file owns.
-    pub(crate) fn local_iter(&self) -> impl Iterator<Item = (&DagId, &CheckedDag)> {
-        self.dags.local_iter()
+    /// Iterate over the identities and bodies this file owns (see
+    /// [`DagSlots::root_owned_locals`]).
+    pub(crate) fn root_owned_locals(&self) -> impl Iterator<Item = (&DagId, &CheckedDag)> {
+        self.dags.root_owned_locals()
     }
 
     /// Iterate over canonical identities and DAG bodies.
@@ -273,10 +274,7 @@ impl CheckedTir {
     /// nested descendants. Inline `dag` syntax and file modules use the same
     /// canonical representation and traversal.
     pub fn local_dags(&self) -> impl Iterator<Item = (&DagId, &CheckedDag)> {
-        let root = self.root_dag_id();
-        self.dags
-            .local_iter()
-            .filter(move |(dag_id, _)| *dag_id == root || dag_id.is_descendant_of(root))
+        self.dags.root_owned_locals()
     }
 
     /// Find the checked DAG that owns a declaration record.

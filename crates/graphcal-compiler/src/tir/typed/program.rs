@@ -266,6 +266,7 @@ impl UncheckedTir {
     }
 
     /// Canonical identity of the root DAG.
+    #[cfg(test)]
     pub(crate) fn root_dag_id(&self) -> &crate::dag_id::DagId {
         self.dags.root_id()
     }
@@ -294,10 +295,7 @@ impl UncheckedTir {
     /// nested descendants. Inline `dag` syntax and file modules use the same
     /// canonical representation and traversal.
     pub(crate) fn local_dags(&self) -> impl Iterator<Item = (&crate::dag_id::DagId, &DagTIR)> {
-        let root = self.root_dag_id();
-        self.dags
-            .local_iter()
-            .filter(move |(dag_id, _)| *dag_id == root || dag_id.is_descendant_of(root))
+        self.dags.root_owned_locals()
     }
 
     /// Look up a unit by its canonical defining-module identity.

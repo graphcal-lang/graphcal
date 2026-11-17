@@ -2162,6 +2162,13 @@ fn imported_slots_keep_their_position_when_localized() {
     assert!(tir.dags.shared(leaf_id).is_none());
     assert_eq!(tir.dags.local_iter().count(), 2);
     assert_eq!(tir.dags.len(), 2);
+    // A localized import is not owned by the root's file.
+    assert_eq!(
+        tir.local_dags()
+            .map(|(dag_id, _)| dag_id.clone())
+            .collect::<Vec<_>>(),
+        [tir.root_dag_id().clone()]
+    );
 
     // The facts mapped before localization no longer match the local
     // bodies, so pairing them fails loudly instead of truncating.
