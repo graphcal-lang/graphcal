@@ -3,8 +3,9 @@
 use std::marker::PhantomData;
 
 use graphcal_model_protocol::{
-    DescribeDocument, Domain, FiniteF64, InterfaceFingerprint, KeyRef, KeyType, KeyValue,
-    ModelInterface, PortName, PortWire, ResolvedUnit, UnitSpelling, VariantName,
+    DescribeDocument, Domain, FiniteF64, InputSlot, InterfaceFingerprint, KeyRef, KeyType,
+    KeyValue, ModelInterface, OutputSlot, PortName, PortWire, ResolvedUnit, SessionSchema,
+    UnitSpelling, VariantName,
 };
 
 use crate::command::GraphcalCommand;
@@ -223,6 +224,23 @@ impl<K: Kind> InputHandle<K> {
     pub(crate) const fn port(&self) -> &PortIdentity {
         &self.port
     }
+
+    /// The slot of this parameter in `schema`, a session of `model`.
+    ///
+    /// The handle is checked against `model` before its name is looked up,
+    /// so a same-named parameter of another model is never matched.
+    pub(crate) fn slot_in(
+        &self,
+        model: ModelId,
+        schema: &SessionSchema,
+    ) -> Result<InputSlot, ClientError> {
+        self.port.ensure_model(model)?;
+        schema
+            .input_slot(self.name().as_str())
+            .ok_or_else(|| ClientError::NotVaried {
+                name: self.name().clone(),
+            })
+    }
 }
 
 /// The entries of `key` for parameter `port`.
@@ -375,5 +393,22 @@ impl<K: Kind> OutputHandle<K> {
 
     pub(crate) const fn port(&self) -> &PortIdentity {
         &self.port
+    }
+
+    /// The slot of this output in `schema`, a session of `model`.
+    ///
+    /// The handle is checked against `model` before its name is looked up,
+    /// so a same-named output of another model is never matched.
+    pub(crate) fn slot_in(
+        &self,
+        model: ModelId,
+        schema: &SessionSchema,
+    ) -> Result<OutputSlot, ClientError> {
+        self.port.ensure_model(model)?;
+        schema
+            .output_slot(self.name().as_str())
+            .ok_or_else(|| ClientError::NotRead {
+                name: self.name().clone(),
+            })
     }
 }
