@@ -2145,13 +2145,15 @@ fn imported_slots_keep_their_position_when_localized() {
         .dags
         .map_local(|_, dag| Ok::<_, ()>(dag.dag_id().clone()))
         .unwrap();
-    assert!(tir.dags.local_fact_at(&facts, imported).is_none());
+    assert!(tir.dags.local_fact(&facts, leaf_id).is_none());
     assert!(tir.dags.local_with_fact(&facts, leaf_id).is_none());
     assert_eq!(
-        tir.dags
-            .local_fact_at(&facts, super::dag_position::DagPosition::ROOT),
+        tir.dags.local_fact(&facts, tir.root_dag_id()),
         Some(tir.root_dag_id())
     );
+    let unknown = crate::dag_id::DagId::root_in_package("elsewhere", "elsewhere");
+    assert!(tir.dags.local_fact(&facts, &unknown).is_none());
+    assert!(tir.dags.local_with_fact(&facts, &unknown).is_none());
 
     // Localizing the import copies its body into a local slot at the same
     // position; it is then visited with the local bodies.
@@ -2171,7 +2173,16 @@ fn imported_slots_keep_their_position_when_localized() {
     );
 
     // The facts mapped before localization no longer match the local
-    // bodies, so pairing them fails loudly instead of truncating.
+    // bodies, so pairing them fails loudly instead of truncating, even when
+    // the looked-up DAG is unknown.
+    let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tir.dags.local_fact(&facts, &unknown).is_none()
+    }));
+    assert!(stale.is_err());
+    let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tir.dags.local_with_fact(&facts, &unknown).is_none()
+    }));
+    assert!(stale.is_err());
     let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tir.dags.map_local_facts(facts, |_, fact| fact)
     }));

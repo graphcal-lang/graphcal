@@ -519,31 +519,8 @@ impl<L: SlotBody> DagSlots<L> {
         dag_id: &DagId,
     ) -> Option<(&'a L, &'a T)> {
         let facts = self.facts_of(facts);
-        match self.slots[self.position(dag_id)?.index()] {
-            Slot::Local(index) => Some((&self.locals[index], &facts[index])),
-            Slot::Shared(_) => None,
-        }
-    }
-
-    /// The fact of the local body at `position`; `None` when the DAG there
-    /// is imported.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `position` is a position of another program with more
-    /// DAGs, or when `facts` was built for another arrangement of local
-    /// bodies.
-    #[must_use]
-    pub fn local_fact_at<'a, T>(
-        &self,
-        facts: &'a LocalDagFacts<T>,
-        position: DagPosition,
-    ) -> Option<&'a T> {
-        let facts = self.facts_of(facts);
-        match self.slots[position.index()] {
-            Slot::Local(index) => Some(&facts[index]),
-            Slot::Shared(_) => None,
-        }
+        let index = self.local_index(dag_id)?;
+        Some((&self.locals[index], &facts[index]))
     }
 
     /// The fact of the local body with this identity.
@@ -554,8 +531,18 @@ impl<L: SlotBody> DagSlots<L> {
     #[must_use]
     pub fn local_fact<'a, T>(&self, facts: &'a LocalDagFacts<T>, dag_id: &DagId) -> Option<&'a T> {
         let facts = self.facts_of(facts);
+        self.local_index(dag_id).map(|index| &facts[index])
+    }
+
+    /// The index of the local body with this identity; `None` for an
+    /// imported or unknown DAG.
+    ///
+    /// Callers pairing the index with a [`LocalDagFacts`] table check that
+    /// table's layout first, so a mismatched table fails loudly even for an
+    /// unknown DAG.
+    fn local_index(&self, dag_id: &DagId) -> Option<usize> {
         match self.slots[self.position(dag_id)?.index()] {
-            Slot::Local(index) => Some(&facts[index]),
+            Slot::Local(index) => Some(index),
             Slot::Shared(_) => None,
         }
     }
