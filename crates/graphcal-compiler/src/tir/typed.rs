@@ -7,7 +7,7 @@
 
 use crate::outcome::Outcome;
 use crate::resolved_name::{
-    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
+    ResolvedDeclName, ResolvedDimName, ResolvedStaticName, ResolvedStructTypeName,
 };
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
@@ -866,61 +866,34 @@ fn collect_resolved_type_defs<'a>(
     Ok(defs)
 }
 
-#[derive(Debug, Clone)]
-enum PublicSignatureDependency {
-    Dimension(Spanned<ResolvedDimName>),
-    Index(Spanned<ResolvedIndexName>),
-    Type(Spanned<ResolvedStructTypeName>),
+/// The kind of declaration a public-signature dependency names, for
+/// diagnostics.
+const fn static_name_declaration_kind(
+    name: &ResolvedStaticName,
+) -> crate::declaration_kind::DeclarationKind {
+    match name {
+        ResolvedStaticName::Dimension(_) => crate::declaration_kind::DeclarationKind::Dimension,
+        ResolvedStaticName::Index(_) => crate::declaration_kind::DeclarationKind::Index,
+        ResolvedStaticName::Type(_) => crate::declaration_kind::DeclarationKind::Type,
+    }
 }
 
-impl PublicSignatureDependency {
-    const fn span(&self) -> Span {
-        match self {
-            Self::Dimension(name) => name.span,
-            Self::Index(name) => name.span,
-            Self::Type(name) => name.span,
-        }
-    }
-
-    fn name(&self) -> crate::syntax::names::NameAtom {
-        match self {
-            Self::Dimension(name) => name.value.atom().clone(),
-            Self::Index(name) => name.value.atom().clone(),
-            Self::Type(name) => name.value.atom().clone(),
-        }
-    }
-
-    const fn kind(&self) -> crate::declaration_kind::DeclarationKind {
-        match self {
-            Self::Dimension(_) => crate::declaration_kind::DeclarationKind::Dimension,
-            Self::Index(_) => crate::declaration_kind::DeclarationKind::Index,
-            Self::Type(_) => crate::declaration_kind::DeclarationKind::Type,
-        }
-    }
-
-    fn is_public(&self, resolver: &ModuleResolver) -> Option<bool> {
-        let visibility = match self {
-            Self::Dimension(name) => resolver.symbol(&name.value).map(SymbolRef::visibility),
-            Self::Index(name) => resolver.symbol(&name.value).map(SymbolRef::visibility),
-            Self::Type(name) => resolver.symbol(&name.value).map(SymbolRef::visibility),
-        };
-        visibility.map(crate::syntax::ast::BindableVisibility::is_public)
-    }
-
-    const fn owner(&self) -> &crate::dag_id::DagId {
-        match self {
-            Self::Dimension(name) => name.value.owner(),
-            Self::Index(name) => name.value.owner(),
-            Self::Type(name) => name.value.owner(),
-        }
-    }
+/// Whether the declaration `name` is public, or `None` when the resolver
+/// has no symbol for it.
+fn static_name_is_public(name: &ResolvedStaticName, resolver: &ModuleResolver) -> Option<bool> {
+    let visibility = match name {
+        ResolvedStaticName::Dimension(name) => resolver.symbol(name).map(SymbolRef::visibility),
+        ResolvedStaticName::Index(name) => resolver.symbol(name).map(SymbolRef::visibility),
+        ResolvedStaticName::Type(name) => resolver.symbol(name).map(SymbolRef::visibility),
+    };
+    visibility.map(crate::syntax::ast::BindableVisibility::is_public)
 }
 
 fn collect_public_signature_generic_arg_dependencies(
     arg: &crate::hir::types::GenericArg,
     defs: &ResolvedTypeDefs,
     visited_defaults: &mut std::collections::HashSet<GenericParamId>,
-    dependencies: &mut Vec<PublicSignatureDependency>,
+    dependencies: &mut Vec<Spanned<ResolvedStaticName>>,
 ) {
     match arg {
         crate::hir::types::GenericArg::Dim(arg) => {
@@ -943,7 +916,7 @@ fn collect_public_signature_generic_arg_dependencies(
 
 fn collect_public_signature_dim_arg_dependencies(
     arg: &crate::hir::types::DimArg,
-    dependencies: &mut Vec<PublicSignatureDependency>,
+    dependencies: &mut Vec<Spanned<ResolvedStaticName>>,
 ) {
     let crate::hir::types::DimArg::Expr(expr) = arg else {
         return;
@@ -952,9 +925,10 @@ fn collect_public_signature_dim_arg_dependencies(
         expr.terms
             .iter()
             .filter_map(|item| match &item.term.target {
-                crate::hir::types::DimTermTarget::Dimension(name) => {
-                    Some(PublicSignatureDependency::Dimension(name.clone()))
-                }
+                crate::hir::types::DimTermTarget::Dimension(name) => Some(Spanned::new(
+                    ResolvedStaticName::Dimension(name.value.clone()),
+                    name.span,
+                )),
                 crate::hir::types::DimTermTarget::GenericParam(_)
                 | crate::hir::types::DimTermTarget::Dimensionless => None,
             }),
@@ -963,10 +937,13 @@ fn collect_public_signature_dim_arg_dependencies(
 
 fn collect_public_signature_index_dependencies(
     index: &crate::hir::types::IndexRef,
-    dependencies: &mut Vec<PublicSignatureDependency>,
+    dependencies: &mut Vec<Spanned<ResolvedStaticName>>,
 ) {
     if let crate::hir::types::IndexRef::Concrete(name) = index {
-        dependencies.push(PublicSignatureDependency::Index(name.clone()));
+        dependencies.push(Spanned::new(
+            ResolvedStaticName::Index(name.value.clone()),
+            name.span,
+        ));
     }
 }
 
@@ -974,7 +951,7 @@ fn collect_public_signature_type_dependencies(
     value_type: &crate::hir::types::ValueType,
     defs: &ResolvedTypeDefs,
     visited_defaults: &mut std::collections::HashSet<GenericParamId>,
-    dependencies: &mut Vec<PublicSignatureDependency>,
+    dependencies: &mut Vec<Spanned<ResolvedStaticName>>,
 ) {
     match &value_type.kind {
         crate::hir::types::ValueTypeKind::Builtin(_)
@@ -984,9 +961,10 @@ fn collect_public_signature_type_dependencies(
                 expr.terms
                     .iter()
                     .filter_map(|item| match &item.term.target {
-                        crate::hir::types::DimTermTarget::Dimension(name) => {
-                            Some(PublicSignatureDependency::Dimension(name.clone()))
-                        }
+                        crate::hir::types::DimTermTarget::Dimension(name) => Some(Spanned::new(
+                            ResolvedStaticName::Dimension(name.value.clone()),
+                            name.span,
+                        )),
                         crate::hir::types::DimTermTarget::GenericParam(_)
                         | crate::hir::types::DimTermTarget::Dimensionless => None,
                     }),
@@ -996,13 +974,19 @@ fn collect_public_signature_type_dependencies(
             collect_public_signature_index_dependencies(index, dependencies);
         }
         crate::hir::types::ValueTypeKind::Struct(name) => {
-            dependencies.push(PublicSignatureDependency::Type(name.clone()));
+            dependencies.push(Spanned::new(
+                ResolvedStaticName::Type(name.value.clone()),
+                name.span,
+            ));
         }
         crate::hir::types::ValueTypeKind::Complex(arg) => {
             collect_public_signature_dim_arg_dependencies(arg, dependencies);
         }
         crate::hir::types::ValueTypeKind::TypeApplication { name, generic_args } => {
-            dependencies.push(PublicSignatureDependency::Type(name.clone()));
+            dependencies.push(Spanned::new(
+                ResolvedStaticName::Type(name.value.clone()),
+                name.span,
+            ));
             for arg in generic_args {
                 collect_public_signature_generic_arg_dependencies(
                     arg,
@@ -1070,21 +1054,25 @@ fn validate_public_generic_defaults(
                 &mut visited_defaults,
                 &mut dependencies,
             );
-            for dependency in dependencies {
+            for Spanned {
+                value: dependency,
+                span,
+            } in dependencies
+            {
                 if dependency.owner() == &crate::semantic::prelude::prelude_dag_id() {
                     continue;
                 }
-                match dependency.is_public(ctx.resolver) {
+                match static_name_is_public(&dependency, ctx.resolver) {
                     Some(true) => {}
                     Some(false) => {
                         return Err(SemanticError::located(
                             src,
-                            dependency.span(),
+                            span,
                             VisibilityError::PrivateInPublic {
                                 pub_kind: crate::declaration_kind::DeclarationKind::Type,
                                 pub_name: type_name.atom().clone(),
-                                ref_kind: dependency.kind(),
-                                ref_name: dependency.name(),
+                                ref_kind: static_name_declaration_kind(&dependency),
+                                ref_name: dependency.atom().clone(),
                                 pub_span,
                             },
                         ));
@@ -1093,11 +1081,11 @@ fn validate_public_generic_defaults(
                         return Err(SemanticError::internal_error(
                             format!(
                                 "canonical {} `{}` is missing visibility metadata",
-                                dependency.kind(),
-                                dependency.name()
+                                static_name_declaration_kind(&dependency),
+                                dependency.atom()
                             ),
                             src,
-                            crate::diagnostic_anchor::DiagnosticAnchor::Source(dependency.span()),
+                            crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
                         ));
                     }
                 }
