@@ -10,10 +10,7 @@ use graphcal_model_protocol::{
 
 use crate::overrides::ParsedOverrides;
 use graphcal_project::compile_error::CompileError;
-use graphcal_project::prepare::{
-    ModelInterfaceError, ModelSessionError, ModelUnitError, PreparedProject,
-};
-use graphcal_project::project_compiler::ProjectCompiler;
+use graphcal_project::prepare::{ModelInterfaceError, ModelSessionError, ModelUnitError};
 use thiserror::Error;
 
 /// How `serve` guards against serving a different interface than the client
@@ -76,7 +73,7 @@ pub fn resolve_units(
     units: &[UnitSpelling],
     root: Option<&Path>,
 ) -> Result<(), ModelServeError> {
-    let prepared = prepare(file, root)?;
+    let prepared = crate::prepare_rooted_project(file, root)?;
     let resolved = units
         .iter()
         .map(|unit| {
@@ -95,7 +92,7 @@ pub fn resolve_units(
 
 /// Print the model's describe document as JSON on stdout.
 pub fn describe(file: &Path, root: Option<&Path>) -> Result<(), ModelServeError> {
-    let prepared = prepare(file, root)?;
+    let prepared = crate::prepare_rooted_project(file, root)?;
     let document = DescribeDocument::new(env!("CARGO_PKG_VERSION"), prepared.model_interface()?);
     let json = serde_json::to_string_pretty(&document).map_err(ModelServeError::Json)?;
     outln!("{json}");
@@ -153,7 +150,7 @@ pub fn serve(
         ),
         |spec, choice| spec.with_unit(choice.port.clone(), choice.unit.clone()),
     );
-    let prepared = prepare(file, root)?;
+    let prepared = crate::prepare_rooted_project(file, root)?;
     let interface = prepared.model_interface()?;
     if let FingerprintCheck::Expect(expected) = fingerprint {
         let actual = InterfaceFingerprint::of(&interface);
@@ -179,13 +176,6 @@ pub fn serve(
         }
     }
     .map_err(ModelServeError::Serve)
-}
-
-fn prepare(file: &Path, root: Option<&Path>) -> Result<PreparedProject, ModelServeError> {
-    let (project, host_fns) = crate::load_rooted_project_with_plugins(file, root)?;
-    Ok(ProjectCompiler::new(&project)
-        .host_fns(&host_fns)
-        .prepare()?)
 }
 
 /// Model setup or process-lifetime failure.
