@@ -647,6 +647,37 @@ pub enum MulDivOp {
     Div,
 }
 
+impl MulDivOp {
+    /// The operator of an `inner` factor of a group that its parent applies
+    /// with `self`, once the group is flattened into the parent: equal
+    /// operators multiply (`a / (b / c)` is `a / b * c`), different ones
+    /// divide.
+    #[must_use]
+    pub const fn compose(self, inner: Self) -> Self {
+        match (self, inner) {
+            (Self::Mul, Self::Mul) | (Self::Div, Self::Div) => Self::Mul,
+            (Self::Mul, Self::Div) | (Self::Div, Self::Mul) => Self::Div,
+        }
+    }
+}
+
+#[cfg(test)]
+mod mul_div_op_tests {
+    use super::MulDivOp;
+
+    #[test]
+    fn compose_follows_the_sign_rule() {
+        for (outer, inner, expected) in [
+            (MulDivOp::Mul, MulDivOp::Mul, MulDivOp::Mul),
+            (MulDivOp::Mul, MulDivOp::Div, MulDivOp::Div),
+            (MulDivOp::Div, MulDivOp::Mul, MulDivOp::Div),
+            (MulDivOp::Div, MulDivOp::Div, MulDivOp::Mul),
+        ] {
+            assert_eq!(outer.compose(inner), expected, "{outer:?} . {inner:?}");
+        }
+    }
+}
+
 // --- Expressions ---
 
 /// An expression node.

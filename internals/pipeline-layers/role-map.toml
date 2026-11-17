@@ -1093,6 +1093,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "ast", "value", "mul_div_op_tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "ast", "value", "nat_expr_display_tests"]
 role = "contracts"
 

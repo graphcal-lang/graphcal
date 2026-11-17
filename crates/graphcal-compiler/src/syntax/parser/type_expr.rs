@@ -299,7 +299,7 @@ impl Parser<'_> {
                     self.lexer.next_token();
                     let items = self.parse_dim_term_or_group()?;
                     for mut item in items {
-                        item.op = Self::combine_ops(MulDivOp::Mul, item.op);
+                        item.op = MulDivOp::Mul.compose(item.op);
                         terms.push(item);
                     }
                 }
@@ -307,7 +307,7 @@ impl Parser<'_> {
                     self.lexer.next_token();
                     let items = self.parse_dim_term_or_group()?;
                     for mut item in items {
-                        item.op = Self::combine_ops(MulDivOp::Div, item.op);
+                        item.op = MulDivOp::Div.compose(item.op);
                         terms.push(item);
                     }
                 }
@@ -470,14 +470,6 @@ impl Parser<'_> {
         Ok((value, span))
     }
 
-    /// Combine two `MulDivOp`s: `Mul*Mul=Mul`, `Mul*Div=Div`, `Div*Mul=Div`, `Div*Div=Mul`.
-    const fn combine_ops(outer: MulDivOp, inner: MulDivOp) -> MulDivOp {
-        match (outer, inner) {
-            (MulDivOp::Mul, MulDivOp::Mul) | (MulDivOp::Div, MulDivOp::Div) => MulDivOp::Mul,
-            (MulDivOp::Mul, MulDivOp::Div) | (MulDivOp::Div, MulDivOp::Mul) => MulDivOp::Div,
-        }
-    }
-
     // --- Unit expressions ---
 
     /// Parse a unit expression:
@@ -584,7 +576,7 @@ impl Parser<'_> {
                         )
                     })?;
                     Ok(UnitExprItem {
-                        op: Self::combine_ops(outer_op, item.op),
+                        op: outer_op.compose(item.op),
                         name: item.name,
                         power: if combined_power == Rational::ONE {
                             None

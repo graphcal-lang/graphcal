@@ -350,7 +350,7 @@ fn expand_dim_arg(
                 ResolvedDimTerm::Concrete { dim, power, op } => Ok(ResolvedDimTerm::Concrete {
                     dim: dim.clone(),
                     power: (*power * outer_power)?,
-                    op: combine_dim_ops(outer_op, *op),
+                    op: outer_op.compose(*op),
                 }),
                 ResolvedDimTerm::GenericParam {
                     name,
@@ -360,22 +360,11 @@ fn expand_dim_arg(
                 } => Ok(ResolvedDimTerm::GenericParam {
                     name: name.clone(),
                     power: (*power * outer_power)?,
-                    op: combine_dim_ops(outer_op, *op),
+                    op: outer_op.compose(*op),
                     span: *span,
                 }),
             })
             .collect(),
-    }
-}
-
-const fn combine_dim_ops(outer: MulDivOp, inner: MulDivOp) -> MulDivOp {
-    if matches!(
-        (outer, inner),
-        (MulDivOp::Mul, MulDivOp::Mul) | (MulDivOp::Div, MulDivOp::Div)
-    ) {
-        MulDivOp::Mul
-    } else {
-        MulDivOp::Div
     }
 }
 
