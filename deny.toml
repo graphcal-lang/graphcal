@@ -8,7 +8,10 @@ all-features = true
 [advisories]
 # Vulnerability, unsoundness, and unmaintained advisories are errors by default.
 # Every future exception must include a reason and an expiry/tracking issue.
-ignore = []
+ignore = [
+  # TODO(#2358): remove once arrow drops chrono.
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained with no fixed version; it comes only through arrow-array, which depends on it unconditionally, and Graphcal does not use it directly (tracked in #2358)" },
+]
 
 [licenses]
 include-dev = true

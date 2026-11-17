@@ -2,7 +2,10 @@
 all-features = true
 
 [advisories]
-ignore = []
+ignore = [
+  # TODO(#2358): remove once arrow drops chrono.
+  { id = "RUSTSEC-2026-0543", reason = "chrono is unmaintained with no fixed version; it comes only through arrow-array, which depends on it unconditionally, and Graphcal does not use it directly (tracked in #2358)" },
+]
 
 [licenses]
 include-dev = true
