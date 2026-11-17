@@ -123,11 +123,64 @@ pub enum GitTransport {
 /// the operating system that parses them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PackageSourceDirectory {
-    components: Vec<SourceDirectoryComponent>,
+    path: PortableRelativePath,
 }
 
+/// A portable path below a package root, stored as validated `/`-separated
+/// components: non-empty, relative, and free of `.`/`..` components,
+/// backslashes, `:` and control characters, so it cannot leave the root and
+/// means the same on every host.
+///
+/// Package source directories and plugin artifact paths both point inside a
+/// package root and share this rule; each adds its own meaning on top.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct SourceDirectoryComponent(String);
+struct PortableRelativePath {
+    components: Vec<String>,
+}
+
+impl PortableRelativePath {
+    fn new(value: &str) -> Result<Self, PackageSourceDirectoryErrorReason> {
+        if value.is_empty() {
+            return Err(PackageSourceDirectoryErrorReason::Empty);
+        }
+        if value.starts_with('/') {
+            return Err(PackageSourceDirectoryErrorReason::Absolute);
+        }
+        if value.contains('\\') {
+            return Err(PackageSourceDirectoryErrorReason::Backslash);
+        }
+        if value.contains(':') {
+            return Err(PackageSourceDirectoryErrorReason::PrefixAmbiguity);
+        }
+        let components = value
+            .split('/')
+            .map(|component| {
+                if component.is_empty() {
+                    Err(PackageSourceDirectoryErrorReason::EmptyComponent)
+                } else if component == "." {
+                    Err(PackageSourceDirectoryErrorReason::CurrentDirectory)
+                } else if component == ".." {
+                    Err(PackageSourceDirectoryErrorReason::ParentDirectory)
+                } else if component.chars().any(char::is_control) {
+                    Err(PackageSourceDirectoryErrorReason::ControlCharacter)
+                } else {
+                    Ok(component.to_string())
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { components })
+    }
+
+    fn to_path_buf(&self) -> PathBuf {
+        self.components.iter().collect()
+    }
+}
+
+impl fmt::Display for PortableRelativePath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_slash_joined(formatter, self.components.iter().map(String::as_str))
+    }
+}
 
 macro_rules! impl_string_newtype {
     ($ty:ty) => {
@@ -187,50 +240,18 @@ impl PackageSourceDirectory {
     /// dot components, backslashes, control characters, or Windows-prefix
     /// ambiguity.
     pub fn new(value: &str) -> Result<Self, PackageSourceDirectoryError> {
-        let invalid = |reason| PackageSourceDirectoryError {
-            value: value.to_string(),
-            reason,
-        };
-        if value.is_empty() {
-            return Err(invalid(PackageSourceDirectoryErrorReason::Empty));
-        }
-        if value.starts_with('/') {
-            return Err(invalid(PackageSourceDirectoryErrorReason::Absolute));
-        }
-        if value.contains('\\') {
-            return Err(invalid(PackageSourceDirectoryErrorReason::Backslash));
-        }
-        if value.contains(':') {
-            return Err(invalid(PackageSourceDirectoryErrorReason::PrefixAmbiguity));
-        }
-        let components = value
-            .split('/')
-            .map(|component| {
-                if component.is_empty() {
-                    Err(invalid(PackageSourceDirectoryErrorReason::EmptyComponent))
-                } else if component == "." {
-                    Err(invalid(PackageSourceDirectoryErrorReason::CurrentDirectory))
-                } else if component == ".." {
-                    Err(invalid(PackageSourceDirectoryErrorReason::ParentDirectory))
-                } else if component.chars().any(char::is_control) {
-                    Err(invalid(PackageSourceDirectoryErrorReason::ControlCharacter))
-                } else {
-                    Ok(SourceDirectoryComponent(component.to_string()))
-                }
+        PortableRelativePath::new(value)
+            .map(|path| Self { path })
+            .map_err(|reason| PackageSourceDirectoryError {
+                value: value.to_string(),
+                reason,
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { components })
     }
 
     /// Materialize the validated components as a host relative path.
     #[must_use]
     pub fn to_path_buf(&self) -> PathBuf {
-        self.components
-            .iter()
-            .fold(PathBuf::new(), |mut path, component| {
-                path.push(&component.0);
-                path
-            })
+        self.path.to_path_buf()
     }
 
     /// Join these validated components below a host filesystem root.
@@ -257,10 +278,7 @@ fn write_slash_joined<'a>(
 
 impl fmt::Display for PackageSourceDirectory {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_slash_joined(
-            formatter,
-            self.components.iter().map(|component| component.0.as_str()),
-        )
+        self.path.fmt(formatter)
     }
 }
 
@@ -1447,11 +1465,8 @@ impl ValidatedLockfile<'_> {
 /// A validated root-relative path to one WASM plugin artifact.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PluginArtifactPath {
-    components: Vec<PluginPathComponent>,
+    path: PortableRelativePath,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct PluginPathComponent(String);
 
 impl PluginArtifactPath {
     /// Parse a portable, plain relative `.wasm` path.
@@ -1466,39 +1481,22 @@ impl PluginArtifactPath {
     )]
     pub fn new(path: impl Into<String>) -> Result<Self, PluginArtifactPathError> {
         let path = path.into();
-        let components = path
-            .split('/')
-            .map(|component| PluginPathComponent(component.to_string()))
-            .collect::<Vec<_>>();
-        let valid_components = !path.contains('\\')
-            && !path.contains(':')
-            && !path.chars().any(char::is_control)
-            && components.iter().all(|component| {
-                !component.0.is_empty() && component.0 != "." && component.0 != ".."
-            });
-        if !valid_components || !path.ends_with(".wasm") {
-            return Err(PluginArtifactPathError { path });
+        match PortableRelativePath::new(&path) {
+            Ok(portable) if path.ends_with(".wasm") => Ok(Self { path: portable }),
+            Ok(_) | Err(_) => Err(PluginArtifactPathError { path }),
         }
-        Ok(Self { components })
     }
 
     /// Materialize the portable path below a filesystem root.
     #[must_use]
     pub fn join_to(&self, root: &Path) -> PathBuf {
-        self.components
-            .iter()
-            .fold(root.to_path_buf(), |path, component| {
-                path.join(&component.0)
-            })
+        root.join(self.path.to_path_buf())
     }
 }
 
 impl fmt::Display for PluginArtifactPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write_slash_joined(
-            formatter,
-            self.components.iter().map(|component| component.0.as_str()),
-        )
+        self.path.fmt(formatter)
     }
 }
 
@@ -4369,6 +4367,35 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 Err(LockedPluginError::InvalidSha256(_))
             ));
         }
+    }
+
+    #[test]
+    fn plugin_paths_and_source_directories_share_the_portable_path_rule() {
+        for spelling in [
+            "plugins",
+            "a/b",
+            "",
+            "/abs",
+            "a//b",
+            "a/",
+            "./a",
+            "a/../b",
+            "back\\slash",
+            "C:",
+            "control\nname",
+        ] {
+            let directory = PackageSourceDirectory::new(spelling);
+            let plugin = PluginArtifactPath::new(format!("{spelling}/x.wasm"));
+            assert_eq!(directory.is_ok(), plugin.is_ok(), "`{spelling}`");
+            if let (Ok(directory), Ok(plugin)) = (directory, plugin) {
+                assert_eq!(plugin.to_string(), format!("{directory}/x.wasm"));
+                assert_eq!(
+                    plugin.join_to(Path::new("root")),
+                    directory.join_to(Path::new("root")).join("x.wasm")
+                );
+            }
+        }
+        assert!(PluginArtifactPath::new("plugins/x.dll").is_err());
     }
 
     #[test]
