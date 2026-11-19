@@ -644,6 +644,175 @@ mod tests {
         ));
     }
 
+    // The public parsers run jiff before the hand-written validators, and jiff
+    // already rejects most out-of-range components, so the validators' own
+    // checks are only observable by calling them directly (#1394). Each bound
+    // is pinned on both sides: the last accepted and the first rejected value.
+
+    #[test]
+    fn two_ascii_digits_in_range_pins_bounds_and_value() {
+        for (digits, min, max, expected) in [
+            (*b"00", 0, 23, true),
+            (*b"23", 0, 23, true),
+            (*b"24", 0, 23, false),
+            (*b"00", 1, 12, false),
+            (*b"01", 1, 12, true),
+            (*b"12", 1, 12, true),
+            (*b"13", 1, 12, false),
+            // The tens digit is weighted by ten and the ones digit by one.
+            (*b"10", 10, 10, true),
+            (*b"09", 9, 9, true),
+            (*b"90", 9, 9, false),
+            (*b"19", 19, 19, true),
+            // Non-digits are rejected before any arithmetic on them.
+            (*b"1x", 0, 99, false),
+            (*b"x1", 0, 99, false),
+            (*b"/0", 0, 99, false),
+            (*b"0:", 0, 99, false),
+        ] {
+            assert_eq!(
+                two_ascii_digits_in_range(digits, min, max),
+                expected,
+                "digits `{}` in {min}..={max}",
+                String::from_utf8_lossy(&digits)
+            );
+        }
+    }
+
+    #[test]
+    fn split_date_time_prefix_checks_each_component_range() {
+        for (source, expected) in [
+            ("2024-11-05T12:00:00", Ok(&b""[..])),
+            ("2024-11-05t12:00:00", Ok(&b""[..])),
+            ("2024-11-05T12:00:00Z", Ok(&b"Z"[..])),
+            ("2024-11-05T12:00:00.5", Ok(&b""[..])),
+            ("2024-11-05T12:00:00.125+09:00", Ok(&b"+09:00"[..])),
+            // Fraction needs at least one digit.
+            ("2024-11-05T12:00:00.", Err(DateTimePrefixError::Syntax)),
+            ("2024-11-05T12:00:00.Z", Err(DateTimePrefixError::Syntax)),
+            // Year: four ASCII digits.
+            ("0000-11-05T12:00:00", Ok(&b""[..])),
+            ("9999-11-05T12:00:00", Ok(&b""[..])),
+            ("x024-11-05T12:00:00", Err(DateTimePrefixError::Syntax)),
+            ("202x-11-05T12:00:00", Err(DateTimePrefixError::Syntax)),
+            // Month: 01..=12.
+            ("2024-00-05T12:00:00", Err(DateTimePrefixError::Syntax)),
+            ("2024-01-05T12:00:00", Ok(&b""[..])),
+            ("2024-12-05T12:00:00", Ok(&b""[..])),
+            ("2024-13-05T12:00:00", Err(DateTimePrefixError::Syntax)),
+            // Day: 01..=31 (the per-month calendar check is left to jiff).
+            ("2024-11-00T12:00:00", Err(DateTimePrefixError::Syntax)),
+            ("2024-11-01T12:00:00", Ok(&b""[..])),
+            ("2024-11-31T12:00:00", Ok(&b""[..])),
+            ("2024-11-32T12:00:00", Err(DateTimePrefixError::Syntax)),
+            // Hour: 00..=23.
+            ("2024-11-05T00:00:00", Ok(&b""[..])),
+            ("2024-11-05T23:00:00", Ok(&b""[..])),
+            ("2024-11-05T24:00:00", Err(DateTimePrefixError::Syntax)),
+            // Minute: 00..=59.
+            ("2024-11-05T12:59:00", Ok(&b""[..])),
+            ("2024-11-05T12:60:00", Err(DateTimePrefixError::Syntax)),
+            // Second: 00..=59, with 60 reported as a leap second.
+            ("2024-11-05T12:00:59", Ok(&b""[..])),
+            ("2024-11-05T12:00:60", Err(DateTimePrefixError::LeapSecond)),
+            ("2024-11-05T12:00:61", Err(DateTimePrefixError::Syntax)),
+            ("2024-11-05T12:00:6x", Err(DateTimePrefixError::Syntax)),
+            // Separators and length.
+            ("2024-11-05 12:00:00", Err(DateTimePrefixError::Syntax)),
+            ("2024/11/05T12:00:00", Err(DateTimePrefixError::Syntax)),
+            ("2024-11-05T12.00.00", Err(DateTimePrefixError::Syntax)),
+            ("2024-11-05T12:00:0", Err(DateTimePrefixError::Syntax)),
+            ("", Err(DateTimePrefixError::Syntax)),
+        ] {
+            assert_eq!(split_date_time_prefix(source), expected, "`{source}`");
+        }
+    }
+
+    #[test]
+    fn validate_rfc3339_syntax_accepts_only_in_range_offsets() {
+        for source in [
+            "2024-11-05T12:00:00Z",
+            "2024-11-05T12:00:00z",
+            "2024-11-05T12:00:00.5Z",
+            "2024-11-05T12:00:00+00:00",
+            "2024-11-05T12:00:00-00:00",
+            "2024-11-05T12:00:00+23:59",
+            "2024-11-05T12:00:00-23:59",
+        ] {
+            assert!(
+                validate_rfc3339_syntax(source).is_ok(),
+                "expected `{source}` to be accepted"
+            );
+        }
+        for source in [
+            // Offset hour 00..=23 and minute 00..=59.
+            "2024-11-05T12:00:00+24:00",
+            "2024-11-05T12:00:00-24:00",
+            "2024-11-05T12:00:00+23:60",
+            "2024-11-05T12:00:00-00:60",
+            "2024-11-05T12:00:00+x9:00",
+            "2024-11-05T12:00:00+09:0x",
+            // Offset shape.
+            "2024-11-05T12:00:00",
+            "2024-11-05T12:00:00*09:00",
+            "2024-11-05T12:00:00+09-00",
+            "2024-11-05T12:00:00+0900",
+            "2024-11-05T12:00:00+09",
+            "2024-11-05T12:00:00+09:00:30",
+            "2024-11-05T12:00:00ZZ",
+            "2024-11-05T12:00:00 Z",
+            // Prefix component ranges reach the validator's own error.
+            "2024-13-05T12:00:00Z",
+            "2024-11-32T12:00:00Z",
+            "2024-11-05T24:00:00Z",
+            "2024-11-05T12:60:00Z",
+            "2024-11-05T12:00:61Z",
+        ] {
+            assert!(
+                matches!(
+                    validate_rfc3339_syntax(source),
+                    Err(ParseOffsetDateTimeLiteralError::InvalidRfc3339)
+                ),
+                "expected `{source}` to be rejected as non-RFC 3339"
+            );
+        }
+        assert!(matches!(
+            validate_rfc3339_syntax("2024-11-05T12:00:60Z"),
+            Err(ParseOffsetDateTimeLiteralError::LeapSecond)
+        ));
+    }
+
+    #[test]
+    fn validate_civil_syntax_rejects_anything_after_the_prefix() {
+        for source in ["2024-11-05T12:00:00", "2024-11-05T23:59:59.5"] {
+            assert!(
+                validate_civil_syntax(source).is_ok(),
+                "expected `{source}` to be accepted"
+            );
+        }
+        for source in [
+            "2024-11-05T12:00:00Z",
+            "2024-11-05T12:00:00+09:00",
+            "2024-11-05T12:00:00 ",
+            "2024-11-05T12:00:00.",
+            "2024-13-05T12:00:00",
+            "2024-11-05T24:00:00",
+            "2024-11-05T12:00:61",
+        ] {
+            assert!(
+                matches!(
+                    validate_civil_syntax(source),
+                    Err(ParseCivilDateTimeLiteralError::InvalidSyntax)
+                ),
+                "expected `{source}` to be rejected as non-canonical syntax"
+            );
+        }
+        assert!(matches!(
+            validate_civil_syntax("2024-11-05T12:00:60"),
+            Err(ParseCivilDateTimeLiteralError::LeapSecond)
+        ));
+    }
+
     #[test]
     fn invalid_calendar_coordinates_are_rejected() {
         assert!(OffsetDateTimeLiteral::parse("2023-02-30T00:00:00Z").is_err());
