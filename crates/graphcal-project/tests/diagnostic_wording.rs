@@ -87,6 +87,23 @@ fn instance_dimension_overflow_is_reported_at_the_include() {
     );
 }
 
+/// #2344: holding a bindable dimension port rigid can overflow a dimension
+/// defined over it. The check-once rigid view reports the overflow at that
+/// dimension's declaration, and an include binding the port at the include.
+#[test]
+fn rigid_view_dimension_overflow_is_reported_at_its_site() {
+    let template = "dag lib {\n    pub(bind) dim A = Length^1500000000;\n    pub(bind) dim M = Length^-1000000000;\n    pub(bind) dim Z = Length^1000000000;\n    pub dim G = A * M * Z;\n    pub node y: G = todo<G> {};\n}\n";
+    insta::assert_snapshot!(
+        "rigid_view_dimension_overflow_template",
+        render_error(template, "rigid_ovf_template.gcl")
+    );
+    let included = format!("{template}include lib(dim M: Mass)::{{ y }};\n");
+    insta::assert_snapshot!(
+        "rigid_view_dimension_overflow_include",
+        render_error(&included, "rigid_ovf_include.gcl")
+    );
+}
+
 /// TYC-15: map entries of different types are a map-literal rule, not an
 /// annotation mismatch against a type nobody declared.
 #[test]

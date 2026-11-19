@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(template, \"rigid_ovf_template.gcl\")"
+---
+dimension exponent overflow
+    Diagnostic severity: error
+Begin snippet for rigid_ovf_template.gcl starting at line 4, column 1
+
+snippet line 4:     pub(bind) dim Z = Length^1000000000;
+snippet line 5:     pub dim G = A * M * Z;
+    label at line 5, column 13: overflow here
+snippet line 6:     pub node y: G = todo<G> {};
+diagnostic help: dimension exponents are stored as `i32`; reduce the magnitude of the exponent
+diagnostic code: graphcal::D010

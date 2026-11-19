@@ -18,6 +18,8 @@ use crate::resolved_name::{
 use crate::semantic::dimension_table::BaseDimensionInfo;
 use crate::semantic::index_def::IndexDef;
 use crate::semantic::unit_scale::UnitInfo;
+use crate::source_id::SourceId;
+use crate::syntax::span::Span;
 
 /// A definition presented to a module it is not owned by.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -44,6 +46,18 @@ pub enum ForeignDefinitionError {
     },
 }
 
+/// The port-generic value of a dimension, with the declaration that defines
+/// it: a view holding a port rigid recomputes the value, and reports a
+/// failure of that recomputation at the declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortGenericDimension {
+    pub value: Dimension,
+    /// The file declaring the dimension.
+    pub source: SourceId,
+    /// The dimension's name in its declaration in `source`.
+    pub span: Span,
+}
+
 /// Dimensions, units, and indexes one module defines, plus the base-dimension
 /// metadata (canonical unit, affine policy) it declares.
 #[derive(Debug, Clone)]
@@ -53,7 +67,7 @@ pub struct StaticDefinitions {
     /// Values of the dimensions that differ in the port-generic view, where
     /// this module's defaulted bindable dimension ports stay opaque bases.
     /// Each such port maps to its own base.
-    port_generic_dimensions: HashMap<ResolvedDimName, Dimension>,
+    port_generic_dimensions: HashMap<ResolvedDimName, PortGenericDimension>,
     units: HashMap<ResolvedUnitName, UnitInfo>,
     indexes: HashMap<ResolvedIndexName, IndexDef>,
     base_dimensions: BTreeMap<BaseDimId, BaseDimensionInfo>,
@@ -108,7 +122,7 @@ impl StaticDefinitions {
     pub fn insert_port_generic_dimension(
         &mut self,
         identity: ResolvedDimName,
-        dimension: Dimension,
+        dimension: PortGenericDimension,
     ) -> Result<(), ForeignDefinitionError> {
         if identity.owner() != &self.owner {
             return Err(ForeignDefinitionError::Dimension {
@@ -172,7 +186,9 @@ impl StaticDefinitions {
 
     /// This module's dimensions whose port-generic value differs from the
     /// default one.
-    pub fn port_generic_dimensions(&self) -> impl Iterator<Item = (&ResolvedDimName, &Dimension)> {
+    pub fn port_generic_dimensions(
+        &self,
+    ) -> impl Iterator<Item = (&ResolvedDimName, &PortGenericDimension)> {
         self.port_generic_dimensions.iter()
     }
 
@@ -278,12 +294,18 @@ mod tests {
             Some(&Dimension::dimensionless())
         );
         assert_eq!(statics.dimensions.get(&foreign), None);
+        let generic = PortGenericDimension {
+            value: Dimension::dimensionless(),
+            source: crate::source_registry::SourceRegistry::new()
+                .register("test", std::sync::Arc::new(String::new())),
+            span: Span::new(0, 1),
+        };
         assert!(matches!(
-            statics.insert_port_generic_dimension(foreign.clone(), Dimension::dimensionless()),
+            statics.insert_port_generic_dimension(foreign.clone(), generic.clone()),
             Err(ForeignDefinitionError::Dimension { identity, .. }) if identity == foreign
         ));
         statics
-            .insert_port_generic_dimension(local, Dimension::dimensionless())
+            .insert_port_generic_dimension(local, generic)
             .unwrap();
         assert_eq!(statics.port_generic_dimensions().count(), 1);
     }

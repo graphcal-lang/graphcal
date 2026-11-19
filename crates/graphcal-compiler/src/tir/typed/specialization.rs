@@ -571,13 +571,15 @@ struct InstanceTemplates {
 }
 
 impl InstanceTemplates {
-    /// The template at `position` for an include rebinding `ports`.
+    /// The template at `position` for an include rebinding `ports`, at
+    /// `site` in `src`.
     fn template<'a>(
         &'a mut self,
         tir: &'a UncheckedTir,
         position: DagPosition,
         ports: Vec<ResolvedDimName>,
         src: SourceId,
+        site: Span,
     ) -> Result<&'a DagTIR, SemanticError> {
         if ports.is_empty() {
             return Ok(tir.dags.at(position));
@@ -585,13 +587,15 @@ impl InstanceTemplates {
         match self.rigid.entry((position, ports)) {
             std::collections::hash_map::Entry::Occupied(rigid) => Ok(rigid.into_mut()),
             std::collections::hash_map::Entry::Vacant(vacant) => {
-                let rigid = super::rigid_template_dag(tir, position, &vacant.key().1, src)?;
+                let rigid = super::rigid_template_dag(tir, position, &vacant.key().1, src, site)?;
                 Ok(vacant.insert(rigid))
             }
         }
     }
 }
 
+/// Clone the template of `edge` as its instance, reporting a failure at
+/// `site` in `src` (see [`instantiate_semantic_edge`]).
 fn clone_checked_instance(
     template_position: super::dag_position::DagPosition,
     edge: &HirInstanceRecord,
@@ -599,7 +603,7 @@ fn clone_checked_instance(
     runtime_units: impl IntoIterator<Item = UnitName>,
     tir: &UncheckedTir,
     templates: &mut InstanceTemplates,
-    src: SourceId,
+    (src, site): (SourceId, Span),
 ) -> Result<DagTIR, SemanticError> {
     // An instance rebinding a defaulted dimension port is built from the
     // template's view where that port is rigid, then specialized like a
@@ -607,7 +611,7 @@ fn clone_checked_instance(
     let ports = tir
         .project_type_store()
         .bound_defaulted_dimension_ports(&edge.instance.specialization().substitution);
-    let template = templates.template(tir, template_position, ports, src)?;
+    let template = templates.template(tir, template_position, ports, src, site)?;
     let mut instance = template.clone();
     initialize_instance_identity(&mut instance, template, edge, parent, runtime_units);
     // A substitution can bind a port to a type of any module, so an instance
@@ -860,7 +864,7 @@ fn instantiate_semantic_edge(
         runtime_unit_names,
         tir,
         templates,
-        src,
+        (src, site),
     )?;
     specialize_instance_semantics(&mut instance, edge, &substitution, src, site)?;
     for (unit, info) in runtime_unit_infos {
