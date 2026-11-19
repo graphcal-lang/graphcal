@@ -603,12 +603,7 @@ fn classify_param_bindings(
                     binding.name.span,
                     ModuleError::DagInputCategoryMismatch {
                         name: binding_name.atom().clone(),
-                        expected: match category {
-                            InputBindingCategory::Unmarked => "param",
-                            InputBindingCategory::Type => "type",
-                            InputBindingCategory::Dimension => "dim",
-                            InputBindingCategory::Index => "index",
-                        },
+                        expected: category,
                     },
                 ));
             }

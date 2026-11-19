@@ -434,7 +434,7 @@ fn fixed_static_declarations_are_not_binding_ports() {
         CompileError::Eval(RenderedSemanticError {
             error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Module(ModuleError::DagInputCategoryMismatch {
-                    expected: "type",
+                    expected: graphcal_compiler::syntax::ast::InputBindingCategory::Type,
                     ..
                 }),
                 ..
