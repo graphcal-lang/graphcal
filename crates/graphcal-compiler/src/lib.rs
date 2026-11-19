@@ -24,6 +24,7 @@ pub mod exact_rational;
 pub mod expression_id;
 pub mod expression_source;
 pub mod extern_struct_result;
+pub mod finite_index_binding;
 pub mod finite_value;
 pub(crate) mod fresh_identity;
 pub mod function_signature;

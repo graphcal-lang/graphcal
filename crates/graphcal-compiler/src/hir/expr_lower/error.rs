@@ -41,6 +41,9 @@ pub enum ExprLowerError {
         name: NameAtom,
         span: Span,
     },
+    /// A `Fin(...)` Static DAG-call index binding named no structural index.
+    #[error("invalid `Fin(...)` binding value")]
+    FiniteIndexBinding(crate::finite_index_binding::FiniteIndexBindingError),
     /// A `todo<T> { … }` hole outside a constant or node formula.
     #[error("`todo` holes are allowed only in `node` and `const node` formulas")]
     TodoHoleNotAllowed { span: Span },
