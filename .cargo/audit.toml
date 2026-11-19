@@ -8,4 +8,18 @@ ignore = [
   # does not use it; it comes only through arrow-array, which depends on it
   # unconditionally. Remove once arrow drops chrono.
   "RUSTSEC-2026-0543",
+  # TODO(#2374): heapless 0.8 is unsound in APIs that nothing in a Graphcal
+  # build uses, and the only patched release (0.9.4) is not semver-compatible.
+  # It comes only through faster-hex 0.10, which gix-hash requires and which
+  # uses heapless only without its `alloc` feature; gix enables `alloc`.
+  # Remove once gix moves to faster-hex 1.0.
+  "RUSTSEC-2026-0574",
+  "RUSTSEC-2026-0575",
+  "RUSTSEC-2026-0576",
+  "RUSTSEC-2026-0577",
+  "RUSTSEC-2026-0578",
+  "RUSTSEC-2026-0579",
+  "RUSTSEC-2026-0580",
+  "RUSTSEC-2026-0581",
+  "RUSTSEC-2026-0582",
 ]
