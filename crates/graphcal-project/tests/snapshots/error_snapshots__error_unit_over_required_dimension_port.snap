@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+cannot declare unit `q_m` over required dimension port `Q`
+    Diagnostic severity: error
+Begin snippet for unit_over_required_dimension_port.gcl starting at line 4, column 1
+
+snippet line 4:     pub(bind) dim Q;
+snippet line 5:     const unit q_m: Q * Length = 1000.0 m;
+    label at line 5, columns 16 to 18: `Q` is a required port; the binding owns its canonical unit
+snippet line 6:     pub node out: Dimensionless = 1.0;
+diagnostic help: a template cannot define units over a required dimension port: each include binds `Q` to a concrete dimension that already has its own units; remove `q_m` and take values of `Q` through a `param` input port, which the including module writes in its own units
+diagnostic code: graphcal::D036

@@ -1,0 +1,10 @@
+// A required dimension port has no canonical unit of its own: every include
+// binds it to a concrete dimension that already owns one.
+dag thermo {
+    pub(bind) dim T;
+    base unit degC: T;
+    param room: T = 21.0 degC;
+    pub node room_out: T = @room;
+}
+include thermo(dim T: Temperature)::{ room_out };
+node room_k: Temperature = @room_out -> K;

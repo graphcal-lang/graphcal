@@ -19,7 +19,7 @@ mod package_layout;
 mod prepared;
 mod project;
 
-pub use bindings::{BindingRequest, MAX_BINDING_EXPR_BYTES};
+pub use bindings::{BindingRequest, BrowserBindingRequest, MAX_BINDING_EXPR_BYTES};
 pub use diagnostics::{
     DiagnosticLabelView, DiagnosticSeverity, DiagnosticView, TextPosition, TextRange,
 };

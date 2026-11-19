@@ -565,6 +565,10 @@ fn plugin_new_scaffolds_a_buildable_crate_layout() {
     ] {
         assert!(root.join(file).is_file(), "missing {file}");
     }
+    // CLI-21: the next steps name the real artifact, not a placeholder.
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("fluid_props.wasm"), "{stdout}");
+    assert!(!stdout.contains("<name>"), "{stdout}");
     let cargo = std::fs::read_to_string(root.join("Cargo.toml")).unwrap();
     assert!(cargo.contains("name = \"fluid-props\""), "{cargo}");
     assert!(cargo.contains("graphcal-plugin"), "{cargo}");

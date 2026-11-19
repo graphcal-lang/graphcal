@@ -191,12 +191,6 @@ impl StaticDefinitions {
         self.base_dimensions.iter()
     }
 
-    /// Look up one of this module's dimensions.
-    #[must_use]
-    pub fn dimension(&self, identity: &ResolvedDimName) -> Option<&Dimension> {
-        self.dimensions.get(identity)
-    }
-
     /// Look up one of this module's units.
     #[must_use]
     pub fn unit(&self, identity: &ResolvedUnitName) -> Option<&UnitInfo> {
@@ -224,15 +218,17 @@ impl ModuleDefinitions {
     /// # Errors
     ///
     /// Returns [`ForeignDefinitionError`] when a nominal type is owned by
-    /// another module.
+    /// another module. A type owned by one of the module's own include
+    /// instances is the module's: a selective include projects it as the
+    /// instance's specialization.
     pub fn try_new(
         statics: StaticDefinitions,
         nominal_types: NominalTypeRegistry,
     ) -> Result<Self, ForeignDefinitionError> {
-        if let Some(foreign) = nominal_types
-            .values()
-            .find(|definition| definition.identity().owner() != statics.owner())
-        {
+        if let Some(foreign) = nominal_types.values().find(|definition| {
+            let owner = definition.identity().owner();
+            owner != statics.owner() && !owner.is_instance_child_of(statics.owner())
+        }) {
             return Err(ForeignDefinitionError::NominalType {
                 identity: foreign.identity().clone(),
                 module: statics.owner().clone(),
@@ -242,12 +238,6 @@ impl ModuleDefinitions {
             statics,
             nominal_types,
         })
-    }
-
-    /// The module owning every definition.
-    #[must_use]
-    pub const fn owner(&self) -> &DagId {
-        self.statics.owner()
     }
 
     /// Dimensions, units, indexes, and base-dimension metadata.
@@ -283,8 +273,11 @@ mod tests {
             statics.insert_dimension(foreign.clone(), Dimension::dimensionless()),
             Err(ForeignDefinitionError::Dimension { identity, .. }) if identity == foreign
         ));
-        assert_eq!(statics.dimension(&local), Some(&Dimension::dimensionless()));
-        assert_eq!(statics.dimension(&foreign), None);
+        assert_eq!(
+            statics.dimensions.get(&local),
+            Some(&Dimension::dimensionless())
+        );
+        assert_eq!(statics.dimensions.get(&foreign), None);
         assert!(matches!(
             statics.insert_port_generic_dimension(foreign.clone(), Dimension::dimensionless()),
             Err(ForeignDefinitionError::Dimension { identity, .. }) if identity == foreign

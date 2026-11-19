@@ -17,3 +17,7 @@
 *.png binary
 *.bin binary
 *.wasm binary
+
+# Fuzz corpus entries are byte-exact inputs, some of which exercise CRLF and
+# lone-CR line endings, so they must never be line-ending converted.
+fuzz/corpus/** -text

@@ -1,0 +1,10 @@
+// A local named like a unit is ambiguous after a quantity literal:
+// `2.0 m / s` reads `s` as the unit, not as the bound duration (N037).
+type Pair {
+    Pair(a: Length, b: Time),
+}
+
+node p: Pair = Pair(a: 1.0 m, b: 10.0 s);
+node v: Velocity = match @p {
+    Pair(a: _, b: s) => 2.0 m / s,
+};

@@ -29,8 +29,10 @@
 //!
 //! The interpreter is [`wasmi`], matching Typst's plugin architecture: it
 //! runs everywhere the toolchain does, including future wasm32 hosts
-//! (browser playground, #43), and its arithmetic is IEEE-754 deterministic
-//! so plugin results are bit-identical across platforms.
+//! (browser playground, #43). The workspace builds it with the Wasm 3.0
+//! deterministic profile (wasmi's `deterministic` feature), which
+//! canonicalizes NaN results so plugin results are bit-identical across
+//! platforms.
 
 mod cache;
 pub mod convert;

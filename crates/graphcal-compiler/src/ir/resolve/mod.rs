@@ -41,7 +41,6 @@ use crate::semantic_error::SemanticError;
 use crate::syntax::ast::{DeclExposure, ImportItemNamespace, IntroducedKind};
 use crate::syntax::decl_name::DeclName;
 use crate::syntax::names::NameAtom;
-use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 
 // Re-export declaration-collection data types.
@@ -305,7 +304,7 @@ fn required_bindability_interface(decl: &DeclKind) -> Option<InterfaceDecl> {
             clippy::uninhabited_references,
             reason = "Sugar(Infallible) proves this arm unreachable"
         )]
-        DeclKind::Sugar(s) => never(*s),
+        DeclKind::Sugar(s) => match *s {},
     }
 }
 
@@ -465,7 +464,7 @@ fn entry<E>(
             clippy::uninhabited_references,
             reason = "Sugar(Infallible) proves this arm unreachable"
         )]
-        DeclKind::Sugar(s) => never(*s),
+        DeclKind::Sugar(s) => match *s {},
         DeclKind::Assert(a) => declare(&a.name).map(|(identity, _)| {
             Decl::Assert(AssertEntry {
                 doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
@@ -525,6 +524,7 @@ fn entry<E>(
             Decl::Const(ConstEntry {
                 doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
+                origin: crate::ir::entry::ValueOrigin::Source,
                 type_ann: InScope::new(c.type_ann.clone(), dag_id.clone()),
                 expr: InScope::new(c.value.clone(), dag_id.clone()),
                 span: decl.span,
@@ -535,6 +535,7 @@ fn entry<E>(
             Decl::Node(NodeEntry {
                 doc: decl.doc.as_ref().map(|doc| doc.text().to_string()),
                 identity,
+                origin: crate::ir::entry::ValueOrigin::Source,
                 type_ann: InScope::new(n.type_ann.clone(), dag_id.clone()),
                 definition: InScope::new(n.value.clone(), dag_id.clone()),
                 span: decl.span,
@@ -741,19 +742,7 @@ fn validate_private_in_public(
                 }
             }
             DeclKind::Unit(u) => collect_dim_refs(&u.dim_type, &mut refs),
-            DeclKind::Type(t) => {
-                // Each constructor payload field type is part of the
-                // type's signature for A9 dependency tracking.
-                if let TypeDeclBody::Constructors(members) = &t.body {
-                    for member in members {
-                        if let Some(fields) = &member.payload {
-                            for field in fields {
-                                collect_type_refs(&field.type_ann, &mut refs);
-                            }
-                        }
-                    }
-                }
-            }
+            DeclKind::Type(t) => collect_type_signature_refs(t, &mut refs),
             DeclKind::Index(index) => {
                 if let IndexDeclKind::RequiredCoordinate { dimension } = &index.kind {
                     collect_dim_refs(dimension, &mut refs);
@@ -775,7 +764,7 @@ fn validate_private_in_public(
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(s) => never(*s),
+            DeclKind::Sugar(s) => match *s {},
         }
 
         emit(
@@ -786,6 +775,37 @@ fn validate_private_in_public(
         )?;
     }
     Ok(())
+}
+
+/// Collect the references of a `type` declaration's signature: each
+/// constructor payload field type is part of it for A9 dependency tracking.
+///
+/// A payload name that spells one of the type's own generic parameters names
+/// that parameter, not a module-level declaration. A parameter that shadows a
+/// declaration is rejected on its own (N027), so blaming the declaration's
+/// visibility would give advice that cannot work.
+fn collect_type_signature_refs(
+    type_decl: &crate::desugar::desugared_ast::TypeDecl,
+    refs: &mut Vec<(crate::syntax::names::NamePath, Span)>,
+) {
+    let mut payload_refs = Vec::new();
+    if let TypeDeclBody::Constructors(members) = &type_decl.body {
+        for field in members
+            .iter()
+            .flat_map(|member| member.payload.iter().flatten())
+        {
+            collect_type_refs(&field.type_ann, &mut payload_refs);
+        }
+    }
+    let generic_params: HashSet<&NameAtom> = type_decl
+        .generic_params
+        .iter()
+        .map(|parameter| parameter.name.value.atom())
+        .collect();
+    refs.extend(payload_refs.into_iter().filter(|(path, _)| {
+        path.as_bare()
+            .is_none_or(|name| !generic_params.contains(name))
+    }));
 }
 
 /// Recursively collect type-system references from a [`TypeExpr`].
@@ -816,7 +836,7 @@ fn collect_type_refs(type_expr: &TypeExpr, refs: &mut Vec<(crate::syntax::names:
         | TypeExprKind::KeyApplication { generic_args } => {
             // `Complex` and `Key` are built in; only their generic argument
             // contributes type-level dependencies.
-            for arg in generic_args {
+            for arg in generic_args.iter().flatten() {
                 match arg {
                     crate::desugar::desugared_ast::GenericArg::Type(type_expr) => {
                         collect_type_refs(type_expr, refs);

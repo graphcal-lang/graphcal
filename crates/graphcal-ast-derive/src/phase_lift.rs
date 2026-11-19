@@ -382,17 +382,19 @@ fn mentions_phase(tokens: TokenStream, phase: &Ident) -> bool {
     })
 }
 
-/// Standard containers that are rebuilt element-wise.
+/// Containers that are rebuilt element-wise: the standard ones and the
+/// compiler's `NonEmpty`.
 #[derive(Clone, Copy)]
 enum Container {
     Box,
     Vec,
     Option,
+    NonEmpty,
 }
 
 impl Container {
     /// Accepted spellings: the prelude name or a `std` / `alloc` / `core`
-    /// path to the item.
+    /// path to the item; `NonEmpty` by its imported name.
     fn recognize(path: &syn::Path) -> Option<Self> {
         let segments: Vec<String> = path.segments.iter().map(|s| s.ident.to_string()).collect();
         let segments: Vec<&str> = segments.iter().map(String::as_str).collect();
@@ -400,6 +402,7 @@ impl Container {
             ["Box"] | ["std" | "alloc", "boxed", "Box"] => Some(Self::Box),
             ["Vec"] | ["std" | "alloc", "vec", "Vec"] => Some(Self::Vec),
             ["Option"] | ["std" | "core", "option", "Option"] => Some(Self::Option),
+            ["NonEmpty"] => Some(Self::NonEmpty),
             _ => None,
         }
     }
@@ -446,7 +449,7 @@ fn lift_value(ty: &Type, value: &TokenStream) -> TokenStream {
             let lift = lift_fn(element);
             quote!(#value.into_iter().map(#lift).collect::<::std::vec::Vec<_>>())
         }
-        Some((Container::Option, element)) => {
+        Some((Container::Option | Container::NonEmpty, element)) => {
             let lift = lift_fn(element);
             quote!(#value.map(#lift))
         }
@@ -577,6 +580,19 @@ mod tests {
         );
         assert!(expanded.contains("b . into_iter ()"));
         assert!(expanded.contains("c . map (:: core :: convert :: From :: from)"));
+    }
+
+    #[test]
+    fn nested_non_empty_is_rebuilt_element_wise() {
+        let input: DeriveInput = parse_quote! {
+            #[phase_lift(from = A, to = B)]
+            struct S<P> {
+                a: Option<NonEmpty<X<P>>>,
+            }
+        };
+        assert!(expand_str(&input).contains(
+            "a . map (| __element | __element . map (:: core :: convert :: From :: from))"
+        ));
     }
 
     #[test]

@@ -33,6 +33,7 @@ pub type PlotDecl = crate::syntax::ast::PlotDecl<Desugared>;
 pub type FigureDecl = crate::syntax::ast::FigureDecl<Desugared>;
 pub type LayerDecl = crate::syntax::ast::LayerDecl<Desugared>;
 pub type ParamBinding = crate::syntax::ast::ParamBinding<Desugared>;
+pub type BindingValue = crate::syntax::ast::BindingValue<Desugared>;
 pub type IncludeDecl = crate::syntax::ast::IncludeDecl<Desugared>;
 pub type PluginImportDecl = crate::syntax::ast::PluginImportDecl<Desugared>;
 pub(crate) type ExternFnDecl = crate::syntax::ast::ExternFnDecl<Desugared>;

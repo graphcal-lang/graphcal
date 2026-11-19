@@ -29,10 +29,8 @@ fn compile_to_tir(source: &str) -> Result<crate::tir::typed::UncheckedTir, Seman
     let file = parse_and_desugar(source);
     let src = crate::source_registry::SourceRegistry::new()
         .register("test.gcl", std::sync::Arc::new(source.to_string()));
-    let ir = crate::ir::lower::lower(&file, "test.gcl", src)?;
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(ir.dag_id().clone(), &file.declarations);
-    let resolver = modules.build().unwrap();
+    let crate::ir::lower::LoweredFile { hir: ir, resolver } =
+        crate::ir::lower::lower(&file, "test.gcl", src)?;
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();

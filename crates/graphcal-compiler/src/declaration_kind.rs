@@ -6,7 +6,6 @@
 
 use crate::desugar::desugared_ast::DeclKind;
 use crate::syntax::names::NameAtom;
-use crate::syntax::phase::never;
 
 /// Semantic category of a source declaration.
 ///
@@ -54,7 +53,7 @@ impl DeclarationKind {
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(s) => never(*s),
+            DeclKind::Sugar(s) => match *s {},
         }
     }
 }

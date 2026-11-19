@@ -65,7 +65,7 @@ macro_rules! expression_children {
             | ExprKind::StringLiteral(_) | ExprKind::OffsetDateTimeLiteral(_)
             | ExprKind::CivilDateTimeLiteral(_) | ExprKind::EpochLiteral(_)
             | ExprKind::ZonedDateTimeLiteral(_)
-            | ExprKind::IanaTimeZoneLiteral(_) | ExprKind::TypeSystemRef(_)
+            | ExprKind::IanaTimeZoneLiteral(_)
             | ExprKind::GraphRef(_) | ExprKind::ConstRef(_) | ExprKind::LocalRef(_)
             | ExprKind::QuantityLiteral { .. } | ExprKind::VariantLiteral(_) => {},
             ExprKind::TodoHole(hole) => hole.interface.value.$iter().for_each(&mut *$visitor),

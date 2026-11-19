@@ -28,7 +28,6 @@ use graphcal_compiler::syntax::span::Span;
 
 use super::imports;
 use super::module_resolve_errors::module_resolve_compile_error;
-use crate::compile_error::PipelineError;
 
 use super::include_static_bindings::IncludeStaticBindings;
 use super::model::{
@@ -65,7 +64,7 @@ struct DirectDagCallValidator<'a> {
 }
 
 impl ExprVisitor<Desugared> for DirectDagCallValidator<'_> {
-    type Error = PipelineError;
+    type Error = SemanticError;
 
     fn visit_inline_dag_ref(
         &mut self,
@@ -88,7 +87,15 @@ impl ExprVisitor<Desugared> for DirectDagCallValidator<'_> {
             )?;
         }
         args.iter()
-            .try_for_each(|binding| self.visit_expr(&binding.value))
+            .filter_map(|binding| match &binding.value {
+                graphcal_compiler::desugar::desugared_ast::BindingValue::Value(value) => {
+                    Some(value)
+                }
+                graphcal_compiler::desugar::desugared_ast::BindingValue::Type(_)
+                | graphcal_compiler::desugar::desugared_ast::BindingValue::Dimension(_)
+                | graphcal_compiler::desugar::desugared_ast::BindingValue::Index(_) => None,
+            })
+            .try_for_each(|value| self.visit_expr(value))
     }
 }
 
@@ -102,7 +109,7 @@ fn validate_direct_dag_calls(
     owner: &graphcal_compiler::dag_id::DagId,
     resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: SourceId,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     let mut validator = DirectDagCallValidator {
         project,
         owner,
@@ -151,7 +158,7 @@ fn validate_direct_dag_calls(
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            DeclKind::Sugar(sugar) => graphcal_compiler::syntax::phase::never(*sugar),
+            DeclKind::Sugar(sugar) => match *sugar {},
         }
     }
     Ok(())
@@ -274,41 +281,81 @@ fn include_debug_name_map(
         .collect()
 }
 
-/// Lower one physical file and every inline DAG it defines into authoritative HIR.
+/// One module body lowered with its own imports and includes elaborated,
+/// with the import facts a file root's HIR retains.
+struct ElaboratedBody {
+    unfrozen: graphcal_compiler::ir::model::UnfrozenIR,
+    imported_source_order: Vec<(ScopedName, DeclCategory)>,
+    output_surface: HashSet<ScopedName>,
+    include_debug_names: graphcal_compiler::display::include_scope_names::IncludeScopeNames,
+    module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
+}
+
+/// Lower one file-root or inline-DAG module body and elaborate its own
+/// includes, always in the module's own source.
 ///
-/// This phase performs elaboration and canonical reference resolution only.
-/// It does not resolve checked declaration types, evaluate constants, verify
-/// host signatures, or construct TIR.
-pub(super) fn lower_file_to_hir(
+/// Every consumer — a file root, an inline DAG the file defines, and a
+/// template an include instantiates before its own file is lowered —
+/// elaborates a module through this one function.
+fn elaborate_module_body(
     semantic: &mut ProjectSemanticContext<'_, '_>,
-    loaded_file: &crate::loader::loaded_file::LoadedFile,
-    ctx: ImportContext<'_>,
+    module: crate::loader::loaded_file::LoadedModule<'_>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirFile, Outcome<PipelineError>> {
+) -> Result<ElaboratedBody, Outcome<SemanticError>> {
+    use crate::loader::loaded_file::LoadedModule;
+
     cancellation.checkpoint()?;
-    let file_dag_id = loaded_file.dag_id();
-    let file_src = loaded_file.source_id();
-    let file_ast = loaded_file.ast();
     let project = semantic.project;
-    let importer = loaded_file.module();
-    validate_direct_dag_calls(
-        importer,
-        project,
-        file_dag_id,
-        semantic.modules.resolver(),
-        file_src,
-    )?;
+    let modules = semantic.modules;
+    let module_resolver = modules.resolver();
+    let dag_id = module.dag_id();
+    let mut ctx = ImportContext::empty();
+    let (src, ast) = match module {
+        LoadedModule::FileRoot(file) => {
+            imports::process_file_body_declarations(
+                project,
+                file,
+                modules,
+                &mut ctx,
+                cancellation,
+            )?;
+            (file.source_id(), std::borrow::Cow::Borrowed(file.ast()))
+        }
+        LoadedModule::InlineDag { file, dag } => {
+            let src = file.source_id();
+            let body = dag.body(file);
+            let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
+                body,
+                dag.parent_dag_id(),
+                file.interface(),
+                dag.resolved_imports(),
+                modules,
+                src,
+            )?;
+            process_dag_body_import_declarations(project, dag, body, src, modules, &mut ctx)?;
+            process_dag_body_include_declarations(project, dag, body, src, modules, &mut ctx)?;
+            extend_imported_value_names(&mut ctx.imported_names, self_imports.names);
+            extend_imported_bindings(&mut ctx.imported_bindings, self_imports.bindings, src)?;
+            (
+                src,
+                std::borrow::Cow::Owned(graphcal_compiler::desugar::desugared_ast::File {
+                    declarations: self_imports.stripped_body,
+                }),
+            )
+        }
+    };
+    validate_direct_dag_calls(module, project, dag_id, module_resolver, src)?;
     let include_debug_names = include_debug_name_map(&ctx);
     let mut unfrozen =
         graphcal_compiler::ir::lower::lower_module_with_imported_bindings_and_cancellation(
             graphcal_compiler::ir::lower::ModuleBody {
-                ast: file_ast,
-                interface: loaded_file.interface(),
+                ast: &ast,
+                interface: module.interface(),
             },
-            file_src,
+            src,
             &ctx.imported_names,
             super::model::hir_imported_bindings(ctx.imported_bindings),
-            file_dag_id,
+            dag_id,
             semantic.definitions,
             cancellation,
         )
@@ -339,13 +386,41 @@ pub(super) fn lower_file_to_hir(
 
     elaborate_include_instances(
         semantic,
-        file_dag_id,
+        dag_id,
         &ctx.include_instances,
-        file_src,
-        importer,
+        src,
+        module,
         &mut unfrozen,
         cancellation,
     )?;
+    Ok(ElaboratedBody {
+        unfrozen,
+        imported_source_order: ctx.imported_source_order,
+        output_surface,
+        include_debug_names,
+        module_map: ctx.module_map,
+    })
+}
+
+/// Lower one physical file and every inline DAG it defines into authoritative HIR.
+///
+/// This phase performs elaboration and canonical reference resolution only.
+/// It does not resolve checked declaration types, evaluate constants, verify
+/// host signatures, or construct TIR.
+pub(super) fn lower_file_to_hir(
+    semantic: &mut ProjectSemanticContext<'_, '_>,
+    loaded_file: &crate::loader::loaded_file::LoadedFile,
+    cancellation: &graphcal_compiler::cancellation::CancellationToken,
+) -> Result<HirFile, Outcome<SemanticError>> {
+    let file_dag_id = loaded_file.dag_id();
+    let file_src = loaded_file.source_id();
+    let ElaboratedBody {
+        unfrozen,
+        imported_source_order,
+        output_surface,
+        include_debug_names,
+        module_map,
+    } = elaborate_module_body(semantic, loaded_file.module(), cancellation)?;
 
     cancellation.checkpoint()?;
     let root =
@@ -356,10 +431,10 @@ pub(super) fn lower_file_to_hir(
         source: file_src,
         root,
         inline_dags,
-        imported_source_order: ctx.imported_source_order,
+        imported_source_order,
         output_surface,
         include_debug_names,
-        module_map: ctx.module_map,
+        module_map,
     })
 }
 
@@ -367,118 +442,30 @@ fn lower_inline_dag_modules(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::loaded_file::LoadedFile,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Vec<graphcal_compiler::ir::model::HirDag>, Outcome<PipelineError>> {
+) -> Result<Vec<graphcal_compiler::ir::model::HirDag>, Outcome<SemanticError>> {
     let file_src = loaded_file.source_id();
     loaded_file
         .inline_dags()
         .iter()
         .map(|loaded_dag| {
             cancellation.checkpoint()?;
-            let dag_body = loaded_dag.body(loaded_file);
-            compile_loaded_dag_module_ir(
-                semantic,
-                loaded_file,
-                loaded_dag,
-                dag_body,
-                file_src,
-                cancellation,
-            )
+            let dag_id = loaded_dag.dag_id();
+            if let Some(template) = semantic.module_templates.get(dag_id) {
+                return freeze_inline_module_template(
+                    &template,
+                    dag_id,
+                    semantic.definitions,
+                    file_src,
+                    cancellation,
+                );
+            }
+            let unfrozen =
+                elaborate_module_body(semantic, loaded_dag.module(loaded_file), cancellation)?
+                    .unfrozen;
+            cancellation.checkpoint()?;
+            store_and_freeze_module_template(semantic, dag_id, unfrozen, file_src, cancellation)
         })
         .collect()
-}
-
-fn compile_loaded_dag_module_ir(
-    semantic: &mut ProjectSemanticContext<'_, '_>,
-    parent_loaded: &crate::loader::loaded_file::LoadedFile,
-    loaded_dag: &crate::loader::loaded_file::LoadedDag,
-    dag_body: &[Declaration],
-    file_src: SourceId,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::model::HirDag, Outcome<PipelineError>> {
-    cancellation.checkpoint()?;
-    if let Some(template) = semantic.module_templates.get(loaded_dag.dag_id()) {
-        return freeze_inline_module_template(
-            &template,
-            loaded_dag.dag_id(),
-            semantic.definitions,
-            file_src,
-            cancellation,
-        );
-    }
-    let project = semantic.project;
-    let modules = semantic.modules;
-    let module_resolver = modules.resolver();
-    let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
-        dag_body,
-        loaded_dag.parent_dag_id(),
-        parent_loaded.interface(),
-        loaded_dag.resolved_imports(),
-        modules,
-        file_src,
-    )
-    .map_err(PipelineError::from)?;
-
-    let mut ctx = ImportContext {
-        imported_names: ImportedValueNames::default(),
-        imported_bindings: HashMap::new(),
-        imported_source_order: Vec::new(),
-        module_map: HashMap::new(),
-        include_instances: Vec::new(),
-    };
-
-    process_dag_body_import_declarations(
-        project, loaded_dag, dag_body, file_src, modules, &mut ctx,
-    )?;
-    process_dag_body_include_declarations(
-        project, loaded_dag, dag_body, file_src, modules, &mut ctx,
-    )?;
-
-    extend_imported_value_names(&mut ctx.imported_names, self_imports.names);
-    extend_imported_bindings(&mut ctx.imported_bindings, self_imports.bindings, file_src)?;
-
-    let dag_ast = graphcal_compiler::desugar::desugared_ast::File {
-        declarations: self_imports.stripped_body,
-    };
-    validate_direct_dag_calls(
-        loaded_dag.module(parent_loaded),
-        project,
-        loaded_dag.dag_id(),
-        module_resolver,
-        file_src,
-    )?;
-    let mut unfrozen =
-        graphcal_compiler::ir::lower::lower_dag_module_with_imported_bindings_and_cancellation(
-            graphcal_compiler::ir::lower::ModuleBody {
-                ast: &dag_ast,
-                interface: loaded_dag.interface(),
-            },
-            &ctx.imported_names,
-            super::model::hir_imported_bindings(ctx.imported_bindings),
-            file_src,
-            loaded_dag.dag_id(),
-            semantic.definitions,
-            cancellation,
-        )
-        .map_err(Outcome::map_into)?;
-
-    elaborate_include_instances(
-        semantic,
-        loaded_dag.dag_id(),
-        &ctx.include_instances,
-        file_src,
-        loaded_dag.module(parent_loaded),
-        &mut unfrozen,
-        cancellation,
-    )?;
-
-    cancellation.checkpoint()?;
-    store_and_freeze_module_template(
-        semantic,
-        loaded_dag.dag_id(),
-        unfrozen,
-        file_src,
-        cancellation,
-    )
 }
 
 fn freeze_inline_module_template(
@@ -487,7 +474,7 @@ fn freeze_inline_module_template(
     definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
     src: SourceId,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::model::HirDag, Outcome<PipelineError>> {
+) -> Result<graphcal_compiler::ir::model::HirDag, Outcome<SemanticError>> {
     template
         .unfrozen
         .clone()
@@ -501,7 +488,7 @@ fn store_and_freeze_module_template(
     unfrozen: graphcal_compiler::ir::model::UnfrozenIR,
     src: SourceId,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::ir::model::HirDag, Outcome<PipelineError>> {
+) -> Result<graphcal_compiler::ir::model::HirDag, Outcome<SemanticError>> {
     let template_unfrozen = unfrozen.clone();
     let frozen = unfrozen
         .freeze_with_cancellation(dag_id, semantic.definitions, src, cancellation)
@@ -526,17 +513,17 @@ fn extend_imported_bindings(
     target: &mut super::model::ImportedBindings,
     source: super::model::ImportedBindings,
     src: SourceId,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     for (name, binding) in source {
         if let Some(first) = target.get(&name) {
-            return Err(PipelineError::Semantic(SemanticError::located(
+            return Err(SemanticError::located(
                 src,
                 binding.span,
                 NameError::DuplicateName {
                     name: DuplicateDeclaration::Scoped(name),
                     first: first.span,
                 },
-            )));
+            ));
         }
         target.insert(name, binding);
     }
@@ -550,7 +537,7 @@ fn process_dag_body_import_declarations<'a>(
     file_src: SourceId,
     modules: &'a crate::loader::loaded_module_resolver::LoadedModuleResolver,
     ctx: &mut ImportContext<'a>,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     let module_resolver = modules.resolver();
     for decl in dag_body {
         let DeclKind::Import(import_decl) = &decl.kind else {
@@ -585,7 +572,7 @@ fn process_dag_body_include_declarations<'a>(
     file_src: SourceId,
     modules: &'a crate::loader::loaded_module_resolver::LoadedModuleResolver,
     ctx: &mut ImportContext<'a>,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     let module_resolver = modules.resolver();
     for decl in dag_body {
         let DeclKind::Include(include_decl) = &decl.kind else {
@@ -594,32 +581,8 @@ fn process_dag_body_include_declarations<'a>(
         let Some(target) = loaded_dag.resolved_imports().get(&include_decl.path.key()) else {
             continue;
         };
-        let crate::loader::loaded_file::LoadedModule::InlineDag {
-            file: target_file,
-            dag: target_dag,
-        } = project.target_module(target)
-        else {
-            imports::process_file_include(
-                project,
-                modules,
-                target,
-                include_decl,
-                decl,
-                &IncludingModule {
-                    interface: loaded_dag.interface(),
-                    source: file_src,
-                    scope: StaticScope::new(loaded_dag.dag_id(), module_resolver),
-                },
-                ctx,
-            )?;
-            continue;
-        };
-        imports::process_inline_dag_include(
-            &imports::InlineDagIncludeTarget {
-                module: target_dag.module(target_file),
-                resolved: modules.target(target),
-                dag_name: &target_dag.declaration(target_file).name.value,
-            },
+        imports::process_include(
+            project.target_module(target),
             include_decl,
             decl,
             &IncludingModule {
@@ -649,23 +612,22 @@ pub(super) fn install_shared_module_artifacts(
     tir: &mut graphcal_compiler::tir::typed::TirDraft,
     module_artifacts: &ModuleArtifactStore,
     src: SourceId,
-) -> Result<(), PipelineError> {
-    for dep_eval in module_artifacts.values() {
-        // Extern signatures travel with the dep's dag bodies: a qualified
-        // inline call into a dep dag that uses extern functions resolves its
-        // signature from the importer's merged TIR at eval time. Repeated
-        // identical signatures are idempotent; a divergent copy is an
-        // internal project-assembly error even if upstream checks missed it.
-        for (key, function) in &dep_eval.extern_functions {
-            tir.insert_extern_function(key.clone(), function.clone())
-                .map_err(|error| {
-                    PipelineError::Semantic(SemanticError::internal_error(
-                        error.to_string(),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    ))
-                })?;
-        }
+) -> Result<(), SemanticError> {
+    // Extern signatures travel with the deps' dag bodies: a qualified inline
+    // call into a dep dag that uses extern functions resolves its signature
+    // from the importer's merged TIR at eval time. Files may declare one
+    // plugin function independently; structurally equivalent copies merge,
+    // and a real conflict is W001 at the later declaration, in its own file.
+    //
+    // Deterministic conflict reporting: earliest source, then earliest
+    // declaration, first.
+    let mut functions: Vec<_> = module_artifacts
+        .values()
+        .flat_map(|artifact| artifact.extern_functions.values())
+        .collect();
+    functions.sort_by_key(|function| (function.source, function.decl_span.offset()));
+    for function in functions {
+        tir.insert_extern_function(function.clone())?;
     }
     // Every loaded module's store is installed at once, so each store's
     // callees (its own imports' bodies) are installed with it.
@@ -675,11 +637,7 @@ pub(super) fn install_shared_module_artifacts(
             .map(|artifact| artifact.dag_store.as_ref()),
     )
     .map_err(|error| {
-        PipelineError::Semantic(SemanticError::internal_error(
-            error.to_string(),
-            src,
-            DiagnosticAnchor::WholeFile,
-        ))
+        SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
     })
 }
 
@@ -689,7 +647,7 @@ fn resolve_projection_expected_fail(
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: SourceId,
-) -> Result<Option<graphcal_compiler::assertion_expectation::ExpectedFail>, PipelineError> {
+) -> Result<Option<graphcal_compiler::assertion_expectation::ExpectedFail>, SemanticError> {
     use graphcal_compiler::assertion_expectation::{ExpectedFail, ExpectedFailKeyPart};
     use graphcal_compiler::semantic::checked_type::IndexTypeRef;
     use graphcal_compiler::syntax::attribute::AttributeName;
@@ -761,22 +719,20 @@ fn instance_substitution(
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
 ) -> StaticSubstitution {
     let mut substitution = request.static_bindings.substitution();
-    if let Some(aliases) = &request.selective_names {
-        for alias in aliases {
-            let source_path =
-                graphcal_compiler::syntax::names::NamePath::local(alias.original.atom().clone());
-            let target_path =
-                graphcal_compiler::syntax::names::NamePath::local(alias.local.atom().clone());
-            if let (Ok(source), Ok(target)) = (
-                module_resolver
-                    .resolve_struct_type_path(request.template.dag_id(), &source_path)
-                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
-                module_resolver
-                    .resolve_struct_type_path(importer, &target_path)
-                    .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
-            ) {
-                substitution.types.insert(source, target);
-            }
+    for alias in &request.selected_types {
+        let source_path =
+            graphcal_compiler::syntax::names::NamePath::local(alias.original.atom().clone());
+        let target_path =
+            graphcal_compiler::syntax::names::NamePath::local(alias.local.atom().clone());
+        if let (Ok(source), Ok(target)) = (
+            module_resolver
+                .resolve_struct_type_path(request.template.dag_id(), &source_path)
+                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
+            module_resolver
+                .resolve_struct_type_path(importer, &target_path)
+                .map(graphcal_compiler::resolve::symbols::SymbolRef::into_resolved),
+        ) {
+            substitution.types.insert(source, target);
         }
     }
     substitution
@@ -818,6 +774,16 @@ fn semantic_output_projections(
         .collect()
 }
 
+/// The compiler-bug diagnostic of a projection whose template target
+/// (`projection`, described for the message) the template does not have.
+fn untargeted_projection(projection: &str, src: SourceId) -> SemanticError {
+    SemanticError::internal_error(
+        format!("{projection} has no semantic target"),
+        src,
+        DiagnosticAnchor::WholeFile,
+    )
+}
+
 fn semantic_assertion_projections(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::model::UnfrozenIR,
@@ -825,14 +791,21 @@ fn semantic_assertion_projections(
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: SourceId,
-) -> Result<Vec<InstanceAssertionProjection>, PipelineError> {
+) -> Result<Vec<InstanceAssertionProjection>, SemanticError> {
     match &request.selective_names {
         Some(_) => request
             .assertion_aliases
             .iter()
             .map(|(source, exposed)| {
                 Ok(InstanceAssertionProjection {
-                    target: template_reference(instance, source.clone()),
+                    target: template
+                        .assertion_projection_target(source)
+                        .ok_or_else(|| {
+                            untargeted_projection(
+                                &format!("selected template assertion `{source}`"),
+                                src,
+                            )
+                        })?,
                     exposure: ProjectionExposure::Selected(exposed.clone()),
                     expected_fail: resolve_projection_expected_fail(
                         request,
@@ -860,7 +833,7 @@ fn semantic_plot_projections(
     request: &IncludeInstanceRequest,
     template: &graphcal_compiler::ir::model::UnfrozenIR,
     src: SourceId,
-) -> Result<Vec<InstancePlotProjection>, PipelineError> {
+) -> Result<Vec<InstancePlotProjection>, SemanticError> {
     request
         .requested_plots
         .iter()
@@ -873,11 +846,7 @@ fn semantic_plot_projections(
                     visibility: requested.visibility,
                 })
                 .ok_or_else(|| {
-                    PipelineError::Semantic(SemanticError::internal_error(
-                        format!("requested template plot `{source}` has no semantic target"),
-                        src,
-                        DiagnosticAnchor::WholeFile,
-                    ))
+                    untargeted_projection(&format!("requested template plot `{source}`"), src)
                 })
         })
         .collect()
@@ -913,7 +882,7 @@ fn record_semantic_instance(
     importer: &graphcal_compiler::dag_id::DagId,
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     src: SourceId,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     let template_id = request.template.dag_id();
     let instance_id = graphcal_compiler::dag_id::InstanceId::new(
         importer.clone(),
@@ -960,22 +929,15 @@ fn record_semantic_instance(
 /// Elaborate every file-root, same-file inline, and cross-file qualified
 /// include through one concrete-instance path:
 ///
-/// 1. Resolve the include's source — file include reads the dep's full
-///    AST; inline DAG include reads the dag block's body and pre-processes
-///    `import <self>::{...}` against the dag's parent file (Concept 9: a
-///    DAG's `<self>` is its file of definition, regardless of where the
-///    include sits).
-/// 2. Assemble the body with canonical imported targets set up.
-/// 3. Validate every index binding against the body's effective typed
+/// 1. Take the template's elaborated body from the cache, or elaborate it in
+///    its own source with [`elaborate_module_body`] (an inline DAG's
+///    `import <self>::{...}` resolves against the DAG's parent file, Concept 9).
+/// 2. Validate every index binding against the body's effective typed
 ///    contract, with both sides resolved canonically.
-/// 4. Preserve canonical A8/V005 reconciliation facts and run
+/// 3. Preserve canonical A8/V005 reconciliation facts and run
 ///    `check_generics_leakage` (A9/V006).
-/// 5. Record a typed semantic instance edge without copying dependency bodies.
-/// 6. Materialize only selective projection aliases in the importer.
-#[expect(
-    clippy::too_many_lines,
-    reason = "single cohesive include pipeline: source resolution, validation, HIR merge"
-)]
+/// 4. Record a typed semantic instance edge without copying dependency bodies.
+/// 5. Materialize only selective projection aliases in the importer.
 fn elaborate_include_instances(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     importer_dag_id: &graphcal_compiler::dag_id::DagId,
@@ -984,171 +946,23 @@ fn elaborate_include_instances(
     importer: crate::loader::loaded_file::LoadedModule<'_>,
     unfrozen: &mut graphcal_compiler::ir::model::UnfrozenIR,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), Outcome<PipelineError>> {
-    let project = semantic.project;
-    let modules = semantic.modules;
-    let module_resolver = modules.resolver();
+) -> Result<(), Outcome<SemanticError>> {
+    let module_resolver = semantic.modules.resolver();
     for instance in include_instances {
         cancellation.checkpoint()?;
-        // ---- 1. Resolve and assemble source body -----------------------------
+        // ---- 1. Elaborated template body ------------------------------------
         let template_id = instance.template.dag_id();
-        let (template, dep_resolution_owner, body_decls_for_aliases) = match (
-            semantic.module_templates.get(template_id),
-            instance.template,
-        ) {
-            (Some(template), template_module) => (
-                template,
-                template_id.clone(),
-                template_module.declarations(),
-            ),
-            (None, crate::loader::loaded_file::LoadedModule::FileRoot(dep_loaded)) => {
-                let dep_dag_id = dep_loaded.dag_id();
-                let dep_src = dep_loaded.source_id();
-                let mut body_ctx = ImportContext {
-                    imported_names: ImportedValueNames::default(),
-                    imported_bindings: HashMap::new(),
-                    imported_source_order: Vec::new(),
-                    module_map: HashMap::new(),
-                    include_instances: Vec::new(),
-                };
-                imports::process_file_body_declarations(
-                    project,
-                    dep_loaded,
-                    modules,
-                    &mut body_ctx,
-                    cancellation,
-                )?;
-                let dep_body = dep_loaded.ast();
-                validate_direct_dag_calls(
-                    dep_loaded.module(),
-                    project,
-                    dep_dag_id,
-                    module_resolver,
-                    dep_src,
-                )?;
-                let mut dep_unfrozen = graphcal_compiler::ir::lower::lower_module_with_imported_bindings_and_cancellation(
-                                graphcal_compiler::ir::lower::ModuleBody {
-                                    ast: dep_body,
-                                    interface: dep_loaded.interface(),
-                                },
-                                dep_src,
-                                &body_ctx.imported_names,
-                                super::model::hir_imported_bindings(body_ctx.imported_bindings),
-                                dep_dag_id,
-                                semantic.definitions,
-                                cancellation,
-                            ).map_err(Outcome::map_into)?;
-                elaborate_include_instances(
-                    semantic,
-                    dep_dag_id,
-                    &body_ctx.include_instances,
-                    dep_src,
-                    dep_loaded.module(),
-                    &mut dep_unfrozen,
-                    cancellation,
-                )?;
-                let template = semantic.module_templates.insert(
-                    dep_dag_id.clone(),
-                    ElaboratedModuleTemplate {
-                        unfrozen: dep_unfrozen,
-                    },
-                );
-                (
-                    template,
-                    dep_dag_id.clone(),
-                    dep_loaded.ast().declarations.as_slice(),
-                )
-            }
-            (
-                None,
-                crate::loader::loaded_file::LoadedModule::InlineDag {
-                    file: parent_loaded,
-                    dag: loaded_inline,
-                },
-            ) => {
-                let dag_id = loaded_inline.dag_id();
-                let parent_dag_id = parent_loaded.dag_id();
-                let inline_body = loaded_inline.body(parent_loaded);
-                let self_imports = crate::inline_dag::preprocess_dag_body_self_imports(
-                    inline_body,
-                    parent_dag_id,
-                    parent_loaded.interface(),
-                    loaded_inline.resolved_imports(),
-                    modules,
-                    importer_src,
-                )
-                .map_err(PipelineError::from)?;
-
-                let mut body_ctx = ImportContext {
-                    imported_names: ImportedValueNames::default(),
-                    imported_bindings: HashMap::new(),
-                    imported_source_order: Vec::new(),
-                    module_map: HashMap::new(),
-                    include_instances: Vec::new(),
-                };
-                process_dag_body_import_declarations(
-                    project,
-                    loaded_inline,
-                    inline_body,
-                    importer_src,
-                    modules,
-                    &mut body_ctx,
-                )?;
-                process_dag_body_include_declarations(
-                    project,
-                    loaded_inline,
-                    inline_body,
-                    importer_src,
-                    modules,
-                    &mut body_ctx,
-                )?;
-                extend_imported_value_names(&mut body_ctx.imported_names, self_imports.names);
-                let mut imported_bindings = body_ctx.imported_bindings;
-                extend_imported_bindings(
-                    &mut imported_bindings,
-                    self_imports.bindings,
-                    importer_src,
-                )?;
-                let stripped_body = graphcal_compiler::desugar::desugared_ast::File {
-                    declarations: self_imports.stripped_body,
-                };
-                validate_direct_dag_calls(
-                    loaded_inline.module(parent_loaded),
-                    project,
-                    dag_id,
-                    module_resolver,
-                    importer_src,
-                )?;
-                let mut dag_unfrozen = graphcal_compiler::ir::lower::lower_dag_module_with_imported_bindings_and_cancellation(
-                                graphcal_compiler::ir::lower::ModuleBody {
-                                    ast: &stripped_body,
-                                    interface: loaded_inline.interface(),
-                                },
-                                &body_ctx.imported_names,
-                                super::model::hir_imported_bindings(imported_bindings),
-                                importer_src,
-                                dag_id,
-                                semantic.definitions,
-                                cancellation,
-                            ).map_err(Outcome::map_into)?;
-                elaborate_include_instances(
-                    semantic,
-                    dag_id,
-                    &body_ctx.include_instances,
-                    importer_src,
-                    loaded_inline.module(parent_loaded),
-                    &mut dag_unfrozen,
-                    cancellation,
-                )?;
-                let template = semantic.module_templates.insert(
-                    dag_id.clone(),
-                    ElaboratedModuleTemplate {
-                        unfrozen: dag_unfrozen,
-                    },
-                );
-                (template, dag_id.clone(), inline_body)
-            }
+        let template = if let Some(template) = semantic.module_templates.get(template_id) {
+            template
+        } else {
+            let unfrozen =
+                elaborate_module_body(semantic, instance.template, cancellation)?.unfrozen;
+            semantic
+                .module_templates
+                .insert(template_id.clone(), ElaboratedModuleTemplate { unfrozen })
         };
+        let dep_resolution_owner = template_id.clone();
+        let body_decls_for_aliases = instance.template.declarations();
         let dep_unfrozen = &template.unfrozen;
 
         // ---- 2. Validate typed index binding contracts -------------------
@@ -1163,18 +977,16 @@ fn elaborate_include_instances(
             &instance.static_bindings,
         )?;
 
-        // ---- 4. Validation checks -----------------------------------------
+        // ---- 3. Validation checks -----------------------------------------
         let static_substitution = instance.static_bindings.substitution();
-        let override_reconciliations = dep_unfrozen
-            .include_override_reconciliations(
-                &instance.bindings,
-                &static_substitution,
-                module_resolver,
-                &dep_resolution_owner,
-                importer_src,
-                instance.include_span,
-            )
-            .map_err(PipelineError::from)?;
+        let override_reconciliations = dep_unfrozen.include_override_reconciliations(
+            &instance.bindings,
+            &static_substitution,
+            module_resolver,
+            &dep_resolution_owner,
+            importer_src,
+            instance.include_span,
+        )?;
         check_generics_leakage(
             body_decls_for_aliases,
             StaticScope::new(&dep_resolution_owner, module_resolver),
@@ -1188,8 +1000,20 @@ fn elaborate_include_instances(
             instance.include_span,
         )?;
 
-        // ---- 5. Retain one typed semantic edge -------------------------------
         let selective_alias_declarations = selective_alias_declarations(instance, dep_unfrozen);
+        super::rebound_type_selection::check_rebound_type_selection(
+            &super::rebound_type_selection::IncludedTemplate {
+                owner: &dep_resolution_owner,
+                declarations: body_decls_for_aliases,
+                resolver: module_resolver,
+                values: dep_unfrozen,
+            },
+            instance,
+            importer_src,
+            instance.include_span,
+        )?;
+
+        // ---- 4. Retain one typed semantic edge -------------------------------
         record_semantic_instance(
             unfrozen,
             instance,
@@ -1200,7 +1024,7 @@ fn elaborate_include_instances(
             importer_src,
         )?;
 
-        // ---- 6. Add selective aliases -------------------------------------
+        // ---- 5. Add selective aliases -------------------------------------
         for projection in &instance.unit_projection_aliases {
             unfrozen.add_dynamic_unit_projection_alias(
                 &importer_dag_id.instance_child(instance.instance_scope.clone()),
@@ -1212,7 +1036,6 @@ fn elaborate_include_instances(
             add_selective_aliases_inner(
                 &selective_alias_declarations,
                 selective,
-                &instance.pub_reexport_items,
                 &instance.instance_scope,
                 &AliasResolutionOwners {
                     r#type: &dep_resolution_owner,
@@ -1239,7 +1062,7 @@ fn validate_index_binding_contracts(
     definitions: &mut graphcal_compiler::ir::static_definitions::StaticDefinitionEvaluator<'_>,
     sites: &IndexBindingSites<'_>,
     bindings: &IncludeStaticBindings,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     use graphcal_compiler::ir::static_substitution::InstanceIndexBindingTarget;
     use graphcal_compiler::semantic::index_def::IndexBindingContractError;
 
@@ -1261,7 +1084,7 @@ fn validate_index_binding_contracts(
         match contract.validate(&candidate) {
             Ok(()) => {}
             Err(IndexBindingContractError::KindMismatch { expected, found }) => {
-                return Err(PipelineError::Semantic(SemanticError::located(
+                return Err(SemanticError::located(
                     sites.importer_src,
                     site.span,
                     ModuleError::IndexKindMismatch {
@@ -1270,10 +1093,10 @@ fn validate_index_binding_contracts(
                         bound_index: site.authored.clone(),
                         bound_kind: found,
                     },
-                )));
+                ));
             }
             Err(IndexBindingContractError::DimensionMismatch { expected, found }) => {
-                return Err(PipelineError::Semantic(SemanticError::located(
+                return Err(SemanticError::located(
                     sites.importer_src,
                     site.span,
                     IndexError::IndexBindingDimensionMismatch {
@@ -1282,7 +1105,7 @@ fn validate_index_binding_contracts(
                         bound_index: site.authored.clone(),
                         found_dim: definitions.dimension_spelling(sites.importer, &found),
                     },
-                )));
+                ));
             }
         }
     }
@@ -1316,7 +1139,7 @@ fn effective_index_binding_contract(
     identity: &ResolvedIndexName,
     dimensions: &std::collections::BTreeMap<ResolvedDimName, ResolvedDimName>,
     binding_span: Span,
-) -> Result<graphcal_compiler::semantic::index_def::IndexBindingContract, PipelineError> {
+) -> Result<graphcal_compiler::semantic::index_def::IndexBindingContract, SemanticError> {
     use graphcal_compiler::desugar::desugared_ast::{DeclKind, IndexDeclKind};
     use graphcal_compiler::ir::static_definitions::DimExprFailure;
     use graphcal_compiler::semantic::index_def::{
@@ -1356,7 +1179,7 @@ fn effective_index_binding_contract(
                     }
                 })
                 .ok_or_else(|| {
-                    PipelineError::Semantic(SemanticError::internal_error(
+                    SemanticError::internal_error(
                         format!(
                             "required coordinate index `{dep_index}` has no source declaration"
                         ),
@@ -1364,7 +1187,7 @@ fn effective_index_binding_contract(
                         graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(
                             binding_span,
                         ),
-                    ))
+                    )
                 })?;
             // The expression is the dependency's source: a reference to a
             // bound dimension port evaluates to the importer's binding target,
@@ -1372,31 +1195,34 @@ fn effective_index_binding_contract(
             let overrides = bound_dimension_ports(definitions, dimensions)?;
             let dimension = definitions
                 .evaluate_dim_expr_with_overrides(sites.template, dimension_expr, &overrides)
-                .map_err(|failure| {
-                    PipelineError::Semantic(match failure {
-                        DimExprFailure::Unknown(name) => SemanticError::located(
-                            sites.importer_src,
-                            binding_span,
-                            DimensionError::UnknownDimension {
-                                name: name.to_name_path(),
-                            },
-                        ),
-                        DimExprFailure::Overflow => SemanticError::located(
-                            sites.importer_src,
-                            binding_span,
-                            DimensionError::DimensionOverflow,
-                        ),
-                        DimExprFailure::Definition(error) => *error,
-                    })
+                .map_err(|failure| match failure {
+                    DimExprFailure::Unknown(name) => SemanticError::located(
+                        sites.importer_src,
+                        binding_span,
+                        DimensionError::UnknownDimension {
+                            name: name.value.to_name_path(),
+                        },
+                    ),
+                    DimExprFailure::Inaccessible { error, .. } => SemanticError::located(
+                        sites.importer_src,
+                        binding_span,
+                        ModuleError::resolution(error),
+                    ),
+                    DimExprFailure::Overflow => SemanticError::located(
+                        sites.importer_src,
+                        binding_span,
+                        DimensionError::DimensionOverflow,
+                    ),
+                    DimExprFailure::Definition(error) => *error,
                 })?;
             Ok(IndexBindingContract::Coordinate { dimension })
         }
         IndexKind::Concrete(ConcreteIndexKind::Finite { .. }) => {
-            Err(PipelineError::Semantic(SemanticError::internal_error(
+            Err(SemanticError::internal_error(
                 format!("declared dependency index `{dep_index}` became structural"),
                 sites.importer_src,
                 graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::Source(binding_span),
-            )))
+            ))
         }
     }
 }
@@ -1407,7 +1233,7 @@ struct AliasResolutionOwners<'a> {
 }
 
 /// Add `local_name = @scope::orig_name` aliases (const or graph) for each
-/// selected item.
+/// selected value.
 ///
 /// The alias keeps the template declaration's annotation, resolved in the
 /// template's scope: names it references (such as a dimension defined over a
@@ -1420,7 +1246,6 @@ struct AliasResolutionOwners<'a> {
 fn add_selective_aliases_inner(
     declarations: &HashMap<DeclName, graphcal_compiler::ir::model::IncludeAliasDeclaration>,
     selective: &[ImportAlias],
-    public_originals: &HashSet<graphcal_compiler::syntax::names::NameAtom>,
     prefix: &ScopeSegment,
     owners: &AliasResolutionOwners<'_>,
     import_span: Span,
@@ -1448,7 +1273,7 @@ fn add_selective_aliases_inner(
             import_span,
         );
 
-        if public_originals.contains(orig_name.atom()) {
+        if alias.visibility.is_public() {
             unfrozen.export_term_alias(local_name.clone());
         }
         if declaration.is_const {

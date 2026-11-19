@@ -2,7 +2,7 @@
 
 use crate::resolved_name::{ResolvedDeclName, ResolvedIndexVariant};
 
-use crate::builtin::{BuiltinConst, BuiltinFn};
+use crate::builtin::{BuiltinConst, BuiltinFn, RemovedBuiltinFn};
 use crate::desugar::desugared_ast as ast;
 use crate::resolve::category::{DeclSymbolKind, SymbolTable};
 use crate::resolve::error::{ExpectedDeclKind, ModuleResolveError, NameCategory};
@@ -24,6 +24,7 @@ use crate::hir::expr::{
     ConstRef, ExprKind, ExternFnRef, ResolvedUnitExpr, ResolvedUnitExprItem, ResolvedUnitRef,
     UnappliedFunctionRef,
 };
+use crate::semantic_error::name::UnitNameSite;
 
 /// Attach the source span of a failed module-resolver lookup.
 pub(super) fn spanned<T>(
@@ -120,16 +121,53 @@ pub(super) enum ResolvedCallable<'r> {
     Function(UnappliedFunctionRef),
 }
 
+/// The expression position a unit expression is written in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum UnitExprSite {
+    /// The unit suffix of a quantity literal (`2.0 m / s`).
+    QuantityLiteral,
+    /// The target of a `->` conversion (`@speed -> km / h`).
+    ConversionTarget,
+}
+
+impl UnitExprSite {
+    const fn term_site(self, position: usize, op: ast::MulDivOp) -> UnitNameSite {
+        match (self, position) {
+            (Self::QuantityLiteral, 0) => UnitNameSite::LiteralLeading,
+            (Self::QuantityLiteral, _) => UnitNameSite::LiteralContinuation(op),
+            (Self::ConversionTarget, _) => UnitNameSite::ConversionTarget,
+        }
+    }
+}
+
 impl<'a> ExprLowerer<'a> {
+    /// Resolve the unit names of a quantity literal or conversion target.
+    ///
+    /// A bare unit name spelled like a lexical local in scope is rejected
+    /// before unit resolution: after a quantity literal, `* s` and `/ s`
+    /// continue the unit, so a local `s` would otherwise be silently ignored.
     pub(super) fn lower_unit_expr(
         &self,
         unit: &ast::UnitExpr,
+        site: UnitExprSite,
     ) -> Result<ResolvedUnitExpr<ResolvedUnitRef>, ExprLowerError> {
         let terms = unit
             .terms
             .iter()
-            .map(|item| {
+            .enumerate()
+            .map(|(position, item)| {
                 let reference = &item.name.value;
+                if let Some(unit_name) = reference.as_bare() {
+                    let name = LocalName::classify(unit_name.atom().clone());
+                    if let Some(local) = self.visible_local(&name) {
+                        return Err(ExprLowerError::UnitNameIsLocal {
+                            local: local.span,
+                            name,
+                            site: site.term_site(position, item.op),
+                            span: item.name.span,
+                        });
+                    }
+                }
                 let path = reference.to_name_path();
                 let resolved = match self.ctx.overlay.unit_binding(reference).cloned() {
                     Some(resolved) => resolved,
@@ -199,8 +237,10 @@ impl<'a> ExprLowerer<'a> {
     /// 1. Lexical locals (for/scan/unfold/match bindings)
     /// 2. Built-in Term constants (`PI`, `E`, ...)
     /// 3. Constructors (a bare constructor name is a nullary call)
-    /// 4. Type-system names (struct types, dimensions, indexes, variants)
-    /// 5. Declarations (const/node/param)
+    /// 4. Declarations (const/node/param), which a bare name cannot read
+    ///
+    /// Struct types, dimensions and indexes live in other namespaces, so a
+    /// bare static name in value position is an unknown Term name.
     ///
     /// A time-scale spelling participates only after Term lookup fails, to
     /// produce a targeted wrong-namespace diagnostic rather than resolving a
@@ -556,11 +596,20 @@ impl<'a> ExprLowerer<'a> {
         callee: &crate::syntax::ast::IdentPath,
     ) -> Result<UnappliedFunctionRef, ExprLowerError> {
         if let Some(ident) = callee.as_bare() {
-            return BuiltinFn::parse(ident.name.as_str())
+            let name = ident.name.as_str();
+            return BuiltinFn::parse(name)
                 .map(UnappliedFunctionRef::Builtin)
-                .ok_or_else(|| ExprLowerError::UnknownFunction {
-                    path: callee.to_name_path(),
-                    span: callee.span(),
+                .ok_or_else(|| {
+                    RemovedBuiltinFn::parse(name).map_or_else(
+                        || ExprLowerError::UnknownFunction {
+                            path: callee.to_name_path(),
+                            span: callee.span(),
+                        },
+                        |function| ExprLowerError::RemovedBuiltinFunction {
+                            function,
+                            span: callee.span(),
+                        },
+                    )
                 });
         }
         // `alias::name(...)`: an extern call when `alias` is a plugin alias in

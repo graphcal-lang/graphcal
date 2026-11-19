@@ -94,3 +94,17 @@ fn multiple_comments() {
     assert_eq!(meta.comments[0].value.lexeme(), "// first");
     assert_eq!(meta.comments[1].value.lexeme(), "// second");
 }
+
+#[test]
+fn blank_line_range_query_uses_start_offsets() {
+    let source = "param x = 1;\n\nparam y = 2;\n\n\nparam z = 3;";
+    let meta = metadata(source);
+    let starts: Vec<_> = meta.blank_lines.iter().map(|b| b.span().offset()).collect();
+    assert_eq!(starts, [12, 26, 27]);
+    assert!(meta.has_blank_line_starting_in(0..13));
+    assert!(!meta.has_blank_line_starting_in(0..12));
+    assert!(!meta.has_blank_line_starting_in(13..26));
+    assert!(meta.has_blank_line_starting_in(13..27));
+    assert!(meta.has_blank_line_starting_in(27..28));
+    assert!(!meta.has_blank_line_starting_in(28..source.len()));
+}

@@ -126,25 +126,6 @@ impl MapLayout {
         })
     }
 
-    /// The axes the entries select on, outermost first.
-    #[must_use]
-    pub const fn axes(&self) -> &NonEmpty<IndexAxis> {
-        &self.axes
-    }
-
-    /// Every entry's placement, in evaluation order; together they fill
-    /// every cell exactly once.
-    #[must_use]
-    pub fn placements(&self) -> &[Placement] {
-        &self.placements
-    }
-
-    /// The number of cells: one per combination of axis keys.
-    #[must_use]
-    pub const fn cells(&self) -> usize {
-        self.placements.len()
-    }
-
     /// The nested value of the map literal: each entry's value, computed by
     /// `entry` from its written position in evaluation order, placed in its
     /// cell, and nested axis by axis (innermost first) by `nest`.
@@ -216,7 +197,7 @@ mod tests {
     use super::{AxisCells, MapLayout, MapLayoutError, Placement};
 
     fn fin(size: u64) -> IndexAxis {
-        IndexAxis::finite(FiniteIndex::try_from_u64(size).unwrap()).unwrap()
+        IndexAxis::finite(FiniteIndex::try_from_u64(size).unwrap())
     }
 
     fn at(size: u64, position: u64) -> MapEntryKey {
@@ -246,11 +227,11 @@ mod tests {
         ];
         let layout =
             MapLayout::try_new(vec![fin(2), fin(2)], &entries.iter().collect::<Vec<_>>()).unwrap();
-        assert_eq!(layout.axes().len(), 2);
-        assert_eq!(layout.cells(), 4);
+        assert_eq!(layout.axes.len(), 2);
+        assert_eq!(layout.placements.len(), 4);
         // Grouped by the outer key; written order within a group.
         assert_eq!(
-            layout.placements(),
+            layout.placements,
             [
                 Placement { entry: 1, cell: 1 },
                 Placement { entry: 3, cell: 0 },
@@ -262,7 +243,7 @@ mod tests {
         let layout = MapLayout::try_new(vec![fin(3)], &single.iter().collect::<Vec<_>>()).unwrap();
         // One axis: written order.
         assert_eq!(
-            layout.placements(),
+            layout.placements,
             [
                 Placement { entry: 0, cell: 2 },
                 Placement { entry: 1, cell: 0 },

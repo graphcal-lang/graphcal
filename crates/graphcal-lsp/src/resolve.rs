@@ -7,7 +7,8 @@ use crate::analysis::AnalysisResult;
 use crate::convert::LineIndex;
 use crate::imported_definitions::ImportedDefinition;
 use crate::symbol_identity::ReferenceTarget;
-use crate::symbol_table::{DefinitionInfo, SymbolKey};
+use crate::symbol_identity::SymbolId;
+use crate::symbol_table::DefinitionInfo;
 
 /// Where a resolved symbol lives.
 pub enum SymbolLocation<'a> {
@@ -21,7 +22,7 @@ pub enum SymbolLocation<'a> {
 ///
 pub struct ResolvedSymbol<'a> {
     /// The symbol table key for this symbol.
-    pub key: SymbolKey,
+    pub key: SymbolId,
     /// Where the definition lives.
     pub location: SymbolLocation<'a>,
     /// Whether the cursor was on a reference (true) or a definition (false).
@@ -107,6 +108,6 @@ pub fn resolve_symbol_at(analysis: &AnalysisResult, offset: usize) -> Option<Res
     None
 }
 
-pub fn reference_lookup_keys(key: &SymbolKey) -> Vec<SymbolKey> {
+pub fn reference_lookup_keys(key: &SymbolId) -> Vec<SymbolId> {
     vec![key.clone()]
 }

@@ -4,14 +4,13 @@ use std::borrow::Cow;
 
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::syntax::builtin_type_name::BuiltinTypeName;
-use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::token::{ContextualKeyword, Token};
 use tower_lsp::lsp_types::{CompletionItem, CompletionItemKind};
 
 use crate::analysis::AnalysisResult;
 use crate::cursor_context::{
-    CompletionContext, CoordinateIndexCompletionContext, ImportItemCompletionContext,
+    CompletionContext, CoordinateIndexCompletionContext, ImportItemCompletionContext, LexedSource,
     determine_completion_context, determine_coordinate_index_completion_context,
 };
 use crate::symbol_table::{DefinitionInfo, SymbolCategory};
@@ -37,9 +36,9 @@ fn all_definitions(analysis: &AnalysisResult) -> impl Iterator<Item = VisibleDef
     let local = analysis
         .symbol_table
         .definitions
-        .values()
-        .map(|definition| VisibleDefinition {
-            label: Cow::Borrowed(definition.name.as_str()),
+        .iter()
+        .map(|(key, definition)| VisibleDefinition {
+            label: definition.label(key),
             definition,
         });
     let imported = analysis.imported_bindings.iter().filter_map(|binding| {
@@ -62,7 +61,8 @@ pub fn completion(
     source: &str,
     offset: usize,
 ) -> Option<Vec<CompletionItem>> {
-    if let Some(context) = determine_coordinate_index_completion_context(source, offset) {
+    let lexed = LexedSource::new(source);
+    if let Some(context) = determine_coordinate_index_completion_context(&lexed, offset) {
         let keywords = match context {
             CoordinateIndexCompletionContext::Constructor => {
                 &[ContextualKeyword::Range, ContextualKeyword::Linspace][..]
@@ -73,10 +73,10 @@ pub fn completion(
         return Some(keyword_items(keywords));
     }
 
-    let context = determine_completion_context(source, offset);
+    let context = determine_completion_context(&lexed, offset);
     let items = match context {
         CompletionContext::ImportItem(context) => complete_import_items(analysis, &context),
-        CompletionContext::GraphRef => complete_graph_refs(analysis, source, offset),
+        CompletionContext::GraphRef => complete_graph_refs(analysis, &lexed, offset),
         CompletionContext::TypeAnnotation => complete_types(analysis),
         CompletionContext::ConversionTarget => complete_conversion_targets(analysis),
         CompletionContext::TopLevel => complete_top_level(),
@@ -217,10 +217,11 @@ enum DagHeader {
 
 /// Derive the current DAG owner from the latest token stream without relying
 /// on declaration spans from a possibly older successful parse.
-fn current_graph_owner(root: &DagId, source: &str, offset: usize) -> Option<DagId> {
+fn current_graph_owner(root: &DagId, lexed: &LexedSource<'_>, offset: usize) -> Option<DagId> {
+    let source = lexed.text();
     let mut braces = Vec::new();
     let mut dag_header = DagHeader::None;
-    for &(token, span) in tokenize(source).tokens() {
+    for &(token, span) in lexed.tokens() {
         if span.offset() >= offset {
             break;
         }
@@ -279,10 +280,10 @@ fn current_graph_owner(root: &DagId, source: &str, offset: usize) -> Option<DagI
 /// reason — offering identifiers that cannot compile is a usability trap.
 fn complete_graph_refs(
     analysis: &AnalysisResult,
-    source: &str,
+    lexed: &LexedSource<'_>,
     offset: usize,
 ) -> Vec<CompletionItem> {
-    let Some(expected_owner) = current_graph_owner(analysis.symbol_table.owner(), source, offset)
+    let Some(expected_owner) = current_graph_owner(analysis.symbol_table.owner(), lexed, offset)
     else {
         return Vec::new();
     };
@@ -432,6 +433,27 @@ mod tests {
 
         assert!(labels.iter().any(|label| label == "local"));
         assert!(!labels.iter().any(|label| label == "top"));
+    }
+
+    /// LSP-6: the extern definition's name is its leaf; the completion label
+    /// still qualifies it with the plugin alias from its typed key.
+    #[test]
+    fn extern_functions_complete_alias_qualified() {
+        let source = "import plugin \"graphcal:demo\" as demo {\n    fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;\n}\nnode y: Dimensionless = 1.0;\n";
+        let uri = tower_lsp::lsp_types::Url::parse("file:///tmp/completion-extern.gcl").unwrap();
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
+        let current = format!("{source}node z: Dimensionless = ");
+        let labels = completion(&analysis, &current, current.len())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| item.label)
+            .collect::<Vec<_>>();
+
+        assert!(
+            labels.iter().any(|label| label == "demo::lerp"),
+            "{labels:?}"
+        );
+        assert!(!labels.iter().any(|label| label == "lerp"), "{labels:?}");
     }
 
     #[test]

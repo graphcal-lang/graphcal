@@ -60,12 +60,14 @@ impl From<Utf16Range> for TextRange {
 pub fn compile_error_view(error: &CompileError, project: &VirtualProject) -> DiagnosticView {
     let diagnostic: &dyn miette::Diagnostic = error;
 
-    let source = error.named_source();
+    let source = error.registered_source();
+    // A detached text (a single in-memory source) is the entry itself.
     let file = source
-        .and_then(|named| VirtualProject::relative_source_name(named.name()))
+        .and_then(|source| source.origin().file_path())
+        .and_then(VirtualProject::relative_source_name)
         .unwrap_or_else(|| project.entry_display());
-    let labels = source.map_or_else(Vec::new, |named| {
-        let index = Utf16LineIndex::new(named.inner().as_str());
+    let labels = source.map_or_else(Vec::new, |source| {
+        let index = Utf16LineIndex::new(source.text().as_str());
         diagnostic
             .labels()
             .into_iter()
@@ -112,6 +114,38 @@ mod tests {
         assert_eq!(diagnostic.file, "main.gcl");
         assert!(!diagnostic.labels.is_empty());
         assert!(diagnostic.labels[0].range.start.line >= 1);
+    }
+
+    #[test]
+    fn a_file_is_named_by_its_origin_not_by_its_display_name() {
+        use std::path::PathBuf;
+        use std::sync::Arc;
+
+        use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
+        use graphcal_compiler::semantic_error::SemanticError;
+        use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
+
+        let project = VirtualProject::try_from(PlaygroundRequest {
+            entry: "main.gcl".to_string(),
+            files: vec![PlaygroundFile {
+                path: "main.gcl".to_string(),
+                content: String::new(),
+            }],
+        })
+        .unwrap();
+        let mut sources = SourceRegistry::new();
+        // In package mode a file is displayed as `<package>:<path>`.
+        let source = sources.register_with_origin(
+            SourceOrigin::File(PathBuf::from("/playground/my_app/lib.gcl")),
+            "pkg-my_app:/playground/my_app/lib.gcl",
+            Arc::new("node x".to_string()),
+        );
+        let error = CompileError::semantic(
+            SemanticError::internal_error("failure", source, DiagnosticAnchor::WholeFile),
+            &sources,
+        );
+
+        assert_eq!(compile_error_view(&error, &project).file, "my_app/lib.gcl");
     }
 
     #[test]

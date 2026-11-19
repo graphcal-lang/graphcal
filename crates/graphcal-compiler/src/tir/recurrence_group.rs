@@ -20,7 +20,7 @@ use crate::syntax::span::Span;
 use crate::tir::recurrence_plan::{
     GroupRead, RecurrenceGroupPlan, RecurrenceMember, RecurrenceShape, StepAccess,
 };
-use crate::tir::schedule::{ComponentRejection, ScheduledDecl};
+use crate::tir::schedule::{ComponentRejection, ScheduledDecl, SchedulingBug};
 use crate::tir::typed::model::DagTIR;
 
 /// The axis a recurrence-shaped definition steps along, compared by resolved
@@ -132,6 +132,19 @@ struct Violation {
     reason: RecurrenceRejection,
 }
 
+/// Why checking a candidate group stopped: a violated rule, or a state only
+/// a bug reaches.
+enum Stop {
+    Violation(Violation),
+    Bug(SchedulingBug),
+}
+
+impl From<Violation> for Stop {
+    fn from(violation: Violation) -> Self {
+        Self::Violation(violation)
+    }
+}
+
 /// Apply R1–R7 to the candidate group `facts` of the callable `callable`
 /// (`Group.check`).
 ///
@@ -152,7 +165,11 @@ pub(crate) fn check_group(
     {
         return Err(ComponentRejection::PlainCycle);
     }
-    let report = |violation: Violation| {
+    let report = |stop: Stop| {
+        let violation = match stop {
+            Stop::Violation(violation) => violation,
+            Stop::Bug(bug) => return ComponentRejection::Bug(bug),
+        };
         let member = &facts.members[violation.member];
         if member.owner() == callable {
             ComponentRejection::Recurrence {
@@ -165,7 +182,7 @@ pub(crate) fn check_group(
         }
     };
     check_members(facts, callable).map_err(report)?;
-    let accesses = classify_reads(facts).map_err(report)?;
+    let accesses = classify_reads(facts).map_err(|violation| report(violation.into()))?;
     let order = order_members(facts, &accesses).map_err(report)?;
     Ok(plan(facts, &accesses, &order))
 }
@@ -173,7 +190,7 @@ pub(crate) fn check_group(
 /// R1, R3, R4: one owner, a top-level `for` or `unfold`, one axis. (R2, which
 /// rejected unfinished members, is retired: a hole's interface lists its
 /// keyed reads, so an unfinished member is classified like a finished one.)
-fn check_members(facts: &GroupFacts, callable: &DagId) -> Result<(), Violation> {
+fn check_members(facts: &GroupFacts, callable: &DagId) -> Result<(), Stop> {
     let members = &facts.members;
     let Some(first) = members.first() else {
         return Ok(());
@@ -183,22 +200,39 @@ fn check_members(facts: &GroupFacts, callable: &DagId) -> Result<(), Violation> 
         let read = facts.reads.iter().find(|read| {
             members[read.source].owner() == callable && members[read.target].owner() != callable
         });
-        return Err(read.map_or_else(
-            || Violation {
-                member: 0,
-                span: first.span,
-                reason: RecurrenceRejection::MixedOwners {
-                    other: first.name.clone(),
-                },
-            },
-            |read| Violation {
+        // The members form a cycle, so one the callable owns reads one it
+        // does not. With no member of its own, the cycle is reported as a
+        // plain cycle, like any violation outside the callable's source.
+        let no_crossing_read = || {
+            members
+                .iter()
+                .find(|member| member.owner() == callable)
+                .map_or_else(
+                    || {
+                        Stop::Violation(Violation {
+                            member: 0,
+                            span: first.span,
+                            reason: RecurrenceRejection::MixedOwners {
+                                other: first.name.clone(),
+                            },
+                        })
+                    },
+                    |own| {
+                        Stop::Bug(SchedulingBug::MixedOwnersWithoutCrossingRead(
+                            own.name.clone(),
+                        ))
+                    },
+                )
+        };
+        return Err(read.map_or_else(no_crossing_read, |read| {
+            Stop::Violation(Violation {
                 member: read.source,
                 span: members[read.source].span,
                 reason: RecurrenceRejection::MixedOwners {
                     other: members[read.target].name.clone(),
                 },
-            },
-        ));
+            })
+        }));
     }
     let at_member = |member: usize, reason: RecurrenceRejection| Violation {
         member,
@@ -209,7 +243,7 @@ fn check_members(facts: &GroupFacts, callable: &DagId) -> Result<(), Violation> 
         .iter()
         .position(|member| member.definition.shape().is_none())
     {
-        return Err(at_member(member, RecurrenceRejection::NotRecurrenceShape));
+        return Err(at_member(member, RecurrenceRejection::NotRecurrenceShape).into());
     }
     if let Some(member) = members
         .iter()
@@ -220,7 +254,8 @@ fn check_members(facts: &GroupFacts, callable: &DagId) -> Result<(), Violation> 
             RecurrenceRejection::AxisMismatch {
                 first: first.name.clone(),
             },
-        ));
+        )
+        .into());
     }
     Ok(())
 }
@@ -261,7 +296,7 @@ fn classify_reads(facts: &GroupFacts) -> Result<Vec<StepAccess>, Violation> {
 }
 
 /// R7: no same-step cycle. Returns the plan order of the members.
-fn order_members(facts: &GroupFacts, accesses: &[StepAccess]) -> Result<Vec<usize>, Violation> {
+fn order_members(facts: &GroupFacts, accesses: &[StepAccess]) -> Result<Vec<usize>, Stop> {
     let same_targets = |member: usize| {
         facts
             .reads
@@ -272,7 +307,14 @@ fn order_members(facts: &GroupFacts, accesses: &[StepAccess]) -> Result<Vec<usiz
     };
     greedy_order(facts.members.len(), &same_targets).map_err(|stuck| {
         // Placement stops only with a member left, and the walk starts there.
-        let cycle = extract_cycle(stuck[0], &stuck, &same_targets);
+        let cycle = match extract_cycle(stuck[0], &stuck, &same_targets) {
+            Ok(cycle) => cycle,
+            Err(member) => {
+                return Stop::Bug(SchedulingBug::StuckWithoutStuckRead(
+                    facts.members[member].name.clone(),
+                ));
+            }
+        };
         let start = cycle[0];
         let span = facts
             .reads
@@ -284,7 +326,7 @@ fn order_members(facts: &GroupFacts, accesses: &[StepAccess]) -> Result<Vec<usiz
                     && **access == StepAccess::Same
             })
             .map_or(facts.members[start].span, |(read, _)| read.span);
-        Violation {
+        Stop::Violation(Violation {
             member: start,
             span,
             reason: RecurrenceRejection::SameStepCycle {
@@ -293,7 +335,7 @@ fn order_members(facts: &GroupFacts, accesses: &[StepAccess]) -> Result<Vec<usiz
                     .map(|member| facts.members[*member].name.clone())
                     .collect(),
             },
-        }
+        })
     })
 }
 
@@ -357,27 +399,28 @@ fn greedy_order<I: Iterator<Item = usize>>(
 /// A same-step cycle among `stuck` members, every one of which reads another
 /// stuck member at the same step: walk from `start` to the first stuck member
 /// each member reads until a member repeats, and return the repeated part
-/// (`Group.extractCycle`). The result is never empty: it is the walk so far
-/// should a member read no stuck member.
+/// (`Group.extractCycle`), which is never empty.
+///
+/// # Errors
+///
+/// Returns the member on the walk that reads no stuck member, which only a
+/// bug in placing the members reaches.
 fn extract_cycle<I: Iterator<Item = usize>>(
     start: usize,
     stuck: &[usize],
     same_targets: &impl Fn(usize) -> I,
-) -> Vec<usize> {
+) -> Result<Vec<usize>, usize> {
     let mut visited = Vec::new();
     let mut current = start;
-    while !visited.contains(&current) {
+    loop {
+        if let Some(repeated) = visited.iter().position(|member| *member == current) {
+            return Ok(visited.split_off(repeated));
+        }
         visited.push(current);
-        let Some(next) = same_targets(current).find(|target| stuck.contains(target)) else {
-            return visited;
-        };
-        current = next;
+        current = same_targets(current)
+            .find(|target| stuck.contains(target))
+            .ok_or(current)?;
     }
-    let repeated = visited
-        .iter()
-        .position(|member| *member == current)
-        .unwrap_or(0);
-    visited.split_off(repeated)
 }
 
 /// A member's own binders: the step binder and, for an `unfold`, the

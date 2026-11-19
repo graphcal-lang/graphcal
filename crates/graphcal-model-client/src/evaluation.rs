@@ -70,13 +70,7 @@ impl Evaluation {
     }
 
     fn slot<K: Kind>(&self, output: &OutputHandle<K>) -> Result<OutputSlot, ClientError> {
-        output.port().ensure_model(self.model)?;
-        self.batch
-            .schema()
-            .output_slot(output.name().as_str())
-            .ok_or_else(|| ClientError::NotRead {
-                name: output.name().clone(),
-            })
+        output.slot_in(self.model, self.batch.schema())
     }
 
     fn wrap<'a>(&'a self, outcome: RowOutcome<RowValues<'a>>) -> RowOutcome<Row<'a>> {

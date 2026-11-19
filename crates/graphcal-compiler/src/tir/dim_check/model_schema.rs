@@ -7,8 +7,11 @@ use crate::hir::nominal::{NominalConstructor, NominalTypeDef, NominalTypeKind};
 use crate::semantic::applied_constructor::{AppliedConstructor, AppliedField};
 use crate::semantic::checked_type::{CheckedGenericArg, CheckedType, IndexTypeRef, StructTypeRef};
 use crate::semantic_error::SemanticError;
+use crate::semantic_error::index::IndexError;
 use crate::source_id::SourceId;
+use crate::static_interface::StaticInputKind;
 use crate::syntax::ast::GenericConstraint;
+use crate::syntax::span::Span;
 use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 
 /// Failure to validate a nominal application for model-schema expansion.
@@ -16,8 +19,15 @@ use crate::syntax::type_name::{ConstructorName, FieldName, GenericParamName};
 pub enum ConcreteModelTypeError {
     #[error("model schema cannot find type definition for `{identity}`")]
     UnknownType { identity: StructTypeRef },
+    /// A required type (`pub(bind) type T;`) the entry DAG leaves unbound:
+    /// no value of it can cross the model boundary.
     #[error("required type `{identity}` was not concretely bound")]
-    RequiredType { identity: StructTypeRef },
+    RequiredType {
+        identity: StructTypeRef,
+        /// The required type's declaration.
+        declaration_source: SourceId,
+        span: Span,
+    },
     #[error("model type `{identity}` expects {expected} generic argument(s), got {actual}")]
     GenericArityMismatch {
         identity: StructTypeRef,
@@ -53,11 +63,24 @@ pub enum ConcreteModelTypeError {
 impl ConcreteModelTypeError {
     /// Convert schema-validation failure into the compiler diagnostic used by
     /// evaluation shells. Source-language failures retain their original
-    /// diagnostic; malformed safe-API inputs are internal invariant failures.
+    /// diagnostic, an unbound required type is the entry DAG's unbound input
+    /// (I010), and malformed safe-API inputs are internal invariant failures.
     #[must_use]
     pub fn into_semantic_error(self, src: SourceId) -> SemanticError {
         match self {
             Self::Compiler(error) => error,
+            Self::RequiredType {
+                identity,
+                declaration_source,
+                span,
+            } => SemanticError::located(
+                declaration_source,
+                span,
+                IndexError::RequiredStaticInputNotBound {
+                    kind: StaticInputKind::Type,
+                    name: identity.name().atom().clone(),
+                },
+            ),
             invariant => {
                 SemanticError::internal_error(invariant.to_string(), src, DiagnosticAnchor::Builtin)
             }
@@ -303,6 +326,8 @@ fn validate_model_type_definition<'tir>(
     let NominalTypeKind::Union { members } = type_def.kind() else {
         return Err(ConcreteModelTypeError::RequiredType {
             identity: identity.clone(),
+            declaration_source: type_def.source(),
+            span: type_def.span(),
         });
     };
     Ok(ModelTypeDefinition {
@@ -432,6 +457,8 @@ fn validate_bound_type_argument(
             if matches!(type_def.kind(), NominalTypeKind::Required) {
                 return Err(ConcreteModelTypeError::RequiredType {
                     identity: nested_identity.clone(),
+                    declaration_source: type_def.source(),
+                    span: type_def.span(),
                 });
             }
             validate_bound_generic_arguments(tir, nested_identity, nested_args)

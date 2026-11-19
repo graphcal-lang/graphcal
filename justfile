@@ -8,7 +8,7 @@ formal-conformance: formal
     GRAPHCAL_REQUIRED_BINDABILITY_ORACLE="$(pwd)/formal/.lake/build/bin/required-bindability-oracle" cargo test --package graphcal-compiler --lib required_bindability_matches_lean_oracle -- --ignored
     GRAPHCAL_TEMPLATE_CLOSURE_ORACLE="$(pwd)/formal/.lake/build/bin/template-closure-oracle" cargo test --package graphcal-compiler --lib template_closure_matches_lean_oracle -- --ignored
     GRAPHCAL_NAMESPACE_RESOLUTION_ORACLE="$(pwd)/formal/.lake/build/bin/namespace-resolution-oracle" cargo test --package graphcal-project --test namespace_formal_conformance -- --ignored
-    GRAPHCAL_EXTERNAL_SURFACE_ORACLE="$(pwd)/formal/.lake/build/bin/external-surface-oracle" cargo test --package graphcal-compiler --lib external_surface_matches_lean_oracle -- --ignored
+    GRAPHCAL_EXTERNAL_SURFACE_ORACLE="$(pwd)/formal/.lake/build/bin/external-surface-oracle" cargo test --package graphcal-project --test external_surface_formal_conformance -- --ignored
 
 # Ratcheted refactor metrics; see internals/refactor-metrics.md.
 refactor-metrics:
@@ -49,7 +49,9 @@ playground-check:
 playground-test: playground-assets
     cd web/playground && vp test
 
-# The view shares the playground's Wasm engine; the published page loads it from its own /view/pkg/.
+# The view shares the playground's Wasm engine; the published page loads it from its own pkg/
+# under its base path: /view/ on graphcal.org (the default), / on view.graphcal.org (VIEW_BASE=/,
+# set by the release workflow's build-view job).
 view-assets: playground-assets
     rm -rf web/view/public/pkg
     mkdir -p web/view/public
@@ -83,9 +85,13 @@ test: formal-conformance pipeline-layers playground-test view-test
 
 # Audit the closed-world CLI surface while preserving documented external crate
 # and ABI boundaries that Hawk cannot observe from the shipped binary.
-# Baseline: zero findings with cargo-hawk 0.1.13 on Rust 1.98.0 (2026-08-30).
+# Baseline: zero findings with cargo-hawk 0.1.18 on Rust 1.100.0 (2026-11-17).
+# cargo-hawk runs only on the exact rustc it was built for, which can lag our
+# toolchain; keep this in sync with `HAWK_RUSTC` in .github/workflows/ci.yaml.
+hawk_rustc := "1.100.0"
+
 hawk:
-    cargo hawk check -D warnings \
+    cargo +{{hawk_rustc}} hawk check -D warnings \
         --exclude-crate graphcal_compiler \
         --exclude-crate graphcal_eval \
         --exclude-crate graphcal_io \

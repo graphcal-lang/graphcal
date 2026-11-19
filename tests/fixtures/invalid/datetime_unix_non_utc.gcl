@@ -1,0 +1,4 @@
+// Error: `to_unix` reads a UTC label and does not convert other scales
+// implicitly; write `to_unix(to_utc(@t))`.
+node t: Datetime<TT> = epoch<TT>("2000-01-01T12:00:00");
+node seconds: Dimensionless = to_unix(@t);

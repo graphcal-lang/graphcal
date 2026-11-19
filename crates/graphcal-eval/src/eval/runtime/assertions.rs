@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 
-use graphcal_compiler::cancellation::Cancelled;
 use graphcal_compiler::ir::instance::InstanceAssertionProjection;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
@@ -54,6 +53,11 @@ pub(super) fn evaluate_assertions(
                 None => {
                     evaluate_assert_with_expected_fail(body, unit.expected_fail(), &mut |expr| {
                         eval_root(&entry_ctx.executable(expr)?, values, &entry_ctx)
+                    })
+                    .map_err(|aborted| {
+                        aborted.into_outcome(|invariant| {
+                            entry_ctx.internal_error(invariant.to_string(), span)
+                        })
                     })?
                 }
             };
@@ -79,6 +83,11 @@ pub(super) fn evaluate_assertions(
             Some(result) => result,
             None => evaluate_assert_with_expected_fail(body, expected, &mut |expr| {
                 eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx)
+            })
+            .map_err(|aborted| {
+                aborted.into_outcome(|invariant| {
+                    assertion_ctx.internal_error(invariant.to_string(), entry.get().span)
+                })
             })?,
         };
         assertions.push(EvalAssertion {
@@ -93,6 +102,12 @@ pub(super) fn evaluate_assertions(
 
 /// Every assertion an include site of the root's closure exposes, with the
 /// closure DAG that includes the instance, in report order.
+///
+/// An assertion an include re-exports is exposed by the include that
+/// selects it from its instance and again by each include that re-selects
+/// it from the re-exporting module. It is one assertion, reported once, by
+/// its outermost exposure: the closure lists each DAG before the DAGs it
+/// includes, and that exposure carries the include site's `#[expected_fail]`.
 fn projected_assertions<'a, 'p>(
     entry: Entry<'a, 'p>,
 ) -> impl Iterator<
@@ -104,6 +119,7 @@ fn projected_assertions<'a, 'p>(
         Scoped<'p, TypedAssertEntry>,
     ),
 > {
+    let mut reported = std::collections::HashSet::new();
     entry
         .callable()
         .closure_instances()
@@ -119,6 +135,7 @@ fn projected_assertions<'a, 'p>(
                 )
             })
         })
+        .filter(move |(_, _, _, body, _)| reported.insert(body.identity().clone()))
 }
 
 /// The name the root reports an assertion `projection` of `planned`
@@ -207,7 +224,7 @@ fn assert_dependency_failure(
     errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
     names: &RootNames<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<Option<AssertResult<ResolvedDeclName>>, Cancelled> {
+) -> Result<Option<AssertResult<ResolvedDeclName>>, Outcome<SemanticError>> {
     let body_exprs = match body.operands() {
         AssertionOperands::Condition(expr) => vec![expr],
         AssertionOperands::Tolerance {
@@ -219,7 +236,9 @@ fn assert_dependency_failure(
     Ok(
         match ctx.unavailable_dependencies(body_exprs.iter().copied()) {
             Ok(Some(reason)) if reason.is_incomplete() => Some(AssertResult::Blocked { reason }),
-            Err(Outcome::Cancelled) => return Err(Cancelled),
+            Err(error @ (Outcome::Cancelled | Outcome::Failed(SemanticError::Internal(_)))) => {
+                return Err(error);
+            }
             Err(Outcome::Failed(error)) => Some(AssertResult::Error {
                 message: error.to_string(),
             }),

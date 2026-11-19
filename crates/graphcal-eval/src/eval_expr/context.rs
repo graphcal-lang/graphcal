@@ -19,7 +19,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::{EvaluationError, EvaluatorFailure};
 use graphcal_compiler::source_id::SourceId;
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{RegisteredSource, SourceRegistry};
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
@@ -37,7 +37,6 @@ use crate::invariant::Failure;
 use crate::static_incompleteness::ExpressionDependencies;
 
 use super::runtime_failure::RuntimeFailure;
-use super::work_budget::WorkBudget;
 
 #[derive(Clone)]
 enum Capabilities<'a> {
@@ -57,7 +56,6 @@ enum Capabilities<'a> {
 #[derive(Clone)]
 pub struct EvalEnvironment<'a> {
     pub cancellation: CancellationToken,
-    pub(super) work_budget: WorkBudget,
     pub registry: &'a FormattingRegistry,
     pub src: SourceId,
     /// Names of the sources `src` and every diagnostic id resolve in, for
@@ -83,8 +81,8 @@ impl EvalEnvironment<'_> {
     #[must_use]
     pub(crate) fn source_name(&self, source: SourceId) -> &str {
         self.sources
-            .named_source(source)
-            .map_or("<unknown source>", miette::NamedSource::name)
+            .source(source)
+            .map_or("<unknown source>", RegisteredSource::name)
     }
 }
 
@@ -107,7 +105,7 @@ impl<'a> Deref for EvalSession<'a> {
 }
 
 impl<'a> EvalSession<'a> {
-    fn environment(
+    const fn environment(
         tir: &'a CheckedTir,
         src: SourceId,
         sources: &'a SourceRegistry,
@@ -115,7 +113,6 @@ impl<'a> EvalSession<'a> {
     ) -> EvalEnvironment<'a> {
         EvalEnvironment {
             cancellation,
-            work_budget: WorkBudget::default(),
             registry: tir.registry(),
             src,
             sources,
@@ -140,7 +137,7 @@ impl<'a> EvalSession<'a> {
     }
 
     /// Share the sealing pass's obligations across constant and bound evaluation.
-    pub(crate) fn provisional_constants_with_checks(
+    pub(crate) const fn provisional_constants_with_checks(
         tir: &'a CheckedTir,
         src: SourceId,
         sources: &'a SourceRegistry,
@@ -203,7 +200,7 @@ impl<'a> EvalSession<'a> {
     /// be omitted or supplied independently of the selected checked project
     /// facts.
     #[must_use]
-    pub fn checked(
+    pub const fn checked(
         plan: &'a ExecPlan<'a>,
         src: SourceId,
         sources: &'a SourceRegistry,
@@ -298,15 +295,16 @@ impl<'a> EvalSession<'a> {
     > {
         let roots = roots.into_iter().collect::<Vec<_>>();
         self.unavailable_among(
-            || roots.iter().flat_map(|root| root.graph_refs()).collect(),
+            || roots.iter().flat_map(|root| root.reads()).collect(),
             roots.iter().map(|root| root.get()),
         )
     }
 
-    /// Availability of `graph_refs` and of the call outputs of `expressions`.
+    /// Availability of the declarations `reads` and of the call outputs of
+    /// `expressions`.
     fn unavailable_among<E: ExpressionDependencies>(
         &self,
-        graph_refs: impl FnOnce() -> Vec<ResolvedDeclName>,
+        reads: impl FnOnce() -> Vec<ResolvedDeclName>,
         expressions: impl IntoIterator<Item = E>,
     ) -> Result<
         Option<graphcal_compiler::node_unavailable::RuntimeUnavailable>,
@@ -321,7 +319,7 @@ impl<'a> EvalSession<'a> {
         {
             return Ok(None);
         }
-        let mut dependencies = graph_refs()
+        let mut dependencies = reads()
             .into_iter()
             .filter_map(|key| {
                 self.unavailable
@@ -449,14 +447,17 @@ impl EvalSession<'_> {
         crate::pipeline_metrics::record(
             crate::pipeline_metrics::Event::DependencyAvailabilityCheck,
         );
-        self.unavailable_among(|| expression.graph_refs(), std::iter::once(expression))?
-            .map_or(Ok(()), |reason| {
-                Err(SemanticError::located(
-                    self.src,
-                    expression.span(),
-                    EvaluationError::Unavailable { reason },
-                )
-                .into())
-            })
+        self.unavailable_among(
+            || expression.referenced_declarations().into_iter().collect(),
+            std::iter::once(expression),
+        )?
+        .map_or(Ok(()), |reason| {
+            Err(SemanticError::located(
+                self.src,
+                expression.span(),
+                EvaluationError::Unavailable { reason },
+            )
+            .into())
+        })
     }
 }

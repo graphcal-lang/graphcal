@@ -398,7 +398,7 @@ fn project_limits_reach_javascript_as_the_validated_constants() {
 
 #[wasm_bindgen_test]
 fn package_layout_reaches_javascript_tagged() {
-    let layout = package_layout_js("[package]\nname = \"demo\"\n".to_string()).unwrap();
+    let layout = package_layout_js(JsValue::from_str("[package]\nname = \"demo\"\n")).unwrap();
     let field = |name: &str| {
         Reflect::get(&layout, &JsValue::from_str(name))
             .unwrap()
@@ -408,4 +408,30 @@ fn package_layout_reaches_javascript_tagged() {
     assert_eq!(field("status"), "package");
     assert_eq!(field("name"), "demo");
     assert_eq!(field("source_dir"), "src");
+}
+
+/// An oversized manifest is rejected before it is copied into linear
+/// memory, as an invalid layout naming the per-file limit.
+#[wasm_bindgen_test]
+fn package_layout_rejects_an_oversized_manifest() {
+    let mut text = "[package]\nname = \"demo\"\n".to_string();
+    text.push_str(&"#".repeat(MAX_PLAYGROUND_FILE_BYTES));
+    let layout = package_layout_js(JsValue::from_str(&text)).unwrap();
+    let field = |name: &str| {
+        Reflect::get(&layout, &JsValue::from_str(name))
+            .unwrap()
+            .as_string()
+            .unwrap()
+    };
+    assert_eq!(field("status"), "invalid");
+    let message = field("message");
+    assert!(
+        message.contains(&MAX_PLAYGROUND_FILE_BYTES.to_string()),
+        "{message}"
+    );
+}
+
+#[wasm_bindgen_test]
+fn package_layout_rejects_a_non_string_manifest() {
+    assert!(package_layout_js(JsValue::from_f64(1.0)).is_err());
 }

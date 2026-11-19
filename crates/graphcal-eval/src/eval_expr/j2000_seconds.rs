@@ -10,6 +10,7 @@ use thiserror::Error;
 use super::datetime::{
     DatetimeRangeError, checked_epoch_add_seconds, checked_epoch_difference_seconds,
 };
+use crate::time_scale_conversion::to_time_scale;
 
 /// A datetime that has no representation as seconds since J2000, or a
 /// number of seconds that names no representable instant.
@@ -36,7 +37,7 @@ pub fn seconds_since_j2000(
     epoch: hifitime::Epoch,
     scale: TimeScale,
 ) -> Result<f64, J2000SecondsError> {
-    checked_epoch_difference_seconds(epoch.to_time_scale(scale.to_hifitime()), j2000(scale)?)
+    checked_epoch_difference_seconds(to_time_scale(epoch, scale), j2000(scale)?)
         .map_err(J2000SecondsError)
 }
 

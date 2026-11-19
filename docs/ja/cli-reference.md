@@ -27,6 +27,7 @@ graphcal [OPTIONS] <COMMAND>
 | [`dump`](#graphcal-dump) | コンパイラー/評価器パイプラインの成果物をデバッグ出力します（実験的） |
 | [`graph`](#graphcal-graph) | `.gcl` ファイルの依存関係グラフをエクスポートします（実験的） |
 | [`model describe`](#graphcal-model-describe) | モデルのバッチ評価用インターフェースを出力します |
+| [`model unit`](#graphcal-model-unit) | モデルのスコープで単位式の次元と SI での倍率を出力します |
 | [`model serve`](#graphcal-model-serve) | リクエストのバッチを stdin/stdout の Arrow IPC 経由で評価します |
 | [`report build`](#graphcal-report-build) | モデルから自己完結型の HTML レポートをビルドします（実験的） |
 | [`deps lock`](#graphcal-deps-lock) | 正確なリビジョン指定の Git 依存関係を解決し、`graphcal.lock` を書き出します |
@@ -68,18 +69,21 @@ graphcal deps lock [OPTIONS]
 ハードエラーとなるため、プラグインのバイナリはレビュー可能なロックファイルの差分と一緒にしか
 変更できません。
 
-依存関係を利用するコマンド（`check`、`eval`、`dump`、`graph`、`model describe`、`model serve`、および LSP）は、
+依存関係を利用するコマンド（`check`、`eval`、`dump`、`graph`、`model describe`、`model unit`、`model serve`、および LSP）は、
 パッケージに関して読み取り専用です。これらは `graphcal.lock` とキャッシュされたソースを
 読み取りますが、ロックファイルのエントリを取得、作成、更新することはありません。ロックファイルが
 存在しない、古い、異なる Graphcal または標準ライブラリのバージョンを使用している、あるいは
 存在しないかハッシュが一致しないキャッシュエントリを参照している場合、これらのコマンドは失敗し、
 `graphcal deps lock` の実行を求めます。
 
-プライベートな Git リポジトリは、基盤となる Git のフェッチが現在の環境から認証情報を取得できる
-場合にのみサポートされます。これは意図的に移植性のある保証とはしていません。SSH は設定済みの
-鍵やエージェントで動作する一方、HTTPS は互換性のある認証情報ヘルパーまたは非対話的な
-認証情報プロバイダーが利用可能でない限り失敗することがあります。`graphcal.toml` の `git` URL に
-認証情報を直接記述しないでください。`GRAPHCAL_CACHE_DIR` はキャッシュのルートを上書きします。
+Graphcal は組み込みの Git クライアントで依存関係を取得します。このクライアントは Git の設定と
+Git 関連の環境変数を読まないので、認証情報ヘルパー、`GIT_ASKPASS`/`SSH_ASKPASS`、`insteadOf`
+による URL の書き換え、`core.sshCommand`、`GIT_SSH_COMMAND` は効きません。プライベートな
+リポジトリには SSH の URL を使ってください。Graphcal は `ssh`（`GIT_SSH` があればそのプログラム）を
+実行し、OpenSSH の設定、鍵、エージェントがそのまま使われます。プライベートな HTTPS リポジトリは
+ターミナルのプロンプトでユーザー名とトークンを入力しないと取得できないため、CI などの非対話環境では
+使えません。`graphcal.toml` の `git` URL に認証情報を直接記述しないでください。`GRAPHCAL_CACHE_DIR`
+はキャッシュのルートを上書きします。
 
 **例:**
 
@@ -707,13 +711,37 @@ graphcal model describe <FILE> [--root <ROOT>]
 
 ---
 
+## `graphcal model unit` { #graphcal-model-unit }
+
+単位式をエントリファイルの `->` の後に書いたものとして解決し、それぞれの次元と、標準の SI 単位での大きさを JSON の配列で出力します。バッチ評価のクライアントは、構造を持つ出力のフィールドなど SI 単位で受け取った物理量を、好きな単位で表示するために使います。
+
+```bash
+graphcal model unit <FILE> <UNIT>... [--root <ROOT>]
+```
+
+**引数とオプション:**
+
+| 項目 | 説明 |
+|------|-------------|
+| `<FILE>` | エントリの `.gcl` ファイル。このスコープで単位を解決します |
+| `<UNIT>` | 倍率が固定の単位式。`h`、`km/s` など。繰り返し指定可能です |
+| `--root <ROOT>` | 明示的なプロジェクトルート |
+
+倍率が固定されているのは、基本単位、`const` 単位、プレリュードの単位です。実行時単位は使えません。
+
+**終了コード:** `0` 成功、`2` プロジェクトのコンパイルまたは単位の解決に失敗。
+
+---
+
 ## `graphcal model serve` { #graphcal-model-serve }
 
 モデルを一度だけ準備し、stdin から受け取ったリクエストのバッチを評価します。リクエストごとに1つの結果のバッチを stdout に書きます。どちらも Arrow IPC ストリームです。
 
 ```bash
 graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=UNIT>]... \
-    (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) [--root <ROOT>]
+    [--param <NAME=VALUE>]... [--params-json <JSON> | --params-json-file <FILE>] \
+    (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) \
+    [--request-timeout <SECONDS> | --print-request-schema] [--root <ROOT>]
 ```
 
 **引数とオプション:**
@@ -721,11 +749,14 @@ graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=U
 | 項目 | 説明 |
 |------|-------------|
 | `<FILE>` | エントリの `.gcl` ファイル |
-| `--input <NAME>` | リクエストで変化させるパラメータ。繰り返し指定可能で、必須です。指定しないパラメータはデフォルト値のままです |
+| `--input <NAME>` | リクエストで変化させるパラメータ。繰り返し指定可能で、必須です。指定しないパラメータは、固定しない限りデフォルト値のままです |
 | `--output <NAME>` | 結果で返す public なノード。繰り返し指定可能で、必須です |
 | `--unit <NAME=UNIT>` | 選んだ物理量ポート `NAME` の値を `UNIT` でやりとりします。`UNIT` はエントリファイルで解決される倍率固定の単位式です。繰り返し指定可能です |
+| `--param`、`--params-json`、`--params-json-file` | 変化させないパラメータを、すべての行でこれらの値に固定します。形式は `eval` と同じです。`--params-json-file -` は使えません |
 | `--expect-fingerprint <FINGERPRINT>` | `graphcal model describe` で得たインターフェースの指紋と一致しない場合、起動を拒否します |
 | `--skip-fingerprint-check` | 指紋を検査せずに起動します |
+| `--request-timeout <SECONDS>` | 1 つのリクエストバッチの評価がこの秒数を過ぎても終わらない場合、終了コード `1` でセッションを終えます。指定しない場合、リクエストは評価が終わるまで実行されます |
+| `--print-request-schema` | 評価は始めず、セッションのリクエストストリームのスキーマをバッチなしの Arrow IPC ストリームとして stdout に書いて終了します |
 | `--root <ROOT>` | 明示的なプロジェクトルート |
 
 `--expect-fingerprint` と `--skip-fingerprint-check` のどちらか一方の指定が必須です。stdout には Arrow IPC だけを書き、診断は stderr に出します。セッションの流れ、行ごとの結果、ストリームの構成は[バッチ評価](batch-evaluation.md)を参照してください。
@@ -801,7 +832,7 @@ graphcal format --check
 graphcal check [OPTIONS] [PATHS]...
 ```
 
-それ以外に問題のない[未完成のノード](language/computation-model.md#unfinished-nodes)については概要を表示し、検査自体は成功します。未使用の DAG 定義も含めて式の完成を必須にするには `--deny-todo` を指定します。この場合も静的検査であり、実行時の値のドメイン検証ではありません。
+それ以外に問題のない[未完成のノードや定数](language/computation-model.md#unfinished-nodes)については概要を表示し、検査自体は成功します。未使用の DAG 定義も含めて式の完成を必須にするには `--deny-todo` を指定します。各ファイルで数えるのは、そのファイル自身の未完成の宣言と、そのファイルが使う他モジュールの未完成の宣言です。インポートしたモジュールにある未使用の未完成の宣言は、そのモジュールを検査したときにだけ報告されます。パッケージ全体の完成を必須にするには、パッケージのディレクトリを検査します。この場合も静的検査であり、実行時の値のドメイン検証ではありません。
 
 **引数:**
 

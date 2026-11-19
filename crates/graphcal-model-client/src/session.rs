@@ -1,16 +1,18 @@
 //! Configuring and running one `graphcal model serve` process.
 
 use std::io::{BufReader, Read, Write};
+use std::path::PathBuf;
 use std::process::{Child, ChildStdin, ChildStdout, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use std::time::Duration;
 
 use arrow_ipc::reader::StreamReader;
 use arrow_ipc::writer::StreamWriter;
 use graphcal_model_protocol::arrow::{request_schema, result_schema, si_scales, validate_schema};
 use graphcal_model_protocol::{
-    CanonicalUnitsOnly, PortName, RequestBatch, ResultBatch, SessionSchema, SessionSpec, SiScale,
-    UnitSpelling,
+    CanonicalUnitsOnly, PortName, RequestBatch, ResultBatch, SessionInput, SessionOutput,
+    SessionSchema, SessionSpec, SiScale, UnitSpelling,
 };
 
 use crate::batch::{BatchBuilder, Request};
@@ -36,6 +38,8 @@ pub struct SessionBuilder<'m> {
     inputs: Vec<PortName>,
     outputs: Vec<PortName>,
     units: Vec<(PortName, UnitSpelling)>,
+    fixed: Vec<PathBuf>,
+    request_timeout: Option<Duration>,
     foreign: Option<PortName>,
 }
 
@@ -46,8 +50,32 @@ impl<'m> SessionBuilder<'m> {
             inputs: Vec::new(),
             outputs: Vec::new(),
             units: Vec::new(),
+            fixed: Vec::new(),
+            request_timeout: None,
             foreign: None,
         }
+    }
+
+    /// End the session when one request is still evaluating after
+    /// `timeout` (`graphcal model serve --request-timeout`); by default a
+    /// request evaluates until it finishes. The server rejects a zero
+    /// timeout when the session starts.
+    pub const fn request_timeout(mut self, timeout: Duration) -> Self {
+        self.request_timeout = Some(timeout);
+        self
+    }
+
+    /// Fix the unvaried parameters named in the JSON document at `path` to
+    /// its values, instead of their defaults, in every row.
+    ///
+    /// The document has the format `graphcal eval --params-json-file`
+    /// reads: one member per parameter, so a record or union parameter
+    /// without a default can be given a value without being varied. The
+    /// server reads and checks the values when the session starts; the
+    /// client reads the parameter names to configure the session.
+    pub fn fix_from_json_file(mut self, path: impl Into<PathBuf>) -> Self {
+        self.fixed.push(path.into());
+        self
     }
 
     /// Vary `input` in every request.
@@ -124,10 +152,25 @@ impl<'m> SessionBuilder<'m> {
         if let Some(name) = &self.foreign {
             return Err(ClientError::ForeignHandle { name: name.clone() });
         }
+        let fixed = self
+            .fixed_document()?
+            .map_or_else(|| Ok(Vec::new()), fixed_parameter_names)?;
         Ok(self.units.iter().fold(
-            SessionSpec::new(self.inputs.clone(), self.outputs.clone()),
+            fixed.into_iter().fold(
+                SessionSpec::new(self.inputs.clone(), self.outputs.clone()),
+                SessionSpec::with_fixed,
+            ),
             |spec, (port, unit)| spec.with_unit(port.clone(), unit.clone()),
         ))
+    }
+
+    /// The one JSON document of fixed values, if any.
+    const fn fixed_document(&self) -> Result<Option<&PathBuf>, ClientError> {
+        match self.fixed.as_slice() {
+            [] => Ok(None),
+            [path] => Ok(Some(path)),
+            [..] => Err(ClientError::FixedParametersTwice),
+        }
     }
 
     /// The session schema this selection configures, without starting a
@@ -168,7 +211,12 @@ impl<'m> SessionBuilder<'m> {
         let mut child = self
             .model
             .command()
-            .serve(&spec, self.model.fingerprint())
+            .serve(
+                &spec,
+                self.model.fingerprint(),
+                self.fixed_document()?,
+                self.request_timeout,
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -195,6 +243,24 @@ impl<'m> SessionBuilder<'m> {
             Err(error) => Err(process.failure(error)),
         }
     }
+}
+
+/// The parameter names of the JSON document of fixed values at `path`.
+fn fixed_parameter_names(path: &PathBuf) -> Result<Vec<PortName>, ClientError> {
+    let invalid = |reason: String| ClientError::FixedParameters {
+        path: path.clone(),
+        reason,
+    };
+    let text = std::fs::read_to_string(path).map_err(|error| invalid(error.to_string()))?;
+    let document = serde_json::from_str::<serde_json::Value>(&text)
+        .map_err(|error| invalid(error.to_string()))?;
+    let serde_json::Value::Object(members) = document else {
+        return Err(invalid("the document is not a JSON object".to_owned()));
+    };
+    members
+        .keys()
+        .map(|name| PortName::new(name.as_str()).map_err(|error| invalid(error.to_string())))
+        .collect()
 }
 
 type Results = StreamReader<BufReader<ChildStdout>>;
@@ -284,6 +350,41 @@ impl Session {
     #[must_use]
     pub const fn schema(&self) -> &Arc<SessionSchema> {
         &self.schema
+    }
+
+    /// The varied parameter `input` as this session carries it: its wire
+    /// type in the session's unit, its domain converted into that unit, and
+    /// the unit's scale. Sample request values from this domain, not from
+    /// the handle's canonical one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] for a handle of another model or a parameter
+    /// this session does not vary.
+    pub fn input<K: Kind>(&self, input: &InputHandle<K>) -> Result<&SessionInput, ClientError> {
+        let slot = input.slot_in(self.model, &self.schema)?;
+        self.schema
+            .input(slot)
+            .ok_or_else(|| ClientError::NotVaried {
+                name: input.name().clone(),
+            })
+    }
+
+    /// The read output `output` as this session carries it: its wire type
+    /// in the session's unit and the unit's scale. Label result values with
+    /// this unit, not with the handle's canonical one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] for a handle of another model or an output
+    /// this session does not read.
+    pub fn output<K: Kind>(&self, output: &OutputHandle<K>) -> Result<&SessionOutput, ClientError> {
+        let slot = output.slot_in(self.model, &self.schema)?;
+        self.schema
+            .output(slot)
+            .ok_or_else(|| ClientError::NotRead {
+                name: output.name().clone(),
+            })
     }
 
     /// Start building a request.

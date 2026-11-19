@@ -271,6 +271,44 @@ fn load_bearing_parentheses_are_preserved() {
     assert_eq!(format_source(&formatted).unwrap(), formatted);
 }
 
+#[test]
+fn quantity_literal_keeps_parentheses_before_unit_continuing_operators() {
+    // A quantity literal's unit suffix greedily absorbs a following `*`,
+    // `/` or `^`, so `(2.0 m) * PI` must not print as `2.0 m * PI` (#2244).
+    let cases = [
+        ("(2.0 m) * PI", "(2.0 m) * PI"),
+        ("(2.0 m) / s", "(2.0 m) / s"),
+        ("(0.001 rad) * to_float(@n)", "(0.001 rad) * to_float(@n)"),
+        ("(2.0 m)^2", "(2.0 m) ^ 2"),
+        ("-(2.0 m)^2", "-(2.0 m) ^ 2"),
+        ("(-2.0 m) * PI", "(-2.0 m) * PI"),
+        ("(@x * 2.0 m) * y", "(@x * 2.0 m) * y"),
+        ("@x + (2.0 m) * y", "@x + (2.0 m) * y"),
+        ("(2.0 m) * (3.0 s)", "2.0 m * 3.0 s"),
+        ("(2.0 m) * (y + @x)", "(2.0 m) * (y + @x)"),
+        ("(2.0 m) / ((2.0 m) * y)", "(2.0 m) / ((2.0 m) * y)"),
+        ("(2.0 m) * @x", "2.0 m * @x"),
+        ("(2.0 m) / (@x + @y)", "2.0 m / (@x + @y)"),
+        ("(2.0 m) / 3.0", "2.0 m / 3.0"),
+        ("@x * 2.0 m", "@x * 2.0 m"),
+        ("(2.0 m) + @x", "2.0 m + @x"),
+        ("(2.0 m) % @x", "2.0 m % @x"),
+        ("(-9223372036854775808)^1", "(-9223372036854775808) ^ 1"),
+        ("-9223372036854775808", "-9223372036854775808"),
+    ];
+    for (expression, expected) in cases {
+        let source = format!("node result: Dimensionless = {expression};\n");
+        let formatted = format_source(&source)
+            .unwrap_or_else(|error| panic!("failed to format `{expression}`: {error}"));
+        assert_eq!(
+            formatted,
+            format!("node result: Dimensionless = {expected};\n"),
+            "unexpected formatting of `{expression}`"
+        );
+        assert_eq!(format_source(&formatted).unwrap(), formatted);
+    }
+}
+
 fn generated_expression() -> impl Strategy<Value = String> {
     prop_oneof![
         Just("1.0".to_string()),
@@ -279,6 +317,7 @@ fn generated_expression() -> impl Strategy<Value = String> {
         Just("@value".to_string()),
         Just("value".to_string()),
         Just("sqrt(1.0)".to_string()),
+        Just("1.0 m".to_string()),
     ]
     .prop_recursive(4, 128, 4, |inner| {
         prop_oneof![
@@ -611,6 +650,20 @@ fn format_unit_decl() {
     let source = "unit EUR: Money = (@rate) USD;\n";
     let formatted = format_source(source).unwrap();
     assert_eq!(formatted, "unit EUR: Money = (@rate) USD;\n");
+}
+
+#[test]
+fn format_base_unit_decl() {
+    let source = "base unit bit: Information;\n";
+    let formatted = format_source(source).unwrap();
+    assert_eq!(formatted, "base unit bit: Information;\n");
+}
+
+#[test]
+fn base_unit_with_a_body_is_not_rewritten_to_const_unit() {
+    // FE-9: the parser rejects the body, so the formatter never sees a
+    // `base unit` it could silently turn into a `const unit`.
+    assert!(format_source("base unit kfoot: Length = 304.8 m;\n").is_err());
 }
 
 #[test]
@@ -1872,5 +1925,48 @@ proptest! {
         let formatted = format_source(&source)
             .unwrap_or_else(|error| panic!("typed generated source failed:\n{source}\n{error}"));
         prop_assert_eq!(format_source(&formatted).unwrap(), formatted);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tables with duplicate labels (FE-12, #2250)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tables_with_duplicate_labels_are_kept_verbatim() {
+    let tables = [
+        // Duplicate row label.
+        "param t: Dimensionless[R, C] = table[R, C] {\n    : X, Y;\n    A: 1.0, 2.0;\n    A: 3.0, 4.0;\n    B: 5.0, 6.0;\n};\n",
+        // Duplicate column label.
+        "param t: Dimensionless[R, C] = table[R, C] {\n    : X, X;\n    A: 1.0,   2.0;\n    B: 5.0,   6.0;\n};\n",
+        // Row label repeated across two sections of the same slice.
+        "param t: Dimensionless[S, R, C] = table[S, R, C] {\n    [S#P]\n     : X, Y;\n    A: 1.0, 2.0;\n\n    [S#Q]\n     : X, Y;\n    A: 3.0, 4.0;\n\n    [S#P]\n     : X, Y;\n    A: 5.0, 6.0;\n};\n",
+    ];
+    for table in tables {
+        let source =
+            format!("index S = {{ P, Q }};\nindex R = {{ A, B }};\nindex C = {{ X, Y }};\n{table}");
+        let formatted = format_source(&source)
+            .unwrap_or_else(|error| panic!("formatting failed for:\n{source}\n{error}"));
+        assert_eq!(formatted, source);
+    }
+}
+
+#[test]
+fn nested_tables_with_duplicate_labels_are_kept_verbatim() {
+    // A cell is pre-rendered on a forked formatter; its verbatim request must
+    // still reach the enclosing declaration.
+    let declarations = [
+        // Table cell inside a table.
+        "param t: Dimensionless[S] = table[S] {\n    P: table[R, C] { : X, X; A: 1.0, 2.0; };\n    Q: 3.0;\n};\n",
+        // Cell of a multi-declaration header.
+        "param a: Dimensionless[S],\nparam b: Dimensionless[S]\n    = table[S, (_, _)] {\n        : _, _;\n        P: table[R, C] { : X, X; A: 1.0, 2.0; }, 1.0;\n        Q: 2.0, 3.0;\n    };\n",
+    ];
+    for declaration in declarations {
+        let source = format!(
+            "index S = {{ P, Q }};\nindex R = {{ A, B }};\nindex C = {{ X, Y }};\n{declaration}"
+        );
+        let formatted = format_source(&source)
+            .unwrap_or_else(|error| panic!("formatting failed for:\n{source}\n{error}"));
+        assert_eq!(formatted, source);
     }
 }

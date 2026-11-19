@@ -11,6 +11,7 @@
 //! disjoint. A repeated name is an error rather than an implicit precedence
 //! rule.
 
+use indexmap::IndexMap;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{self, Read};
@@ -26,6 +27,9 @@ use graphcal_project::compile_error::CompileError;
 use graphcal_project::prepare::{ExternalValue, ParameterBindingBuilder};
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
+
+use graphcal_compiler::outcome::without_cancellation;
+use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, RealFileSystem};
 
 use crate::json_input::{self, JsonInputError};
 
@@ -65,6 +69,15 @@ pub struct ParameterArgs {
 }
 
 impl ParameterArgs {
+    /// Whether the JSON parameter document is read from stdin
+    /// (`--params-json-file -`).
+    #[must_use]
+    pub fn reads_stdin(&self) -> bool {
+        self.params_json_file
+            .as_deref()
+            .is_some_and(|path| path == Path::new("-"))
+    }
+
     fn json_source(&self) -> Result<Option<ParameterJsonSource>, OverrideParseError> {
         match (&self.params_json, &self.params_json_file) {
             (Some(_), Some(_)) => Err(OverrideParseError::ConflictingJsonSources),
@@ -134,8 +147,10 @@ impl ParameterOverride {
 /// Parsed CLI bindings plus source metadata for diagnostics and report replay.
 #[derive(Debug)]
 pub struct ParsedOverrides {
-    /// Values keyed by their typed entry parameter names.
-    pub values: HashMap<DeclName, ParameterOverride>,
+    /// Values keyed by their typed entry parameter names, in command-line
+    /// order: direct `--param` values, then JSON keys in document order.
+    /// Binding in this order reports the first bad value as given.
+    pub values: IndexMap<DeclName, ParameterOverride>,
     /// Direct bindings in command-line order.
     pub direct_parameters: Vec<DirectParameterBinding>,
     /// Bulk JSON source selected for this invocation, including an empty object.
@@ -273,14 +288,12 @@ pub enum OverrideParseError {
 
     /// A JSON parameter document exceeded the configured size cap.
     #[error(
-        "parameter JSON from {origin} is {size} bytes, exceeds limit of {limit} bytes (use --params-json-max-bytes to override)"
+        "parameter JSON from {origin} exceeds the limit of {limit} bytes (use --params-json-max-bytes to override)"
     )]
     #[diagnostic(code(graphcal::cli::O006))]
     JsonTooLarge {
         /// Where the JSON was supplied.
         origin: ParameterJsonOrigin,
-        /// The document size in bytes.
-        size: u64,
         /// The active limit in bytes.
         limit: u64,
     },
@@ -316,7 +329,7 @@ pub fn parse_overrides_with_sources(
         return Err(OverrideParseError::JsonLimitWithoutSource);
     }
 
-    let mut overrides = HashMap::new();
+    let mut overrides = IndexMap::new();
     let mut direct_parameters = Vec::new();
 
     for raw in &args.param {
@@ -330,11 +343,11 @@ pub fn parse_overrides_with_sources(
             source: Box::new(source),
         })?;
         match overrides.entry(binding.name.clone()) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
+            indexmap::map::Entry::Vacant(entry) => {
                 entry.insert(ParameterOverride::Direct(value));
                 direct_parameters.push(binding);
             }
-            std::collections::hash_map::Entry::Occupied(_) => {
+            indexmap::map::Entry::Occupied(_) => {
                 return Err(OverrideParseError::DuplicateParameterBinding { name: binding.name });
             }
         }
@@ -356,7 +369,7 @@ pub fn parse_overrides_with_sources(
             NamedSource::new(loaded.origin.diagnostic_name(), Arc::new(loaded.text));
         for (name, expression) in json_overrides {
             match overrides.entry(name.clone()) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
+                indexmap::map::Entry::Vacant(entry) => {
                     let span = parameter_spans
                         .get(&name)
                         .copied()
@@ -369,7 +382,7 @@ pub fn parse_overrides_with_sources(
                         },
                     });
                 }
-                std::collections::hash_map::Entry::Occupied(_) => {
+                indexmap::map::Entry::Occupied(_) => {
                     return Err(OverrideParseError::DuplicateParameterBinding { name });
                 }
             }
@@ -488,24 +501,32 @@ fn load_parameter_json(
     }
 }
 
+/// Read a parameter file through the bounded regular-file capability, which
+/// validates the opened handle, so a FIFO or device is rejected instead of
+/// blocking or streaming forever.
 fn read_parameter_json_file(
     path: &Path,
     limit: u64,
 ) -> Result<LoadedParameterJson, OverrideParseError> {
     let origin = ParameterJsonOrigin::File(path.to_path_buf());
-    let file = std::fs::File::open(path).map_err(|source| OverrideParseError::JsonRead {
-        origin: origin.clone(),
-        source,
-    })?;
-    let size = file
-        .metadata()
-        .map_err(|source| OverrideParseError::JsonRead {
+    let bytes = without_cancellation(|cancellation| {
+        RealFileSystem::default().read_bytes_bounded(path, ByteLimit::new(limit), cancellation)
+    })
+    .map_err(|error| match error {
+        FileSystemReadError::Io(source) => OverrideParseError::JsonRead {
             origin: origin.clone(),
             source,
-        })?
-        .len();
-    ensure_json_size(&origin, size, limit)?;
-    read_parameter_json_bounded(file, origin, limit)
+        },
+        FileSystemReadError::ByteLimitExceeded { .. } => OverrideParseError::JsonTooLarge {
+            origin: origin.clone(),
+            limit,
+        },
+        error @ FileSystemReadError::EntryLimitExceeded { .. } => OverrideParseError::JsonRead {
+            origin: origin.clone(),
+            source: io::Error::other(error),
+        },
+    })?;
+    loaded_parameter_json(bytes, origin)
 }
 
 fn read_parameter_json_bounded(
@@ -523,6 +544,13 @@ fn read_parameter_json_bounded(
         })?;
     let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     ensure_json_size(&origin, size, limit)?;
+    loaded_parameter_json(bytes, origin)
+}
+
+fn loaded_parameter_json(
+    bytes: Vec<u8>,
+    origin: ParameterJsonOrigin,
+) -> Result<LoadedParameterJson, OverrideParseError> {
     let text = String::from_utf8(bytes).map_err(|source| OverrideParseError::JsonRead {
         origin: origin.clone(),
         source: io::Error::new(io::ErrorKind::InvalidData, source),
@@ -538,7 +566,6 @@ fn ensure_json_size(
     if size > limit {
         return Err(OverrideParseError::JsonTooLarge {
             origin: origin.clone(),
-            size,
             limit,
         });
     }
@@ -582,11 +609,7 @@ mod tests {
         assert!(ensure_json_size(&origin, 42, 42).is_ok());
         assert!(matches!(
             ensure_json_size(&origin, 43, 42),
-            Err(OverrideParseError::JsonTooLarge {
-                size: 43,
-                limit: 42,
-                ..
-            })
+            Err(OverrideParseError::JsonTooLarge { limit: 42, .. })
         ));
     }
 
@@ -602,7 +625,7 @@ mod tests {
 
     fn parse_values(
         args: &ParameterArgs,
-    ) -> Result<HashMap<DeclName, ParameterOverride>, OverrideParseError> {
+    ) -> Result<IndexMap<DeclName, ParameterOverride>, OverrideParseError> {
         parse_overrides_with_sources(args).map(|parsed| parsed.values)
     }
 
@@ -701,10 +724,7 @@ mod tests {
 
         let err = parse_values(&args).unwrap_err();
         match err {
-            OverrideParseError::JsonTooLarge { size, limit, .. } => {
-                assert_eq!(limit, 256);
-                assert!(size > 256);
-            }
+            OverrideParseError::JsonTooLarge { limit, .. } => assert_eq!(limit, 256),
             other => panic!("unexpected error: {other}"),
         }
     }
@@ -784,6 +804,22 @@ mod tests {
         };
         let overrides = parse_values(&args).unwrap();
         assert_eq!(overrides.len(), 2);
+    }
+
+    /// Bindings are applied in this order, so the first bad value reported
+    /// is the first one given rather than a hash-order pick (PRJ-13).
+    #[test]
+    fn parameters_keep_command_line_then_json_document_order() {
+        let args = ParameterArgs {
+            param: vec!["c=1".to_string(), "a=2".to_string(), "d=3".to_string()],
+            params_json: Some(r#"{"z": "1", "b": "2", "y": "3"}"#.to_string()),
+            ..ParameterArgs::default()
+        };
+        let overrides = parse_values(&args).unwrap();
+        assert_eq!(
+            overrides.keys().map(DeclName::as_str).collect::<Vec<_>>(),
+            ["c", "a", "d", "z", "b", "y"]
+        );
     }
 
     #[test]

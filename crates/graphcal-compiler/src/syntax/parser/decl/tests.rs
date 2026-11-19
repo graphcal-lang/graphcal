@@ -311,7 +311,7 @@ fn parse_base_unit() {
     let file = Parser::new("base unit m: Length;").parse_file().unwrap();
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
-            assert_eq!(u.constness, UnitConstness::Const);
+            assert_eq!(u.constness(), UnitConstness::Const);
             assert_eq!(u.name.value.as_str(), "m");
             assert_eq!(
                 u.dim_type.terms[0]
@@ -324,7 +324,7 @@ fn parse_base_unit() {
                     .as_str(),
                 "Length"
             );
-            assert!(u.definition.is_none());
+            assert!(u.definition().is_none());
         }
         _ => panic!("expected unit"),
     }
@@ -337,15 +337,34 @@ fn parse_no_body_unit_without_base_is_rejected() {
 }
 
 #[test]
+fn parse_base_unit_with_a_body_is_rejected_at_the_equals_sign() {
+    // FE-9: a `base unit` has no body; `= …` must not silently turn it into a
+    // `const unit`.
+    let source = "base unit kfoot: Length = 304.8 m;";
+    let error = Parser::new(source).parse_file().unwrap_err();
+    assert!(matches!(
+        error.kind,
+        ParseErrorKind::UnexpectedToken {
+            expected: Expected::BaseUnitEnd,
+            found: Found::Token(crate::syntax::token::Token::Eq),
+        }
+    ));
+    assert_eq!(
+        error.span,
+        crate::syntax::span::Span::new(source.find('=').unwrap(), 1)
+    );
+}
+
+#[test]
 fn parse_derived_unit() {
     let file = Parser::new("unit km: Length = 1000.0 m;")
         .parse_file()
         .unwrap();
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
-            assert_eq!(u.constness, UnitConstness::Dynamic);
+            assert_eq!(u.constness(), UnitConstness::Dynamic);
             assert_eq!(u.name.value.as_str(), "km");
-            let def = u.definition.as_ref().unwrap();
+            let def = u.definition().unwrap();
             assert!(
                 matches!(&def.scale_expr.kind, ExprKind::Number(n) if (*n - 1000.0).abs() < f64::EPSILON)
             );
@@ -364,7 +383,7 @@ fn parse_compound_unit_decl() {
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
             assert_eq!(u.name.value.as_str(), "N");
-            let def = u.definition.as_ref().unwrap();
+            let def = u.definition().unwrap();
             assert!(
                 matches!(&def.scale_expr.kind, ExprKind::Number(n) if (*n - 1.0).abs() < f64::EPSILON)
             );
@@ -388,7 +407,7 @@ fn parse_unit_decl_with_paren_expr() {
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
             assert_eq!(u.name.value.as_str(), "deg");
-            let def = u.definition.as_ref().unwrap();
+            let def = u.definition().unwrap();
             // The parser now stores the expression tree instead of evaluating it.
             match &def.scale_expr.kind {
                 ExprKind::BinOp { op, lhs, rhs } => {
@@ -1176,19 +1195,50 @@ fn parse_include_dotted_path_with_param_bindings() {
 }
 
 #[test]
-fn include_binding_recovers_finite_index_argument_shape() {
+fn include_index_binding_is_parsed_as_an_index_expression() {
     let file = Parser::new("include scale(index Axis: Fin(1 + 2)) as scaled;")
         .parse_file()
         .unwrap();
     let DeclKind::Include(include) = &file.declarations[0].kind else {
         panic!("expected Include");
     };
-    let Some(crate::syntax::ast::IndexExpr::Finite { cardinality, .. }) =
-        include.param_bindings[0].value.index_binding_arg()
+    let crate::syntax::ast::BindingValue::Index(crate::syntax::ast::IndexExpr::Finite {
+        cardinality,
+        ..
+    }) = &include.param_bindings[0].value
     else {
         panic!("expected finite index binding argument");
     };
     assert_eq!(cardinality.to_string(), "1 + 2");
+}
+
+/// Each marker selects its own grammar: a `type` binding takes a type
+/// expression (generic applications included) and a `dim` binding a
+/// dimension expression, instead of a value expression reclassified later.
+#[test]
+fn include_static_bindings_are_parsed_with_their_marker_grammar() {
+    use crate::syntax::ast::BindingValue;
+    let file = Parser::new(
+        "include holder(type Element: Vec3<Length, Eci>, dim D: Length / Time, \
+         type Item: Marker, x: 1.0) as h;",
+    )
+    .parse_file()
+    .unwrap();
+    let DeclKind::Include(include) = &file.declarations[0].kind else {
+        panic!("expected Include");
+    };
+    let [applied, product, named, value] = include.param_bindings.as_slice() else {
+        panic!("expected four bindings");
+    };
+    assert!(matches!(&applied.value, BindingValue::Type(_)));
+    assert!(applied.value.static_name().is_none());
+    assert!(matches!(&product.value, BindingValue::Dimension(_)));
+    assert!(product.value.static_name().is_none());
+    assert_eq!(
+        named.value.static_name().map(|name| name.value.to_string()),
+        Some("Marker".to_string())
+    );
+    assert!(matches!(&value.value, BindingValue::Value(_)));
 }
 
 #[test]
@@ -1980,9 +2030,9 @@ fn parse_const_unit() {
         .unwrap();
     match &file.declarations[0].kind {
         DeclKind::Unit(u) => {
-            assert_eq!(u.constness, UnitConstness::Const);
+            assert_eq!(u.constness(), UnitConstness::Const);
             assert_eq!(u.name.value.as_str(), "hr");
-            assert!(u.definition.is_some());
+            assert!(u.definition().is_some());
         }
         other => panic!("expected const unit, got {other:?}"),
     }
@@ -1994,7 +2044,7 @@ fn plain_unit_decl_still_parses_as_dynamic_unit() {
         .parse_file()
         .unwrap();
     match &file.declarations[0].kind {
-        DeclKind::Unit(u) => assert_eq!(u.constness, UnitConstness::Dynamic),
+        DeclKind::Unit(u) => assert_eq!(u.constness(), UnitConstness::Dynamic),
         other => panic!("expected unit, got {other:?}"),
     }
 }

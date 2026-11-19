@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+shifting a `Datetime<UTC>` by a duration is not defined
+    Diagnostic severity: error
+Begin snippet for datetime_utc_shift.gcl starting at line 3, column 1
+
+snippet line 3: node start: Datetime = datetime("2016-12-31T23:00:00Z");
+snippet line 4: node end: Datetime = @start + 2.0 h;
+    label at line 4, columns 22 to 35: UTC readings skip leap seconds
+diagnostic help: a UTC shift across a leap second lands one second off; shift in TAI and convert back, for example `to_utc(to_tai(@start) + 90.0 min)`
+diagnostic code: graphcal::D044

@@ -47,12 +47,6 @@ pub struct SemanticInstanceInput {
 }
 
 impl UnfrozenIR {
-    /// Typed Static ports authored directly by this reusable DAG template.
-    #[must_use]
-    pub fn static_ports(&self) -> &[crate::hir::source_interface::StaticPort] {
-        &self.static_ports
-    }
-
     /// Resolve an exposed plot alias to its canonical template declaration.
     #[must_use]
     pub fn plot_projection_target(&self, name: &DeclName) -> Option<LocalDecl> {
@@ -68,6 +62,35 @@ impl UnfrozenIR {
                         .plot_projections
                         .iter()
                         .find(|projection| &projection.alias == name)
+                        .map(|projection| {
+                            LocalDecl::new(instance_declaration(
+                                instance.instance.id(),
+                                projection.target.leaf().clone(),
+                            ))
+                        })
+                })
+            })
+    }
+
+    /// Resolve an exposed assertion name to its canonical template
+    /// declaration: an assertion of the template's own, or one the template
+    /// selects from one of its own instances.
+    #[must_use]
+    pub fn assertion_projection_target(&self, name: &DeclName) -> Option<LocalDecl> {
+        self.decls
+            .iter()
+            .find_map(|decl| match decl {
+                Decl::Assert(entry) if entry.name() == name => {
+                    Some(LocalDecl::new(entry.identity()))
+                }
+                _ => None,
+            })
+            .or_else(|| {
+                self.semantic_instances.iter().find_map(|instance| {
+                    instance
+                        .assertion_projections
+                        .iter()
+                        .find(|projection| projection.exposure.selected() == Some(name))
                         .map(|projection| {
                             LocalDecl::new(instance_declaration(
                                 instance.instance.id(),
@@ -225,6 +248,7 @@ impl UnfrozenIR {
         self.decls.push(Decl::Const(entry::ConstEntry {
             doc: None,
             identity: projection_alias(&body_resolution_owner, name),
+            origin: entry::ValueOrigin::IncludeAlias,
             type_ann: InScope::new(type_ann, type_resolution_owner),
             expr: InScope::new(expr, body_resolution_owner),
             span,
@@ -262,6 +286,7 @@ impl UnfrozenIR {
         self.decls.push(Decl::Node(entry::NodeEntry {
             doc: None,
             identity,
+            origin: entry::ValueOrigin::IncludeAlias,
             type_ann: InScope::new(type_ann, type_resolution_owner),
             definition: InScope::new(expr, body_resolution_owner),
             span,
@@ -489,12 +514,6 @@ impl ExprVisitor<crate::syntax::phase::Desugared> for NominalOverridePreflight<'
                             OverrideMention::MatchConstructor(constructor.clone()),
                         )?;
                     }
-                }
-                crate::desugar::desugared_ast::MatchPattern::Constructor { name, .. } => {
-                    self.check_constructor(
-                        &name.value,
-                        OverrideMention::MatchConstructor(name.value.clone()),
-                    )?;
                 }
             }
             self.visit_expr(&arm.body)?;

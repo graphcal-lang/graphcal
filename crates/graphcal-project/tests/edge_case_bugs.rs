@@ -746,29 +746,261 @@ node x: Dimensionless = 1.0 / @neg_zero;
 }
 
 // ============================================================================
-// BUG 8: to_float precision loss for large integers
+// Exact to_float() conversion (#2235)
 //
-// to_float uses `i as f64` which loses precision for i64 values > 2^53.
-// For engineering, this could silently corrupt large integer values.
+// `to_float(n)` fails instead of rounding an `Int` that binary64 cannot
+// represent exactly. Such values exist only above 2^53 in magnitude.
 // ============================================================================
 
 #[test]
-fn to_float_large_integer_precision() {
-    // 2^53 = 9007199254740992 is the last integer exactly representable as f64
-    // 2^53 + 1 = 9007199254740993 should lose precision
+fn to_float_rejects_an_integer_binary64_cannot_represent() {
     let val = (1i64 << 53) + 1;
     let source = format!("param x: Int = {val};\nnode y: Dimensionless = to_float(@x);");
     let result = compile_and_eval(&source).unwrap();
-    let y = find_value(&result, "y");
-    // BUG: y will be 9007199254740992.0, not 9007199254740993.0
-    // The precision loss is silent — no error, no warning
-    let expected = val as f64; // This itself loses precision
+    let message = get_node_error_message(&result, "y").expect("to_float should fail");
     assert!(
-        (y - expected).abs() < f64::EPSILON,
-        "to_float({val}) = {y}, expected {expected}. Note: both lose precision!"
+        message.contains("to_float() argument")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected message: {message}"
     );
-    // The real test: does the language warn about or prevent this?
-    // Currently it doesn't, which is a design concern for safety-critical code.
+}
+
+#[test]
+fn to_float_rejects_an_inexact_integer_in_a_const_node() {
+    let source = "const node y: Dimensionless = to_float(9007199254740993);";
+    let error = compile_and_eval(source)
+        .expect_err("a const node is evaluated at compile time, so to_float should fail there");
+    let message = error.to_string();
+    assert!(
+        message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected error: {message}"
+    );
+}
+
+#[test]
+fn to_float_converts_large_integers_binary64_represents() {
+    let source = format!(
+        "param a: Int = {};\nparam b: Int = {};\nnode x: Dimensionless = to_float(@a);\nnode y: Dimensionless = to_float(@b);",
+        1i64 << 53,
+        -(1i64 << 62),
+    );
+    let result = compile_and_eval(&source).unwrap();
+    assert_eq!(
+        find_value(&result, "x").to_bits(),
+        9_007_199_254_740_992.0_f64.to_bits()
+    );
+    assert_eq!(
+        find_value(&result, "y").to_bits(),
+        (-4_611_686_018_427_387_904.0_f64).to_bits()
+    );
+}
+
+// ============================================================================
+// An Int scales a quantity in `*` and `/` (#2187)
+//
+// The Int operand is converted exactly, so the result is bit-identical to the
+// explicit `to_float` form, and an Int binary64 cannot represent fails.
+// ============================================================================
+
+#[test]
+fn int_scaling_matches_the_explicit_to_float_form() {
+    let source = "\
+param p: Power = 2.8 W;
+param t: Time = 3.0 s;
+param n: Int = 7;
+param d: Int = 2;
+param z: Complex<Length> = complex(3.0 m, 4.0 m);
+node mul_right: Power = @p * @n;
+node mul_right_explicit: Power = @p * to_float(@n);
+node mul_left: Power = @n * @p;
+node div_right: Power = @p / @n;
+node div_right_explicit: Power = @p / to_float(@n);
+node div_left: Frequency = @n / @t;
+node div_left_explicit: Frequency = to_float(@n) / @t;
+node ratio: Power = @p * @n / @d;
+node real_quotient: Dimensionless = to_float(@n) / @d;
+node literal: Length = 2 * PI * 1.0 m;
+node complex_re: Length = re(@z * @n);
+node complex_im: Length = im(@n * @z);
+node complex_div_re: Length = re(@z / @d);
+";
+    let result = compile_and_eval(source).unwrap();
+    let bits = |name: &str| find_value(&result, name).to_bits();
+    assert_eq!(bits("mul_right"), bits("mul_right_explicit"));
+    assert_eq!(bits("mul_left"), bits("mul_right_explicit"));
+    assert_eq!(bits("div_right"), bits("div_right_explicit"));
+    assert_eq!(bits("div_left"), bits("div_left_explicit"));
+    assert_eq!(bits("ratio"), (2.8_f64 * 7.0 / 2.0).to_bits());
+    assert_eq!(bits("real_quotient"), 3.5_f64.to_bits());
+    assert_eq!(bits("literal"), (2.0 * std::f64::consts::PI).to_bits());
+    assert_eq!(bits("complex_re"), 21.0_f64.to_bits());
+    assert_eq!(bits("complex_im"), 28.0_f64.to_bits());
+    assert_eq!(bits("complex_div_re"), 1.5_f64.to_bits());
+}
+
+#[test]
+fn int_scaling_rejects_an_integer_binary64_cannot_represent() {
+    let val = (1i64 << 53) + 1;
+    let source =
+        format!("param p: Power = 1.0 W;\nparam n: Int = {val};\nnode y: Power = @p * @n;");
+    let result = compile_and_eval(&source).unwrap();
+    let message = get_node_error_message(&result, "y").expect("Int scaling should fail");
+    assert!(
+        message.contains("Int operand of `*` or `/` with a quantity")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected message: {message}"
+    );
+}
+
+#[test]
+fn int_scaling_rejects_an_inexact_integer_in_a_const_node() {
+    let source = "const node y: Length = 9007199254740993 * 1.0 m;";
+    let error = compile_and_eval(source).expect_err(
+        "a const node is evaluated at compile time, so the conversion should fail there",
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected error: {message}"
+    );
+}
+
+/// Unit scales and coordinates are typed by the rules node bodies use (#2195):
+/// the same expression has the same meaning with and without an `@`
+/// reference, and an `Int` scale is converted exactly.
+#[test]
+fn unit_scales_and_coordinates_follow_node_typing() {
+    let source = "\
+base dim Money;
+base unit USD: Money;
+param k: Dimensionless = 1.0;
+param n: Int = 3;
+const unit kilo_m: Length = 1000 m;
+const unit third_m: Length = (to_float(1) / 3) m;
+unit half_m: Length = (@k * div_floor(1, 2) + 0.5) m;
+unit triple_usd: Money = (@n) USD;
+index Steps = range(0.0 s, 2 * 30.0 s, step: 30.0 s);
+node e: Time[Steps] = for s: Steps { coord(s) };
+node a: Length = 2.0 kilo_m;
+node b: Length = 3.0 third_m;
+node c: Length = 1.0 half_m;
+node d: Money = 2.0 triple_usd;
+";
+    let result = compile_and_eval(source).unwrap();
+    let bits = |name: &str| find_value(&result, name).to_bits();
+    assert_eq!(bits("a"), 2000.0_f64.to_bits());
+    assert_eq!(bits("b"), (3.0 * (1.0_f64 / 3.0)).to_bits());
+    assert_eq!(bits("c"), 0.5_f64.to_bits());
+    assert_eq!(bits("d"), 6.0_f64.to_bits());
+}
+
+#[test]
+fn int_division_in_a_unit_scale_is_rejected_with_and_without_graph_refs() {
+    for source in [
+        "unit third_m: Length = (1 / 3) m;",
+        "param k: Dimensionless = 1.0;\nunit third_m: Length = (@k * (1 / 3)) m;",
+    ] {
+        let error = compile_and_eval(source).expect_err("`1 / 3` divides two Int operands");
+        assert!(
+            format!("{error:?}").contains("IntOperandDivision"),
+            "expected D043 for `{source}`, got {error:?}"
+        );
+    }
+}
+
+#[test]
+fn int_unit_scales_reject_an_integer_binary64_cannot_represent() {
+    let error = compile_and_eval("const unit u: Length = 9007199254740993 m;")
+        .expect_err("the scale has no exact binary64 value");
+    assert!(
+        error
+            .to_string()
+            .contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected error: {error}"
+    );
+    let source = "base dim Money;\nbase unit USD: Money;\nparam n: Int = 9007199254740993;\nunit u: Money = (@n) USD;\nnode y: Money = 1.0 u;";
+    let result = compile_and_eval(source).unwrap();
+    let message = get_node_error_message(&result, "y").expect("the dynamic scale should fail");
+    assert!(
+        message.contains("Int unit scale")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected message: {message}"
+    );
+}
+
+// ============================================================================
+// An Int exponent on a Dimensionless base (#2232)
+//
+// The exponent is converted exactly, so the result is bit-identical to the
+// explicit `to_float` form, and an Int binary64 cannot represent fails.
+// ============================================================================
+
+/// `x ^ n` is bit-identical to `x ^ to_float(n)`, including negative
+/// exponents, an odd power of a negative base, and constant nodes.
+#[test]
+fn int_exponent_matches_the_explicit_to_float_form() {
+    let source = "\
+param x: Dimensionless = 1.1;
+param n: Int = 7;
+param m: Int = -3;
+node pos: Dimensionless = @x ^ @n;
+node pos_explicit: Dimensionless = @x ^ to_float(@n);
+node neg: Dimensionless = @x ^ @m;
+node neg_explicit: Dimensionless = @x ^ to_float(@m);
+node odd_negative_base: Dimensionless = (-2.0) ^ @n;
+const node constant: Dimensionless = 2.0 ^ (5 + 5);
+";
+    let result = compile_and_eval(source).unwrap();
+    let bits = |name: &str| find_value(&result, name).to_bits();
+    assert_eq!(bits("pos"), bits("pos_explicit"));
+    assert_eq!(bits("neg"), bits("neg_explicit"));
+    assert_eq!(bits("odd_negative_base"), (-128.0_f64).to_bits());
+    assert_eq!(bits("constant"), 1024.0_f64.to_bits());
+}
+
+/// A runtime `Int` exponent binary64 cannot represent fails at evaluation.
+#[test]
+fn int_exponent_rejects_an_integer_binary64_cannot_represent() {
+    let val = (1i64 << 53) + 1;
+    let source = format!(
+        "param x: Dimensionless = 1.0;\nparam n: Int = {val};\nnode y: Dimensionless = @x ^ @n;"
+    );
+    let result = compile_and_eval(&source).unwrap();
+    let message = get_node_error_message(&result, "y").expect("Int exponent should fail");
+    assert!(
+        message.contains("Int exponent of `^`")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected message: {message}"
+    );
+}
+
+/// An inexact `Int` exponent in a constant node fails at compile time.
+#[test]
+fn int_exponent_rejects_an_inexact_integer_in_a_const_node() {
+    // A literal exponent is exact syntax, so the `Int` reaches `^` through a
+    // constant reference.
+    let source = "const node n: Int = 9007199254740993;\nconst node y: Dimensionless = 1.0 ^ @n;";
+    let error = compile_and_eval(source).expect_err(
+        "a const node is evaluated at compile time, so the conversion should fail there",
+    );
+    let message = error.to_string();
+    assert!(
+        message.contains("Int exponent of `^`")
+            && message.contains("9007199254740993 cannot be represented exactly as binary64"),
+        "unexpected error: {message}"
+    );
+}
+
+/// Zero to a negative `Int` power reports the existing infinite-result error.
+#[test]
+fn int_exponent_of_zero_to_a_negative_power_fails() {
+    let source = "param n: Int = -1;\nnode y: Dimensionless = 0.0 ^ @n;";
+    let result = compile_and_eval(source).unwrap();
+    let message = get_node_error_message(&result, "y").expect("0 ^ -1 should fail");
+    assert!(
+        message.contains("infinite"),
+        "unexpected message: {message}"
+    );
 }
 
 // ============================================================================
@@ -941,24 +1173,37 @@ proptest! {
         }
     }
 
-    /// Integer division truncates toward zero (Rust semantics)
+    /// Each integer division built-in rounds the real quotient in its named
+    /// direction, for either divisor sign.
     #[test]
-    fn int_division_truncates_toward_zero(a in -1000i64..1000, b in 1i64..1000) {
+    #[expect(
+        clippy::float_cmp,
+        reason = "both sides are integer-valued binary64 values, which compare exactly"
+    )]
+    fn int_division_builtins_round_the_real_quotient(
+        a in -1000i64..1000,
+        b in prop_oneof![-1000i64..0, 1i64..1000],
+    ) {
         let source = format!(
-            "param a: Int = {a};\nparam b: Int = {b};\nnode q: Int = @a / @b;"
+            "param a: Int = {a};\nparam b: Int = {b};\n\
+             node t: Int = div_trunc(@a, @b);\n\
+             node f: Int = div_floor(@a, @b);\n\
+             node c: Int = div_ceil(@a, @b);"
         );
         let result = compile_and_eval(&source).unwrap();
-        let q = find_int_value(&result, "q");
-        let expected = a / b; // Rust truncates toward zero
-        prop_assert_eq!(q, expected);
+        // Small operands make the binary64 quotient an exact oracle.
+        let quotient = a as f64 / b as f64;
+        prop_assert_eq!(find_int_value(&result, "t") as f64, quotient.trunc());
+        prop_assert_eq!(find_int_value(&result, "f") as f64, quotient.floor());
+        prop_assert_eq!(find_int_value(&result, "c") as f64, quotient.ceil());
     }
 
-    /// Integer modulo satisfies: a == (a / b) * b + (a % b)
+    /// Integer modulo satisfies: a == div_trunc(a, b) * b + (a % b)
     #[test]
     fn int_euclidean_identity(a in -1000i64..1000, b in 1i64..1000) {
         let source = format!(
             "param a: Int = {a};\nparam b: Int = {b};\n\
-             node q: Int = @a / @b;\nnode r: Int = @a % @b;"
+             node q: Int = div_trunc(@a, @b);\nnode r: Int = @a % @b;"
         );
         let result = compile_and_eval(&source).unwrap();
         let q = find_int_value(&result, "q");

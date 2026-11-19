@@ -140,6 +140,17 @@ describe("patchOf", () => {
       files: 0,
     });
   });
+  test("keeps the heading on one comment line", () => {
+    // MDL-6: a newline in the heading would start a `diff --git` git applies.
+    const patch = patchOf(
+      [{ path: "b", before: "1\n", after: "2\n" }],
+      "graphcal what-if: o/r @ main\ndiff --git a/evil b/evil\r\n\u2028x",
+    );
+    const [heading, blank, next] = patch.text.split("\n");
+    expect(heading).toBe("# graphcal what-if: o/r @ main diff --git a/evil b/evil x");
+    expect(blank).toBe("");
+    expect(next).toBe("diff --git a/b b/b");
+  });
 });
 
 describe("changedFiles", () => {

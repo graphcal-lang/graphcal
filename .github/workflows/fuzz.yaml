@@ -20,49 +20,77 @@ env:
 jobs:
   fuzz:
     name: fuzz (${{ matrix.target }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && format('namespace-profile-4x8-ubuntu-2604;overrides.cache-tag=graphcal-fuzz-{0}', matrix.cache_tag) || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: parser
+            cache_tag: parser
             max_len: 65536
           - target: formatter
+            cache_tag: formatter
             max_len: 65536
           - target: package_manifest
+            cache_tag: package-manifest
             max_len: 65536
           - target: package_lockfile
+            cache_tag: package-lockfile
             max_len: 131072
           - target: plugin_manifest
+            cache_tag: plugin-manifest
             max_len: 262144
           - target: plugin_section
+            cache_tag: plugin-section
             max_len: 524288
           - target: generated_project
+            cache_tag: generated-project
             max_len: 4096
+          - target: model_request
+            cache_tag: model-request
+            max_len: 262144
+          - target: json_parameters
+            cache_tag: json-parameters
+            max_len: 65536
+          - target: plugin_result
+            cache_tag: plugin-result
+            max_len: 65536
+          - target: report_bundle
+            cache_tag: report-bundle
+            max_len: 262144
     env:
       FUZZ_TARGET: ${{ matrix.target }}
       MAX_LEN: ${{ matrix.max_len }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: |
+            ~/.rustup
+            fuzz/target
+
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
 
       - name: Install nightly Rust
         run: rustup toolchain install nightly --profile minimal
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
         with:
           workspaces: fuzz
 
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --version "$CARGO_FUZZ_VERSION" --locked
 
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+      - uses: taiki-e/install-action@v2.90.3
         if: matrix.target == 'parser'
         with:
           tool: cargo-deny@0.20.2
@@ -96,7 +124,7 @@ jobs:
 
       - name: Upload crash artifacts
         if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: fuzz-${{ matrix.target }}-${{ github.sha }}
           path: fuzz/artifacts/${{ matrix.target }}

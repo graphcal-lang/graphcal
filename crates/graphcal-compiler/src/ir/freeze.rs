@@ -139,18 +139,47 @@ impl UnfrozenIR {
                 instance_templates: &instance_templates,
             },
         );
+        // The overlay binds this DAG's own lexical names. An expression this
+        // DAG holds in another module's scope (a selective include alias's
+        // annotation, written in the template) resolves through that
+        // module's scope alone, never through this DAG's names.
+        let overlay_for = |resolution_owner: &crate::dag_id::DagId| {
+            if resolution_owner == owner {
+                overlay
+            } else {
+                crate::hir::expr_lower::context::BindingOverlay::None
+            }
+        };
         let lower_in = |expr: &Expr, resolution_owner: &crate::dag_id::DagId| {
             let scope =
                 crate::hir::lower::ModuleScope::new(resolution_owner, resolver, &generic_scope);
             let expr_ctx = crate::hir::expr_lower::context::ExprLoweringContext::with_overlay(
                 scope,
                 &time_zones,
-                overlay,
+                overlay_for(resolution_owner),
             );
             crate::hir::expr_lower::lower::lower_expr(expr, expr_ctx)
                 .map_err(|err| crate::hir::diagnostics::expr_lower_error_to_semantic(&err, src))
         };
         let lower_scoped = |expr: &InScope<Expr>| lower_in(&expr.syntax, &expr.resolution_owner);
+        // A constant or node body may be unfinished: it accepts `todo` holes.
+        let lower_unfinished = |expr: &InScope<Expr>| {
+            let scope = crate::hir::lower::ModuleScope::new(
+                &expr.resolution_owner,
+                resolver,
+                &generic_scope,
+            );
+            crate::hir::expr_lower::lower::lower_expr(
+                &expr.syntax,
+                crate::hir::expr_lower::context::ExprLoweringContext::with_overlay(
+                    scope,
+                    &time_zones,
+                    overlay_for(&expr.resolution_owner),
+                )
+                .allowing_todo_holes(),
+            )
+            .map_err(|error| crate::hir::diagnostics::expr_lower_error_to_semantic(&error, src))
+        };
         let lower_type_annotation = |type_ann: &InScope<TypeExpr>| -> Result<
             crate::hir::type_annotation::TypeAnnotation,
             SemanticError,
@@ -255,8 +284,9 @@ impl UnfrozenIR {
                     Decl::Const(entry) => Decl::Const(ConstEntry {
                         doc: entry.doc,
                         type_ann: lower_type_annotation(&entry.type_ann)?,
-                        expr: lower_scoped(&entry.expr)?,
+                        expr: lower_unfinished(&entry.expr)?,
                         identity: entry.identity,
+                        origin: entry.origin,
                         span: entry.span,
                         definition_range: entry.definition_range,
                     }),
@@ -272,23 +302,9 @@ impl UnfrozenIR {
                     Decl::Node(entry) => Decl::Node(NodeEntry {
                         doc: entry.doc,
                         type_ann: lower_type_annotation(&entry.type_ann)?,
-                        definition: crate::hir::expr_lower::lower::lower_expr(
-                            &entry.definition.syntax,
-                            crate::hir::expr_lower::context::ExprLoweringContext::with_overlay(
-                                crate::hir::lower::ModuleScope::new(
-                                    &entry.definition.resolution_owner,
-                                    resolver,
-                                    &generic_scope,
-                                ),
-                                &time_zones,
-                                overlay,
-                            )
-                            .allowing_todo_holes(),
-                        )
-                        .map_err(|error| {
-                            crate::hir::diagnostics::expr_lower_error_to_semantic(&error, src)
-                        })?,
+                        definition: lower_unfinished(&entry.definition)?,
                         identity: entry.identity,
+                        origin: entry.origin,
                         span: entry.span,
                         definition_range: entry.definition_range,
                     }),
@@ -303,7 +319,7 @@ impl UnfrozenIR {
                                     &generic_scope,
                                 ),
                                 &time_zones,
-                                overlay,
+                                overlay_for(&entry.body.resolution_owner),
                             ),
                         )
                         .map_err(|err| {

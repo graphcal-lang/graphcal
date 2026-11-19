@@ -88,16 +88,15 @@ fn check_draft(
     draft: crate::tir::typed::TirDraft,
     src: crate::source_id::SourceId,
 ) -> Result<crate::tir::typed::CheckedTir, SemanticError> {
-    draft
-        .instantiate(
-            &crate::tir::typed::CheckedOverrideDependencies::default(),
-            src,
-        )
-        .and_then(|instantiated| {
-            crate::outcome::without_cancellation(|cancellation| {
-                instantiated.check(src, cancellation)
-            })
-        })
+    crate::outcome::without_cancellation(|cancellation| {
+        draft
+            .instantiate(
+                &crate::tir::typed::CheckedOverrideDependencies::default(),
+                src,
+                cancellation,
+            )?
+            .check(src, cancellation)
+    })
 }
 
 /// The checked declared type of every root value declaration and imported
@@ -134,10 +133,8 @@ fn module_aware_tir(source: &str) -> (crate::tir::typed::TirDraft, crate::source
     let desugared = crate::desugar::desugared_ast::File::from(raw_file);
     let file = desugared;
     let src = make_src(source);
-    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(ir.dag_id().clone(), &file.declarations);
-    let resolver = modules.build().unwrap();
+    let crate::ir::lower::LoweredFile { hir: ir, resolver } =
+        crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut project_types = crate::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
@@ -1308,8 +1305,8 @@ fn builtin_arity_is_checked_before_arguments_are_inferred() {
         ("norm", "{bad}, 1.0", 1),
         ("dot", "{bad}", 2),
         ("year", "{bad}, 1.0", 1),
-        ("from_jd", "{bad}, 1.0", 1),
-        ("to_jd", "{bad}, 1.0", 1),
+        ("from_unix", "{bad}, 1.0", 1),
+        ("to_unix", "{bad}, 1.0", 1),
         ("to_tai", "{bad}, 1.0", 1),
         ("epoch<TT>", "{bad}, 1.0", 1),
         ("to_float", "{bad}, 1.0", 1),
@@ -1790,6 +1787,227 @@ fn check_power_int_signed_negative_literal_exponent_rejected_with_int_message() 
     );
 }
 
+// --- Integer division names its rounding (issue #2188) ---
+
+#[test]
+fn check_int_operand_division_is_rejected_with_d043() {
+    for source in [
+        "param a: Int = 7;\nnode q: Int = @a / 2;",
+        "const node q: Int = 7 / 2;",
+        "param n: Int = 4;\nnode share: Dimensionless = to_float(1 / @n);",
+    ] {
+        let err = check(source).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SemanticError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::IntOperandDivision),
+                    ..
+                })
+            ),
+            "{source}: {err:?}"
+        );
+    }
+}
+
+// --- An Int scales a quantity in `*` and `/` (issue #2187) ---
+
+const INT_SCALING_PARAMS: &str = "param p: Power = 2.8 W;\n\
+     param t: Time = 2.0 s;\n\
+     param n: Int = 4;\n\
+     param z: Complex<Length> = complex(3.0 m, 4.0 m);\n\
+     param w: Complex<Dimensionless> = complex(1.0, 2.0);\n\
+     param b: Bool = true;\n";
+
+#[test]
+fn check_int_scales_real_and_complex_quantities() {
+    for node in [
+        "node x: Power = @p * @n;",
+        "node x: Power = @n * @p;",
+        "node x: Power = @p / @n;",
+        "node x: Frequency = @n / @t;",
+        "node x: Power = @p * @n / 2;",
+        "node x: Power = 2 * @n * @p;",
+        "node x: Length = 2 * PI * 1.0 m;",
+        "node x: Complex<Length> = @z * @n;",
+        "node x: Complex<Length> = @n * @z;",
+        "node x: Complex<Length> = @z / @n;",
+        "node x: Complex<Dimensionless> = @n / @w;",
+        "const node x: Length = 3 * 1.0 m;",
+    ] {
+        let source = format!("{INT_SCALING_PARAMS}{node}");
+        check(&source).unwrap_or_else(|err| panic!("{node}: {err:?}"));
+    }
+}
+
+#[test]
+fn check_int_scaling_keeps_the_quantity_dimension() {
+    let source = format!("{INT_SCALING_PARAMS}node x: Energy = @p * @n;");
+    let err = check(&source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::DimensionMismatchInAnnotation { .. }
+                ),
+                ..
+            })
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_int_does_not_mix_with_quantities_outside_scaling() {
+    for node in [
+        "node x: Power = @p + @n;",
+        "node x: Power = @n - @p;",
+        "node x: Bool = @p > @n;",
+        "node x: Bool = @n == @p;",
+        "node x: Complex<Length> = @z + @n;",
+        "node x: Power = @b * @n;",
+        "node x: Power = @n * @b;",
+    ] {
+        let source = format!("{INT_SCALING_PARAMS}{node}");
+        let err = check(&source).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SemanticError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                    ..
+                })
+            ),
+            "{node}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn check_int_quotient_does_not_reach_quantity_scaling() {
+    // `@n / 2` is still `/` on two Ints, so a truncated quotient cannot
+    // silently scale a quantity.
+    for node in [
+        "node x: Power = @n / 2 * @p;",
+        "node x: Power = @p * (@n / 2);",
+    ] {
+        let source = format!("{INT_SCALING_PARAMS}{node}");
+        let err = check(&source).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SemanticError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::IntOperandDivision),
+                    ..
+                })
+            ),
+            "{node}: {err:?}"
+        );
+    }
+}
+
+// --- An Int exponent on a Dimensionless base (issue #2232) ---
+
+const INT_EXPONENT_PARAMS: &str = "param x: Dimensionless = 1.5;\n\
+     param l: Length = 2.0 m;\n\
+     param n: Int = 3;\n\
+     param w: Complex<Dimensionless> = complex(1.0, 2.0);\n";
+
+/// A runtime `Int` exponent is accepted on a `Dimensionless` base, in nodes
+/// and constant nodes alike.
+#[test]
+fn check_int_exponent_on_a_dimensionless_base() {
+    for node in [
+        "node y: Dimensionless = @x ^ @n;",
+        "node y: Dimensionless = @x ^ (-@n);",
+        "node y: Dimensionless = @x ^ (@n + 1);",
+        "node y: Dimensionless = 2.0 ^ @n;",
+        "node y: Dimensionless = (@l / 1.0 m) ^ @n;",
+        "const node y: Dimensionless = 2.0 ^ (1 + 2);",
+    ] {
+        let source = format!("{INT_EXPONENT_PARAMS}{node}");
+        check(&source).unwrap_or_else(|err| panic!("{node}: {err:?}"));
+    }
+}
+
+/// A dimensioned base keeps D005: the value of an `Int` exponent cannot fix
+/// the result dimension.
+#[test]
+fn check_int_exponent_on_a_dimensioned_base_is_rejected() {
+    let source = format!("{INT_EXPONENT_PARAMS}node y: Volume = @l ^ @n;");
+    let err = check(&source).unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(
+                    DimensionError::RuntimeExponentForDimensionedBase
+                ),
+                ..
+            })
+        ),
+        "got: {err:?}"
+    );
+}
+
+/// An `Int` base still requires an exact non-negative exponent, so no real
+/// quotient of two `Int`s appears, and a complex base still has no `^`.
+#[test]
+fn check_int_exponent_leaves_int_and_complex_bases_unchanged() {
+    for node in [
+        "node y: Int = 2 ^ @n;",
+        "node y: Int = 2 ^ (-@n);",
+        "node y: Complex<Dimensionless> = @w ^ @n;",
+    ] {
+        let source = format!("{INT_EXPONENT_PARAMS}{node}");
+        let err = check(&source).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SemanticError::Located(crate::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { .. }),
+                    ..
+                })
+            ),
+            "{node}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn check_int_division_builtins_require_int_operands() {
+    check("param a: Int = 7;\nnode q: Int = div_floor(@a, 2);").unwrap();
+    let err = check("param x: Length = 1.0 m;\nnode q: Int = div_ceil(@x, 2);").unwrap_err();
+    assert!(
+        matches!(
+            &err,
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatch { help, .. }),
+                ..
+            }) if **help == crate::semantic_error::dimension_mismatch::MismatchRule::IntDivisionOperands(
+                crate::builtin::IntDivisionFn::Ceil
+            )
+        ),
+        "got: {err:?}"
+    );
+}
+
+#[test]
+fn check_exact_rational_exponent_syntax_is_not_int_division() {
+    // `(4/2)` and `(3/2)` spell exact exponents; they are not `Int / Int`.
+    check("param n: Int = 3;\nnode q: Int = @n ^ (4/2);").unwrap();
+    check("param x: Dimensionless = 4.0;\nnode y: Dimensionless = @x ^ (3/2);").unwrap();
+}
+
+#[test]
+fn check_int_division_builtins_fold_where_a_static_int_is_required() {
+    // Rewriting a constant `a / b` as `div_trunc(a, b)` keeps an exponent
+    // chain or a Fin-key addend static.
+    check("const node i: Int = 2 ^ div_trunc(7, 2);").unwrap();
+    check("node k: Key<Fin(5)> = key(Fin(3), 1) + div_floor(5, 2);").unwrap();
+}
+
 // --- If condition must be dimensionless ---
 
 #[test]
@@ -2247,13 +2465,14 @@ param p: MkPos = 1.0;";
 }
 
 #[test]
-fn check_index_as_type_application_head_reports_wrong_universe() {
+fn check_index_as_type_application_head_reports_index_as_type() {
+    // The same N021 as `param x: M`, not a module-resolution catch-all.
     let source = "\
 pub index M = { A };
 param x: M<Length> = 1.0;";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Module(kind @ ModuleError::ModuleResolution { .. }), .. }) if kind.to_string().contains("`M` is an index, not a type")),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(kind @ NameError::IndexAsType { .. }), .. }) if kind.to_string() == "index `M` cannot be used as a type"),
         "got: {err:?}"
     );
 }
@@ -2340,11 +2559,10 @@ const unit EUR: Money = (@rate) USD;";
 }
 
 #[test]
-fn dynamic_unit_scale_requires_scalar_dimensionless_quantity() {
+fn dynamic_unit_scale_requires_int_or_scalar_dimensionless_quantity() {
     for factor in [
         "param factor: Length = 2.0 m;",
         "param factor: Bool = true;",
-        "param factor: Int = 2;",
         "pub index Case = { A, B };\nparam factor: Dimensionless[Case] = { Case#A: 1.0, Case#B: 2.0 };",
     ] {
         let source = format!(
@@ -2356,7 +2574,7 @@ fn dynamic_unit_scale_requires_scalar_dimensionless_quantity() {
                 err,
                 SemanticError::Located(crate::diagnostic::Diagnostic {
                     kind: SemanticErrorKind::Dimension(
-                        DimensionError::DynamicUnitScaleTypeMismatch { .. }
+                        DimensionError::UnitScaleTypeMismatch { .. }
                     ),
                     ..
                 })
@@ -2367,11 +2585,16 @@ fn dynamic_unit_scale_requires_scalar_dimensionless_quantity() {
 }
 
 #[test]
-fn dynamic_unit_scale_accepts_scalar_dimensionless_quantity() {
-    check(
-        "base dim Money;\nbase unit USD: Money;\nparam factor: Dimensionless = 1.08;\nunit EUR: Money = (@factor) USD;",
-    )
-    .unwrap();
+fn dynamic_unit_scale_accepts_int_or_scalar_dimensionless_quantity() {
+    for factor in [
+        "param factor: Dimensionless = 1.08;",
+        "param factor: Int = 2;",
+    ] {
+        check(&format!(
+            "base dim Money;\nbase unit USD: Money;\n{factor}\nunit EUR: Money = (@factor) USD;"
+        ))
+        .unwrap();
+    }
 }
 
 #[test]
@@ -2909,10 +3132,56 @@ fn domain_bound_quantity_literal_matches() {
     check(source).unwrap();
 }
 
+/// The written integer literal of an `Int` bound on a `Dimensionless`
+/// domain, or a panic naming the unexpected outcome.
+fn int_bound_on_dimensionless_literal(source: &str) -> Option<i64> {
+    match check(source) {
+        Err(SemanticError::Located(crate::diagnostic::Diagnostic {
+            kind:
+                SemanticErrorKind::Domain(DomainError::IntBoundOnDimensionlessDomain {
+                    literal, ..
+                }),
+            ..
+        })) => literal,
+        other => panic!("expected IntBoundOnDimensionlessDomain, got: {other:?}"),
+    }
+}
+
 #[test]
-fn domain_bound_dimensionless_accepts_int() {
-    // Bare Int literal is accepted as a Dimensionless bound (existing behavior).
+fn domain_bound_dimensionless_rejects_int_literal() {
+    // Bounds are comparisons, and `Int` is never compared with a quantity (#2234).
     let source = "param r: Dimensionless(min: 0, max: 1) = 0.5;";
+    assert_eq!(int_bound_on_dimensionless_literal(source), Some(0));
+}
+
+#[test]
+fn domain_bound_dimensionless_rejects_negated_int_literal() {
+    let source = "param r: Dimensionless(min: -3, max: 1.0) = 0.5;";
+    assert_eq!(int_bound_on_dimensionless_literal(source), Some(-3));
+}
+
+#[test]
+fn domain_bound_dimensionless_rejects_computed_int() {
+    let source = "const node LOW: Int = 2;\nparam r: Dimensionless(min: 0.0, max: @LOW) = 0.5;";
+    assert_eq!(int_bound_on_dimensionless_literal(source), None);
+}
+
+#[test]
+fn domain_bound_dimensionless_field_rejects_int_literal() {
+    let source = "type Ratio { Ratio(r: Dimensionless(max: 1)) }\nnode x: Ratio = Ratio(r: 0.5);";
+    assert_eq!(int_bound_on_dimensionless_literal(source), Some(1));
+}
+
+#[test]
+fn domain_bound_generic_field_specialized_to_dimensionless_rejects_int() {
+    let source = "type Box<D: Dim> { Box(x: D(min: 0)) }\nnode b: Box<Dimensionless> = Box<Dimensionless>(x: 0.5);";
+    assert_eq!(int_bound_on_dimensionless_literal(source), Some(0));
+}
+
+#[test]
+fn domain_bound_dimensionless_accepts_converted_int() {
+    let source =
+        "const node LOW: Int = 2;\nparam r: Dimensionless(min: 0.0, max: to_float(@LOW)) = 0.5;";
     check(source).unwrap();
 }
 
@@ -4063,8 +4332,8 @@ plot p = {
     assert!(matches!(
         error,
         SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::PlotEncodingAxisMismatch { channels, .. }), .. })
-            if channels.iter().any(|channel| channel.to_string().contains("test.Step"))
-                && channels.iter().any(|channel| channel.to_string().contains("test.Pair"))
+            if channels.iter().any(|channel| channel.to_string() == "`x` ranges over `Step`")
+                && channels.iter().any(|channel| channel.to_string() == "`y` ranges over `Pair`")
     ));
 }
 
@@ -4259,7 +4528,7 @@ plot real_plot = { mark: line, encode: { x: for s: Step { @vals[s] } } };
 figure f = { plots: [real_plot, my_polt] };";
     let err = check(source).unwrap_err();
     assert!(
-        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownPlotReference { owner_kind: "figure", name, .. }), .. }) if name.to_string() == "my_polt"),
+        matches!(&err, SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Name(NameError::UnknownPlotReference { owner_kind: crate::declaration_kind::DeclarationKind::Figure, name, .. }), .. }) if name.to_string() == "my_polt"),
         "got: {err:?}"
     );
 }
@@ -4278,7 +4547,7 @@ figure outer_figure = { plots: [inner] };";
             err,
             SemanticError::Located(crate::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Name(NameError::CompositionReferencesNonPlot {
-                    actual_kind: "figure",
+                    actual_kind: crate::declaration_kind::DeclarationKind::Figure,
                     ..
                 }),
                 ..
@@ -4880,22 +5149,22 @@ fn recurrence_reads_are_classified_from_their_written_form() {
     let action = || DeclName::expect_valid("action");
     for (closure, expected, anchor) in [
         (
-            "s + sum(@action)",
+            "x + sum(@action)",
             RecurrenceRejection::WholeValueRead { target: action() },
             "@action",
         ),
         (
-            "s + sum(for u: Step { @action[u] })",
+            "x + sum(for u: Step { @action[u] })",
             RecurrenceRejection::NotStepKeyed { target: action() },
             "@action",
         ),
         (
-            "s + @action[nearest_key(Step, 0.0 s)]",
+            "x + @action[nearest_key(Step, 0.0 s)]",
             RecurrenceRejection::NotStepKeyed { target: action() },
             "@action",
         ),
         (
-            "s + @action[prev_t] + @action[t]",
+            "x + @action[prev_t] + @action[t]",
             RecurrenceRejection::SameStepCycle {
                 cycle: vec![action(), DeclName::expect_valid("state")],
             },
@@ -4905,7 +5174,7 @@ fn recurrence_reads_are_classified_from_their_written_form() {
         let source = format!(
             "{RECURRENCE_AXIS}\
              node action: Dimensionless[Step] = for t: Step {{ @state[t] }};\n\
-             node state: Dimensionless[Step] = unfold(Step, 1.0, |s, prev_t, t| {closure});"
+             node state: Dimensionless[Step] = unfold(Step, 1.0, |x, prev_t, t| {closure});"
         );
         let (reason, _, text) = recurrence_rejection(&source);
         assert_eq!(reason, expected, "{closure}");
@@ -5002,4 +5271,81 @@ fn unfinished_formulas_are_checked_but_never_executable() {
     ));
     assert!(tir.root().is_unfinished(&pending.identity()));
     assert!(!tir.root().is_unfinished(&done.identity()));
+}
+
+/// Each source declares several equally bad facts; the checker must report
+/// the first in declaration order on every run. Semantic facts used to live
+/// in `HashMap`s, whose per-instance random seed made the reported fact vary
+/// between runs (TIR-5), so each source is checked repeatedly.
+#[test]
+fn several_bad_semantic_facts_report_the_first_in_declaration_order() {
+    let cases = [
+        // Domain bound dimension mismatches.
+        (
+            "param a: Length(min: 1.0 s) = 2.0 m;\n\
+             param b: Length(min: 1.0 s) = 2.0 m;\n\
+             param c: Length(min: 1.0 s) = 2.0 m;\n\
+             param d: Length(min: 1.0 s) = 2.0 m;",
+            "param a",
+        ),
+        // Runtime reads in declaration domain bounds.
+        (
+            "param p: Length = 1.0 m;\n\
+             param a: Length(min: @p) = 2.0 m;\n\
+             param b: Length(min: @p) = 2.0 m;\n\
+             param c: Length(min: @p) = 2.0 m;\n\
+             param d: Length(min: @p) = 2.0 m;",
+            "param a",
+        ),
+        // Runtime reads in field domain bounds.
+        (
+            "param p: Length = 1.0 m;\n\
+             type Ta { Ta(v: Length(min: @p)) }\n\
+             type Tb { Tb(v: Length(min: @p)) }\n\
+             type Tc { Tc(v: Length(min: @p)) }\n\
+             type Td { Td(v: Length(min: @p)) }",
+            "type Ta",
+        ),
+        // Dynamic unit scales of the wrong dimension.
+        (
+            "base dim Money;\n\
+             base unit USD: Money;\n\
+             param rate: Dimensionless = 2.0;\n\
+             unit ua: Money = (@rate * 1.0 m) USD;\n\
+             unit ub: Money = (@rate * 1.0 m) USD;\n\
+             unit uc: Money = (@rate * 1.0 m) USD;\n\
+             unit ud: Money = (@rate * 1.0 m) USD;",
+            "unit ua",
+        ),
+        // Dynamic unit scales that read an assertion.
+        (
+            "base dim Money;\n\
+             base unit USD: Money;\n\
+             param rate: Dimensionless = 2.0;\n\
+             assert ok = @rate > 0.0;\n\
+             unit ua: Money = (@ok) USD;\n\
+             unit ub: Money = (@ok) USD;\n\
+             unit uc: Money = (@ok) USD;\n\
+             unit ud: Money = (@ok) USD;",
+            "unit ua",
+        ),
+    ];
+    for (source, first_bad_line) in cases {
+        let line_start = source.find(first_bad_line).unwrap();
+        let line_end = source[line_start..]
+            .find('\n')
+            .map_or(source.len(), |end| line_start + end);
+        for _ in 0..16 {
+            let error = check(source).unwrap_err();
+            let SemanticError::Located(crate::diagnostic::Diagnostic { primary: span, .. }) =
+                &error
+            else {
+                panic!("expected a located diagnostic for `{source}`, got {error:?}");
+            };
+            assert!(
+                (line_start..line_end).contains(&span.offset()),
+                "`{source}`: expected the diagnostic on `{first_bad_line}`, got {error:?}"
+            );
+        }
+    }
 }

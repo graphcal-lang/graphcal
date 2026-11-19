@@ -2,7 +2,7 @@
 source: crates/graphcal-project/tests/error_snapshots.rs
 expression: rendered
 ---
-non-exhaustive map literal: missing 3 entries; first missing entry is (missing_multi_axis_combinations.Row#First, missing_multi_axis_combinations.Column#Right)
+non-exhaustive map literal: missing 3 entries; first missing entry is (Row#First, Column#Right)
     Diagnostic severity: error
 Begin snippet for missing_multi_axis_combinations.gcl starting at line 3, column 1
 

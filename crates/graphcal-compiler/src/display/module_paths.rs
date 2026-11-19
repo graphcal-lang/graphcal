@@ -28,13 +28,7 @@ pub struct ModuleDeclName {
     name: ScopedName,
 }
 
-impl ModuleDeclName {
-    /// The source module path of the declaring module.
-    #[must_use]
-    pub const fn module(&self) -> &ModulePathKey {
-        &self.module
-    }
-}
+impl ModuleDeclName {}
 
 impl fmt::Display for ModuleDeclName {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -178,7 +172,7 @@ mod tests {
         paths.record(&path(&["pipeline", "lib", "helper"]), &helper);
 
         let name = paths.name(&lib(), &leaf("x")).unwrap();
-        assert_eq!(name.module(), &path(&["pipeline", "lib"]));
+        assert_eq!(&name.module, &path(&["pipeline", "lib"]));
         assert_eq!(name.to_string(), "pipeline.lib::x");
         assert_eq!(
             paths.name(&helper, &leaf("pending")).unwrap().to_string(),

@@ -2,8 +2,9 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
-use graphcal_model_protocol::{InterfaceFingerprint, SessionSpec};
+use graphcal_model_protocol::{InterfaceFingerprint, SessionSpec, UnitSpelling};
 
 /// The `graphcal` executable and the model file it serves.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,9 +59,25 @@ impl GraphcalCommand {
         self.base("describe")
     }
 
+    /// `graphcal model unit` for `units`.
+    pub(crate) fn unit(&self, units: &[UnitSpelling]) -> Command {
+        let mut command = self.base("unit");
+        command.arg("--");
+        command.args(units.iter().map(UnitSpelling::as_str));
+        command
+    }
+
     /// `graphcal model serve` for `spec`, refusing any interface but the
-    /// one with `fingerprint`.
-    pub(crate) fn serve(&self, spec: &SessionSpec, fingerprint: InterfaceFingerprint) -> Command {
+    /// one with `fingerprint`, with the values of its fixed parameters in
+    /// the JSON document `fixed` and each request bounded by
+    /// `request_timeout`.
+    pub(crate) fn serve(
+        &self,
+        spec: &SessionSpec,
+        fingerprint: InterfaceFingerprint,
+        fixed: Option<&PathBuf>,
+        request_timeout: Option<Duration>,
+    ) -> Command {
         let mut command = self.base("serve");
         for input in spec.inputs() {
             command.arg("--input").arg(input.as_str());
@@ -72,6 +89,16 @@ impl GraphcalCommand {
             command
                 .arg("--unit")
                 .arg(format!("{}={}", choice.port(), choice.unit()));
+        }
+        if let Some(fixed) = fixed {
+            command.arg("--params-json-file").arg(fixed);
+        }
+        if let Some(timeout) = request_timeout {
+            // Shortest round-tripping decimal seconds, as the server parses
+            // them.
+            command
+                .arg("--request-timeout")
+                .arg(timeout.as_secs_f64().to_string());
         }
         command
             .arg("--expect-fingerprint")
@@ -116,7 +143,12 @@ mod tests {
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         )
         .unwrap();
-        let command = GraphcalCommand::new("model.gcl").serve(&spec, fingerprint);
+        let command = GraphcalCommand::new("model.gcl").serve(
+            &spec,
+            fingerprint,
+            None,
+            Some(Duration::from_millis(1500)),
+        );
         let arguments = command
             .get_args()
             .map(|argument| argument.to_string_lossy().into_owned())
@@ -133,6 +165,8 @@ mod tests {
                 "margin",
                 "--unit",
                 "load=kN",
+                "--request-timeout",
+                "1.5",
                 "--expect-fingerprint",
                 "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             ]

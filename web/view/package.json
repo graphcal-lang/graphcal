@@ -12,14 +12,14 @@
   "dependencies": {
     "@codemirror/commands": "6.11.1",
     "@codemirror/language": "6.13.1",
-    "@codemirror/merge": "6.12.2",
+    "@codemirror/merge": "6.12.3",
     "@codemirror/state": "6.7.6",
-    "@codemirror/view": "6.43.14",
+    "@codemirror/view": "6.43.15",
     "@lezer/highlight": "1.2.5",
     "zod": "4.6.7"
   },
   "devDependencies": {
-    "@types/node": "26.6.5",
+    "@types/node": "26.6.6",
     "typescript": "7.0.2",
     "vite": "catalog:",
     "vite-plus": "catalog:"
@@ -27,7 +27,7 @@
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "12.14.0",
+      "version": "12.18.0",
       "onFail": "download"
     }
   }

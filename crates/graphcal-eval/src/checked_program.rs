@@ -111,6 +111,12 @@ impl ExecutionFacts {
             .flat_map(|facts| facts.const_presentations.iter())
     }
 
+    /// The constants of every DAG: their values, or why they have none.
+    #[must_use]
+    pub const fn consts(&self) -> &ConstPool {
+        &self.consts
+    }
+
     /// Resolved struct-field constraints of every concrete application.
     #[must_use]
     pub fn struct_field_constraints(&self) -> &StructFieldConstraints {
@@ -237,17 +243,6 @@ impl EvaluatedTir {
     #[must_use]
     pub const fn consts(&self) -> &ConstPool {
         &self.consts
-    }
-
-    /// The evaluated constants of the DAG at `position` of the TIR.
-    ///
-    /// # Panics
-    ///
-    /// Panics when `position` is a position of another registry with more
-    /// DAGs.
-    #[must_use]
-    pub(crate) fn pool_at(&self, position: DagPosition) -> &Arc<RuntimeValueMap> {
-        self.pools.at(position)
     }
 
     /// Facts of the checked modules this TIR includes.

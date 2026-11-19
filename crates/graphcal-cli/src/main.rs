@@ -1,11 +1,10 @@
-// The CLI is the imperative shell — writing to stdout/stderr is the binary's
-// whole purpose. Suppress both lints crate-wide so that library crates keep
-// the workspace-level warning while this binary doesn't need per-call-site
-// `#[expect]` blocks.
+// The CLI is the imperative shell — writing to stderr is part of the binary's
+// whole purpose, so that lint is suppressed crate-wide. Stdout is not: every
+// stdout write goes through `outln!`/`out!` (see `stdout.rs`), which handle a
+// closed pipe, so `clippy::print_stdout` stays active to catch a `println!`.
 #![expect(
     clippy::print_stderr,
-    clippy::print_stdout,
-    reason = "CLI binary; stdout/stderr are the user-facing output channels"
+    reason = "CLI binary; stderr is the user-facing diagnostic channel"
 )]
 #![expect(
     clippy::result_large_err,
@@ -21,6 +20,9 @@
 #[cfg(target_env = "musl")]
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[macro_use]
+mod stdout;
 
 mod deps;
 mod display;
@@ -48,6 +50,7 @@ use graphcal_io::{
 };
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::{LoadedProject, build_rooted_filesystem, load_project};
+use graphcal_project::prepare::PreparedProject;
 use graphcal_project::project_compiler::ProjectCompiler;
 
 use graphcal::format::{
@@ -130,7 +133,7 @@ enum Commands {
     },
     /// Check .gcl files for type/dimension errors without evaluation
     Check {
-        /// Reject unfinished node definitions without evaluating runtime values
+        /// Reject unfinished constant and node definitions without evaluating runtime values
         #[arg(long)]
         deny_todo: bool,
         /// Files or directories to check (default: current directory)
@@ -207,6 +210,18 @@ enum ModelCommands {
         #[arg(long)]
         root: Option<PathBuf>,
     },
+    /// Print the dimension and SI scale of fixed-scale unit expressions as
+    /// protocol JSON
+    Unit {
+        /// Path to the entry .gcl file, whose scope resolves the units
+        file: PathBuf,
+        /// Unit expression, e.g. `h` or `km/s`; repeat for several
+        #[arg(required = true, value_name = "UNIT", value_parser = model::parse_unit_spelling)]
+        units: Vec<graphcal_model_protocol::UnitSpelling>,
+        /// Project root directory (overrides automatic graphcal.toml detection)
+        #[arg(long)]
+        root: Option<PathBuf>,
+    },
     /// Evaluate request batches over stdin/stdout Arrow IPC streams
     #[command(group(
         clap::ArgGroup::new("fingerprint")
@@ -234,6 +249,18 @@ enum ModelCommands {
         /// Serve without checking the interface fingerprint
         #[arg(long)]
         skip_fingerprint_check: bool,
+        /// End the session when one request batch is still evaluating after
+        /// this many seconds; by default a request evaluates until it finishes
+        #[arg(long, value_name = "SECONDS", value_parser = model::parse_request_timeout)]
+        request_timeout: Option<std::time::Duration>,
+        /// Print the session's request-stream schema as an Arrow IPC stream
+        /// without batches on stdout and exit, instead of serving
+        #[arg(long, conflicts_with = "request_timeout")]
+        print_request_schema: bool,
+        /// Values of unvaried params, used instead of their defaults in every
+        /// row; stdin is not available as a JSON source
+        #[command(flatten)]
+        parameters: ParameterArgs,
         /// Project root directory (overrides automatic graphcal.toml detection)
         #[arg(long)]
         root: Option<PathBuf>,
@@ -394,7 +421,7 @@ fn main() {
     }))
     .ok();
 
-    let cli = Cli::parse();
+    let cli = Cli::try_parse().unwrap_or_else(|error| stdout::exit_with_clap_output(&error));
     stacker::grow(COMMAND_STACK_SIZE, || run_command(cli));
 }
 
@@ -543,20 +570,15 @@ fn run_plugin_new(name: &str, dir: Option<&Path>) {
         std::fs::write(&path, &file.contents)
             .unwrap_or_else(|e| bail_with(&format!("could not write {}", path.display()), e, 2));
     }
-    println!("created plugin crate `{name}` at {}", plan.root.display());
-    println!("next steps:");
-    println!("  cd {}", plan.root.display());
-    println!("  cargo build --release --target wasm32-unknown-unknown");
-    println!("  graphcal plugin test target/wasm32-unknown-unknown/release/<name>.wasm");
+    outln!("created plugin crate `{name}` at {}", plan.root.display());
+    outln!("next steps:");
+    outln!("  cd {}", plan.root.display());
+    outln!("  cargo build --release --target wasm32-unknown-unknown");
+    outln!("  graphcal plugin test {}", plan.release_artifact.display());
 }
 
-/// `graphcal plugin test`: load and validate a module (all ABI checks run
-/// before any plugin code), print its identity and signatures, and
-/// optionally call one function under the default resource limits.
-///
-/// Exit codes: 1 when the module fails validation or the called function
-/// fails or returns a value violating its declared kind; 2 for unreadable
-/// files or unusable --call arguments.
+/// Read a plugin module, refusing anything but a regular file and bounding
+/// the read by the plugin ingestion limit.
 fn read_plugin_module_bounded(module_path: &Path) -> Result<Vec<u8>, String> {
     let metadata = std::fs::symlink_metadata(module_path).map_err(|error| error.to_string())?;
     if !metadata.file_type().is_file() {
@@ -591,6 +613,13 @@ fn read_plugin_module_bounded(module_path: &Path) -> Result<Vec<u8>, String> {
     }
 }
 
+/// `graphcal plugin test`: load and validate a module (all ABI checks run
+/// before any plugin code), print its identity and signatures, and
+/// optionally call one function under the default resource limits.
+///
+/// Exit codes: 1 when the module fails validation or the called function
+/// fails or returns a value violating its declared kind; 2 for unreadable
+/// files or unusable --call arguments.
 fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
     let bytes = read_plugin_module_bounded(module_path).unwrap_or_else(|error| {
         bail_with(
@@ -620,15 +649,15 @@ fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
             process::exit(1);
         });
 
-    println!("plugin: {}", module_path.display());
-    println!("sha256: {}", module.sha256_hex());
-    println!(
+    outln!("plugin: {}", module_path.display());
+    outln!("sha256: {}", module.sha256_hex());
+    outln!(
         "abi: version {}, {} function(s)",
         module.manifest().abi_version,
         module.functions().len()
     );
-    println!();
-    println!("{import_block}");
+    outln!();
+    outln!("{import_block}");
     eprintln!();
     eprintln!("note: adjust the import path to the module's vendored location in your project");
 
@@ -663,11 +692,11 @@ fn run_plugin_test(module_path: &Path, call: Option<&str>, args: &[String]) {
         }
     };
 
-    println!();
+    outln!();
     let call_display = format!("{}({})", function.as_str(), args.join(", "));
     match module.call(&function, &abi_args) {
         Ok(raw) => match plugin::render_result(&signature, &raw) {
-            Ok(rendered) => println!("{call_display} = {rendered}"),
+            Ok(rendered) => outln!("{call_display} = {rendered}"),
             Err(e) => {
                 eprintln!("error: {call_display} returned {raw:?}: {e}");
                 process::exit(1);
@@ -684,9 +713,9 @@ fn run_deps_lock(root: Option<&Path>) {
     match deps::lock(root) {
         Ok(outcome) => {
             if outcome.changed {
-                println!("wrote {}", outcome.lockfile_path.display());
+                outln!("wrote {}", outcome.lockfile_path.display());
             } else {
-                println!("up to date: {}", outcome.lockfile_path.display());
+                outln!("up to date: {}", outcome.lockfile_path.display());
             }
         }
         Err(e) => {
@@ -705,16 +734,31 @@ fn report_parameter_error(error: &OverrideParseError) -> ! {
     process::exit(2);
 }
 
-fn run_model_describe(file: &Path, root: Option<&Path>) {
-    if let Err(error) = model::describe(file, root) {
-        eprintln!("error: {error}");
-        process::exit(error.exit_code());
+/// Print a `model` subcommand failure and exit with its status class.
+/// Compile errors render with their file, line and snippet, as `check` does.
+fn report_model_error(error: model::ModelServeError) -> ! {
+    let code = error.exit_code();
+    match error {
+        model::ModelServeError::Compile(error) => {
+            eprintln!("{:?}", miette::Report::new(error));
+        }
+        other => eprintln!("error: {other}"),
     }
+    process::exit(code);
 }
 
 fn run_model_command(command: ModelCommands) {
     match command {
-        ModelCommands::Describe { file, root } => run_model_describe(&file, root.as_deref()),
+        ModelCommands::Describe { file, root } => {
+            if let Err(error) = model::describe(&file, root.as_deref()) {
+                report_model_error(error);
+            }
+        }
+        ModelCommands::Unit { file, units, root } => {
+            if let Err(error) = model::resolve_units(&file, &units, root.as_deref()) {
+                report_model_error(error);
+            }
+        }
         ModelCommands::Serve {
             file,
             input,
@@ -722,6 +766,9 @@ fn run_model_command(command: ModelCommands) {
             unit,
             expect_fingerprint,
             skip_fingerprint_check: _,
+            request_timeout,
+            print_request_schema,
+            parameters,
             root,
         } => {
             // The required argument group admits exactly one of the two
@@ -730,22 +777,48 @@ fn run_model_command(command: ModelCommands) {
                 model::FingerprintCheck::Skip,
                 model::FingerprintCheck::Expect,
             );
-            run_model_serve(&file, &input, &output, &unit, &fingerprint, root.as_deref());
+            if parameters.reads_stdin() {
+                eprintln!(
+                    "error: `model serve` reads requests from stdin, so `--params-json-file -` is not available"
+                );
+                process::exit(2);
+            }
+            let overrides = match parse_overrides_with_sources(&parameters) {
+                Ok(overrides) => overrides,
+                Err(error) => report_parameter_error(&error),
+            };
+            run_model_serve(
+                &file,
+                &model::SessionSelection {
+                    inputs: &input,
+                    outputs: &output,
+                    units: &unit,
+                    fixed: &overrides,
+                },
+                &fingerprint,
+                if print_request_schema {
+                    model::ServeMode::PrintRequestSchema
+                } else {
+                    model::ServeMode::Serve(request_timeout.map_or(
+                        graphcal_model_server::RequestDeadline::Unbounded,
+                        graphcal_model_server::RequestDeadline::After,
+                    ))
+                },
+                root.as_deref(),
+            );
         }
     }
 }
 
 fn run_model_serve(
     file: &Path,
-    inputs: &[String],
-    outputs: &[String],
-    units: &[model::UnitChoiceArgument],
+    selection: &model::SessionSelection<'_>,
     fingerprint: &model::FingerprintCheck,
+    mode: model::ServeMode,
     root: Option<&Path>,
 ) {
-    if let Err(error) = model::serve(file, inputs, outputs, units, fingerprint, root) {
-        eprintln!("error: {error}");
-        process::exit(error.exit_code());
+    if let Err(error) = model::serve(file, selection, fingerprint, mode, root) {
+        report_model_error(error);
     }
 }
 
@@ -758,26 +831,21 @@ fn handle_eval(
     plot_output: Option<&PlotOutput>,
     allow_incomplete: bool,
 ) {
-    // Rooted sandbox: derive the project root from the loader's rules and
-    // confine reads to it. `root` (the user's explicit --root) takes
-    // precedence; otherwise walk up from `file`'s parent looking for
-    // `graphcal.toml`, falling back to the loose file's parent directory.
-    let outcome = build_rooted_filesystem(file, root).and_then(|fs| {
-        load_project_with_plugins(file, root, &fs).and_then(|(project, host_fns)| {
-            let prepared = ProjectCompiler::new(&project)
-                .host_fns(&host_fns)
-                .prepare()?;
-            let mut bindings = prepared.binding_builder();
-            for (name, value) in &overrides.values {
-                value.bind(name, &mut bindings)?;
-            }
-            prepared.evaluate(&bindings.finish()?)
-        })
+    let outcome = prepare_rooted_project(file, root).and_then(|prepared| {
+        let mut bindings = prepared.binding_builder();
+        for (name, value) in &overrides.values {
+            value.bind(name, &mut bindings)?;
+        }
+        prepared.evaluate(&bindings.finish()?)
     });
     match outcome {
         Ok(result) => {
             let plot_json_only = matches!(plot_output, Some(PlotOutput::Json));
-            if !plot_json_only {
+            if plot_json_only {
+                // stdout carries only the figure array, so the failures that
+                // explain a non-zero exit must still reach stderr.
+                report_unavailable_results(&result, output_view);
+            } else {
                 match format {
                     OutputFormat::Text => print_text(&result, output_view),
                     OutputFormat::Json => {
@@ -849,22 +917,16 @@ fn handle_plot_output(result: &EvalResult, plot_mode: &PlotOutput) -> bool {
     match plot_mode {
         PlotOutput::Browser | PlotOutput::HtmlFile(_) if rendered.is_empty() => {}
         PlotOutput::HtmlFile(path) => {
-            let html = graphcal_report::plot_page::render_html(
-                &rendered,
-                graphcal_report::plot_page::VegaScriptSource::Inline,
-            )
-            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
+            let html = graphcal_report::plot_page::render_html(&rendered)
+                .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
             std::fs::write(path, html).unwrap_or_else(|e| {
                 bail_with(&format!("could not write {}", path.display()), e, 2)
             });
             eprintln!("wrote plots to {}", path.display());
         }
         PlotOutput::Browser => {
-            let html = graphcal_report::plot_page::render_html(
-                &rendered,
-                graphcal_report::plot_page::VegaScriptSource::Inline,
-            )
-            .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
+            let html = graphcal_report::plot_page::render_html(&rendered)
+                .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
             let mut tmp = tempfile::Builder::new()
                 .prefix("graphcal_plot_")
                 .suffix(".html")
@@ -885,7 +947,7 @@ fn handle_plot_output(result: &EvalResult, plot_mode: &PlotOutput) -> bool {
         PlotOutput::Json => {
             let json = graphcal_report::plot_page::render_json(&rendered)
                 .unwrap_or_else(|e| bail_with("could not render plots as JSON", e, 2));
-            println!("{json}");
+            outln!("{json}");
         }
     }
     no_displayed_plots
@@ -936,6 +998,29 @@ fn report_traversal_failures(failures: &TraversalFailures) {
     });
 }
 
+/// [`load_project_with_plugins`] in the sandbox of `file`'s project root.
+///
+/// The explicit `project_root` (`--root`) takes precedence; otherwise the
+/// loader walks up from `file`'s parent looking for `graphcal.toml`, falling
+/// back to the loose file's parent directory. Reads are confined to it.
+fn load_rooted_project_with_plugins(
+    file: &Path,
+    project_root: Option<&Path>,
+) -> Result<(LoadedProject, HostFunctionRegistry), CompileError> {
+    let fs = build_rooted_filesystem(file, project_root)?;
+    load_project_with_plugins(file, project_root, &fs)
+}
+
+/// Load `file`'s project in its rooted sandbox (see
+/// [`load_rooted_project_with_plugins`]) and prepare it for evaluation.
+fn prepare_rooted_project(
+    file: &Path,
+    project_root: Option<&Path>,
+) -> Result<PreparedProject, CompileError> {
+    let (project, host_fns) = load_rooted_project_with_plugins(file, project_root)?;
+    ProjectCompiler::new(&project).host_fns(&host_fns).prepare()
+}
+
 /// Load a project and build the host function registry backing its extern
 /// (plugin) declarations: the built-in demo plugin plus every wasm plugin
 /// the project vendors, loaded through one plugin host per invocation.
@@ -954,6 +1039,11 @@ fn load_project_with_plugins<F: graphcal_io::FileSystemReader>(
     Ok((project, host_fns))
 }
 
+/// Check the selected files without evaluating them and report their completeness.
+/// With `deny_todo`, reachable unfinished declarations count as file errors.
+///
+/// Exits with status 2 if source discovery is incomplete, or 1 if no files
+/// are found or any file fails loading or checking (including `deny_todo`).
 fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
     let (targets, traversal_failures) = resolve_target_files(paths).into_parts();
     if let Some(failures) = &traversal_failures {
@@ -967,41 +1057,24 @@ fn run_check(paths: &[PathBuf], project_root: Option<&Path>, deny_todo: bool) {
 
     let mut error_count = 0;
     for file in &targets {
-        let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
-            load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
+        let outcome =
+            load_rooted_project_with_plugins(file, project_root).and_then(|(project, host_fns)| {
                 ProjectCompiler::new(&project).host_fns(&host_fns).check()
-            })
-        });
+            });
         match outcome {
             Ok(checked) => {
-                let todos = checked
-                    .tir()
-                    .dag_registry()
-                    .values()
-                    .filter(|dag| !dag.is_semantic_instance())
-                    .map(|dag| {
-                        dag.declarations()
-                            .filter(|declaration| {
-                                declaration.category()
-                                    == graphcal_compiler::declaration_category::DeclCategory::Value(
-                                        graphcal_compiler::declaration_category::ValueDeclCategory::Node,
-                                    )
-                                    && dag.is_unfinished(declaration.identity())
-                            })
-                            .count()
-                    })
-                    .sum::<usize>();
+                let todos = checked.tir().reachable_unfinished().len();
                 if todos == 0 {
-                    println!("ok: {}", file.display());
+                    outln!("ok: {}", file.display());
                 } else if deny_todo {
                     eprintln!(
-                        "error: {}: {todos} unfinished node(s); --deny-todo requires complete formulas",
+                        "error: {}: {todos} unfinished declaration(s); --deny-todo requires complete formulas",
                         file.display()
                     );
                     error_count += 1;
                 } else {
-                    println!(
-                        "ok: {} (model incomplete: {todos} unfinished node(s))",
+                    outln!(
+                        "ok: {} (model incomplete: {todos} unfinished declaration(s))",
                         file.display()
                     );
                 }
@@ -1048,16 +1121,13 @@ fn run_graph(
     eprintln!(
         "warning: `graphcal graph` is experimental; its output and CLI surface may change in any release"
     );
-    let outcome = build_rooted_filesystem(file, project_root).and_then(|fs| {
-        load_project_with_plugins(file, project_root, &fs).and_then(|(project, host_fns)| {
-            ProjectCompiler::new(&project).host_fns(&host_fns).check()
-        })
-    });
+    let outcome = load_rooted_project_with_plugins(file, project_root)
+        .and_then(|(project, host_fns)| ProjectCompiler::new(&project).host_fns(&host_fns).check());
     match outcome {
         Ok(checked) => match graphcal_project::graph_ir::project_tir(checked.tir()) {
             Ok(ir) => match format {
                 GraphFormat::Dot => {
-                    print!("{}", graphcal_project::graph_ir::dot::render(&ir, view));
+                    out!("{}", graphcal_project::graph_ir::dot::render(&ir, view));
                 }
             },
             Err(error) => {
@@ -1107,8 +1177,7 @@ fn run_view(file: &Path, project_root: Option<&Path>, instance: Option<String>) 
         instance: ViewInstanceId::from_wire(instance),
     });
     let outcome = (|| -> Result<ViewModel, ViewFailure> {
-        let fs = build_rooted_filesystem(file, project_root)?;
-        let (project, host_fns) = load_project_with_plugins(file, project_root, &fs)?;
+        let (project, host_fns) = load_rooted_project_with_plugins(file, project_root)?;
         let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
         let projections = project_views(&project, &checked)?;
         let Some(projection) = projections.get(&target) else {
@@ -1126,7 +1195,7 @@ fn run_view(file: &Path, project_root: Option<&Path>, instance: Option<String>) 
     match outcome {
         Ok(view) => {
             match serde_json::to_string_pretty(&view) {
-                Ok(json) => println!("{json}"),
+                Ok(json) => outln!("{json}"),
                 Err(error) => {
                     eprintln!("JSON serialization error: {error}");
                     process::exit(2);
@@ -1180,7 +1249,16 @@ fn run_format(paths: &[PathBuf], check: bool) {
     let mut unformatted_count = 0;
     let mut error_count = 0;
     for file in &targets {
-        let source = match std::fs::read_to_string(file) {
+        // The bounded regular-file read validates the opened handle, so a
+        // FIFO or device is reported instead of blocking the whole batch.
+        let read = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+            RealFileSystem::default().read_to_string_bounded(
+                file,
+                ProjectIngestionPolicy::default().source_file(),
+                cancellation,
+            )
+        });
+        let source = match read {
             Ok(s) => s,
             Err(e) => {
                 // Match `run_check`'s behavior: accumulate errors across the
@@ -1203,7 +1281,7 @@ fn run_format(paths: &[PathBuf], check: bool) {
             }
             FormatStatus::Changed(formatted) => {
                 if check {
-                    println!("Would reformat: {}", file.display());
+                    outln!("Would reformat: {}", file.display());
                     unformatted_count += 1;
                 } else {
                     match replace_file_atomically_if_unchanged(
@@ -1211,7 +1289,7 @@ fn run_format(paths: &[PathBuf], check: bool) {
                         source.as_bytes(),
                         formatted.as_bytes(),
                     ) {
-                        Ok(()) => println!("Formatted: {}", file.display()),
+                        Ok(()) => outln!("Formatted: {}", file.display()),
                         Err(error) => {
                             eprintln!(
                                 "error: cannot atomically replace {}: {error}",
@@ -1262,11 +1340,8 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                 let width = max_name_len;
                 for entry in entries {
                     match entry {
-                        display::FlatEntry::Error(name, reason) if !reason.has_failure() => {
-                            println!("{name:width$} = {reason}");
-                        }
-                        display::FlatEntry::Error(name, err) => {
-                            eprintln!("{name:width$} = ERROR: {err}");
+                        display::FlatEntry::Error(name, reason) => {
+                            print_unavailable_line(name, width, reason);
                         }
                         display::FlatEntry::Value(name, value) => {
                             // A coordinate key renders as its coordinate quantity.
@@ -1296,9 +1371,9 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                                     Ok(displayed) => {
                                         let formatted = format_number(displayed);
                                         if let Some(label) = value.display_label(&result.render) {
-                                            println!("{name:width$} = {formatted} {label}");
+                                            outln!("{name:width$} = {formatted} {label}");
                                         } else {
-                                            println!("{name:width$} = {formatted}");
+                                            outln!("{name:width$} = {formatted}");
                                         }
                                     }
                                     Err(error) => {
@@ -1310,7 +1385,7 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                                     &result.render,
                                     graphcal_eval::eval::UnitLabel::Inline,
                                 ) {
-                                    Ok(formatted) => println!("{name:width$} = {formatted}"),
+                                    Ok(formatted) => outln!("{name:width$} = {formatted}"),
                                     Err(error) => eprintln!("{name:width$} = ERROR: {error}"),
                                 }
                             }
@@ -1319,16 +1394,16 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
                 }
             }
             OutputBlock::Table(name, value) => {
-                println!();
-                println!("{}", format_indexed_table(name, value, &result.render));
+                outln!();
+                outln!("{}", format_indexed_table(name, value, &result.render));
             }
         }
     }
 
     // Print assertion results
     if !result.assertions.is_empty() {
-        println!();
-        println!("Assertions:");
+        outln!();
+        outln!("Assertions:");
         let assert_names: Vec<String> = result
             .assertions
             .iter()
@@ -1346,9 +1421,78 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
             if is_assert_failure(assert_result) {
                 eprintln!("{line}");
             } else {
-                println!("{line}");
+                outln!("{line}");
             }
         }
+    }
+}
+
+/// Write every unavailable value (failed or unfinished) and every assertion
+/// that did not pass to stderr, with text output's line formatters.
+///
+/// Used when stdout is reserved for another payload (`--plot json`): the
+/// lines text mode would show for anything not computed or not verified
+/// still reach the user, so neither a non-zero exit nor an assertion left
+/// unchecked by `todo` inputs (under `--allow-incomplete`) goes unreported.
+fn report_unavailable_results(result: &EvalResult, output_view: EvalOutputView) {
+    let unavailable_values: Vec<(String, &OutputUnavailable)> = result
+        .output_values(output_view)
+        .filter_map(|entry| match &entry.outcome {
+            Err(reason) => Some((entry.name.to_string(), reason)),
+            Ok(_) => None,
+        })
+        .collect();
+    let width = unavailable_values
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or(0);
+    for (name, reason) in &unavailable_values {
+        eprintln!("{}", format_unavailable_line(name, width, reason));
+    }
+
+    let unverified_assertions: Vec<(String, &graphcal_eval::eval::EvalAssertion)> = result
+        .assertions
+        .iter()
+        .filter(|assertion| !matches!(assertion.outcome, graphcal_eval::eval::AssertResult::Pass))
+        .map(|assertion| (assertion.name.to_string(), assertion))
+        .collect();
+    let width = unverified_assertions
+        .iter()
+        .map(|(name, _)| name.len())
+        .max()
+        .unwrap_or(0);
+    for (name, assertion) in &unverified_assertions {
+        eprintln!(
+            "{}",
+            format_assertion_line(
+                name,
+                &assertion.outcome,
+                width,
+                result.assumes_map.get(&assertion.name),
+            )
+        );
+    }
+}
+
+/// Format the text-output line of a value that is unavailable: `ERROR:` for a
+/// failure, the bare reason (TODO, BLOCKED) for unfinished work.
+fn format_unavailable_line(name: &str, width: usize, reason: &OutputUnavailable) -> String {
+    if reason.has_failure() {
+        format!("{name:width$} = ERROR: {reason}")
+    } else {
+        format!("{name:width$} = {reason}")
+    }
+}
+
+/// Print a text-output unavailable-value line: failures to stderr,
+/// unfinished work (TODO, BLOCKED) to stdout with the values.
+fn print_unavailable_line(name: &str, width: usize, reason: &OutputUnavailable) {
+    let line = format_unavailable_line(name, width, reason);
+    if reason.has_failure() {
+        eprintln!("{line}");
+    } else {
+        outln!("{line}");
     }
 }
 
@@ -1639,7 +1783,7 @@ fn print_json(
         output.insert("assert".to_string(), serde_json::Value::Object(assertions));
     }
 
-    println!(
+    outln!(
         "{}",
         serde_json::to_string_pretty(&serde_json::Value::Object(output))?
     );

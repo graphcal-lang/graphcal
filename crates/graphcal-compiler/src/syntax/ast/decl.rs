@@ -107,10 +107,9 @@ pub struct Declaration<P: Phase = Raw> {
     pub span: Span,
     /// The `///` doc block immediately preceding this declaration, when one
     /// exists. Attached by the parser (see `syntax::doc_attach`); purely
-    /// documentary, so it never affects semantics or format equivalence: the
-    /// doc is re-derived from comments on every parse, and the formatter
-    /// preserves comments separately.
-    #[fe(skip)]
+    /// documentary, so it never affects semantics. Its text is still part of
+    /// format equivalence: docs feed hover, reports, and the view model, so
+    /// formatting must never change which declaration a doc block documents.
     pub doc: Option<crate::syntax::comments::DocComment>,
 }
 
@@ -146,8 +145,8 @@ pub enum DeclKind<P: Phase = Raw> {
     /// surface forms like multi-decl (issue #481) that are eliminated by the
     /// desugar pass. In [`Desugared`](Raw), the
     /// payload is [`core::convert::Infallible`] — the variant is statically
-    /// unreachable, so post-desugar consumers handle it with
-    /// `crate::syntax::phase::never`.
+    /// unreachable, so post-desugar consumers handle it with an empty match:
+    /// `Sugar(s) => match *s {}`.
     #[phase_lift(residual = RawDeclSugar)]
     Sugar(P::DeclSugar),
 }
@@ -656,13 +655,62 @@ impl UnitConstness {
 #[fe(phase = Raw)]
 pub struct UnitDecl<P: Phase = Raw> {
     pub visibility: Visibility,
-    pub constness: UnitConstness,
     pub name: Spanned<UnitName>,
     /// The dimension this unit measures.
     pub dim_type: DimExpr,
-    /// Scale definition: `(scale_value, base_unit_expr)`.
-    /// `None` iff this is a base unit (`base unit bit: Information;`).
-    pub definition: Option<UnitDef<P>>,
+    /// The declaration form, which fixes both its constness and whether it
+    /// has a scale definition.
+    pub body: UnitBody<P>,
+}
+
+impl<P: Phase> UnitDecl<P> {
+    /// Whether the unit may appear in `const node` bodies.
+    #[must_use]
+    pub const fn constness(&self) -> UnitConstness {
+        self.body.constness()
+    }
+
+    /// The scale definition, absent only for a `base unit`.
+    #[must_use]
+    pub const fn definition(&self) -> Option<&UnitDef<P>> {
+        self.body.definition()
+    }
+}
+
+/// The form of a unit declaration.
+///
+/// A `base unit` has no scale body and is always const, so a definition-less
+/// runtime unit is unrepresentable.
+#[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
+#[phase_lift(from = Raw, to = Desugared)]
+#[fe(phase = Raw)]
+pub enum UnitBody<P: Phase = Raw> {
+    /// `base unit bit: Information;`: the canonical unit of its dimension.
+    Base,
+    /// `const unit km: Length = 1000 m;`: a compile-time scale.
+    Const(UnitDef<P>),
+    /// `unit EUR: Money = (@rate) USD;`: a runtime scale.
+    Dynamic(UnitDef<P>),
+}
+
+impl<P: Phase> UnitBody<P> {
+    /// Whether the unit may appear in `const node` bodies.
+    #[must_use]
+    pub const fn constness(&self) -> UnitConstness {
+        match self {
+            Self::Base | Self::Const(_) => UnitConstness::Const,
+            Self::Dynamic(_) => UnitConstness::Dynamic,
+        }
+    }
+
+    /// The scale definition, absent only for [`Self::Base`].
+    #[must_use]
+    pub const fn definition(&self) -> Option<&UnitDef<P>> {
+        match self {
+            Self::Base => None,
+            Self::Const(definition) | Self::Dynamic(definition) => Some(definition),
+        }
+    }
 }
 
 /// The scale definition part of a unit declaration: `1000 m` or `1 kg * m / s^2`.

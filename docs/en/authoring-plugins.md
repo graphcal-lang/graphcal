@@ -264,9 +264,9 @@ with a reviewable `graphcal.lock` diff. See
 
 - Values are SI quantities, `Bool`, `Int`, non-empty multi-axis arrays of all
   three scalar kinds, and record-shaped results with concrete fields. Not
-  crossing the boundary yet: `Datetime` (use explicit
-  `to_jd`/`from_jd`-style conversions), struct parameters, generic records,
-  and dimension-variable struct fields.
+  crossing the boundary yet: `Datetime` (pass a UTC datetime as
+  `to_unix(...)` seconds and convert a result back with `from_unix(...)`),
+  struct parameters, generic records, and dimension-variable struct fields.
 - One `plugin!` block per plugin (a second block fails the wasm link with
   a duplicate-symbol error); helper functions can live anywhere in the
   crate.

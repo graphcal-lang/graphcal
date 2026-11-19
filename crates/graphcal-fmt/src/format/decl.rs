@@ -3,7 +3,7 @@ use graphcal_compiler::syntax::ast::{
     Encoding, Expr, FieldDecl, FigureDecl, GenericConstraint, GenericParam, ImportDecl,
     IncludeDecl, IndexDecl, IndexDeclKind, LayerDecl, MultiDecl, MultiHeaderCell, MultiSlotAxis,
     NodeDecl, ParamBinding, ParamDecl, PlotDecl, SlotKind, TableIndexSpec, TypeDecl, TypeDeclBody,
-    TypeExpr, UnionMember, UnitConstness, UnitDecl, UnitDef, Visibility,
+    TypeExpr, UnionMember, UnitBody, UnitDecl, UnitDef, Visibility,
 };
 use pretty::RcDoc;
 
@@ -218,16 +218,16 @@ fn format_dim_decl(d: &DimDecl) -> RcDoc<'static> {
 
 /// `const unit name: Dim = scale unit_expr;`, `unit name: Dim = ...`, or `base unit name: Dim;`.
 fn format_unit_decl(fmt: &mut Formatter<'_>, d: &UnitDecl) -> RcDoc<'static> {
-    let head = match (&d.definition, d.constness) {
-        (None, _) => RcDoc::text("base unit "),
-        (Some(_), UnitConstness::Const) => RcDoc::text("const unit "),
-        (Some(_), UnitConstness::Dynamic) => RcDoc::text("unit "),
+    let (keyword, definition) = match &d.body {
+        UnitBody::Base => ("base unit ", None),
+        UnitBody::Const(definition) => ("const unit ", Some(definition)),
+        UnitBody::Dynamic(definition) => ("unit ", Some(definition)),
     };
-    let mut doc = head
+    let mut doc = RcDoc::text(keyword)
         .append(RcDoc::text(d.name.value.as_str().to_string()))
         .append(RcDoc::text(": "))
         .append(format_dim_expr_inline(&d.dim_type));
-    if let Some(ref def) = d.definition {
+    if let Some(def) = definition {
         doc = doc
             .append(RcDoc::text(" = "))
             .append(format_unit_def(fmt, def));
@@ -636,18 +636,7 @@ fn format_include_param_bindings(
 ) -> RcDoc<'static> {
     let binding_docs: Vec<RcDoc<'static>> = bindings
         .iter()
-        .map(|b| {
-            let marker = match b.category {
-                graphcal_compiler::syntax::ast::InputBindingCategory::Unmarked => "",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Type => "type ",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Dimension => "dim ",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Index => "index ",
-            };
-            RcDoc::text(marker)
-                .append(RcDoc::text(b.name.name.as_str().to_owned()))
-                .append(RcDoc::text(": "))
-                .append(format_expr(fmt, &b.value))
-        })
+        .map(|b| super::expr::format_param_binding(fmt, b, super::expr::format_expr))
         .collect();
     soft_parenthesized_list(binding_docs, false)
 }
@@ -890,7 +879,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
         if idx > 0 {
             out.push('\n');
         }
-        if let Some(comments) = fmt.drain_comments_before(slot.header_span().offset()) {
+        if let Some(comments) = fmt.drain_comments_before_declaration(slot.header_span().offset()) {
             out.push_str(&render_doc_to_string(&comments));
         }
         // Do not let the next slot's leading-comment drain relocate a comment
@@ -1009,13 +998,14 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
     text_with_hardlines(&out)
 }
 
-fn render_multi_decl_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
-    let mut cell_fmt = fmt.fork_skipping_comments_before(expr.span.offset());
-    render_doc_to_string(&format_expr(&mut cell_fmt, expr))
+fn render_multi_decl_cell_value(fmt: &mut Formatter<'_>, expr: &Expr) -> String {
+    fmt.with_fork_skipping_comments_before(expr.span.offset(), |cell_fmt| {
+        render_doc_to_string(&format_expr(cell_fmt, expr))
+    })
 }
 
 fn compute_multi_decl_layout(
-    fmt: &Formatter<'_>,
+    fmt: &mut Formatter<'_>,
     info: &MultiDecl,
 ) -> (usize, Vec<usize>, Vec<Vec<Vec<String>>>) {
     let num_cols = info
@@ -1106,7 +1096,7 @@ pub(super) fn format_decl_sequence(
         let emit_end = emit_start + decl.span.len();
 
         // Emit leading comments before this declaration
-        let leading = fmt.drain_comments_before(emit_start);
+        let leading = fmt.drain_comments_before_declaration(emit_start);
         let has_leading_comments = leading.is_some();
 
         if i > 0 {

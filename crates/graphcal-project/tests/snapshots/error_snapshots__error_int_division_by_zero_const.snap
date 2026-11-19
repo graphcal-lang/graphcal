@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+integer division by zero
+    Diagnostic severity: error
+Begin snippet for int_division_by_zero_const.gcl starting at line 1, column 1
+
+snippet line 1: // Const integer division errors during checking because the operands are known.
+snippet line 2: const node per_rack: Int = div_ceil(10, 0);
+    label at line 2, columns 28 to 42: error here
+diagnostic code: graphcal::E001

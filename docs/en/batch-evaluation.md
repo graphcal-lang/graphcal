@@ -43,7 +43,7 @@ node:
 
 ```json
 {
-  "protocol_version": 2,
+  "protocol_version": 3,
   "graphcal_version": "0.0.1-alpha.37",
   "interface_fingerprint": "sha256:…",
   "interface": {
@@ -51,7 +51,15 @@ node:
       {
         "name": "load",
         "graphcal_type": "Force",
-        "wire": { "kind": "quantity", "dimension": { "Length": 1, "Mass": 1, "Time": -2 }, "unit": "m*kg/s^2" },
+        "wire": {
+          "kind": "quantity",
+          "dimension": [
+            { "base": { "kind": "prelude", "name": "Length" }, "exponent": 1 },
+            { "base": { "kind": "prelude", "name": "Mass" }, "exponent": 1 },
+            { "base": { "kind": "prelude", "name": "Time" }, "exponent": -2 }
+          ],
+          "unit": "m*kg/s^2"
+        },
         "domain": { "kind": "quantity", "min": 0.0, "max": 10000.0 },
         "has_default": false
       },
@@ -63,8 +71,12 @@ node:
 ```
 
 - `wire` is how values travel (see the table below). A type the protocol
-  cannot carry is listed with `"kind": "unsupported"` and a reason, never
-  silently omitted.
+  cannot carry is listed with `"kind": "unsupported"`, a `reason` code, and a
+  `message`, never silently omitted.
+- A `dimension` lists its base dimensions with their exponents. A prelude
+  base dimension is named by `name`; one the model declares, like the index
+  of a key or an indexed value, by the `package`, `module` path, and `name`
+  you write on an import path. File locations never appear.
 - `unit` is the port's canonical SI unit. Values travel in it unless a
   session chooses another unit for the port (see below).
 - `domain` is in the same unit. It bounds every element of an indexed
@@ -80,14 +92,16 @@ node:
 | `T[I]` | `indexed` | One `T` per entry of `I`, in declaration order |
 | Struct or union type | `algebraic` | One constructor and its fields |
 
-- `interface_fingerprint` identifies this interface. Formulas may change
-  without changing it; adding, removing, or retyping a port changes it.
+- `interface_fingerprint` identifies this interface. Formulas, file
+  locations, and the `message` of an unsupported port may change without
+  changing it; adding, removing, or retyping a port changes it.
 
 ## 2. Start a session
 
 A session names the parameters it varies (`--input`) and the outputs it reads
-(`--output`). Every parameter it does not vary keeps its default, so a
-parameter without a default must be varied:
+(`--output`). Every parameter it does not vary keeps its default unless the
+session fixes it (see [Fix parameters with values](#fix-parameters-with-values)),
+so a parameter without a default must be varied or fixed:
 
 ```bash
 graphcal model serve reliability.gcl \
@@ -111,6 +125,12 @@ graphcal model serve reliability.gcl \
     --unit load=kN --unit margin=kN \
     --expect-fingerprint sha256:…
 ```
+
+`--unit` chooses the unit of a whole port. To show a quantity inside a
+structured output in another unit, resolve the unit with
+[`graphcal model unit`](cli-reference.md#graphcal-model-unit) (from Rust,
+`Model::resolve_units`), which reports the dimension it measures and its SI
+scale, and convert the SI value yourself.
 
 The server reads request batches on stdin and writes results on stdout as
 Arrow IPC streams, so it is driven by a client rather than a terminal.
@@ -156,9 +176,26 @@ session.shutdown()?;
 [Tenax](https://github.com/shunichironomura/tenax) uses this client to sample
 Graphcal models and run PRIM scenario discovery.
 
+## Fix parameters with values
+
+To evaluate parameters a session does not vary at other values than their
+defaults, or to give a value to a parameter that has none, pass the values to
+`serve` the way `graphcal eval` takes them: `--param NAME=VALUE`,
+`--params-json`, or `--params-json-file`. Stdin carries the requests, so
+`--params-json-file -` is not available. The server checks the values when it
+starts and uses them in every row; a fixed parameter cannot also be varied.
+From Rust, `SessionBuilder::fix_from_json_file` passes a JSON file.
+
+```bash
+graphcal model serve reliability.gcl \
+    --input load --output failure --output margin \
+    --params-json-file scenario.json \
+    --expect-fingerprint sha256:…
+```
+
 ## Fix parameters with a wrapper file
 
-To hold some parameters at values other than their defaults, write a small
+To hold some parameters at values computed in Graphcal, write a small
 wrapper that includes the model, and serve the wrapper instead. An `include`
 of another file needs a package (see
 [Multi-File Projects](language/multi-file.md)); here the model is
@@ -189,33 +226,50 @@ Every request row produces exactly one outcome, in request order:
 | Input out of domain | A value lies outside its parameter's `min`/`max` | None |
 | Evaluation error | Any other runtime failure, such as a division by zero | None |
 
-Malformed streams, a request schema that differs from the session, NaN or
-infinite values, and keys outside their index are protocol errors: the server stops
-with exit code `1` instead of reporting a row.
+Malformed streams, a request schema that differs from the session, an empty
+request batch, NaN or infinite values, and keys outside their index are
+protocol errors: the server stops with exit code `1` instead of reporting a
+row.
 
 ## Writing another client
 
 Clients in other languages talk to `graphcal model serve` directly:
 
 1. Run `graphcal model describe` and select ports.
-2. Start `graphcal model serve` with `--input`, `--output`, any `--unit`
-   choices, and `--expect-fingerprint`.
-3. Read the result-stream schema from stdout before writing to stdin. Its
+2. Run `graphcal model serve` with `--input`, `--output`, any `--unit`
+   choices, `--expect-fingerprint`, and `--print-request-schema`. It prints
+   the exact request-stream schema as an Arrow IPC stream without batches and
+   exits. Build every request batch with this schema (in pyarrow,
+   `pa.ipc.open_stream(stdout).schema`) instead of reconstructing it.
+3. Start `graphcal model serve` with the same arguments but without
+   `--print-request-schema`.
+4. Read the result-stream schema from stdout before writing to stdin. Its
    schema-level metadata lists `si_scales`: the size of each chosen unit in
    the canonical SI unit. The request schema carries the same metadata, and
    its domains are converted into the chosen units.
-4. Write one request stream on stdin. For each request batch, read one result
+5. Write one request stream on stdin. For each request batch, read one result
    batch.
-5. Close the request stream; the server finishes the result stream and exits
+6. Close the request stream; the server finishes the result stream and exits
    with code `0`.
 
 Schemas carry one `graphcal` metadata key whose value is JSON. The request
 stream has one non-nullable field per varied parameter, in declaration order.
+The server accepts a request schema only if it equals the printed one, with
+metadata compared as JSON values:
+
+- the schema metadata holds `protocol_version`, `interface_fingerprint`,
+  `"stream": "request"`, and `si_scales` when a unit is chosen;
+- each field's metadata holds `"role": "input"`, its `wire` type, and its
+  `domain` (`null` without one), with bounds as binary64 numbers;
+- every child is non-nullable, except a union's constructor structs and
+  their fields: a `FixedSizeList` has one non-nullable child named `item`,
+  unlike the nullable default of most Arrow libraries.
+
 The result stream has two struct fields:
 
 | Field | Children |
 |-------|----------|
-| `outputs` | One nullable field per read output, in declaration order; null exactly in failed rows |
+| `outputs` | One nullable field per read output, in declaration order; null exactly in failed rows, and so is every child of a null value |
 | `outcome` | `status` (`UInt8`: `0` success, `1` assertion failed, `2` input out of domain, `3` evaluation error), `subject` (the failed assertion or parameter), `message` |
 
 Quantities and datetimes are `Float64`, `Int` is `Int64`, and `Bool` is

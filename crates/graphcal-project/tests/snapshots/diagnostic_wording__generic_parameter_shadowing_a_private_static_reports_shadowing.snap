@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, \"shadow.gcl\")"
+---
+generic parameter `T` shadows a visible Static name
+    Diagnostic severity: error
+Begin snippet for shadow.gcl starting at line 1, column 1
+
+snippet line 1: type T { T(x: Length) }
+snippet line 2: pub type Box<T: Type> { Box(value: T) }
+    label at line 2, column 14: error here
+snippet line 3: node b: Box<Dimensionless> = Box<Dimensionless>(value: 1.0);
+diagnostic code: graphcal::N027

@@ -58,12 +58,6 @@ impl ScalarFunction {
         Self { kernel, signature }
     }
 
-    /// Returns the arity (number of parameters) of this function.
-    #[must_use]
-    pub const fn arity(&self) -> usize {
-        self.kernel.arity()
-    }
-
     /// Returns the function's typed dimension signature.
     #[must_use]
     pub const fn signature(&self) -> &FunctionSignature {
@@ -81,7 +75,7 @@ impl ScalarFunction {
     /// # Errors
     ///
     /// Returns [`BuiltinEvalError::WrongArity`] when `args` does not contain
-    /// exactly [`Self::arity`] values. The private kernels therefore cannot be
+    /// exactly `self.signature().arity()` values. The private kernels therefore cannot be
     /// called with a slice shape that would panic on indexing.
     pub fn eval(&self, args: &[f64]) -> Result<f64, BuiltinEvalError> {
         match (self.kernel, args) {
@@ -311,7 +305,7 @@ mod tests {
         for (position, function) in ScalarFn::ALL.iter().enumerate() {
             assert_eq!(*function as usize, position);
             let entry = scalar_function(*function);
-            assert_eq!(entry.arity(), function.arity());
+            assert_eq!(entry.kernel.arity(), function.arity());
             assert_eq!(entry.signature().arity(), function.arity());
         }
     }
@@ -320,12 +314,12 @@ mod tests {
     fn every_kernel_rejects_wrong_arity_without_panicking() {
         for function in ScalarFn::all() {
             let entry = scalar_function(function);
-            for wrong_len in [entry.arity() - 1, entry.arity() + 1] {
+            for wrong_len in [entry.kernel.arity() - 1, entry.kernel.arity() + 1] {
                 let args = vec![0.0; wrong_len];
                 assert_eq!(
                     entry.eval(&args),
                     Err(BuiltinEvalError::WrongArity {
-                        expected: entry.arity(),
+                        expected: entry.kernel.arity(),
                         actual: wrong_len,
                     }),
                     "wrong-arity behavior for `{function}`"

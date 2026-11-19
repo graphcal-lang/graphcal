@@ -111,7 +111,7 @@ User unit definitions on bare `Temperature` are rejected (`D014`): the common te
 
 The unit expression on the right-hand side must have exactly the declared dimension. For example, `const unit wrong: Length = 1.0 h;` is rejected instead of attaching an hour's scale to `Length`. This rule applies equally to static and runtime-dependent definitions, including compound and reciprocal unit expressions.
 
-Unit scale factors must be **positive and finite**. Static unit definitions such as `const unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales apply the same concrete-value check at evaluation time.
+A scale is typed by the same rules as an expression in a node body: `1000 m` scales `m` by the `Int` 1000, and `(1 / 3) m` is rejected like any division of two `Int` values (`D043`); write `(1.0 / 3) m` instead. Unit scale factors must be **positive and finite**. Static unit definitions such as `const unit z: Length = 0.0 m;`, negative scales, and overflowing scales are rejected. Dynamic unit scales apply the same concrete-value check at evaluation time.
 
 ### Unit Scoping
 
@@ -146,7 +146,7 @@ Here, 1 EUR = `usd_per_eur` USD. The scale factor is evaluated at runtime, so
 binding `usd_per_eur` at evaluation time (e.g., via
 `--param 'usd_per_eur=1.20'`) changes all EUR-denominated values accordingly.
 
-Dynamic unit definitions are fully checked even when the unit is never used. The scale expression must have the scalar type `Dimensionless`: dimensioned quantities, `Bool`, `Int`, structs/unions, and indexed values are rejected (`D032`). Runtime params and nodes may be referenced; assertions and external plugin functions may not. The right-hand unit expression must still have exactly the declared dimension (`D031`).
+Dynamic unit definitions are fully checked even when the unit is never used. The scale expression must be an `Int` or have the scalar type `Dimensionless`: dimensioned quantities, `Bool`, structs/unions, and indexed values are rejected (`D032`). Runtime params and nodes may be referenced; assertions and external plugin functions may not. The right-hand unit expression must still have exactly the declared dimension (`D031`).
 
 Only the scale's concrete value is deferred until evaluation, after its referenced params and nodes have been computed. That value must be positive and finite; otherwise any declaration using the unit fails instead of receiving a fallback scale.
 

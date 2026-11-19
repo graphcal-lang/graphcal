@@ -9,9 +9,6 @@ use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::dimension_mismatch::{
     MismatchOperand, MismatchRule, OperandExpectation,
 };
-use crate::semantic_error::name::NameError;
-use crate::semantic_error::structure::StructError;
-use crate::semantic_error::structure::UnknownLocal;
 
 use crate::semantic::checked_type::CheckedType;
 
@@ -58,16 +55,6 @@ impl Infer<'_> {
                 )
                 .into());
             }
-            ExprKind::TypeSystemRef(name) => {
-                return Err(SemanticError::located(
-                    self.env.src,
-                    name.span,
-                    NameError::TypeSystemRefAsValue {
-                        reference: name.value.clone(),
-                    },
-                )
-                .into());
-            }
             ExprKind::QuantityLiteral { unit, .. } => {
                 infer_hir_quantity_literal(unit, self.env.tir, self.env.src)?
             }
@@ -84,17 +71,11 @@ impl Infer<'_> {
                 .env
                 .infer_resolved_decl_ref_type(&target.value, target.span)?,
             ExprKind::ConstRef(target) => self.infer_hir_const_ref(target)?,
-            ExprKind::LocalRef(local) => {
-                self.locals.get(local.value).cloned().ok_or_else(|| {
-                    SemanticError::located(
-                        self.env.src,
-                        local.span,
-                        StructError::UnknownLocalRef {
-                            name: UnknownLocal::Slot(local.value),
-                        },
-                    )
-                })?
-            }
+            ExprKind::LocalRef(local) => self
+                .locals
+                .get(local.value)
+                .cloned()
+                .ok_or_else(|| super::indexing::unbound_local_slot(self.env.src, local.span))?,
             ExprKind::FnCall { callee, args, .. } => {
                 if self.owner.is_some_and(|owner| {
                     self.env

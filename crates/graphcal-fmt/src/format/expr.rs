@@ -2,13 +2,20 @@
 //! recursive with (generic arguments carry type expressions, whose domain
 //! bounds carry value expressions).
 
+use std::collections::HashMap;
+use std::hash::Hash;
+
 use graphcal_compiler::syntax::ast::{
     BinOp, DomainBound, ElementTypeExpr, Expr, ExprKind, FieldInit, ForBinding, GenericArg,
     IndexArg, MapEntry, MapEntryKey, MatchArm, MatchPattern, ModulePath, ParamBinding,
     PatternBinding, PatternBindings, TableIndexSpec, TodoDependency, TodoHole, TypeExpr,
     TypeExprKind, UnaryOp,
 };
+use graphcal_compiler::syntax::fin_position::FinPosition;
+use graphcal_compiler::syntax::index_name::IndexVariantName;
 use graphcal_compiler::syntax::local_name::LocalName;
+use graphcal_compiler::syntax::names::NamePath;
+use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Spanned;
 use pretty::RcDoc;
 
@@ -36,11 +43,19 @@ fn format_expr_in_context(
     expr: &Expr,
     context: ExprContext,
 ) -> RcDoc<'static> {
+    format_expr_parenthesized_if(fmt, expr, context.needs_parentheses(expr))
+}
+
+fn format_expr_parenthesized_if(
+    fmt: &mut Formatter<'_>,
+    expr: &Expr,
+    parenthesized: bool,
+) -> RcDoc<'static> {
     // Recursion choke point: formatting recurses once per tree level
     // (unbounded for left-nested operator chains).
     graphcal_compiler::stack::with_stack_growth(|| {
-        let doc = format_expr_inner(fmt, expr);
-        if context.needs_parentheses(expr) {
+        let doc = fmt.within(expr.span, |fmt| format_expr_inner(fmt, expr));
+        if parenthesized {
             soft_parenthesized(doc)
         } else {
             doc
@@ -48,9 +63,10 @@ fn format_expr_in_context(
     })
 }
 
-fn render_table_cell_value(fmt: &Formatter<'_>, expr: &Expr) -> String {
-    let mut cell_fmt = fmt.fork_skipping_comments_before(expr.span.offset());
-    render_doc_to_string(&format_delimited_expr(&mut cell_fmt, expr))
+fn render_table_cell_value(fmt: &mut Formatter<'_>, expr: &Expr) -> String {
+    fmt.with_fork_skipping_comments_before(expr.span.offset(), |cell_fmt| {
+        render_doc_to_string(&format_delimited_expr(cell_fmt, expr))
+    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -119,12 +135,137 @@ impl ExprContext {
     }
 }
 
+/// Whether the left operand of `lhs op rhs` must be parenthesized.
+///
+/// Besides precedence, a left operand whose printed form ends with a quantity
+/// literal must be parenthesized when the literal's unit suffix would
+/// greedily continue into the operator: the parser always reads `2.0 m^2`
+/// as the unit `m^2`, and reads `2.0 m * PI` or `2.0 m / (s)` as the units
+/// `m*PI` and `m/s`, while `2.0 m / @t` stays an arithmetic division.
+fn infix_left_needs_parentheses(op: BinOp, lhs: &Expr, rhs: &Expr) -> bool {
+    ExprContext::InfixOperand {
+        parent: op,
+        side: InfixSide::Left,
+    }
+    .needs_parentheses(lhs)
+        || (ends_with_quantity_literal(lhs)
+            && match op {
+                BinOp::Pow(_) => true,
+                BinOp::Mul | BinOp::Div => starts_unit_continuation(
+                    rhs,
+                    ExprContext::InfixOperand {
+                        parent: op,
+                        side: InfixSide::Right,
+                    },
+                ),
+                BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mod
+                | BinOp::Eq
+                | BinOp::Ne
+                | BinOp::Lt
+                | BinOp::Gt
+                | BinOp::Le
+                | BinOp::Ge
+                | BinOp::And
+                | BinOp::Or => false,
+            })
+}
+
+/// Whether the printed form of `expr` ends with an unparenthesized quantity
+/// literal, whose unit suffix could continue into a following operator.
+///
+/// Walks the right spine of the expression as the formatter prints it,
+/// stopping at the first parenthesized subexpression.
+fn ends_with_quantity_literal(expr: &Expr) -> bool {
+    let mut current = expr;
+    loop {
+        let (child, child_context) = match &current.kind {
+            ExprKind::QuantityLiteral { .. } => return true,
+            ExprKind::UnaryOp { operand, .. } => (operand.as_ref(), ExprContext::PrefixOperand),
+            ExprKind::BinOp { op, rhs, .. } => (
+                rhs.as_ref(),
+                ExprContext::InfixOperand {
+                    parent: *op,
+                    side: InfixSide::Right,
+                },
+            ),
+            _ => return false,
+        };
+        if child_context.needs_parentheses(child) {
+            return false;
+        }
+        current = child;
+    }
+}
+
+/// Whether `expr`, printed in `context` right after a `*` or `/`, begins with
+/// tokens that the parser takes as the continuation of a preceding unit
+/// suffix: a name, or `(` followed by a name or another `(`.
+///
+/// Walks the left spine of the expression as the formatter prints it,
+/// counting the opening parentheses before the first other token. Leading
+/// tokens other than `@`, a number, a prefix operator, a string or `{` are
+/// conservatively treated as names.
+fn starts_unit_continuation(expr: &Expr, context: ExprContext) -> bool {
+    let mut open_parentheses = usize::from(context.needs_parentheses(expr));
+    let mut current = expr;
+    loop {
+        if open_parentheses >= 2 {
+            return true;
+        }
+        let (child, child_parenthesized) = match &current.kind {
+            ExprKind::BinOp { op, lhs, rhs } => {
+                (lhs.as_ref(), infix_left_needs_parentheses(*op, lhs, rhs))
+            }
+            ExprKind::FieldAccess { expr: inner, .. } => (
+                inner.as_ref(),
+                ExprContext::PostfixBase(PostfixOperator::Field).needs_parentheses(inner),
+            ),
+            ExprKind::IndexAccess { expr: inner, .. } => (
+                inner.as_ref(),
+                ExprContext::PostfixBase(PostfixOperator::Index).needs_parentheses(inner),
+            ),
+            ExprKind::Convert { expr: inner, .. }
+            | ExprKind::DisplayTimezone { expr: inner, .. } => (
+                inner.as_ref(),
+                ExprContext::ConversionOperand.needs_parentheses(inner),
+            ),
+            ExprKind::Number(_)
+            | ExprKind::Integer(_)
+            | ExprKind::QuantityLiteral { .. }
+            | ExprKind::UnaryOp { .. }
+            | ExprKind::StringLiteral(_)
+            | ExprKind::GraphRef(_)
+            | ExprKind::InlineDagRef { .. }
+            | ExprKind::MapLiteral { .. } => return false,
+            ExprKind::Bool(_)
+            | ExprKind::UnresolvedRef(_)
+            | ExprKind::FnCall { .. }
+            | ExprKind::If { .. }
+            | ExprKind::ConstructorCall { .. }
+            | ExprKind::Sugar(_)
+            | ExprKind::ForComp { .. }
+            | ExprKind::Scan { .. }
+            | ExprKind::Unfold { .. }
+            | ExprKind::KeyForm { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::TodoHole(_) => return true,
+        };
+        open_parentheses += usize::from(child_parenthesized);
+        current = child;
+    }
+}
+
 const fn binding_strength(expr: &Expr) -> BindingStrength {
     match &expr.kind {
         ExprKind::Convert { .. } | ExprKind::DisplayTimezone { .. } => BindingStrength::Conversion,
         ExprKind::If { .. } => BindingStrength::Conditional,
         ExprKind::BinOp { op, .. } => binop_binding_strength(*op),
-        ExprKind::UnaryOp { .. } => BindingStrength::Prefix,
+        // The parser folds `-9223372036854775808` into one literal, which
+        // still prints with its leading `-` and so binds like a prefix
+        // negation (`(-9223372036854775808)^1` must keep its parentheses).
+        ExprKind::UnaryOp { .. } | ExprKind::Integer(i64::MIN) => BindingStrength::Prefix,
         ExprKind::FieldAccess { .. } | ExprKind::IndexAccess { .. } => BindingStrength::Postfix,
         ExprKind::Number(_)
         | ExprKind::Integer(_)
@@ -280,6 +421,13 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
         }) => format_table_literal(fmt, indexes, entries),
         ExprKind::ForComp { bindings, body } => format_for_comp(fmt, bindings, body),
         ExprKind::IndexAccess { expr: inner, args } => {
+            // Format in source order so comments inside `inner` are drained
+            // before any inside the brackets.
+            let base = format_expr_in_context(
+                fmt,
+                inner,
+                ExprContext::PostfixBase(PostfixOperator::Index),
+            );
             let arg_docs: Vec<RcDoc<'static>> = args
                 .iter()
                 .map(|a| match a {
@@ -290,8 +438,14 @@ fn format_expr_inner(fmt: &mut Formatter<'_>, expr: &Expr) -> RcDoc<'static> {
                     IndexArg::Expr(e) => format_delimited_expr(fmt, e),
                 })
                 .collect();
-            format_expr_in_context(fmt, inner, ExprContext::PostfixBase(PostfixOperator::Index))
-                .append(RcDoc::text("["))
+            // A comment between the brackets that no argument drained has no
+            // place in the one-line `base[args]` layout; leaving it to a later
+            // drain would move it out of the brackets (e.g. after a following
+            // operator), so keep the declaration's source instead.
+            if fmt.has_comment_before(expr.span.offset() + expr.span.len()) {
+                fmt.request_verbatim();
+            }
+            base.append(RcDoc::text("["))
                 .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
                 .append(RcDoc::text("]"))
         }
@@ -365,14 +519,8 @@ fn format_binop(fmt: &mut Formatter<'_>, op: BinOp, lhs: &Expr, rhs: &Expr) -> R
         return format_logical_chain(fmt, op, lhs, rhs);
     }
 
-    let lhs_doc = format_expr_in_context(
-        fmt,
-        lhs,
-        ExprContext::InfixOperand {
-            parent: op,
-            side: InfixSide::Left,
-        },
-    );
+    let lhs_doc =
+        format_expr_parenthesized_if(fmt, lhs, infix_left_needs_parentheses(op, lhs, rhs));
     // Drain any comment between lhs and rhs (e.g. `1.0 + // comment\n 2.0`)
     let comment = fmt.drain_comments_before(rhs.span.offset());
     let rhs_doc = format_expr_in_context(
@@ -738,10 +886,6 @@ fn format_table_2d(
 
 /// Format the inner body of a 2D table (header row + data rows).
 /// Shared between 2D tables and 3D+ slice sections.
-#[expect(
-    clippy::too_many_lines,
-    reason = "table body formatting keeps header, row, and comment layout together"
-)]
 fn format_table_2d_body(
     fmt: &mut Formatter<'_>,
     indexes: &[TableIndexSpec],
@@ -754,41 +898,28 @@ fn format_table_2d_body(
     let row_is_nat = indexes[row_idx].is_finite_index();
     let col_is_nat = indexes[col_idx].is_finite_index();
 
-    // Extract unique column labels (from the last key, preserving order)
-    let mut col_labels: Vec<String> = Vec::new();
-    for e in entries {
-        let col_label = e.keys[col_idx].entry_key().to_string();
-        if !col_labels.contains(&col_label) {
-            col_labels.push(col_label);
-        }
-    }
+    // Unique column and row labels in first-appearance order, with the
+    // position of every entry's column and row.
+    // Labels are rendered only after the typed keys are deduplicated.
+    let (col_keys, entry_cols) =
+        index_unique_labels(entries.iter().map(|e| e.keys[col_idx].entry_key()));
+    let (row_keys, entry_rows) =
+        index_unique_labels(entries.iter().map(|e| e.keys[row_idx].entry_key()));
+    let col_labels: Vec<String> = col_keys.iter().map(ToString::to_string).collect();
+    let row_labels: Vec<String> = row_keys.iter().map(ToString::to_string).collect();
     let num_cols = col_labels.len();
-
-    // Extract unique row labels (from the second-to-last key, preserving order)
-    let mut row_labels: Vec<String> = Vec::new();
-    for e in entries {
-        let row_label = e.keys[row_idx].entry_key().to_string();
-        if !row_labels.contains(&row_label) {
-            row_labels.push(row_label);
-        }
-    }
 
     // Build 2D grid of rendered values and track entry indices per cell
     let mut grid: Vec<Vec<String>> = vec![vec![String::new(); num_cols]; row_labels.len()];
     let mut entry_indices: Vec<Vec<Option<usize>>> = vec![vec![None; num_cols]; row_labels.len()];
-    for (ei, e) in entries.iter().enumerate() {
-        let row_label = e.keys[row_idx].entry_key().to_string();
-        let col_label = e.keys[col_idx].entry_key().to_string();
-        // Labels were built from the same entries, so lookup cannot miss.
-        // If it somehow does, skip this entry rather than silently using row/col 0.
-        let Some(ri) = row_labels.iter().position(|r| r == &row_label) else {
-            continue;
-        };
-        let Some(ci) = col_labels.iter().position(|c| c == &col_label) else {
-            continue;
-        };
+    for (ei, ((e, &ri), &ci)) in entries.iter().zip(&entry_rows).zip(&entry_cols).enumerate() {
+        if entry_indices[ri][ci].replace(ei).is_some() {
+            // A duplicated row/column label puts two entries in one cell; the
+            // grid layout would drop a value, so keep the source as written.
+            fmt.request_verbatim();
+            return RcDoc::nil();
+        }
         grid[ri][ci] = render_table_cell_value(fmt, &e.value);
-        entry_indices[ri][ci] = Some(ei);
     }
 
     // Compute column widths: max of (column label width, max cell width in that column)
@@ -882,6 +1013,42 @@ fn format_table_2d_body(
     RcDoc::intersperse(all_rows, RcDoc::hardline())
 }
 
+/// Deduplicate `labels` in first-appearance order, returning the unique
+/// labels and, for each input label, its position among them.
+fn index_unique_labels<K: Hash + Eq + Clone>(
+    labels: impl Iterator<Item = K>,
+) -> (Vec<K>, Vec<usize>) {
+    let mut unique: Vec<K> = Vec::new();
+    let mut positions: HashMap<K, usize> = HashMap::new();
+    let indices = labels
+        .map(|label| {
+            *positions.entry(label).or_insert_with_key(|label| {
+                unique.push(label.clone());
+                unique.len() - 1
+            })
+        })
+        .collect();
+    (unique, indices)
+}
+
+/// The identity of one slice-axis key of a 3D+ table entry: the spelled
+/// index path with its variant, or the `Fin` position. Spans are excluded, so
+/// equal keys from different source sections group into one slice.
+#[derive(PartialEq, Eq, Hash)]
+enum SliceCoordinate<'a> {
+    Named(&'a NamePath, &'a IndexVariantName),
+    Finite(FinPosition),
+}
+
+impl<'a> SliceCoordinate<'a> {
+    const fn of(key: &'a MapEntryKey) -> Self {
+        match key {
+            MapEntryKey::Named { index, variant, .. } => Self::Named(&index.value, &variant.value),
+            MapEntryKey::Finite { position, .. } => Self::Finite(position.value),
+        }
+    }
+}
+
 /// Format a 3D+ table with slice sections.
 fn format_table_sliced(
     fmt: &mut Formatter<'_>,
@@ -892,23 +1059,38 @@ fn format_table_sliced(
     let ndim = indexes.len();
     let slice_dims = ndim - 2;
 
-    // Group entries by their slice keys (first N-2 keys).
-    // Named axes render as `Index#Variant`; finite positions render as `#N`.
-    let mut slices: Vec<(Vec<usize>, Vec<String>)> = Vec::new();
+    // Group entries by their slice keys (first N-2 keys), in first-appearance
+    // order. Each group keeps the indices of its entries.
+    let mut slices: Vec<Vec<usize>> = Vec::new();
+    let mut slice_positions: HashMap<Vec<SliceCoordinate<'_>>, usize> = HashMap::new();
     for (idx, e) in entries.iter().enumerate() {
-        let slice_key: Vec<String> = (0..slice_dims).map(|i| e.keys[i].to_string()).collect();
-
-        if let Some((entry_indices, _)) = slices.iter_mut().find(|(_, key)| key == &slice_key) {
-            entry_indices.push(idx);
-        } else {
-            slices.push((vec![idx], slice_key));
-        }
+        let slice_key: Vec<SliceCoordinate<'_>> = e
+            .keys
+            .iter()
+            .take(slice_dims)
+            .map(SliceCoordinate::of)
+            .collect();
+        let position = *slice_positions.entry(slice_key).or_insert_with(|| {
+            slices.push(Vec::new());
+            slices.len() - 1
+        });
+        slices[position].push(idx);
     }
 
     // Build each slice doc and nest it for indentation.
     let mut slice_docs: Vec<RcDoc<'static>> = Vec::new();
-    for (entry_indices, slice_key) in &slices {
-        let slice_header = format!("[{}]", slice_key.join(", "));
+    for entry_indices in &slices {
+        // Named axes render as `Index#Variant`; finite positions as `#N`.
+        let slice_header = format!(
+            "[{}]",
+            entries[entry_indices[0]]
+                .keys
+                .iter()
+                .take(slice_dims)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
 
         // Drain leading comments before this slice header
         let first_idx = entry_indices[0];
@@ -1109,9 +1291,6 @@ pub fn format_match_pattern(p: &MatchPattern) -> RcDoc<'static> {
         MatchPattern::IndexLabel { index, variant, .. } => {
             RcDoc::text(format!("{}#{}", index.value, variant.value))
         }
-        MatchPattern::Constructor { name, bindings, .. } => {
-            append_pattern_bindings(RcDoc::text(name.value.as_str().to_string()), bindings)
-        }
     }
 }
 
@@ -1163,18 +1342,7 @@ fn format_inline_dag_ref(
 ) -> RcDoc<'static> {
     let binding_docs: Vec<RcDoc<'static>> = args
         .iter()
-        .map(|b| {
-            let marker = match b.category {
-                graphcal_compiler::syntax::ast::InputBindingCategory::Unmarked => "",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Type => "type ",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Dimension => "dim ",
-                graphcal_compiler::syntax::ast::InputBindingCategory::Index => "index ",
-            };
-            RcDoc::text(marker)
-                .append(RcDoc::text(b.name.name.as_str().to_owned()))
-                .append(RcDoc::text(": "))
-                .append(format_delimited_expr(fmt, &b.value))
-        })
+        .map(|b| format_param_binding(fmt, b, format_delimited_expr))
         .collect();
     let path_text = path.display_path();
     RcDoc::text(format!("@{path_text}"))
@@ -1186,6 +1354,39 @@ fn format_inline_dag_ref(
 // ---------------------------------------------------------------------------
 // Type expressions
 // ---------------------------------------------------------------------------
+
+/// Format one DAG input binding: its marker, name, and value in the grammar
+/// the marker selects. `format_value` formats an unmarked value expression.
+pub fn format_param_binding(
+    fmt: &mut Formatter<'_>,
+    binding: &ParamBinding,
+    format_value: fn(&mut Formatter<'_>, &Expr) -> RcDoc<'static>,
+) -> RcDoc<'static> {
+    use graphcal_compiler::syntax::ast::BindingValue;
+    let (marker, value) = match &binding.value {
+        BindingValue::Value(value) => ("", format_value(fmt, value)),
+        BindingValue::Type(type_expr) => ("type ", format_type_expr_inline(fmt, type_expr)),
+        BindingValue::Dimension(dim) => ("dim ", format_dim_expr_inline(dim)),
+        BindingValue::Index(index) => ("index ", format_index_expr_inline(index)),
+    };
+    RcDoc::text(marker)
+        .append(RcDoc::text(binding.name.name.as_str().to_owned()))
+        .append(RcDoc::text(": "))
+        .append(value)
+}
+
+/// Format an index expression: `Name`, `Fin(N)`, or a bare Nat.
+fn format_index_expr_inline(index: &graphcal_compiler::syntax::ast::IndexExpr) -> RcDoc<'static> {
+    match index {
+        graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
+            RcDoc::text(format!("Fin({cardinality})"))
+        }
+        graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
+            RcDoc::text(name.value.display_path())
+        }
+        graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat) => RcDoc::text(nat.to_string()),
+    }
+}
 
 /// Format a type expression.
 pub fn format_type_expr_inline(fmt: &mut Formatter<'_>, te: &TypeExpr) -> RcDoc<'static> {
@@ -1245,33 +1446,13 @@ fn format_element_type_expr_inline(
                 .append(RcDoc::text(">"))
         }
         TypeExprKind::ComplexApplication { generic_args } => {
-            let arg_docs: Vec<RcDoc<'static>> = generic_args
-                .iter()
-                .map(|arg| format_generic_arg_inline(fmt, arg))
-                .collect();
-            RcDoc::text("Complex")
-                .append(RcDoc::text("<"))
-                .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
-                .append(RcDoc::text(">"))
+            format_builtin_type_former(fmt, "Complex", generic_args.as_ref())
         }
         TypeExprKind::IndexLabel { index, label } => {
             RcDoc::text(format!("{}#{}", index.display_path(), label.value))
         }
         TypeExprKind::KeyApplication { generic_args } => {
-            // Bare `Key` (a parse-level arity error) keeps its spelling so the
-            // formatter never fabricates an empty `<>` argument list.
-            let mut doc = RcDoc::text("Key");
-            if !generic_args.is_empty() {
-                let arg_docs: Vec<RcDoc<'static>> = generic_args
-                    .iter()
-                    .map(|arg| format_generic_arg_inline(fmt, arg))
-                    .collect();
-                doc = doc
-                    .append(RcDoc::text("<"))
-                    .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
-                    .append(RcDoc::text(">"));
-            }
-            doc
+            format_builtin_type_former(fmt, "Key", generic_args.as_ref())
         }
     };
 
@@ -1282,19 +1463,32 @@ fn format_element_type_expr_inline(
     }
 }
 
+/// A built-in type former such as `Complex<D>` or `Key<I>`. A bare former
+/// (a parse-level arity error left to HIR) keeps its spelling, so the
+/// formatter never fabricates an empty `<>` argument list.
+fn format_builtin_type_former(
+    fmt: &mut Formatter<'_>,
+    name: &'static str,
+    generic_args: Option<&NonEmpty<GenericArg>>,
+) -> RcDoc<'static> {
+    let Some(generic_args) = generic_args else {
+        return RcDoc::text(name);
+    };
+    let arg_docs: Vec<RcDoc<'static>> = generic_args
+        .iter()
+        .map(|arg| format_generic_arg_inline(fmt, arg))
+        .collect();
+    RcDoc::text(name)
+        .append(RcDoc::text("<"))
+        .append(RcDoc::intersperse(arg_docs, RcDoc::text(", ")))
+        .append(RcDoc::text(">"))
+}
+
 /// Format one unresolved generic argument at either a type or call site.
 pub fn format_generic_arg_inline(fmt: &mut Formatter<'_>, arg: &GenericArg) -> RcDoc<'static> {
     match arg {
         GenericArg::Type(type_expr) => format_type_expr_inline(fmt, type_expr),
-        GenericArg::Index(index) => match index {
-            graphcal_compiler::syntax::ast::IndexExpr::Finite { cardinality, .. } => {
-                RcDoc::text(format!("Fin({cardinality})"))
-            }
-            graphcal_compiler::syntax::ast::IndexExpr::Name(name) => {
-                RcDoc::text(name.value.display_path())
-            }
-            graphcal_compiler::syntax::ast::IndexExpr::BareNat(nat) => RcDoc::text(nat.to_string()),
-        },
+        GenericArg::Index(index) => format_index_expr_inline(index),
         GenericArg::Nat(nat_expr) => RcDoc::text(nat_expr.to_string()),
         GenericArg::Ambiguous(ambiguous) => RcDoc::text(ambiguous.to_string()),
     }
@@ -1392,5 +1586,18 @@ fn todo_dependency_text(dependency: &TodoDependency) -> String {
                 .join(", ")
         ),
         TodoDependency::Local(local) => local.value.as_str().to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::index_unique_labels;
+
+    #[test]
+    fn unique_labels_keep_first_appearance_order_and_positions() {
+        let labels = ["B", "A", "B", "C", "A"].map(String::from);
+        let (unique, positions) = index_unique_labels(labels.into_iter());
+        assert_eq!(unique, ["B", "A", "C"]);
+        assert_eq!(positions, [0, 1, 0, 2, 1]);
     }
 }

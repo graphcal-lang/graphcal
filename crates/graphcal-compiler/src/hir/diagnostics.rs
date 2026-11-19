@@ -29,7 +29,7 @@ pub fn validate_type_annotation(type_expr: &TypeExpr, src: SourceId) -> Result<(
         }
         TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => {
-            validate_generic_args(generic_args.iter(), src)
+            validate_generic_args(generic_args.iter().flatten(), src)
         }
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().try_for_each(|arg| {
             // Bounds before an index suffix are left to the indexed-argument
@@ -127,6 +127,13 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             *span,
             NameError::UnknownFunction { name: path.clone() },
         ),
+        ExprLowerError::RemovedBuiltinFunction { function, span } => SemanticError::located(
+            src,
+            *span,
+            NameError::RemovedBuiltinFunction {
+                function: *function,
+            },
+        ),
         ExprLowerError::UnknownExternFunction { alias, name, span } => SemanticError::located(
             src,
             *span,
@@ -161,13 +168,16 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
                 got: *got,
             },
         ),
-        ExprLowerError::InvalidStaticBindingValue { name, span } => SemanticError::located(
+        ExprLowerError::InvalidStaticBindingValue { kind, name, span } => SemanticError::located(
             src,
             *span,
-            ModuleError::InvalidTypeLevelBindingValue { name: name.clone() },
+            ModuleError::InvalidTypeLevelBindingValue {
+                kind: *kind,
+                name: name.clone(),
+            },
         ),
         ExprLowerError::TodoHoleNotAllowed { span } => {
-            SemanticError::located(src, *span, GraphError::TodoHoleOutsideNode)
+            SemanticError::located(src, *span, GraphError::TodoHoleOutsideFormula)
         }
         ExprLowerError::TodoHoleDomainConstraint { span } => {
             SemanticError::located(src, *span, DomainError::TodoHoleDomainConstraint)
@@ -196,6 +206,20 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
             src,
             *span,
             NameError::TimeScaleInValuePosition { scale: *scale },
+        ),
+        ExprLowerError::UnitNameIsLocal {
+            name,
+            site,
+            local,
+            span,
+        } => SemanticError::located(
+            src,
+            *span,
+            NameError::UnitNameIsLocal {
+                name: name.clone(),
+                site: *site,
+                local: *local,
+            },
         ),
         ExprLowerError::UnknownUnit { name, span } => SemanticError::located(
             src,

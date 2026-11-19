@@ -14,6 +14,7 @@ use graphcal_compiler::plot_shape::PlotLeafKind;
 use graphcal_compiler::plot_visibility::PlotVisibility;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::checked_type::{CheckedType, Symbolic};
+use graphcal_compiler::semantic::time_scale::TimeScale;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::module_name::ScopedName;
@@ -596,10 +597,15 @@ fn channel_axis_meta(
             .map_or_else(AxisMeta::default, |dimension| {
                 quantity_axis_meta(&dimension, None, ctx)
             }),
-        PlotLeafKind::Int
-        | PlotLeafKind::Bool
-        | PlotLeafKind::Datetime(_)
-        | PlotLeafKind::ContextualString => AxisMeta::default(),
+        // Every datetime is plotted as its UTC instant, whatever scale it is
+        // declared in, so the axis names the scale it shows (#2246).
+        PlotLeafKind::Datetime(_) => AxisMeta {
+            dimension_label: Some("Datetime".to_owned()),
+            unit_label: Some(TimeScale::UTC.to_string()),
+        },
+        PlotLeafKind::Int | PlotLeafKind::Bool | PlotLeafKind::ContextualString => {
+            AxisMeta::default()
+        }
     }
 }
 

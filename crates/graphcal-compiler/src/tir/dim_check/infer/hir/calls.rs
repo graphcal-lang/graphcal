@@ -1,4 +1,5 @@
-//! Inference of built-in function calls: arity, dispatch, and the linear-algebra and complex families.
+//! Inference of built-in function calls: arity, dispatch, and the linear-algebra, complex, and
+//! integer-division families.
 
 use crate::hir::expr::{Expr, FunctionRef};
 use crate::outcome::Outcome;
@@ -8,7 +9,9 @@ use crate::semantic_error::dimension_mismatch::{
     MismatchOperand, MismatchRule, OperandExpectation,
 };
 
-use crate::builtin::{AggregationFn, BuiltinFn, DatetimeFn, ScalarFn, ValueAggregation};
+use crate::builtin::{
+    AggregationFn, BuiltinFn, DatetimeFn, IntDivisionFn, ScalarFn, UnixTimeFn, ValueAggregation,
+};
 use crate::dimension::{Dimension, Rational};
 use crate::semantic_error::SemanticError;
 use crate::syntax::span::Span;
@@ -19,6 +22,7 @@ use crate::tir::dim_check::helpers::expect_quantity;
 use crate::tir::dim_check::infer::linear_algebra::{
     LinearAlgebraTypeError, infer_linear_algebra_type,
 };
+use crate::tir::operator_typing::{self, Operand};
 
 use super::context::Infer;
 
@@ -99,6 +103,26 @@ impl Infer<'_> {
             }
         })
         .map_err(Outcome::Failed)
+    }
+
+    /// `div_*(a, b)`: both operands are `Int`, and so is the quotient.
+    fn infer_hir_int_division_call(
+        &self,
+        function: IntDivisionFn,
+        args: &[Expr],
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
+        for arg in args {
+            operator_typing::int_division_operand_rule(
+                function,
+                &Operand {
+                    ty: self.infer_arg(arg)?,
+                    span: arg.span,
+                },
+                &self.env.registry.dimensions,
+                self.env.src,
+            )?;
+        }
+        Ok(CheckedType::Int)
     }
 
     pub(super) fn infer_hir_fn_call(
@@ -225,6 +249,7 @@ impl Infer<'_> {
                 self.infer_hir_linear_algebra_call(function, callee.span, args)
             }
             BuiltinFn::Conversion(kind) => self.infer_hir_type_conversion(kind, args),
+            BuiltinFn::IntDivision(function) => self.infer_hir_int_division_call(function, args),
             BuiltinFn::Datetime(DatetimeFn::ScaleConversion(conversion)) => {
                 self.infer_hir_timescale_conversion(builtin, conversion.target(), args)
             }
@@ -234,39 +259,41 @@ impl Infer<'_> {
             BuiltinFn::Datetime(DatetimeFn::Field(_)) => {
                 self.infer_hir_datetime_unary(builtin, args, CheckedType::Int)
             }
-            BuiltinFn::Datetime(DatetimeFn::FromNumeric(_)) => {
+            BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::FromUnix)) => {
                 let arg_type = self.infer_arg(&args[0])?;
-                match &arg_type {
-                    t if t
-                        .quantity_dimension()
-                        .is_some_and(Dimension::is_dimensionless) => {}
-                    CheckedType::Int => {}
-                    _ => {
-                        return Err(SemanticError::located(
-                            self.env.src,
-                            args[0].span,
-                            DimensionError::DimensionMismatch {
-                                expected: Box::new(MismatchOperand::Expected(
-                                    OperandExpectation::DimensionlessOrInt,
-                                )),
-                                found: Box::new(MismatchOperand::Type(
-                                    arg_type.spelling(&self.env.registry.dimensions),
-                                )),
-                                help: Box::new(MismatchRule::DimensionlessNumericArgument(builtin)),
-                            },
-                        )
-                        .into());
-                    }
+                if !arg_type
+                    .quantity_dimension()
+                    .is_some_and(Dimension::is_dimensionless)
+                {
+                    // An `Int` count converts to a real number only where the
+                    // conversion is written (#2246, decision D11).
+                    let help = if matches!(arg_type, CheckedType::Int) {
+                        MismatchRule::FromUnixInt
+                    } else {
+                        MismatchRule::DimensionlessNumericArgument(builtin)
+                    };
+                    return Err(SemanticError::located(
+                        self.env.src,
+                        args[0].span,
+                        DimensionError::DimensionMismatch {
+                            expected: Box::new(MismatchOperand::Expected(
+                                OperandExpectation::Dimensionless,
+                            )),
+                            found: Box::new(MismatchOperand::Type(
+                                arg_type.spelling(&self.env.registry.dimensions),
+                            )),
+                            help: Box::new(help),
+                        },
+                    )
+                    .into());
                 }
                 Ok(CheckedType::Datetime(
                     crate::semantic::time_scale::TimeScale::UTC,
                 ))
             }
-            BuiltinFn::Datetime(DatetimeFn::ToNumeric(_)) => self.infer_hir_datetime_unary(
-                builtin,
-                args,
-                CheckedType::Quantity(Dimension::dimensionless()),
-            ),
+            BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::ToUnix)) => {
+                self.infer_hir_to_unix(builtin, args)
+            }
             BuiltinFn::Scalar(function) => {
                 self.infer_hir_builtin_fn(function, callee.span, checked)
             }

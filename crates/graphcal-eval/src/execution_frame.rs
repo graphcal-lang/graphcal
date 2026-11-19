@@ -1,7 +1,7 @@
 //! Shared frame mechanics. Expression interpretation and result reporting are adapters.
 
 use crate::constant_pools::RuntimeValueMap;
-use crate::domain_check::check_domain_constraint;
+use crate::domain_check::{DomainViolation, check_domain_constraint};
 use crate::domain_constraint::ResolvedDomainConstraint;
 use crate::eval::types::{NodeUnavailable, RuntimeUnavailable};
 use crate::execution_plan::{
@@ -25,7 +25,7 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy)]
 pub enum FailurePolicy {
@@ -48,6 +48,9 @@ pub struct ExecutionFrame<'a> {
     values: RuntimeValueMap,
     presented: PendingPresentedMap,
     errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    /// The unfinished constants this frame reads, as their reasons are
+    /// recorded in `errors` from the start.
+    unfinished_constants: HashSet<ResolvedDeclName>,
 }
 
 /// What a finished frame computed.
@@ -230,8 +233,20 @@ impl<'a> ExecutionFrame<'a> {
         policy: FailurePolicy,
     ) -> Self {
         let mut values = RuntimeValueMap::new();
+        // An unfinished constant has no value; whatever reads it is blocked.
+        let mut unfinished_constants = HashMap::new();
         for import in callable.constant_imports() {
-            values.insert(import.destination.clone(), import.value.value().clone());
+            match import.value.value() {
+                Ok(value) => {
+                    values.insert(import.destination.clone(), value.clone());
+                }
+                Err(unfinished) => {
+                    unfinished_constants.insert(
+                        import.destination.clone(),
+                        unfinished.reason(import.value.key()),
+                    );
+                }
+            }
         }
         values.extend(
             callable
@@ -239,6 +254,18 @@ impl<'a> ExecutionFrame<'a> {
                 .iter()
                 .flat_map(|closure| closure.scope().const_values().iter())
                 .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        let pool = plan.program().facts().consts();
+        unfinished_constants.extend(
+            callable
+                .execution_dags()
+                .iter()
+                .flat_map(|closure| {
+                    let dag_id = closure.scope().dag().dag_id();
+                    pool.unfinished_constants()
+                        .filter(move |(key, _)| key.owner() == dag_id)
+                })
+                .map(|(key, unfinished)| (key.clone(), unfinished.reason(key))),
         );
         let presented = plan
             .program()
@@ -253,8 +280,32 @@ impl<'a> ExecutionFrame<'a> {
             policy,
             values,
             presented,
-            errors: HashMap::new(),
+            unfinished_constants: unfinished_constants.keys().cloned().collect(),
+            errors: unfinished_constants,
         }
+    }
+
+    /// The unavailable inputs of `step`: the earlier steps it depends on and
+    /// the unfinished constants it reads.
+    fn unavailable_inputs<'s>(
+        &'s self,
+        step: &'s crate::execution_plan::Step<'a>,
+    ) -> impl Iterator<Item = (&'s ResolvedDeclName, &'s RuntimeUnavailable)> {
+        let callable = self.callable;
+        let steps = step
+            .deps()
+            .iter()
+            .map(move |dep| callable.step(*dep).declaration().key());
+        let constants = step
+            .declaration()
+            .reads()
+            .iter()
+            .filter(|read| self.unfinished_constants.contains(*read));
+        steps.chain(constants).filter_map(|dependency| {
+            self.errors
+                .get(dependency)
+                .map(|reason| (dependency, reason))
+        })
     }
 
     /// Values bound so far.
@@ -318,10 +369,10 @@ impl<'a> ExecutionFrame<'a> {
         source: SourceId,
         span: Span,
     ) -> Result<(), SemanticError> {
-        if let Some(error) = Self::domain_violation(&value, domain, source, span) {
+        if let Some(failure) = Self::domain_violation(&value, domain) {
             self.values.remove(key);
             self.presented.remove(key);
-            return self.failure(key, error);
+            return self.failure(key, Self::violation_error(failure, source, span));
         }
         self.store(key, value);
         Ok(())
@@ -353,16 +404,21 @@ impl<'a> ExecutionFrame<'a> {
         self.bind(key, domain, value, source, span)
     }
 
-    /// The domain violation of `value`, as the diagnostic `bind` reports.
+    /// The domain violation of `value`, if any.
     fn domain_violation(
         value: &EvaluatedRuntimeValue,
         domain: Option<&ResolvedDomainConstraint>,
+    ) -> Option<Failure<DomainViolation>> {
+        check_domain_constraint(&value.value(), domain?).err()
+    }
+
+    /// The diagnostic of a domain violation of the value declared at `span`.
+    fn violation_error(
+        failure: Failure<DomainViolation>,
         source: SourceId,
         span: Span,
-    ) -> Option<SemanticError> {
-        let constraint = domain?;
-        let failure = check_domain_constraint(&value.value(), constraint).err()?;
-        Some(match failure {
+    ) -> SemanticError {
+        match failure {
             Failure::Error(violation) => SemanticError::located(
                 source,
                 span,
@@ -371,7 +427,7 @@ impl<'a> ExecutionFrame<'a> {
                 ),
             ),
             Failure::Invariant(invariant) => invariant.into_internal_error(source),
-        })
+        }
     }
 
     /// Run every unit of the callable that is not already bound, in order.
@@ -412,7 +468,6 @@ impl<'a> ExecutionFrame<'a> {
         )
             -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>>,
     ) -> Result<(), Outcome<SemanticError>> {
-        let callable = self.callable;
         let declaration = step.declaration();
         let key = declaration.key();
         if self.values.contains_key(key) || self.errors.contains_key(key) {
@@ -441,12 +496,7 @@ impl<'a> ExecutionFrame<'a> {
                         )
                     })
                     .collect::<Vec<_>>();
-                let outside = step.deps().iter().filter_map(|dep| {
-                    let dependency = callable.step(*dep).declaration().key();
-                    self.errors
-                        .get(dependency)
-                        .map(|reason| (dependency, reason))
-                });
+                let outside = self.unavailable_inputs(step);
                 if let Some(reason) = NodeUnavailable::blocked_by(
                     todo.iter()
                         .map(|(member, reason)| (*member, reason))
@@ -458,12 +508,7 @@ impl<'a> ExecutionFrame<'a> {
             }
             ComputedBody::Expression { root, tree } => (root.get(), tree),
         };
-        if let Some(reason) = NodeUnavailable::blocked_by(step.deps().iter().filter_map(|dep| {
-            let dependency = callable.step(*dep).declaration().key();
-            self.errors
-                .get(dependency)
-                .map(|reason| (dependency, reason))
-        })) {
+        if let Some(reason) = NodeUnavailable::blocked_by(self.unavailable_inputs(step)) {
             self.errors.insert(key.clone(), reason);
             return Ok(());
         }
@@ -603,13 +648,8 @@ impl<'a> ExecutionFrame<'a> {
                 continue;
             }
             problems.push(
-                NodeUnavailable::blocked_by(step.deps().iter().filter_map(|dep| {
-                    let dependency = callable.step(*dep).declaration().key();
-                    self.errors
-                        .get(dependency)
-                        .map(|reason| (dependency, reason))
-                }))
-                .map(MemberProblem::Unavailable),
+                NodeUnavailable::blocked_by(self.unavailable_inputs(step))
+                    .map(MemberProblem::Unavailable),
             );
         }
         let mut previous_key: Option<&KeyValue> = None;
@@ -673,17 +713,21 @@ impl<'a> ExecutionFrame<'a> {
                 );
                 let failure = match result {
                     Ok(value) => {
-                        match Self::domain_violation(
-                            &value,
-                            steps[position].declaration().domain(),
-                            source,
-                            span,
-                        ) {
+                        match Self::domain_violation(&value, steps[position].declaration().domain())
+                        {
                             None => {
                                 slots.set(position, step, ElementSlot::Computed(value));
                                 continue;
                             }
-                            Some(error) => error,
+                            // The member's value is indexed by the group's
+                            // axis: its element at `at` violates the domain.
+                            Some(failure) => Self::violation_error(
+                                failure.map_error(|violation| {
+                                    violation.at_entry(at.entry_key().into_owned())
+                                }),
+                                source,
+                                span,
+                            ),
                         }
                     }
                     Err(Outcome::Cancelled) => return Err(Outcome::Cancelled.into()),

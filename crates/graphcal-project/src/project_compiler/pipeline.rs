@@ -1,29 +1,22 @@
 //! Dependency-ordered whole-project checking orchestration.
 
-#[allow(
-    clippy::wildcard_imports,
-    clippy::allow_attributes,
-    reason = "project compiler pass uses the shared internal model"
-)]
 use graphcal_compiler::semantic_error::graph::GraphError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use graphcal_compiler::ir::resolve::ImportedValueNames;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::PluginDigest;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::plugin::{PluginError, PluginLoadFailure};
 use graphcal_compiler::source_id::SourceId;
 
-use super::{checking, imports, lowering};
-use crate::compile_error::PipelineError;
+use super::{checking, lowering};
 
 use super::checked_project::CheckedProject;
 use super::checked_project::CompiledFile;
 use super::hir_project::HirProject;
 use super::lowering::ProjectSemanticContext;
-use super::model::{HirFile, ImportContext, ModuleArtifact, ModuleArtifactStore};
+use super::model::{HirFile, ModuleArtifact, ModuleArtifactStore};
 use super::template::ModuleTemplateStore;
 use graphcal_compiler::dag_id::DagId;
 use graphcal_compiler::dependency_graph::Cycle;
@@ -37,7 +30,7 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 pub(super) fn recursive_dag_instantiation(
     project: &crate::loader::loaded_project::LoadedProject,
     cycle: &Cycle<DagId>,
-) -> PipelineError {
+) -> SemanticError {
     let templates = cycle
         .path()
         .chain(std::iter::once(cycle.entry()))
@@ -55,11 +48,11 @@ pub(super) fn recursive_dag_instantiation(
             (src, src.whole_span())
         }
     };
-    PipelineError::Semantic(SemanticError::located(
+    SemanticError::located(
         src,
         span,
         GraphError::RecursiveDagInstantiation { templates },
-    ))
+    )
 }
 
 /// Lower one physical file after every dependency HIR interface is available.
@@ -67,25 +60,9 @@ fn lower_single_file_to_hir(
     semantic: &mut ProjectSemanticContext<'_, '_>,
     loaded_file: &crate::loader::loaded_file::LoadedFile,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirFile, Outcome<PipelineError>> {
+) -> Result<HirFile, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
-    let mut ctx = ImportContext {
-        imported_names: ImportedValueNames::default(),
-        imported_bindings: HashMap::new(),
-        imported_source_order: Vec::new(),
-        module_map: HashMap::new(),
-        include_instances: Vec::new(),
-    };
-
-    imports::process_file_body_declarations(
-        semantic.project,
-        loaded_file,
-        semantic.modules,
-        &mut ctx,
-        cancellation,
-    )?;
-
-    lowering::lower_file_to_hir(semantic, loaded_file, ctx, cancellation)
+    lowering::lower_file_to_hir(semantic, loaded_file, cancellation)
 }
 
 /// Store one pure compile-time module artifact for downstream imports, and
@@ -96,7 +73,7 @@ fn store_module_artifact(
     file_src: SourceId,
     module_artifacts: &mut ModuleArtifactStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_eval::checked_program::ExecutionFacts, Outcome<PipelineError>> {
+) -> Result<graphcal_eval::checked_program::ExecutionFacts, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let (tir, execution_facts) = compiled.program.into_parts();
     let local_owners = tir.local_dags().map(|(dag_id, _)| dag_id.clone()).collect();
@@ -107,11 +84,7 @@ fn store_module_artifact(
     // mutable assembly registry so each local body becomes one immutable
     // handle; no DAG body is cloned for an importer.
     let dag_store = tir.freeze_local_dag_store().map_err(|error| {
-        PipelineError::Semantic(SemanticError::internal_error(
-            error.to_string(),
-            file_src,
-            DiagnosticAnchor::WholeFile,
-        ))
+        SemanticError::internal_error(error.to_string(), file_src, DiagnosticAnchor::WholeFile)
     })?;
 
     module_artifacts
@@ -125,11 +98,7 @@ fn store_module_artifact(
             },
         )
         .map_err(|error| {
-            PipelineError::Semantic(SemanticError::internal_error(
-                error.to_string(),
-                file_src,
-                DiagnosticAnchor::WholeFile,
-            ))
+            SemanticError::internal_error(error.to_string(), file_src, DiagnosticAnchor::WholeFile)
         })?;
     Ok(execution_facts)
 }
@@ -143,7 +112,7 @@ pub(super) fn lower_project_perfile<'project, Mode>(
     modules: crate::loader::loaded_module_resolver::LoadedModuleResolver,
     mode: Mode,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<HirProject<'project, Mode>, Outcome<PipelineError>> {
+) -> Result<HirProject<'project, Mode>, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let mut module_templates = ModuleTemplateStore::default();
 
@@ -170,8 +139,7 @@ pub(super) fn lower_project_perfile<'project, Mode>(
                 }))
             }),
             project.root_file().source_id(),
-        )
-        .map_err(PipelineError::from)?;
+        )?;
         let mut semantic = ProjectSemanticContext {
             project,
             modules: &modules,
@@ -218,7 +186,7 @@ pub(super) fn lower_project_perfile<'project, Mode>(
 
 fn build_project_type_store<Mode>(
     hir: &HirProject<'_, Mode>,
-) -> Result<Arc<graphcal_compiler::tir::typed::ProjectTypeStore>, PipelineError> {
+) -> Result<Arc<graphcal_compiler::tir::typed::ProjectTypeStore>, SemanticError> {
     let root_source = &hir.files.root().source;
     let mut project_types = graphcal_compiler::tir::typed::ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().map_err(|error| {
@@ -248,7 +216,7 @@ pub(super) fn check_hir_project<Mode>(
     hir: HirProject<'_, Mode>,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CheckedProject, Outcome<PipelineError>> {
+) -> Result<CheckedProject, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let project_types = build_project_type_store(&hir)?;
     let HirProject {
@@ -269,7 +237,7 @@ pub(super) fn check_hir_project<Mode>(
         |hir_file: HirFile,
          module_artifacts: &ModuleArtifactStore,
          inherited_execution_facts: &graphcal_eval::checked_program::ExecutionFacts|
-         -> Result<(CompiledFile, SourceId), Outcome<PipelineError>> {
+         -> Result<(CompiledFile, SourceId), Outcome<SemanticError>> {
             cancellation.checkpoint()?;
             let file_src = hir_file.source;
             let compiled = checking::check_hir_file(
@@ -284,13 +252,7 @@ pub(super) fn check_hir_project<Mode>(
                 },
                 cancellation,
             )?;
-            verify_host_functions(
-                plugins,
-                compiled.program.tir(),
-                file_src,
-                host_metadata,
-                cancellation,
-            )?;
+            verify_host_functions(plugins, compiled.program.tir(), host_metadata, cancellation)?;
             Ok((compiled, file_src))
         };
 
@@ -326,23 +288,23 @@ pub(super) fn check_hir_project<Mode>(
 ///    host must have registered the module (its recorded failure is
 ///    reported otherwise).
 /// 2. The registry must provide the function (`MissingHostFunction`, W003).
-/// 3. When the registry entry carries a manifest-provided signature, the
-///    declared signature must be structurally equivalent to it (W005) —
-///    this is the "declaration verified against the embedded manifest"
-///    guarantee of the plugin design (#25).
+/// 3. The declared signature must be structurally equivalent to the one
+///    the registry entry provides (W005). Every entry carries one (a wasm
+///    manifest's, or a native function's own), so no declaration is
+///    trusted as-is — the "declaration verified against the embedded
+///    manifest" guarantee of the plugin design (#25).
 fn verify_host_functions(
     plugins: &HashMap<
         graphcal_compiler::plugin_identity::PluginIdentity,
         crate::loader::loaded_project::PluginFileEntry,
     >,
     tir: &graphcal_compiler::tir::typed::CheckedTir,
-    src: SourceId,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<(), Outcome<PipelineError>> {
+) -> Result<(), Outcome<SemanticError>> {
     // Deterministic reporting order: earliest declaration first.
     let mut declared: Vec<_> = tir.extern_functions().iter().collect();
-    declared.sort_by_key(|(_, function)| function.name_span.offset());
+    declared.sort_by_key(|(_, function)| (function.source, function.name_span.offset()));
 
     for (key, function) in declared {
         cancellation.checkpoint()?;
@@ -350,27 +312,25 @@ fn verify_host_functions(
             key.plugin,
             graphcal_compiler::plugin_identity::PluginIdentity::Wasm { .. }
         ) {
-            verify_wasm_plugin(plugins, function, src, host_metadata)?;
+            verify_wasm_plugin(plugins, function, host_metadata)?;
         }
-        if !host_metadata.contains(key) {
-            return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+        let Some(provided) = host_metadata.provided_signature(key) else {
+            return Err(SemanticError::located(
+                function.source,
                 function.name_span,
                 PluginError::MissingHostFunction {
                     plugin: function.plugin.clone(),
                     name: function.name.clone(),
                 },
-            ))
+            )
             .into());
-        }
-        if let Some(provided) = host_metadata.provided_signature(key)
-            && !function.signature.structurally_equivalent(provided)
-        {
+        };
+        if !function.signature.structurally_equivalent(provided) {
             let format_dim = |dim: &graphcal_compiler::dimension::Dimension| {
                 tir.registry().dimensions.format_dimension(dim)
             };
-            return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+            return Err(SemanticError::located(
+                function.source,
                 function.decl_span,
                 PluginError::ExternSignatureMismatch {
                     plugin: function.plugin.clone(),
@@ -378,7 +338,7 @@ fn verify_host_functions(
                     declared: function.signature.spelling(format_dim),
                     provided: provided.spelling(format_dim),
                 },
-            ))
+            )
             .into());
         }
     }
@@ -394,54 +354,53 @@ fn verify_wasm_plugin(
         crate::loader::loaded_project::PluginFileEntry,
     >,
     function: &graphcal_compiler::ir::extern_function::ExternFunctionEntry,
-    src: SourceId,
     host_metadata: &graphcal_eval::host_fns::HostFunctionMetadata,
-) -> Result<(), PipelineError> {
+) -> Result<(), SemanticError> {
     match plugins.get(&function.plugin) {
         Some(Err(crate::loader::loaded_project::PluginFileError::NotPinned)) => {
-            return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+            return Err(SemanticError::located(
+                function.source,
                 function.path_span,
                 PluginError::PluginNotPinned {
                     plugin: function.plugin.clone(),
                 },
-            )));
+            ));
         }
         Some(Err(crate::loader::loaded_project::PluginFileError::HashMismatch {
             expected,
             actual,
         })) => {
-            return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+            return Err(SemanticError::located(
+                function.source,
                 function.path_span,
                 PluginError::PluginHashMismatch {
                     plugin: function.plugin.clone(),
                     expected: PluginDigest::from_bytes(*expected.as_bytes()),
                     actual: PluginDigest::from_bytes(*actual.as_bytes()),
                 },
-            )));
+            ));
         }
         Some(Err(file_error)) => {
-            return Err(PipelineError::Semantic(SemanticError::located(
-                src,
+            return Err(SemanticError::located(
+                function.source,
                 function.path_span,
                 PluginError::PluginLoadFailed {
                     plugin: function.plugin.clone(),
                     reason: PluginLoadFailure::Artifact(std::sync::Arc::new(file_error.clone())),
                 },
-            )));
+            ));
         }
         // The loader records an entry for every root-package wasm import of
         // the project it loaded.
         None => {
-            return Err(PipelineError::Semantic(SemanticError::internal_error(
+            return Err(SemanticError::internal_error(
                 format!(
                     "the project loader recorded no artifact for plugin \"{}\"",
                     function.plugin
                 ),
-                src,
+                function.source,
                 DiagnosticAnchor::Source(function.path_span),
-            )));
+            ));
         }
         Some(Ok(_)) => {}
     }
@@ -450,18 +409,18 @@ fn verify_wasm_plugin(
         Some(graphcal_eval::host_fns::PluginRegistrationError::ForbiddenImport {
             module,
             name,
-        }) => Err(PipelineError::Semantic(SemanticError::located(
-            src,
+        }) => Err(SemanticError::located(
+            function.source,
             function.path_span,
             PluginError::PluginForbiddenImport {
                 plugin: function.plugin.clone(),
                 import_module: module.clone(),
                 import_name: name.clone(),
             },
-        ))),
+        )),
         Some(graphcal_eval::host_fns::PluginRegistrationError::LoadFailed { reason }) => {
-            Err(PipelineError::Semantic(SemanticError::located(
-                src,
+            Err(SemanticError::located(
+                function.source,
                 function.path_span,
                 PluginError::PluginLoadFailed {
                     plugin: function.plugin.clone(),
@@ -469,7 +428,7 @@ fn verify_wasm_plugin(
                         reason: reason.clone(),
                     },
                 },
-            )))
+            ))
         }
         None => Ok(()),
     }

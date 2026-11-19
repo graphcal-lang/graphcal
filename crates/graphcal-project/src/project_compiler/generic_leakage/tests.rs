@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use graphcal_compiler::ir::module_interface::ModuleInterface;
+use graphcal_compiler::syntax::names::NameAtom;
 
 use super::super::include_static_bindings::{CoveredStaticBindings, StaticBindingResolution};
 use super::*;
-use crate::compile_error::PipelineError;
+use graphcal_compiler::semantic_error::SemanticError;
 
 fn parse_declarations(source: &str) -> Vec<graphcal_compiler::desugar::desugared_ast::Declaration> {
     let raw = graphcal_compiler::syntax::parser::Parser::new(source)
@@ -32,11 +33,7 @@ fn resolver(
 ) -> graphcal_compiler::resolve::ModuleResolver {
     let mut tables = graphcal_compiler::resolve::builder::SymbolTables::default();
     tables.add_file(dependency(), declarations).unwrap();
-    tables
-        .scopes(&graphcal_compiler::resolve::builder::NoModuleTargets)
-        .unwrap()
-        .freeze()
-        .unwrap()
+    tables.freeze_without_edges().unwrap()
 }
 
 /// The resolution of an include that binds nothing.
@@ -53,7 +50,7 @@ impl StaticBindingResolution for NothingBound {
             graphcal_compiler::resolved_name::ResolvedIndexName,
             InstanceIndexBindingTarget,
         ),
-        PipelineError,
+        SemanticError,
     > {
         panic!("unexpected index binding {port}")
     }
@@ -62,12 +59,13 @@ impl StaticBindingResolution for NothingBound {
         &self,
         port: &graphcal_compiler::syntax::type_name::StructTypeName,
         _: &graphcal_compiler::syntax::type_name::StructTypeName,
+        _: Span,
     ) -> Result<
         (
             graphcal_compiler::resolved_name::ResolvedStructTypeName,
             graphcal_compiler::resolved_name::ResolvedStructTypeName,
         ),
-        PipelineError,
+        SemanticError,
     > {
         panic!("unexpected type binding {port}")
     }
@@ -76,25 +74,26 @@ impl StaticBindingResolution for NothingBound {
         &self,
         port: &graphcal_compiler::syntax::dimension::DimName,
         _: &graphcal_compiler::syntax::dimension::DimName,
+        _: Span,
     ) -> Result<
         (
             graphcal_compiler::resolved_name::ResolvedDimName,
             graphcal_compiler::resolved_name::ResolvedDimName,
         ),
-        PipelineError,
+        SemanticError,
     > {
         panic!("unexpected dimension binding {port}")
     }
 }
 
 /// The Static bindings of an include that binds nothing.
-fn unbound(dependency: &ModuleInterface) -> Result<CoveredStaticBindings, PipelineError> {
+fn unbound(dependency: &ModuleInterface) -> Result<CoveredStaticBindings, SemanticError> {
     CoveredStaticBindings::check(
         dependency,
+        indexmap::IndexMap::new(),
         HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
-        HashMap::new(),
+        indexmap::IndexMap::new(),
+        indexmap::IndexMap::new(),
         source(),
         Span::new(0, 0),
     )
@@ -105,7 +104,10 @@ fn unsubstituted_dependency_name_is_not_probed_in_the_importer() {
     let declarations = parse_declarations(
         "type Inner { Inner(value: Int), } node output: Inner = Inner(value: 1);",
     );
-    let reexports = HashSet::from([NameAtom::parse("output").unwrap()]);
+    let reexports = HashSet::from([ReexportedItem {
+        namespace: ImportItemNamespace::Term,
+        name: NameAtom::parse("output").unwrap(),
+    }]);
     let importer_interface =
         ModuleInterface::new(&parse_declarations("type Inner { Inner(value: Int), }"));
 
@@ -138,7 +140,7 @@ fn bindings_leaving_a_required_port_unbound_are_rejected_before_leakage_analysis
     let error = unbound(&ModuleInterface::new(&declarations)).unwrap_err();
 
     match error {
-        PipelineError::Semantic(SemanticError::Located(diagnostic)) => assert!(
+        SemanticError::Located(diagnostic) => assert!(
             matches!(
                 diagnostic.kind,
                 graphcal_compiler::semantic_error::SemanticErrorKind::Index(
@@ -150,6 +152,6 @@ fn bindings_leaving_a_required_port_unbound_are_rejected_before_leakage_analysis
             ),
             "{diagnostic:?}"
         ),
-        other => panic!("expected I010, got {other:?}"),
+        other @ SemanticError::Internal(_) => panic!("expected I010, got {other:?}"),
     }
 }

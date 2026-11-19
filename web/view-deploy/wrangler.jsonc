@@ -1,0 +1,22 @@
+// The view at https://view.graphcal.org/, served as Cloudflare Workers static
+// assets: `just view-build` writes web/view/dist, and `wrangler deploy` (the
+// release workflow's `deploy-view` job) uploads it.
+//
+// Keep it assets only: no `main`, no `run_worker_first`. The security headers
+// in web/view/public/_headers apply only to responses Cloudflare serves from
+// the assets, never to responses a Worker script makes.
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "graphcal-view",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "../view/dist",
+    // The address is a fragment on the one page; any other path is not found.
+    "not_found_handling": "none",
+    "html_handling": "auto-trailing-slash"
+  },
+  "routes": [{ "pattern": "view.graphcal.org", "custom_domain": true }],
+  // Only the custom domain serves it, under its headers.
+  "workers_dev": false,
+  "preview_urls": false
+}

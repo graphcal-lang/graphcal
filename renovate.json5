@@ -1,12 +1,8 @@
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
-  extends: ["config:best-practices", "helpers:pinGitHubActionDigestsToSemver"],
-  minimumReleaseAge: "7 days",
+  extends: ["github>graphcal-lang/renovate-config"],
   // Keep transitive deps (e.g. @codemirror/state) from resolving to a stale duplicate after an update.
   postUpdateOptions: ["pnpmDedupe"],
-  lockFileMaintenance: {
-    enabled: true,
-  },
   customManagers: [
     {
       customType: "regex",
@@ -26,17 +22,24 @@
       ],
       datasourceTemplate: "pypi",
     },
+    {
+      customType: "regex",
+      description: "Update the pinned qa-corpus commit checked out by CI",
+      managerFilePatterns: ["/^\\.github\\/workflows\\/ci\\.yaml$/"],
+      matchStrings: [
+        "repository: graphcal-lang/qa-corpus\\n(?:\\s*#.*\\n)*\\s*ref: (?<currentDigest>[0-9a-f]{40}) # renovate: branch=(?<currentValue>\\S+)",
+      ],
+      depNameTemplate: "graphcal-lang/qa-corpus",
+      packageNameTemplate: "https://github.com/graphcal-lang/qa-corpus",
+      datasourceTemplate: "git-refs",
+    },
   ],
   packageRules: [
     {
-      matchUpdateTypes: ["lockFileMaintenance"],
-      minimumReleaseAge: null,
-    },
-    {
-      description: "Disable Renovate cooldown for Cargo crates until Cargo min-publish-age is stable (#885)",
+      description: "Hold num-bigint at 0.4 until num-rational supports 0.5 (rust-num/num-rational#157)",
       matchManagers: ["cargo"],
-      matchDatasources: ["crate"],
-      minimumReleaseAge: null,
+      matchPackageNames: ["num-bigint"],
+      allowedVersions: "<0.5",
     },
     {
       matchManagers: ["rust-toolchain"],

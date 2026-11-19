@@ -3,18 +3,13 @@
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::source_id::SourceId;
 
-#[allow(
-    clippy::wildcard_imports,
-    clippy::allow_attributes,
-    reason = "project checking consumes the shared internal phase model"
-)]
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use graphcal_compiler::semantic::checked_type::CheckedType;
 
 use super::{entry_interface, lowering};
-use crate::compile_error::PipelineError;
+use graphcal_compiler::semantic_error::SemanticError;
 
 use super::checked_project::CompiledFile;
 use super::model::{HirFile, ModuleArtifactStore};
@@ -53,7 +48,7 @@ fn resolve_file_signatures(
     module_resolver: &graphcal_compiler::resolve::ModuleResolver,
     project_types: &graphcal_compiler::tir::typed::ProjectTypeStore,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<ResolvedFileSignatures, Outcome<PipelineError>> {
+) -> Result<ResolvedFileSignatures, Outcome<SemanticError>> {
     let root = graphcal_compiler::tir::typed::resolve_hir_signature_with_modules_and_cancellation(
         root,
         file_src,
@@ -122,7 +117,7 @@ pub(super) fn check_hir_file(
     inherited_execution_facts: &graphcal_eval::checked_program::ExecutionFacts,
     environment: FileCheckEnvironment<'_>,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<CompiledFile, Outcome<PipelineError>> {
+) -> Result<CompiledFile, Outcome<SemanticError>> {
     let FileCheckEnvironment {
         exported_runtime_units,
         module_resolver,
@@ -165,8 +160,7 @@ pub(super) fn check_hir_file(
         &hir.module_map,
         exported_runtime_units,
         *file_src,
-    )
-    .map_err(PipelineError::from)?;
+    )?;
 
     for signed in signed_inline {
         cancellation.checkpoint()?;
@@ -214,10 +208,14 @@ fn finish_module_assembly(
     module_artifacts: &ModuleArtifactStore,
     src: SourceId,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<graphcal_compiler::tir::typed::CheckedTir, Outcome<PipelineError>> {
+) -> Result<graphcal_compiler::tir::typed::CheckedTir, Outcome<SemanticError>> {
     draft
-        .instantiate(&checked_dependency_overrides(module_artifacts), src)
-        .map_err(PipelineError::from)?
+        .instantiate(
+            &checked_dependency_overrides(module_artifacts),
+            src,
+            cancellation,
+        )
+        .map_err(Outcome::map_into)?
         .check(src, cancellation)
         .map_err(Outcome::map_into)
 }

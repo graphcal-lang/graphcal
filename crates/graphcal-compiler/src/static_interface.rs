@@ -4,35 +4,10 @@
 //! include binding construction all consume this module so their category and
 //! role inventories cannot drift.
 
-use std::collections::HashSet;
 use std::fmt;
 
 use crate::desugar::desugared_ast::{DeclKind, IndexDeclKind, TypeDeclBody};
-use crate::syntax::ast::{BindableVisibility, ImportItemNamespace};
-use crate::syntax::names::NameAtom;
-
-/// Every declared name of one module that a pure import may not bring
-/// across, keyed by its import category.
-///
-/// Built by `ir::static_dependencies::static_import_rejections`.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct StaticImportRejections {
-    rejected: HashSet<(ImportItemNamespace, NameAtom)>,
-}
-
-impl StaticImportRejections {
-    pub(crate) fn new(rejected: impl IntoIterator<Item = (ImportItemNamespace, NameAtom)>) -> Self {
-        Self {
-            rejected: rejected.into_iter().collect(),
-        }
-    }
-
-    /// Whether a pure import must not bring `name` across in `namespace`.
-    #[must_use]
-    pub fn rejects(&self, name: &NameAtom, namespace: ImportItemNamespace) -> bool {
-        self.rejected.contains(&(namespace, name.clone()))
-    }
-}
+use crate::syntax::ast::BindableVisibility;
 
 /// Closed set of Static declaration categories accepted by typed DAG bindings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -126,44 +101,6 @@ impl StaticInterface {
 #[must_use]
 pub fn static_binding_valid(input: StaticInterface, target: StaticInterface) -> bool {
     input.kind() == target.kind() && input.role().is_bindable() && target.role().is_concrete()
-}
-
-/// Semantic identity selected by projecting one Static declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StaticProjectionIdentity {
-    SourceDeclaration,
-    BindingTarget,
-}
-
-/// Typed failure while projecting one Static declaration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum StaticProjectionError {
-    MissingBinding,
-    InvalidBinding,
-}
-
-/// Select the effective semantic identity for a Static include projection.
-///
-/// Fixed declarations preserve source identity. Optional inputs preserve source
-/// identity when omitted and become the concrete binding target when supplied.
-/// Required inputs must become a valid concrete binding target.
-pub fn project_static_identity(
-    source: StaticInterface,
-    target: Option<StaticInterface>,
-) -> Result<StaticProjectionIdentity, StaticProjectionError> {
-    match (source.role(), target) {
-        (StaticRole::Fixed, _) | (StaticRole::OptionalInput, None) => {
-            Ok(StaticProjectionIdentity::SourceDeclaration)
-        }
-        (StaticRole::RequiredInput, None) => Err(StaticProjectionError::MissingBinding),
-        (StaticRole::OptionalInput | StaticRole::RequiredInput, Some(target)) => {
-            if static_binding_valid(source, target) {
-                Ok(StaticProjectionIdentity::BindingTarget)
-            } else {
-                Err(StaticProjectionError::InvalidBinding)
-            }
-        }
-    }
 }
 
 /// Construct the semantic role represented by visibility and requirement.

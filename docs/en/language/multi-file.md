@@ -770,13 +770,13 @@ Rules:
   path. Local paths, `file://`, plain HTTP, other URL schemes, embedded
   credentials, query strings, fragments, dotted/ambiguous paths, and
   option-shaped authority or path components are rejected before fetching.
-- Private repositories require whatever credentials the underlying Git fetch
-  implementation can obtain in the current environment, so support is
-  environment-dependent. For example, SSH may work when an SSH key/agent is
-  available, while HTTPS may fail unless a compatible credential helper or
-  non-interactive credential provider is configured. The SSH username in an SSH
-  URL is allowed; passwords, tokens, and other secrets must not be embedded in
-  the URL.
+- Use an SSH URL for a private repository. Graphcal ignores your Git
+  configuration, so Git credential helpers do not apply; SSH works through your
+  OpenSSH configuration, keys, and agent. A private HTTPS repository needs a
+  username and token typed at the terminal prompt, which rules out CI. See
+  [`graphcal deps lock`](../cli-reference.md#graphcal-deps-lock) for details. The SSH
+  username in an SSH URL is allowed; passwords, tokens, and other secrets must
+  not be embedded in the URL.
 - The dependency table key is the source-visible dependency name used in
   `import` and `include` paths.
 - If `package` is omitted, the fetched package's `[package].name` must match

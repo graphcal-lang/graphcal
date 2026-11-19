@@ -11,5 +11,5 @@ snippet line 2: param x: Dimensionless = 1.0;
     label at line 2, column 7: first defined here
 snippet line 3: param x: Dimensionless = 2.0;
     label at line 3, column 7: duplicate definition here
-diagnostic help: each name must be unique within a file
+diagnostic help: each name must be unique within its file or `dag` body
 diagnostic code: graphcal::N001

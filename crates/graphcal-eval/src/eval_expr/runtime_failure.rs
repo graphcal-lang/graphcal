@@ -6,10 +6,9 @@
 //! which keeps the typed failure and renders it only where the diagnostic is
 //! displayed.
 
-use graphcal_compiler::builtin::{DatetimeFromNumericFn, ScalarFn};
+use graphcal_compiler::builtin::ScalarFn;
 use graphcal_compiler::hir::expr::ExternFnRef;
 use graphcal_compiler::ratio::ExactPowerError;
-use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic::checked_type::IndexTypeRef;
 use graphcal_compiler::semantic::scalar_function::BuiltinEvalError;
 use graphcal_compiler::semantic::unit_scale::PositiveFiniteScaleError;
@@ -19,13 +18,14 @@ use thiserror::Error;
 
 use super::aggregations::AggregationError;
 use super::complex::ComplexEvalError;
-use super::conversions::ExactIntConversionError;
 use super::datetime::DatetimeRangeError;
 use super::linear_algebra_error::LinearAlgebraError;
-use super::numeric::QuantityValidationError;
+use super::numeric::{ExactI64ToF64Error, QuantityValidationError};
 use crate::domain_check::DomainViolation;
 use crate::host_abi::marshal::{ArgumentError, ResultError};
 use crate::host_fns::HostFnError;
+use graphcal_compiler::finite_value::ExactF64ToI64Error;
+use graphcal_compiler::semantic::int_arith::IntArithError;
 
 /// Why evaluating a checked expression failed at runtime.
 #[derive(Debug, Error)]
@@ -34,18 +34,22 @@ pub(super) enum RuntimeFailure {
     Quantity(#[from] QuantityValidationError),
     #[error(transparent)]
     Integer(#[from] IntegerFailure),
-    #[error("division by zero")]
-    QuantityDivisionByZero,
     #[error(transparent)]
     Power(#[from] ExactPowerError),
     #[error(transparent)]
     Complex(#[from] ComplexEvalError),
     #[error(transparent)]
     Datetime(#[from] DatetimeRangeError),
-    #[error("{}() integer argument {} is too large for exact conversion", .0.as_str(), .1)]
-    DatetimeIntegerTooLarge(DatetimeFromNumericFn, i64),
+    #[error("to_float() argument: {0}")]
+    ToFloat(ExactI64ToF64Error),
+    #[error("Int operand of `*` or `/` with a quantity: {0}")]
+    IntScalar(ExactI64ToF64Error),
+    #[error("Int exponent of `^`: {0}")]
+    IntExponent(ExactI64ToF64Error),
+    #[error("Int unit scale: {0}")]
+    IntUnitScale(ExactI64ToF64Error),
     #[error("to_int() argument {}{}", .0, rounding_help(.0))]
-    ToInt(ExactIntConversionError),
+    ToInt(ExactF64ToI64Error),
     #[error("builtin function `{function}` {error}")]
     ScalarFunction {
         function: ScalarFn,
@@ -60,8 +64,6 @@ pub(super) enum RuntimeFailure {
     Aggregation(#[from] AggregationError),
     #[error(transparent)]
     LinearAlgebra(#[from] LinearAlgebraError),
-    #[error(transparent)]
-    Unbound(#[from] UnboundReference),
     #[error("fin_key: {position} out of bounds for {axis}")]
     FinKeyOutOfBounds { position: i64, axis: IndexTypeRef },
     #[error("{}: no coordinate of `{axis}` is {} the target", search.kind().as_str(), relation(*search))]
@@ -69,8 +71,6 @@ pub(super) enum RuntimeFailure {
         search: CoordinateSearch,
         axis: IndexTypeRef,
     },
-    #[error("unfold requires a coordinate index, but `{0}` is not coordinate-valued")]
-    UnfoldWithoutCoordinates(IndexTypeRef),
     #[error("field `{constructor}.{field}` {violation}")]
     FieldConstraint {
         constructor: ConstructorName,
@@ -102,8 +102,17 @@ pub(super) enum IntegerFailure {
     NegationOverflow,
     #[error("integer exponent must be non-negative")]
     NegativeExponent,
-    #[error("integer exponent too large")]
-    ExponentTooLarge,
+}
+
+impl From<IntArithError> for IntegerFailure {
+    fn from(error: IntArithError) -> Self {
+        match error {
+            IntArithError::ModuloByZero => Self::ModuloByZero,
+            IntArithError::Overflow => Self::Overflow,
+            IntArithError::NegationOverflow => Self::NegationOverflow,
+            IntArithError::NegativeExponent => Self::NegativeExponent,
+        }
+    }
 }
 
 /// The unit-scale computation a non-finite scale came from.
@@ -122,17 +131,6 @@ impl std::fmt::Display for UnitScaleContext {
             Self::Compound => "compound unit scale",
         })
     }
-}
-
-/// A reference whose value is not bound where it is read.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-pub(super) enum UnboundReference {
-    #[error("undefined constant `{0}`")]
-    Constant(ResolvedDeclName),
-    #[error("undefined local variable")]
-    Local,
-    #[error("undefined graph reference `@{0}`")]
-    GraphRef(ResolvedDeclName),
 }
 
 /// Why a plugin function call failed.
@@ -179,14 +177,12 @@ pub(super) enum InlineAssertionFailure {
 }
 
 /// The advice an inexact `to_int()` argument gets.
-const fn rounding_help(error: &ExactIntConversionError) -> &'static str {
+const fn rounding_help(error: &ExactF64ToI64Error) -> &'static str {
     match error {
-        ExactIntConversionError::NonInteger { .. } => {
+        ExactF64ToI64Error::NonInteger { .. } => {
             "; apply trunc(), floor(), ceil(), or round() explicitly before to_int()"
         }
-        ExactIntConversionError::NonFinite { .. } | ExactIntConversionError::OutOfRange { .. } => {
-            ""
-        }
+        ExactF64ToI64Error::NonFinite { .. } | ExactF64ToI64Error::OutOfRange { .. } => "",
     }
 }
 
@@ -202,18 +198,18 @@ const fn relation(search: CoordinateSearch) -> &'static str {
 mod tests {
     use graphcal_compiler::tir::texpr::CoordinateSearch;
 
-    use super::super::conversions::ExactIntConversionError;
     use super::{IntegerFailure, RuntimeFailure, UnitScaleContext, relation, rounding_help};
+    use graphcal_compiler::finite_value::ExactF64ToI64Error;
 
     #[test]
     fn failures_render_their_established_messages() {
         assert_eq!(
-            RuntimeFailure::ToInt(ExactIntConversionError::NonInteger { value: 1.5 }).to_string(),
+            RuntimeFailure::ToInt(ExactF64ToI64Error::NonInteger { value: 1.5 }).to_string(),
             "to_int() argument is not integer-valued (got 1.5); apply trunc(), floor(), ceil(), \
              or round() explicitly before to_int()"
         );
         assert_eq!(
-            rounding_help(&ExactIntConversionError::NonFinite { value: f64::NAN }),
+            rounding_help(&ExactF64ToI64Error::NonFinite { value: f64::NAN }),
             ""
         );
         assert_eq!(relation(CoordinateSearch::Floor), "at or below");

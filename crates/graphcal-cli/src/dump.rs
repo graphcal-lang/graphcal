@@ -1,19 +1,19 @@
 //! Thin imperative shell for the experimental `graphcal dump` namespace.
 
 use std::fmt::Debug;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use clap::{Args, Subcommand};
-use miette::{Diagnostic, NamedSource};
+use graphcal_compiler::source_registry::RegisteredSource;
+use miette::Diagnostic;
 use thiserror::Error;
 
 use graphcal_compiler::diagnostic_render::RenderableDiagnostic;
 use graphcal_compiler::syntax::ast::File;
 use graphcal_compiler::syntax::lexer::tokenize;
 use graphcal_compiler::syntax::parser::{ParseErrorKind, Parser};
-use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader};
+use graphcal_io::{ByteLimit, FileSystemReadError, FileSystemReader, ProjectIngestionPolicy};
 use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::{build_rooted_filesystem, load_project};
 use graphcal_project::prepare::{ParameterBindingRow, PreparedProject};
@@ -22,8 +22,6 @@ use graphcal_project::project_compiler::ProjectCompiler;
 use crate::overrides::{
     OverrideParseError, ParameterArgs, ParsedOverrides, parse_overrides_with_sources,
 };
-
-const MAX_SOURCE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Nested `graphcal dump <STAGE>` commands.
 #[derive(Subcommand)]
@@ -100,7 +98,7 @@ pub enum DumpError {
         path.display()
     )]
     #[diagnostic(code(graphcal::dump::D002))]
-    SourceTooLarge { path: PathBuf, limit: usize },
+    SourceTooLarge { path: PathBuf, limit: ByteLimit },
     #[error("source file {} is not valid UTF-8", path.display())]
     #[diagnostic(code(graphcal::dump::D003))]
     SourceEncoding { path: PathBuf },
@@ -110,19 +108,13 @@ pub enum DumpError {
         #[source]
         source: graphcal_compiler::resolve::error::ModuleResolveError,
     },
-    #[error("could not write dump output: {source}")]
-    #[diagnostic(code(graphcal::dump::D005))]
-    Output {
-        #[source]
-        source: std::io::Error,
-    },
 }
 
 /// Run one nested dump command.
 ///
 /// # Errors
 ///
-/// Returns an input, compiler, evaluator, or output diagnostic.
+/// Returns an input, compiler, or evaluator diagnostic.
 pub fn run(command: DumpCommands) -> Result<DumpStatus, DumpError> {
     eprintln!(
         "warning: `graphcal dump` is experimental; its Rust Debug output may change without notice"
@@ -142,20 +134,20 @@ pub fn run(command: DumpCommands) -> Result<DumpStatus, DumpError> {
 }
 
 fn run_source(args: &FileArgs) -> Result<DumpStatus, DumpError> {
-    write_debug(&read_source(&args.file, args.root.as_deref())?)?;
+    write_debug(&read_source(&args.file, args.root.as_deref())?);
     Ok(DumpStatus::Success)
 }
 
 fn run_tokens(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let source = read_source(&args.file, args.root.as_deref())?;
-    write_debug(&tokenize(&source.text))?;
+    write_debug(&tokenize(&source.text));
     Ok(DumpStatus::Success)
 }
 
 fn run_ast(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let source = read_source(&args.file, args.root.as_deref())?;
     let artifact = parse_source(&source)?;
-    write_debug(&artifact)?;
+    write_debug(&artifact);
     Ok(DumpStatus::Success)
 }
 
@@ -163,17 +155,18 @@ fn run_desugared(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let source = read_source(&args.file, args.root.as_deref())?;
     let raw = parse_source(&source)?;
     let artifact = graphcal_compiler::desugar::desugared_ast::File::from(raw);
-    write_debug(&artifact)?;
+    write_debug(&artifact);
     Ok(DumpStatus::Success)
 }
 
 fn run_modules(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let project = load_project(&args.file, args.root.as_deref(), &fs)?;
-    let resolver = project
-        .build_module_resolver()
-        .map_err(|source| DumpError::ModuleIndex { source })?;
-    write_debug(&(project, resolver))?;
+    let resolver = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        project.build_module_resolver(cancellation)
+    })
+    .map_err(|source| DumpError::ModuleIndex { source })?;
+    write_debug(&(project, resolver));
     Ok(DumpStatus::Success)
 }
 
@@ -181,27 +174,26 @@ fn run_hir(args: &FileArgs) -> Result<DumpStatus, DumpError> {
     let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let project = load_project(&args.file, args.root.as_deref(), &fs)?;
     let hir = ProjectCompiler::new(&project).lower()?;
-    write_debug(&hir)?;
+    write_debug(&hir);
     Ok(DumpStatus::Success)
 }
 
 fn run_tir(args: &FileArgs) -> Result<DumpStatus, DumpError> {
-    let fs = build_rooted_filesystem(&args.file, args.root.as_deref())?;
     let (project, host_fns) =
-        crate::load_project_with_plugins(&args.file, args.root.as_deref(), &fs)?;
+        crate::load_rooted_project_with_plugins(&args.file, args.root.as_deref())?;
     let checked = ProjectCompiler::new(&project).host_fns(&host_fns).check()?;
-    write_debug(checked.tir())?;
+    write_debug(checked.tir());
     Ok(DumpStatus::Success)
 }
 
 fn run_plan(args: &FileArgs) -> Result<DumpStatus, DumpError> {
-    let prepared = prepare(&args.file, args.root.as_deref())?;
-    write_debug(&prepared.debug_plan())?;
+    let prepared = crate::prepare_rooted_project(&args.file, args.root.as_deref())?;
+    write_debug(&prepared.debug_plan());
     Ok(DumpStatus::Success)
 }
 
 fn run_runtime(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
-    let prepared = prepare(&args.project.file, args.project.root.as_deref())?;
+    let prepared = crate::prepare_rooted_project(&args.project.file, args.project.root.as_deref())?;
     let row = parse_bindings(&prepared, args)?;
     let outcome = prepared.evaluate_runtime(&row)?;
     let status = if outcome.has_errors() {
@@ -209,12 +201,12 @@ fn run_runtime(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
     } else {
         DumpStatus::Success
     };
-    write_debug(&outcome)?;
+    write_debug(&outcome);
     Ok(status)
 }
 
 fn run_result(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
-    let prepared = prepare(&args.project.file, args.project.root.as_deref())?;
+    let prepared = crate::prepare_rooted_project(&args.project.file, args.project.root.as_deref())?;
     let row = parse_bindings(&prepared, args)?;
     let result = prepared.evaluate(&row)?;
     let status = if result.has_errors() {
@@ -222,16 +214,8 @@ fn run_result(args: &EvaluationArgs) -> Result<DumpStatus, DumpError> {
     } else {
         DumpStatus::Success
     };
-    write_debug(&result)?;
+    write_debug(&result);
     Ok(status)
-}
-
-fn prepare(file: &Path, root: Option<&Path>) -> Result<PreparedProject, DumpError> {
-    let fs = build_rooted_filesystem(file, root)?;
-    let (project, host_fns) = crate::load_project_with_plugins(file, root, &fs)?;
-    Ok(ProjectCompiler::new(&project)
-        .host_fns(&host_fns)
-        .prepare()?)
 }
 
 fn parse_bindings(
@@ -261,13 +245,16 @@ struct SourceUnit {
 
 fn read_source(file: &Path, root: Option<&Path>) -> Result<SourceUnit, DumpError> {
     let fs = build_rooted_filesystem(file, root)?;
+    // The loader's own per-source limit: a file `dump` accepts is one the
+    // loader would accept too.
+    let limit = ProjectIngestionPolicy::default().source_file();
     let bytes = graphcal_compiler::outcome::without_cancellation(|cancellation| {
-        fs.read_bytes_bounded(file, ByteLimit::new(MAX_SOURCE_BYTES as u64), cancellation)
+        fs.read_bytes_bounded(file, limit, cancellation)
     })
     .map_err(|error| match error {
         FileSystemReadError::ByteLimitExceeded { .. } => DumpError::SourceTooLarge {
             path: file.to_path_buf(),
-            limit: MAX_SOURCE_BYTES,
+            limit,
         },
         other => DumpError::SourceRead {
             path: file.to_path_buf(),
@@ -284,13 +271,16 @@ fn read_source(file: &Path, root: Option<&Path>) -> Result<SourceUnit, DumpError
 /// Parse `source`, rendering a parse failure against the file it came from.
 fn parse_source(source: &SourceUnit) -> Result<File, DumpError> {
     Parser::new(&source.text).parse_file().map_err(|error| {
-        let named = NamedSource::new(source.path.to_string_lossy(), Arc::new(source.text.clone()));
+        let named = RegisteredSource::detached(
+            source.path.to_string_lossy(),
+            Arc::new(source.text.clone()),
+        );
         DumpError::Parse(RenderableDiagnostic::in_source(
             error.kind, error.span, named,
         ))
     })
 }
 
-fn write_debug<T: Debug + ?Sized>(value: &T) -> Result<(), DumpError> {
-    writeln!(std::io::stdout().lock(), "{value:#?}").map_err(|source| DumpError::Output { source })
+fn write_debug<T: Debug + ?Sized>(value: &T) {
+    outln!("{value:#?}");
 }

@@ -1,0 +1,15 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+unit `s` has the same name as a local in scope
+    Diagnostic severity: error
+Begin snippet for unit_name_is_local.gcl starting at line 8, column 1
+
+snippet line 8: node v: Velocity = match @p {
+snippet line 9:     Pair(a: _, b: s) => 2.0 m / s,
+    label at line 9, column 19: local `s` bound here
+    label at line 9, column 33: read as the unit `s`
+snippet line 10: };
+diagnostic help: a quantity literal reads `/ s` as part of its unit; to divide by the local `s`, close the literal with parentheses, as in `(2.0 m) / s`; to use the unit `s`, rename the local
+diagnostic code: graphcal::N037

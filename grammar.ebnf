@@ -208,14 +208,14 @@ regular_declaration_kind
    `--params-json-file`; required callable-DAG ports use include/call bindings.
    Params never take visibility. *)
 param_decl
-   = "param", IDENT, [ ":", type_expr ], [ "=", expr ], ";";
+   = "param", IDENT, ":", type_expr, [ "=", expr ], ";";
 
 (* --- node, const node --- *)
 node_decl
-   = "node", IDENT, [ ":", type_expr ], "=", expr, ";";
+   = "node", IDENT, ":", type_expr, "=", expr, ";";
 
 const_decl
-   = "const", "node", IDENT, [ ":", type_expr ], "=", expr, ";";
+   = "const", "node", IDENT, ":", type_expr, "=", expr, ";";
 
 (* --- multi-decl (dataframe-like) ---                                  *)
 (*                                                                      *)
@@ -564,15 +564,17 @@ include_param_bindings
             { ",", include_param_binding }, [ "," ] ], ")";
 
 (* Binding names are semantically unique within one list. Their order has no
-   effect. An unmarked binding selects exactly a param Term. Static ports require
-   an explicit `type`, `dim`, or `index` marker; there is deliberately no
-   `param` marker. The shared parser retains the RHS as expr until the selected
-   target category is known. *)
+   effect. An unmarked binding selects exactly a param Term and takes a value
+   expression. Static ports require an explicit `type`, `dim`, or `index`
+   marker, which selects the grammar of the value; there is deliberately no
+   `param` marker. A static binding value must name a declared type,
+   dimension, or index (or be `Fin(N)` for an index); other well-formed type
+   and dimension expressions are rejected semantically. *)
 include_param_binding
-   = [ input_binding_category ], IDENT, ":", expr;
-
-input_binding_category
-   = "type" | "dim" | "index";
+   = IDENT, ":", expr
+   | "type", IDENT, ":", type_expr
+   | "dim", IDENT, ":", dim_expr
+   | "index", IDENT, ":", index_expr;
 
 (* --- dag --- *)
 (* DAG blocks define reusable, parameterized computation. They
@@ -972,11 +974,19 @@ dag_path
    = namespace_path;
 
 ident_expr
-   = ident_path,
+   = index_label                                   (* owner-qualified index
+                                                       label `Phase#Burn` *)
+   | ident_path,
      [ "<", generic_arg_list, ">" ],
      "(", [ call_arg_list ], ")"                   (* function call or
                                                        constructor call *)
    | ident_path;                                   (* unresolved name path *)
+(* A `<` after an ident_path opens a generic_arg_list only when the tokens
+   up to its matching `>` form a balanced generic argument list and `(`
+   directly follows that `>`; otherwise `<` is a comparison. Directly inside
+   the angle brackets only type, index, and Nat tokens may appear (a `:`
+   rules the generic reading out), so `Flags(low: a < b, high: a > (c))`
+   holds two comparisons. *)
 
 (* The argument list of a call expression accepts positional args for
    function calls (`sqrt(x)`) or named args for constructor calls
@@ -1011,7 +1021,7 @@ generic_arg
    the built-in scientific-time constructor consumes a static argument:
    `epoch<S>(civil_literal)`, where S is one supported time scale. Civil
    datetime strings require an explicit date and time
-   (`YYYY-MM-DDTHH:MM:SS...`); date-only strings do not implicitly mean
+   (exactly `YYYY-MM-DDTHH:MM:SS[.fraction]`); date-only strings do not implicitly mean
    midnight. Every other non-empty function generic argument list is rejected. *)
 
 expr_list
@@ -1098,7 +1108,7 @@ paren_expr
 
 (* --- Match expression --- *)
 match_expr
-   = "match", expr, "{", [ match_arm, { [ "," ], match_arm }, [ "," ] ], "}";
+   = "match", expr, "{", [ match_arm, { ",", match_arm }, [ "," ] ], "}";
 
 match_arm
    = match_pattern, "=>", expr;

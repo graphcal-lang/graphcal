@@ -143,3 +143,36 @@ param mass: Mass(max: @LIMIT) = @GOOD;
     )
     .unwrap();
 }
+
+/// Sealing reads every DAG's bounds from one map of canonically keyed
+/// constants instead of a per-DAG copy (#2251): same-named constants of
+/// different DAGs still bound only their own declarations.
+#[test]
+fn bounds_read_their_own_dags_constants_without_per_dag_copies() {
+    let result = compile_and_eval(
+        r"
+dag tight {
+    const node LIMIT: Dimensionless = 1.0;
+    param x: Dimensionless(max: @LIMIT);
+    pub node out: Dimensionless = @x;
+}
+dag loose {
+    const node LIMIT: Dimensionless = 10.0;
+    param x: Dimensionless(max: @LIMIT);
+    pub node out: Dimensionless = @x;
+}
+const node LIMIT: Dimensionless = 100.0;
+node from_tight: Dimensionless = @tight(x: 5.0)::out;
+node from_loose: Dimensionless = @loose(x: 5.0)::out;
+",
+    )
+    .unwrap();
+    let outcome = |name: &str| {
+        result
+            .nodes()
+            .find(|(candidate, _)| candidate.to_string() == name)
+            .map(|(_, outcome)| outcome.is_ok())
+    };
+    assert_eq!(outcome("from_tight"), Some(false));
+    assert_eq!(outcome("from_loose"), Some(true));
+}

@@ -16,6 +16,7 @@ use crate::syntax::type_name::{ConstructorNameNamespace, StructTypeNameNamespace
 use super::category::{DeclSymbolKind, ExportedImportItemKind};
 use super::error::ModuleResolveError;
 use super::namespace::{Namespace, Occupant};
+use super::reserved_name::validate_reserved_name;
 use super::symbols::{
     ConstructorSignature, GenericParamSignature, ModuleSymbols, Symbol, Table, occupant_in,
 };
@@ -73,12 +74,6 @@ impl ModuleAliasTarget {
         &self.target
     }
 
-    /// Visibility rule for names reached through this alias.
-    #[must_use]
-    pub const fn access(&self) -> Access {
-        self.access
-    }
-
     /// Whether this alias names an imported DAG or an included instance.
     #[must_use]
     pub const fn role(&self) -> ModuleAliasRole {
@@ -133,18 +128,6 @@ pub struct ModuleScope {
 }
 
 impl ModuleScope {
-    /// Module aliases introduced by whole-module imports/includes.
-    #[must_use]
-    pub const fn module_aliases(&self) -> &HashMap<ModuleAliasName, ModuleAliasTarget> {
-        &self.module_aliases
-    }
-
-    /// Extern-plugin aliases introduced by `import plugin` declarations.
-    #[must_use]
-    pub const fn plugin_aliases(&self) -> &HashMap<ModuleAliasName, PluginAliasTarget> {
-        &self.plugin_aliases
-    }
-
     /// The import binding occupying `(namespace, atom)`, if any.
     pub(super) fn occupant(&self, namespace: Namespace, atom: &NameAtom) -> Option<Occupant> {
         match namespace {
@@ -176,14 +159,21 @@ impl ModuleScope {
 
     /// Install the names one `import` / `include` edge introduces.
     ///
-    /// Each name must claim a free slot of the owner's collision unit: local
-    /// declarations, earlier imports, and the edge's own earlier names all
-    /// occupy it.
+    /// Each selective item's local name must not take a spelling reserved in
+    /// its namespace (a prelude unit or dimension, a built-in type, function,
+    /// or constant), and each name must claim a free slot of the owner's
+    /// collision unit: local declarations, earlier imports, and the edge's own
+    /// earlier names all occupy it.
+    ///
+    /// Module aliases are exempt from the reserved-name policy: they are only
+    /// reachable as a path qualifier, never as a bare name.
     ///
     /// # Errors
     ///
     /// Returns [`ModuleResolveError::DuplicateImportName`] for the first
-    /// addition whose slot is already occupied.
+    /// addition whose slot is already occupied, and
+    /// [`ModuleResolveError::ReservedImportName`] for the first selective
+    /// item whose local name is reserved.
     pub(super) fn add_imports(
         &mut self,
         symbols: &ModuleSymbols,
@@ -202,6 +192,17 @@ impl ModuleScope {
                     name: local.value.clone(),
                     first: first.span,
                     duplicate: local.span,
+                });
+            }
+            if let Some(kind) = addition.target.item_kind()
+                && let Err(error) = validate_reserved_name(namespace, &local.value)
+            {
+                return Err(ModuleResolveError::ReservedImportName {
+                    owner: symbols.owner().clone(),
+                    kind,
+                    name: local.value.clone(),
+                    reserved: error.reserved,
+                    span: local.span,
                 });
             }
             self.install(addition);
@@ -341,8 +342,9 @@ pub(super) fn module_alias(
 /// module's Term namespace whether or not the loader resolves its target to a
 /// registered module, so an alias and a local declaration of the same name are
 /// rejected uniformly. The one exception is an alias that re-spells the local
-/// `dag` its single-segment path names (`include d(...)`, `import d`): it
-/// shares that declaration's name rather than introducing a second one.
+/// `dag` its single-segment path names (`include d(...)`, `import d`): it is
+/// not claimed here, because the module's declaration-name check already
+/// rejects it as a duplicate name (N001) and must be its only report.
 ///
 /// Import and include aliases are installed later, when their loader-resolved
 /// edge registers (see [`ModuleScope::add_imports`]); plugin aliases have no
@@ -350,24 +352,28 @@ pub(super) fn module_alias(
 ///
 /// A declaration whose alias cannot be claimed is skipped and its error
 /// returned, in declaration order: [`ModuleResolveError::DuplicateImportName`]
-/// when an alias collides with a local declaration or an earlier plugin
-/// alias, and [`ModuleResolveError::DuplicatePluginFunction`] for a function
+/// when an alias collides with a local declaration or an earlier alias of any
+/// form, and [`ModuleResolveError::DuplicatePluginFunction`] for a function
 /// declared twice in one plugin block.
 pub(super) fn declare_aliases(
     scope: &mut ModuleScope,
     symbols: &ModuleSymbols,
     declarations: &[ast::Declaration],
 ) -> Vec<ModuleResolveError> {
+    let mut claimed = HashMap::new();
     declarations
         .iter()
-        .filter_map(|decl| declare_alias(scope, symbols, decl).err())
+        .filter_map(|decl| declare_alias(scope, &mut claimed, symbols, decl).err())
         .collect()
 }
 
 /// Claim the alias one declaration introduces, if any (see
-/// [`declare_aliases`]).
+/// [`declare_aliases`]). `claimed` holds the aliases earlier declarations
+/// claimed, so two aliases of one name are rejected at the second one, even
+/// when both re-spell the same local `dag`.
 fn declare_alias(
     scope: &mut ModuleScope,
+    claimed: &mut HashMap<ModuleAliasName, Span>,
     symbols: &ModuleSymbols,
     decl: &ast::Declaration,
 ) -> Result<(), ModuleResolveError> {
@@ -388,16 +394,12 @@ fn declare_alias(
             ast::DeclKind::PluginImport(plugin) => (plugin.alias.clone(), false),
             _ => return Ok(()),
         };
-        let plugin_alias = match &decl.kind {
-            ast::DeclKind::PluginImport(_) => scope.plugin_aliases.get(&alias.value),
-            _ => None,
-        };
         let names_local_dag = respells_path && symbols.declares_dag(alias.value.atom());
         if let Some(first) = symbols
             .occupant(Namespace::Term, alias.value.atom())
             .filter(|_| !names_local_dag)
             .map(|occupant| occupant.span)
-            .or_else(|| plugin_alias.map(|target| target.span))
+            .or_else(|| claimed.get(&alias.value).copied())
         {
             return Err(ModuleResolveError::DuplicateImportName {
                 owner: owner.clone(),
@@ -407,6 +409,7 @@ fn declare_alias(
                 duplicate: alias.span,
             });
         }
+        claimed.insert(alias.value.clone(), alias.span);
         if let ast::DeclKind::PluginImport(plugin) = &decl.kind {
             let mut functions = HashMap::new();
             for function in &plugin.functions {

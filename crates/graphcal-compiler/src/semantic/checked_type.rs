@@ -71,12 +71,6 @@ impl<Ns: NameNamespace> TypeNameRef<Ns> {
         self.resolved() == other.resolved()
     }
 
-    /// Borrow the leaf string for diagnostic/display-only formatting.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        self.name.as_str()
-    }
-
     /// Clone the leaf definition name for diagnostic/display boundaries.
     #[must_use]
     fn to_unowned_name(&self) -> NameDef<Ns> {
@@ -95,12 +89,6 @@ impl<Ns: NameNamespace> Eq for TypeNameRef<Ns> {}
 impl<Ns: NameNamespace> std::hash::Hash for TypeNameRef<Ns> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.resolved.hash(state);
-    }
-}
-
-impl<Ns: NameNamespace> From<ResolvedName<Ns>> for TypeNameRef<Ns> {
-    fn from(resolved: ResolvedName<Ns>) -> Self {
-        Self::from_resolved(resolved)
     }
 }
 
@@ -498,12 +486,6 @@ impl IndexTypeRef<Symbolic> {
         FiniteIndexRef::from_form(form).map(Self::Finite)
     }
 
-    /// Wrap an already validated finite structural reference.
-    #[must_use]
-    pub const fn from_finite_index_ref(reference: FiniteIndexRef) -> Self {
-        Self::Finite(reference)
-    }
-
     /// Return the finite structural reference, when this is a compiler-generated finite structural.
     #[must_use]
     pub(crate) const fn finite_index_ref(&self) -> Option<&FiniteIndexRef> {
@@ -541,12 +523,6 @@ impl IndexTypeRef<Concrete> {
             Self::Declared(reference) => IndexTypeRef::Declared(reference.clone()),
             Self::Finite(index) => IndexTypeRef::Finite(FiniteIndexRef::concrete(*index)),
         }
-    }
-}
-
-impl<V: Concreteness> From<ResolvedIndexName> for IndexTypeRef<V> {
-    fn from(resolved: ResolvedIndexName) -> Self {
-        Self::from_resolved(resolved)
     }
 }
 

@@ -1,0 +1,7 @@
+index I = { A, B };
+param gm: Dimensionless = 2.0;
+param v: Dimensionless[I] = { I#A: 1.0, I#B: 2.0 }; // calibration
+node s: Dimensionless = sqrt(@gm / 2.0); // speed
+node x: Dimensionless = @v[ // which
+ I#A] + 1.0;
+dag d { param a: Dimensionless; } // the dag

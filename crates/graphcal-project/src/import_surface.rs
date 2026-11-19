@@ -7,65 +7,14 @@
 //! circular module dependency between the two consumers.
 
 use graphcal_compiler::ir::module_interface::ModuleInterface;
-use graphcal_compiler::resolve::category::ExportedImportItemKind;
-use graphcal_compiler::resolve::namespace::Namespace;
-use graphcal_compiler::resolve::reserved_name::validate_reserved_name;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::graph::DagReference;
 use graphcal_compiler::semantic_error::module::ModuleError;
-use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::source_id::SourceId;
-use graphcal_compiler::syntax::ast::{ImportItem, ImportItemNamespace};
+use graphcal_compiler::syntax::ast::ImportItemNamespace;
 use graphcal_compiler::syntax::import_category::ImportItemCategoryMismatch;
 use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::span::Span;
-
-/// Validate the source-visible local spelling introduced by one selective item.
-pub fn validate_constructor_alias(
-    kind: ExportedImportItemKind,
-    import_item: &ImportItem,
-    src: SourceId,
-) -> Result<(), SemanticError> {
-    match kind {
-        ExportedImportItemKind::Constructor => {
-            validate_reserved_alias(Namespace::Term, import_item, src)
-        }
-        ExportedImportItemKind::Decl(_)
-        | ExportedImportItemKind::Dimension
-        | ExportedImportItemKind::Unit(_)
-        | ExportedImportItemKind::Type
-        | ExportedImportItemKind::Index => Ok(()),
-    }
-}
-
-/// Validate one alias against the reserved vocabulary of its semantic namespace.
-pub fn validate_reserved_alias(
-    namespace: Namespace,
-    import_item: &ImportItem,
-    src: SourceId,
-) -> Result<(), SemanticError> {
-    let local_name = import_item.local_name_atom();
-    validate_reserved_name(namespace, local_name).map_err(|_| {
-        let kind = match namespace {
-            Namespace::Static => match import_item.namespace {
-                ImportItemNamespace::Type => "type alias",
-                ImportItemNamespace::Dimension => "dimension alias",
-                ImportItemNamespace::Index => "index alias",
-                ImportItemNamespace::Term | ImportItemNamespace::Unit => "Static alias",
-            },
-            Namespace::Unit => "unit alias",
-            Namespace::Term => "Term alias",
-        };
-        SemanticError::located(
-            src,
-            import_item.local_span(),
-            NameError::BuiltinNameShadowed {
-                kind,
-                name: local_name.clone(),
-            },
-        )
-    })
-}
 
 /// Diagnose a selective item that names nothing importable in `expected`:
 /// a category mismatch when `name` exists in another namespace, otherwise

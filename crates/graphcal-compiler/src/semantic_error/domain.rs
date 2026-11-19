@@ -17,14 +17,6 @@ use crate::syntax::index_name::IndexEntryKey;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 use crate::tir::typed::declared_type_spelling::DeclaredTypeSpelling;
 
-/// One step from a constant into a nested value: a struct field or an
-/// indexed entry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValuePathStep {
-    Field(FieldName),
-    Entry(IndexEntryKey),
-}
-
 /// A constrained field of a nominal type: `Type.field` when the constructor
 /// is record-shaped and named like its type (`constructor` is `None`),
 /// `Type.Constructor.field` otherwise.
@@ -53,50 +45,6 @@ pub enum DomainSubject {
     NominalField(Box<NominalFieldPath>),
     /// A constrained field named by its constructor: `Constructor.field`.
     ConstructorField(Box<(ConstructorName, FieldName)>),
-    /// A value inside a constant.
-    Value(Box<ValuePath>),
-}
-
-/// A constant's value or a value nested inside it: `root.step.step`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValuePath {
-    root: DeclName,
-    steps: Vec<ValuePathStep>,
-}
-
-impl ValuePath {
-    /// The whole value of the constant `root`.
-    #[must_use]
-    pub const fn new(root: DeclName) -> Self {
-        Self {
-            root,
-            steps: Vec::new(),
-        }
-    }
-
-    /// The value one step further into this one.
-    #[must_use]
-    pub fn child(&self, step: ValuePathStep) -> Self {
-        let mut steps = self.steps.clone();
-        steps.push(step);
-        Self {
-            root: self.root.clone(),
-            steps,
-        }
-    }
-}
-
-impl std::fmt::Display for ValuePath {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.root.fmt(f)?;
-        for step in &self.steps {
-            match step {
-                ValuePathStep::Field(field) => write!(f, ".{field}")?,
-                ValuePathStep::Entry(key) => write!(f, ".{key}")?,
-            }
-        }
-        Ok(())
-    }
 }
 
 impl std::fmt::Display for DomainSubject {
@@ -105,7 +53,6 @@ impl std::fmt::Display for DomainSubject {
             Self::Declaration(name) => name.fmt(f),
             Self::NominalField(path) => path.fmt(f),
             Self::ConstructorField(path) => write!(f, "{}.{}", path.0, path.1),
-            Self::Value(path) => path.fmt(f),
         }
     }
 }
@@ -143,12 +90,12 @@ pub enum UnconstrainableType {
 impl std::fmt::Display for UnconstrainableType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Bool => f.write_str("Bool"),
-            Self::Complex => f.write_str("Complex"),
-            Self::Key => f.write_str("Key"),
+            Self::Bool => f.write_str("`Bool`"),
+            Self::Complex => f.write_str("`Complex`"),
+            Self::Key => f.write_str("`Key`"),
             Self::Struct(name) => write!(f, "struct `{name}`"),
             Self::GenericTypeParam(param) => write!(f, "generic Type parameter `{param}`"),
-            Self::Checked(ty) => ty.fmt(f),
+            Self::Checked(ty) => write!(f, "`{ty}`"),
         }
     }
 }
@@ -288,7 +235,7 @@ pub enum DomainError {
         min: Box<DomainBoundSpelling>,
         max: Box<DomainBoundSpelling>,
     },
-    #[error("domain constraints are not valid on `{type_kind}` types")]
+    #[error("domain constraints are not valid on {type_kind} types")]
     InvalidDomainTarget { type_kind: UnconstrainableType },
     #[error("domain bound type mismatch on Int `{name}`: {bound_name} bound has type {bound_type}")]
     IntDomainBoundTypeMismatch {
@@ -307,11 +254,26 @@ pub enum DomainError {
         bound_name: DomainBoundKind,
         bound_type: TypeSpelling,
     },
-    /// An Int bound on a quantity domain that `f64` cannot represent exactly.
-    #[error("domain bound integer {value} is too large for exact quantity comparison")]
-    InexactIntDomainBound { value: i64 },
+    /// An `Int` bound on a `Dimensionless` domain. Bounds are compared with
+    /// the value, and `Int` and quantities are never compared implicitly.
+    #[error("domain bound type mismatch on Dimensionless `{name}`: {bound_name} bound is an Int")]
+    IntBoundOnDimensionlessDomain {
+        name: DomainSubject,
+        bound_name: DomainBoundKind,
+        /// The bound's value when it is a (possibly negated) integer
+        /// literal, so the help can spell its `Dimensionless` replacement.
+        literal: Option<i64>,
+    },
     #[error("domain constraints are not supported on the type of a `todo` hole")]
     TodoHoleDomainConstraint,
+    /// A bound reads a constant that has no value: its formula, or that of a
+    /// constant it reads, is unfinished.
+    #[error("{bound_name} bound on `{name}` reads the unfinished constant `{constant}`")]
+    DomainBoundReadsUnfinishedConstant {
+        name: DomainSubject,
+        bound_name: DomainBoundKind,
+        constant: DeclName,
+    },
 }
 
 impl DiagnosticKind for DomainError {
@@ -324,8 +286,9 @@ impl DiagnosticKind for DomainError {
             Self::IntDomainBoundTypeMismatch { .. } => "graphcal::C005",
             Self::GenericTypeArgDomainConstraint => "graphcal::C006",
             Self::DatetimeDomainBoundTypeMismatch { .. } => "graphcal::C007",
-            Self::InexactIntDomainBound { .. } => "graphcal::C008",
             Self::TodoHoleDomainConstraint => "graphcal::C009",
+            Self::DomainBoundReadsUnfinishedConstant { .. } => "graphcal::C010",
+            Self::IntBoundOnDimensionlessDomain { .. } => "graphcal::C011",
         }
     }
 
@@ -346,7 +309,12 @@ impl DiagnosticKind for DomainError {
             Self::DatetimeDomainBoundTypeMismatch { .. } => {
                 Some("datetime bound has the wrong time scale or value type".to_owned())
             }
-            Self::InexactIntDomainBound { .. } => Some("error here".to_owned()),
+            Self::IntBoundOnDimensionlessDomain { .. } => {
+                Some("Dimensionless bound must not be an Int".to_owned())
+            }
+            Self::DomainBoundReadsUnfinishedConstant { .. } => {
+                Some("bound has no value yet".to_owned())
+            }
         }
     }
 
@@ -360,7 +328,11 @@ impl DiagnosticKind for DomainError {
             Self::GenericTypeArgDomainConstraint => Some("put the constraint on the field in the struct definition, not on the generic type argument".to_owned()),
             Self::DatetimeDomainBoundTypeMismatch { .. } => Some("datetime bounds must have exactly the constrained Datetime<S> type; use an explicit time-scale conversion".to_owned()),
             Self::TodoHoleDomainConstraint => Some("put the constraint on the declaration's type instead".to_owned()),
-            Self::InexactIntDomainBound { .. } => None,
+            Self::IntBoundOnDimensionlessDomain { literal, .. } => Some(literal.map_or_else(
+                || "convert the bound with `to_float(...)`, or write an integer literal as a Dimensionless number such as `0.0`".to_owned(),
+                |literal| format!("write `{literal}.0` instead of `{literal}`"),
+            )),
+            Self::DomainBoundReadsUnfinishedConstant { .. } => Some("a bound must be known when the model is checked; finish the constant's formula first".to_owned()),
         }
     }
 
@@ -373,8 +345,9 @@ impl DiagnosticKind for DomainError {
             | Self::IntDomainBoundTypeMismatch { .. }
             | Self::GenericTypeArgDomainConstraint
             | Self::DatetimeDomainBoundTypeMismatch { .. }
-            | Self::InexactIntDomainBound { .. }
-            | Self::TodoHoleDomainConstraint => Vec::new(),
+            | Self::IntBoundOnDimensionlessDomain { .. }
+            | Self::TodoHoleDomainConstraint
+            | Self::DomainBoundReadsUnfinishedConstant { .. } => Vec::new(),
         }
     }
 }

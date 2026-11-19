@@ -91,7 +91,7 @@ node mass_ratio: Dimensionless = 3.0;
 node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 ```
 
-A hole has the written type `T` and can replace a whole formula or any part of one, such as `@mass * todo<Acceleration> { @g0 }`; the rest of the formula is still type-checked. Holes are allowed only in `node` formulas, and a node whose formula contains a hole is unfinished. The braces list **all possible direct dependencies** of the missing part; transitive dependencies need not be listed. An entry is a reference `@y`, an element `@y[t]` keyed by local variables in scope, or a local variable such as `s`, which documents intent without being a graph dependency. Element entries let an unfinished recurrence state which step it reads. An explicitly empty interface is `todo<T> {}`. References have the usual name, visibility, and cycle checks. Constant references are permitted without making constants runtime DAG nodes.
+A hole has the written type `T` and can replace a whole formula or any part of one, such as `@mass * todo<Acceleration> { @g0 }`; the rest of the formula is still type-checked. Holes are allowed in `node` and `const node` formulas (see [Constants](#constants)), and a declaration whose formula contains a hole is unfinished. The braces list **all possible direct dependencies** of the missing part; transitive dependencies need not be listed. An entry is a reference `@y`, an element `@y[t]` keyed by local variables in scope, or a local variable such as `s`, which documents intent without being a graph dependency. Element entries let an unfinished recurrence state which step it reads. An explicitly empty interface is `todo<T> {}`. References have the usual name, visibility, and cycle checks. Constant references are permitted without making constants runtime DAG nodes.
 
 Here, `mass_ratio` evaluates, `v_exhaust` is **TODO**, and `delta_v` is **BLOCKED**. An unfinished node is TODO even if evaluation would not reach its hole, and blocking follows the static dependency graph, including references in unselected branches. These outcomes are not values, `null`, or evaluation errors.
 
@@ -104,6 +104,8 @@ const node g0: Acceleration = 9.80665 m/s^2;
 ```
 
 Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes. DAG calls are anonymous runtime includes, so they are also prohibited in `const node` expressions and compile-time domain bounds.
+
+A constant whose value is not decided yet can be written with a hole, such as `const node v_exhaust: Velocity = todo<Velocity> { @g0 };`. Its interface may list only constants. An unfinished constant is TODO, and everything that reads it is BLOCKED, as for nodes. A domain bound must be known when the model is checked, so a bound that reads an unfinished constant is an error. Because constants are checked at compile time, filling in the hole can make `check` report an error that was not visible before, such as a value outside the constant's domain.
 
 ### Assertions
 
@@ -119,7 +121,7 @@ The `@` prefix is the central scoping mechanism:
 
 | Reference | Meaning | Allowed in |
 |-----------|---------|------------|
-| `@name` | Parameter, node, or const node in the graph | `node` expressions, param defaults, `dag` block bodies |
+| `@name` | Parameter, node, or const node in the graph | `node` expressions, param defaults, `dag` block bodies; const nodes only in `const node` expressions |
 | `@dag(args)::out` | Runtime DAG instantiation projecting one output | Runtime expressions, including param defaults |
 | `NAME` | Built-in constant (`PI`, `E`, `TAU`, etc.) | Everywhere |
 | `name` | Local variable (loop variable, match binding) | Expression bodies |
@@ -144,7 +146,7 @@ numeric value silently.
 |---------|-------------|
 | `node` expression | Yes |
 | `param` default value | Yes |
-| `const node` expression | No |
+| `const node` expression | Only for other `const node` values |
 | `dag` block body (inside `node` expressions) | Yes |
 
 ## Evaluation Order

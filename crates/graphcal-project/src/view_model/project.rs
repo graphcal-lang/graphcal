@@ -31,6 +31,7 @@ use graphcal_eval::presentation_evidence::PresentationPathPart;
 use thiserror::Error;
 
 use crate::graph_ir::{GraphClusterKind, GraphIr, GraphProjectionError, project_tir};
+use crate::loader::loaded_file::LoadedModule;
 use crate::loader::{LoadedFile, LoadedProject};
 use crate::project_compiler::CheckedProject;
 
@@ -283,9 +284,8 @@ fn project_subject(
     let module_name = scope.module_name(&presented);
     let cells_from = scope
         .project
-        .files()
-        .get(&presented.file_root())
-        .map(|file| file.ast().declarations.as_slice());
+        .module(&presented)
+        .map(LoadedModule::declarations);
     let mut builder = NodeBuilder {
         shared_definitions: shared_definitions(tir, &locals),
         scope,
@@ -473,14 +473,14 @@ impl<'p> Scope<'p> {
             .map_or_else(|| declaration.to_string(), |name| name.to_string())
     }
 
-    /// Whether `module` declares `name` as an explicit `pub` output.
+    /// Whether `module` exposes `name` as an output: a `param` input port,
+    /// or an explicit `pub` export, including one it re-exports.
     fn is_public(&self, module: &DagId, name: &DeclName) -> bool {
         self.project.module(module).is_some_and(|module| {
             module
                 .interface()
-                .value_outputs()
-                .iter()
-                .any(|output| output.name() == name)
+                .external_surface()
+                .is_externally_nameable(name)
         })
     }
 
@@ -738,8 +738,9 @@ struct NodeBuilder<'a> {
     /// root, or an instance's template.
     presented: &'a DagId,
     module_name: &'a str,
-    /// The declarations of the presented module's file, whose table cells
-    /// the subject's own nodes edit.
+    /// The declarations of the presented module (the file root, or an
+    /// instance's inline DAG body), whose table cells the subject's own
+    /// nodes edit.
     cells_from: Option<&'a [Declaration]>,
     /// The include edge of an instance subject, whose arguments define its
     /// bound params.
@@ -1069,7 +1070,7 @@ fn axis_entries(def: &IndexDef) -> Vec<ViewIndexEntry> {
     let coordinates = def.coordinate_data().and_then(|data| {
         NonEmpty::try_from_vec(keys.clone())
             .ok()
-            .map(|keys| coordinate_entry_display_names(data, &keys))
+            .map(|keys| coordinate_entry_display_names(data, keys))
     });
     keys.iter()
         .map(|key: &IndexEntryKey| ViewIndexEntry {
@@ -1257,7 +1258,7 @@ impl<'p> SourceFiles<'p> {
                 Some(relative) => Ok(relative),
                 None => Ok(checked
                     .sources()
-                    .named_source(file.source_id())?
+                    .source(file.source_id())?
                     .name()
                     .to_string()),
             }

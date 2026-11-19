@@ -32,10 +32,23 @@ icon: material/code-parentheses
 | `a + b` | 加算 | 加算 | 次元が一致しなければならない |
 | `a - b` | 減算 | 減算 | 次元が一致しなければならない |
 | `a * b` | 乗算 | 乗算 | 次元を乗算 |
-| `a / b` | 除算 | 整数除算 | 次元を除算 |
+| `a / b` | 除算 | 定義されない | 次元を除算 |
 | `a % b` | 非対応 | 剰余 | `Int` オペランドのみ |
 | `a ^ n` | べき乗 | 整数のべき乗（非負の指数） | 次元をべき乗 |
 | `-a` | 符号反転 | 符号反転 | 次元を保持 |
+
+`Int` 同士の `/` は定義されていません。整数の商は丸める必要があり、丸める方向は言語によって異なるためです。`div_trunc`、`div_floor`、`div_ceil` のいずれかで丸め方を指定してください（[整数除算関数](built-ins.md#integer-division-functions)を参照）。実数の商が必要な場合は、被除数を変換して `to_float(a) / b` と書きます。
+
+`Int` で量をスカラー倍できます。`n * q`、`q * n`、`q / n`、`n / q` は量の算術として計算され、`Int` の `n` は正確な `Dimensionless` の値として扱われます。そのため `n * q` の次元は `q` と同じです。`+`、`-`、比較では `Int` と量を混ぜられません。binary64 で表せない `Int`（絶対値が `2 ^ 53` を超える場合にだけ存在します）は評価エラーになります。
+
+```graphcal
+param p_unit: Power = 2.8 W;
+param qty: Int = 4;
+param r: Length = 0.5 m;
+
+node p_total: Power = @p_unit * @qty; // 11.2 W
+node circumference: Length = 2 * PI * @r;
+```
 
 `%` は `Int % Int` に対してのみ定義されます。Graphcal は実数の量に IEEE 浮動小数点の剰余を暗黙に適用しません。結果は切り捨て整数剰余の意味論に従い、除数がゼロの場合は評価エラーになります。
 
@@ -48,9 +61,9 @@ icon: material/code-parentheses
 | `z1 + z2`, `z1 - z2` | `Complex<D>` | 両オペランドが `Complex<D>` であること |
 | `z1 * z2` | `Complex<D1 * D2>` | 複素数のオペランドは異なる次元を持ってよい |
 | `z1 / z2` | `Complex<D1 / D2>` | 除数が非ゼロであること |
-| `q * z`, `z * q` | `Complex<Dq * Dz>` | `q` は実数の量 |
-| `z / q` | `Complex<Dz / Dq>` | `q` は非ゼロの実数の量 |
-| `q / z` | `Complex<Dq / Dz>` | `z` が非ゼロであること |
+| `q * z`, `z * q` | `Complex<Dq * Dz>` | `q` は実数の量または `Int` |
+| `z / q` | `Complex<Dz / Dq>` | `q` は非ゼロの実数の量または `Int` |
+| `q / z` | `Complex<Dq / Dz>` | `q` は実数の量または `Int`、`z` は非ゼロ |
 | `-z` | `Complex<D>` | |
 
 例を示します。
@@ -66,7 +79,7 @@ node with_offset: Complex<Length> = @displacement + to_complex(1.0 m);
 
 ### べき乗の指数 { #power-exponents }
 
-量に対するすべての指数は無次元でなければなりません。底が `Dimensionless` であれば、指数は任意の実行時 `Dimensionless` 量でかまいません。`@ratio ^ @runtime_exponent` は有効です。
+量に対するすべての指数は無次元でなければなりません。底が `Dimensionless` であれば、指数は任意の実行時 `Dimensionless` 量か `Int` でかまいません。`@ratio ^ @runtime_exponent` も `@ratio ^ @n` も有効です。`Int` の指数は、`*` や `/` の `Int` オペランドと同じく、正確な `Dimensionless` の値として扱われます。
 
 底が物理的な次元を持つ場合、その指数は代わりに正確な静的構文、すなわち整数（`2`、`-2`、`0`）または括弧で囲まれた有理数（`(3/2)` や `(-1/3)`）を使わなければなりません。結果の次元はその正確な有理数だけべき乗されます。次元付きの底に対しては小数／指数表記の構文は受け付けられません。`0.25` ではなく `(1/4)`、`2.0` ではなく `2` と書いてください（`D020`）。
 
@@ -95,7 +108,7 @@ node with_offset: Complex<Length> = @displacement + to_complex(1.0 m);
 
 すべての比較演算子は、インデックスなしのオペランドに対して `Bool` を返します。複素数の量は、次元が一致する場合に正確な `==` と `!=` をサポートしますが、順序比較はサポートしません。[インデックスキー](indexes.md#index-keys)も同様に、同じ軸上でのみ `==` と `!=` をサポートし、順序を持ちません。順序が必要な場合は、取り出した中身（`coord(t)`、`to_int(i)`）を比較してください。構造体とユニオンの等値比較は再帰的です。インデックス付きのフィールドや座標インデックスキー（その軸と位置の両方が同一性の一部です）を含め、すべてのフィールドが等しくなければなりません。
 
-Datetime の算術は「時点対期間」の規則に従います。`Datetime + Time`、`Time + Datetime`、`Datetime - Time` は `Datetime` を生成し、`Datetime - Datetime` は `Time` の期間を生成します。`Time - Datetime` と `Datetime + Datetime` はエラーです。
+Datetime の算術は「時点対期間」の規則に従います。`Datetime + Time`、`Time + Datetime`、`Datetime - Time` は `Datetime` を生成し、`Datetime - Datetime` は `Time` の期間を生成します。`Time - Datetime` と `Datetime + Datetime` はエラーです。うるう秒を数えない `Datetime<UTC>` の算術もエラーなので、`to_tai` で TAI に変換して計算してください。
 
 比較演算子はブロードキャストしません。すべてのオペランドはインデックスなしでなければなりません。インデックス付きの値を `==`、`!=`、`<`、`>`、`<=`、`>=` に渡すとコンパイルエラー（`D019`）になります。要素ごとの比較は `for` を使って明示的に書き、本体の中で各コレクションをインデックスしてください。
 

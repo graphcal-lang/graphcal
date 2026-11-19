@@ -9,12 +9,14 @@ use std::sync::Arc;
 
 use graphcal_compiler::syntax::lexer::Lexer;
 use graphcal_compiler::syntax::span::Span;
-use tower_lsp::lsp_types::Url;
+use tower_lsp::lsp_types::{Range, Url};
 
+use crate::convert::LineIndex;
+use crate::symbol_identity::SymbolId;
 use crate::symbol_identity::{
     ReferenceTarget, UnresolvedSymbol, VisibleBinding, resolve_visible_target,
 };
-use crate::symbol_table::{DefinitionInfo, ReferenceInfo, SymbolKey, SymbolTable};
+use crate::symbol_table::{DefinitionInfo, ReferenceInfo, SymbolTable};
 
 /// Symbol data for one physical source document in a project snapshot.
 #[derive(Debug)]
@@ -41,7 +43,7 @@ impl ProjectDocumentSymbols {
         }
     }
 
-    fn resolve_reference(&self, reference: &ReferenceInfo) -> Option<SymbolKey> {
+    fn resolve_reference(&self, reference: &ReferenceInfo) -> Option<SymbolId> {
         self.table
             .resolve_local_target(&reference.target)
             .map(|target| self.canonical_visible_target(target))
@@ -55,7 +57,7 @@ impl ProjectDocumentSymbols {
             })
     }
 
-    fn canonical_visible_target(&self, resolved: SymbolKey) -> SymbolKey {
+    fn canonical_visible_target(&self, resolved: SymbolId) -> SymbolId {
         if self.table.definitions.contains_key(&resolved) {
             return resolved;
         }
@@ -80,7 +82,7 @@ impl ProjectDocumentSymbols {
     fn may_unresolved_reference_target(
         &self,
         unresolved: &UnresolvedSymbol,
-        target: &SymbolKey,
+        target: &SymbolId,
     ) -> bool {
         if !unresolved.accepts(target) {
             return false;
@@ -104,6 +106,20 @@ impl ProjectDocumentSymbols {
 pub struct ProjectOccurrence {
     pub uri: Url,
     pub span: Span,
+}
+
+/// What one reference occurrence resolves to, located by its definition site
+/// rather than by its identity, so two snapshots of edited sources can be
+/// compared even where an identity embeds source positions.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ResolutionSite {
+    /// The name occurrence of the source definition.
+    Definition(ProjectOccurrence),
+    /// An identity without a navigable definition in the snapshot (a
+    /// built-in, for instance).
+    Identity(SymbolId),
+    /// The occurrence has no unique target.
+    Unresolved,
 }
 
 /// A definition occurrence with the metadata needed by editor features.
@@ -166,7 +182,7 @@ impl ProjectSymbolIndex {
 
     /// Query visibility at the canonical definition, not at the cursor's root.
     #[must_use]
-    pub fn is_externally_visible(&self, target: &SymbolKey) -> bool {
+    pub fn is_externally_visible(&self, target: &SymbolId) -> bool {
         self.documents.values().any(|document| {
             document.table.definitions.contains_key(target)
                 && document.table.is_externally_visible(target)
@@ -181,7 +197,7 @@ impl ProjectSymbolIndex {
     }
 
     #[must_use]
-    pub fn resolve_root_reference(&self, reference: &ReferenceInfo) -> Option<SymbolKey> {
+    pub fn resolve_root_reference(&self, reference: &ReferenceInfo) -> Option<SymbolId> {
         self.root_uri
             .as_ref()
             .and_then(|uri| self.documents.get(uri))?
@@ -194,7 +210,7 @@ impl ProjectSymbolIndex {
     }
 
     #[must_use]
-    pub fn definition(&self, target: &SymbolKey) -> Option<ProjectDefinition<'_>> {
+    pub fn definition(&self, target: &SymbolId) -> Option<ProjectDefinition<'_>> {
         self.documents.values().find_map(|document| {
             let definition = document.table.definitions.get(target)?;
             definition.is_navigable().then(|| ProjectDefinition {
@@ -208,7 +224,7 @@ impl ProjectSymbolIndex {
     }
 
     #[must_use]
-    pub fn references(&self, target: &SymbolKey) -> Vec<ProjectOccurrence> {
+    pub fn references(&self, target: &SymbolId) -> Vec<ProjectOccurrence> {
         let mut occurrences: Vec<_> = self
             .documents
             .values()
@@ -230,13 +246,37 @@ impl ProjectSymbolIndex {
         occurrences
     }
 
+    /// Every reference occurrence of the snapshot with what it resolves to.
+    pub fn resolutions(&self) -> impl Iterator<Item = (ProjectOccurrence, ResolutionSite)> + '_ {
+        self.documents.values().flat_map(move |document| {
+            document.table.references().iter().map(move |reference| {
+                let site = document.resolve_reference(reference).map_or(
+                    ResolutionSite::Unresolved,
+                    |target| {
+                        self.definition(&target)
+                            .map_or(ResolutionSite::Identity(target), |definition| {
+                                ResolutionSite::Definition(definition.occurrence)
+                            })
+                    },
+                );
+                (
+                    ProjectOccurrence {
+                        uri: document.uri.clone(),
+                        span: reference.span,
+                    },
+                    site,
+                )
+            })
+        })
+    }
+
     /// Source ranges that must change when the canonical target's leaf changes.
     ///
     /// An imported alias still resolves to the target, but its authored leaf is
     /// intentionally different and therefore does not participate in a
     /// canonical-definition rename.
     #[must_use]
-    pub fn rename_occurrences(&self, target: &SymbolKey) -> Vec<ProjectOccurrence> {
+    pub fn rename_occurrences(&self, target: &SymbolId) -> Vec<ProjectOccurrence> {
         let Some(canonical_name) = self
             .definition(target)
             .map(|definition| definition.definition.name.as_str())
@@ -275,7 +315,7 @@ impl ProjectSymbolIndex {
     /// Whether a tolerant occurrence could denote `target` but lacks one
     /// canonical resolution. A rename is unsafe while this is true.
     #[must_use]
-    pub fn has_ambiguous_reference_to(&self, target: &SymbolKey) -> bool {
+    pub fn has_ambiguous_reference_to(&self, target: &SymbolId) -> bool {
         self.documents.values().any(|document| {
             document.table.references().iter().any(|reference| {
                 let ReferenceTarget::Unresolved(unresolved) = &reference.target else {
@@ -287,74 +327,11 @@ impl ProjectSymbolIndex {
         })
     }
 
-    /// Whether changing a canonical leaf would introduce a declaration or
-    /// direct-import collision in any affected source scope.
-    #[must_use]
-    pub fn collides_with(
-        &self,
-        target: &SymbolKey,
-        renamed_target: &SymbolKey,
-        new_name: &str,
-    ) -> bool {
-        if self.documents.values().any(|document| {
-            document
-                .table
-                .definitions
-                .get(renamed_target)
-                .is_some_and(|definition| !definition.is_builtin())
-        }) {
-            return true;
-        }
-
-        self.documents.values().any(|document| {
-            let direct_binding = document.imported_bindings.iter().any(|binding| {
-                binding.target() == target
-                    && binding.spelling().is_local()
-                    && binding.spelling().leaf().as_str() == target.leaf_name()
-            });
-            let locally_defined = document.table.definitions.contains_key(target)
-                && target.owner() == Some(document.table.owner());
-            let definition_collision =
-                document
-                    .table
-                    .definitions
-                    .iter()
-                    .any(|(candidate, definition)| {
-                        !definition.is_builtin()
-                            && candidate.owner() == Some(document.table.owner())
-                            && candidate.leaf_name() == new_name
-                            && candidate.same_namespace(target)
-                    });
-            let imported_collision = document.imported_bindings.iter().any(|binding| {
-                binding.target() != target
-                    && binding.spelling().is_local()
-                    && binding.spelling().leaf().as_str() == new_name
-                    && binding.target().same_namespace(target)
-            });
-            let top_level_namespace = matches!(
-                target,
-                SymbolKey::Declaration(_)
-                    | SymbolKey::Dimension(_)
-                    | SymbolKey::Unit(_)
-                    | SymbolKey::StructType(_)
-                    | SymbolKey::Constructor(_)
-                    | SymbolKey::Index(_)
-            );
-            (direct_binding && (definition_collision || imported_collision))
-                || (locally_defined && top_level_namespace && imported_collision)
-        })
-    }
-
     /// Whether the cursor occurrence itself spells the canonical leaf and can
     /// therefore initiate a project-wide canonical rename. Alias uses remain
     /// navigable but deliberately cannot trigger a surprising API rename.
     #[must_use]
-    pub fn occurrence_can_initiate_rename(
-        &self,
-        uri: &Url,
-        span: Span,
-        target: &SymbolKey,
-    ) -> bool {
+    pub fn occurrence_can_initiate_rename(&self, uri: &Url, span: Span, target: &SymbolId) -> bool {
         let Some(canonical_name) = self
             .definition(target)
             .map(|definition| definition.definition.name.as_str())
@@ -364,6 +341,40 @@ impl ProjectSymbolIndex {
         self.documents.get(uri).is_some_and(|document| {
             rename_leaf_span(&document.source, span, canonical_name).is_some()
         })
+    }
+}
+
+impl ProjectSymbolIndex {
+    /// Converter from occurrences to editor ranges that scans each document's
+    /// source at most once, however many occurrences it converts.
+    #[must_use]
+    pub fn line_indexes(&self) -> ProjectLineIndexes<'_> {
+        ProjectLineIndexes {
+            project: self,
+            lines: HashMap::new(),
+        }
+    }
+}
+
+/// Lazily built line indexes for the documents of one [`ProjectSymbolIndex`].
+///
+/// References and rename convert every occurrence of a symbol; building a
+/// line index per occurrence made them quadratic in the source size.
+pub struct ProjectLineIndexes<'a> {
+    project: &'a ProjectSymbolIndex,
+    lines: HashMap<&'a Url, LineIndex<'a>>,
+}
+
+impl ProjectLineIndexes<'_> {
+    /// The editor range of `occurrence`, or `None` when its document is not
+    /// part of the project snapshot.
+    pub fn range(&mut self, occurrence: &ProjectOccurrence) -> Option<Range> {
+        let (uri, document) = self.project.documents.get_key_value(&occurrence.uri)?;
+        let lines = self
+            .lines
+            .entry(uri)
+            .or_insert_with(|| LineIndex::new(&document.source));
+        Some(lines.span_to_range(occurrence.span))
     }
 }
 
@@ -410,4 +421,59 @@ fn sort_and_dedup(occurrences: &mut Vec<ProjectOccurrence>) {
     });
     let mut seen = HashSet::new();
     occurrences.retain(|occurrence| seen.insert((occurrence.uri.clone(), occurrence.span)));
+}
+
+#[cfg(test)]
+mod tests {
+    use tower_lsp::lsp_types::Position;
+
+    use super::*;
+    use crate::symbol_table;
+
+    fn document(uri: &Url, source: &str) -> ProjectDocumentSymbols {
+        let ast = graphcal_compiler::desugar::desugared_ast::File::from(
+            graphcal_compiler::syntax::parser::Parser::new(source)
+                .parse_file()
+                .unwrap(),
+        );
+        ProjectDocumentSymbols::new(
+            uri.clone(),
+            Arc::new(source.to_string()),
+            symbol_table::build_for_buffer(&ast, source),
+            Vec::new(),
+        )
+    }
+
+    /// LSP-2 (#2253): converting many occurrences builds one line index per
+    /// document instead of rescanning the source for every occurrence.
+    #[test]
+    fn line_indexes_scan_each_document_once() {
+        let root = Url::parse("file:///root.gcl").unwrap();
+        let other = Url::parse("file:///other.gcl").unwrap();
+        let missing = Url::parse("file:///missing.gcl").unwrap();
+        let source = "node a: Dimensionless = 1.0;\nnode b: Dimensionless = @a;\n";
+        let index = ProjectSymbolIndex::standalone(
+            root.clone(),
+            [document(&root, source), document(&other, source)],
+        );
+        let mut lines = index.line_indexes();
+        let occurrences: Vec<_> = (0..100)
+            .flat_map(|_| [&root, &other])
+            .map(|uri| ProjectOccurrence {
+                uri: uri.clone(),
+                span: Span::new(source.rfind('a').unwrap(), 1),
+            })
+            .collect();
+        for occurrence in &occurrences {
+            let range = lines.range(occurrence).unwrap();
+            assert_eq!(range.start, Position::new(1, 25));
+            assert_eq!(range.end, Position::new(1, 26));
+        }
+        assert_eq!(lines.lines.len(), 2);
+        let missing = ProjectOccurrence {
+            uri: missing,
+            span: Span::new(0, 1),
+        };
+        assert_eq!(lines.range(&missing), None);
+    }
 }

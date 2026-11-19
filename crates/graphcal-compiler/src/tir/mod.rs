@@ -3,6 +3,7 @@
 #[warn(clippy::arithmetic_side_effects)]
 pub mod dim_check;
 pub mod materialized_shape;
+pub mod operator_typing;
 pub mod presentation;
 pub mod recurrence_group;
 pub mod recurrence_plan;

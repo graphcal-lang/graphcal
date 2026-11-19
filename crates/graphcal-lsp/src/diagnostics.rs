@@ -2,11 +2,12 @@
 
 use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
+use graphcal_compiler::semantic_error::domain::DomainError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::semantic_error::name::NameError;
 use graphcal_compiler::semantic_error::structure::StructError;
 use graphcal_compiler::semantic_error::structure::UnknownLocal;
-use graphcal_compiler::semantic_error::visibility::VisibilityError;
+use graphcal_compiler::semantic_error::visibility::{IncludeForm, VisibilityError};
 use std::collections::HashMap;
 
 use tower_lsp::lsp_types::{
@@ -22,53 +23,20 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::convert::LineIndex;
+use crate::file_identity::DocumentUris;
+use crate::repair_data::{AddedVisibility, AutoImportCategory, RepairData};
 use crate::symbol_identity::SymbolId;
 use crate::symbol_table::SymbolTable;
 
-/// Typed LSP payload category for an unknown-name auto-import repair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AutoImportCategory {
-    Term,
-    Type,
-    Dimension,
-    Unit,
-    Index,
-}
-
-impl AutoImportCategory {
-    pub const fn namespace(self) -> graphcal_compiler::syntax::ast::ImportItemNamespace {
-        use graphcal_compiler::syntax::ast::ImportItemNamespace;
-        match self {
-            Self::Term => ImportItemNamespace::Term,
-            Self::Type => ImportItemNamespace::Type,
-            Self::Dimension => ImportItemNamespace::Dimension,
-            Self::Unit => ImportItemNamespace::Unit,
-            Self::Index => ImportItemNamespace::Index,
-        }
+fn auto_import_data(name: impl Into<String>, category: AutoImportCategory) -> RepairData {
+    RepairData::AutoImport {
+        name: name.into(),
+        category,
     }
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AutoImportDiagnosticData {
-    pub auto_import_name: String,
-    pub auto_import_category: AutoImportCategory,
-}
-
-fn auto_import_data(
-    name: impl Into<String>,
-    category: AutoImportCategory,
-) -> Option<serde_json::Value> {
-    serde_json::to_value(AutoImportDiagnosticData {
-        auto_import_name: name.into(),
-        auto_import_category: category,
-    })
-    .ok()
-}
-
 /// Report source markers even in libraries and unused DAG definitions.
-pub fn unfinished_node_diagnostics<P: graphcal_compiler::syntax::phase::Phase>(
+pub fn unfinished_formula_diagnostics<P: graphcal_compiler::syntax::visitor::VisitablePhase>(
     declarations: &[graphcal_compiler::syntax::ast::Declaration<P>],
     source: &str,
 ) -> Vec<Diagnostic>
@@ -79,22 +47,24 @@ where
     let lines = LineIndex::new(source);
     declarations
         .iter()
-        .flat_map(|declaration| match &declaration.kind {
-            DeclKind::Node(node) => {
-                graphcal_compiler::syntax::visitor::collect_todo_holes(&node.value)
-                    .into_iter()
-                    .map(|hole| Diagnostic {
-                        range: lines.span_to_range(hole.span),
-                        severity: Some(DiagnosticSeverity::INFORMATION),
-                        code: Some(NumberOrString::String("graphcal::todo".to_string())),
-                        source: Some("graphcal".to_string()),
-                        message: format!("{}: TODO — formula unfinished", node.name.value),
-                        ..Default::default()
-                    })
-                    .collect()
-            }
-            DeclKind::Dag(dag) => unfinished_node_diagnostics(&dag.body, source),
-            _ => Vec::new(),
+        .flat_map(|declaration| {
+            let (name, formula) = match &declaration.kind {
+                DeclKind::Node(node) => (&node.name.value, &node.value),
+                DeclKind::ConstNode(constant) => (&constant.name.value, &constant.value),
+                DeclKind::Dag(dag) => return unfinished_formula_diagnostics(&dag.body, source),
+                _ => return Vec::new(),
+            };
+            graphcal_compiler::syntax::visitor::collect_todo_holes(formula)
+                .into_iter()
+                .map(|hole| Diagnostic {
+                    range: lines.span_to_range(hole.span),
+                    severity: Some(DiagnosticSeverity::INFORMATION),
+                    code: Some(NumberOrString::String("graphcal::todo".to_string())),
+                    source: Some("graphcal".to_string()),
+                    message: format!("{name}: TODO — formula unfinished"),
+                    ..Default::default()
+                })
+                .collect()
         })
         .collect()
 }
@@ -299,18 +269,20 @@ pub fn eval_result_to_diagnostics(
 /// Convert a `CompileError` to LSP diagnostics, grouped by the URI of the
 /// source file the error actually belongs to.
 ///
-/// The (URI, source) pair is read directly from the error's
-/// [`CompileError::named_source`]: the source text is the exact buffer whose
-/// byte offsets the error's labels index into, and the URI is parsed from the
-/// name miette already carries on the source. This makes it structurally
-/// impossible to pair offsets from one file with the line index of another —
-/// e.g., an `import`ed file's parse error cannot be rendered against the
-/// importer's text, no matter how nested the import graph is.
+/// The source is read directly from the error's
+/// [`CompileError::registered_source`]: its text is the exact buffer whose
+/// byte offsets the error's labels index into, and its typed
+/// [`SourceOrigin`](graphcal_compiler::source_registry::SourceOrigin) names the
+/// file, which `documents` maps to the URI the editor opened it under. This
+/// makes it structurally impossible to pair offsets from one file with the
+/// line index of another — e.g., an `import`ed file's parse error cannot be
+/// rendered against the importer's text, no matter how nested the import
+/// graph is — and the display name (which may be `pkg-name:/abs/path.gcl`) is
+/// never parsed back.
 ///
-/// `fallback_uri` is used only for source-less errors (loader-stage
-/// `FileNotFound`, `CircularImport`, `ManifestError`) and as a last-ditch
-/// fallback when the error's source name can be neither parsed as a URL nor
-/// converted from a file path (e.g., synthetic test names).
+/// Source-less errors (loader-stage `FileNotFound`, `CircularImport`,
+/// `ManifestError`) and errors about a detached text belong to the analyzed
+/// document.
 ///
 /// When an error has multiple labeled spans (e.g., "duplicate definition here" +
 /// "first defined here"), the first label becomes the primary diagnostic and the
@@ -319,23 +291,18 @@ pub fn eval_result_to_diagnostics(
 /// information references the same URI.
 pub fn compile_error_to_diagnostics_grouped(
     error: &CompileError,
-    fallback_uri: &Url,
+    documents: &DocumentUris,
 ) -> HashMap<Url, Vec<Diagnostic>> {
     let diag: &dyn miette::Diagnostic = error;
-    let data = structured_data(error);
+    let data = structured_data(error)
+        .as_ref()
+        .and_then(RepairData::to_value);
 
     // Source-less errors carry no labels either, so an empty source is safe
     // for the LineIndex (which is unused when there are no labels).
-    let (uri, source) = error.named_source().map_or_else(
-        || (fallback_uri.clone(), ""),
-        |ns| {
-            let name = ns.name();
-            let uri = Url::parse(name)
-                .ok()
-                .or_else(|| Url::from_file_path(name).ok())
-                .unwrap_or_else(|| fallback_uri.clone());
-            (uri, ns.inner().as_str())
-        },
+    let (uri, source) = error.registered_source().map_or_else(
+        || (documents.root().clone(), ""),
+        |source| (documents.of_source(source.origin()), source.text().as_str()),
     );
 
     let diags = compile_error_to_diagnostics_in_source(diag, source, &uri, data);
@@ -351,72 +318,97 @@ pub fn compile_error_to_diagnostics_grouped(
 /// the rendered message and re-parsing it in `code_actions` was exactly the
 /// string-convention round trip the project bans. `Diagnostic::data` rides
 /// along with the diagnostic to the `textDocument/codeAction` request.
-fn structured_data(error: &CompileError) -> Option<serde_json::Value> {
+fn structured_data(error: &CompileError) -> Option<RepairData> {
     use graphcal_compiler::semantic_error::SemanticError;
 
     let CompileError::Eval(e) = error else {
         return None;
     };
-    match e.error() {
+    let SemanticError::Located(diagnostic) = e.error() else {
+        return None;
+    };
+    match &diagnostic.kind {
         // V003: the private item that needs `pub`.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }),
-            ..
-        }) => Some(serde_json::json!({ "referencedName": ref_name.as_str() })),
+        SemanticErrorKind::Visibility(VisibilityError::PrivateInPublic { ref_name, .. }) => {
+            Some(RepairData::AddVisibility {
+                item: ref_name.to_string(),
+                visibility: AddedVisibility::Public,
+            })
+        }
         // V006: the leaked private item that needs `pub`.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind:
-                SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage { leaked_name, .. }),
+        SemanticErrorKind::Visibility(VisibilityError::GenericsLeakage { leaked_name, .. }) => {
+            Some(RepairData::AddVisibility {
+                item: leaked_name.to_string(),
+                visibility: AddedVisibility::Public,
+            })
+        }
+        // V002: the required item that must join the bindable interface.
+        SemanticErrorKind::Visibility(VisibilityError::RequiredItemMustBeBindable {
+            name, ..
+        }) => Some(RepairData::AddVisibility {
+            item: name.to_string(),
+            visibility: AddedVisibility::Bindable,
+        }),
+        // V008: a selective include can select the missing types; a
+        // module-form include cannot specialize them at all.
+        SemanticErrorKind::Visibility(VisibilityError::IncludeMustSelectReboundType {
+            types,
+            form: IncludeForm::Selective,
             ..
-        }) => Some(serde_json::json!({ "referencedName": leaked_name.as_str() })),
+        }) => Some(RepairData::SelectTypes {
+            types: types
+                .iter()
+                .map(|dependency| dependency.nominal.to_string())
+                .collect(),
+        }),
         // D020: an exact replacement exists only when the decimal spelling
         // maps exactly into the dimension rational model.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind:
-                SemanticErrorKind::Dimension(DimensionError::FloatPowerExponent {
-                    replacement: Some(replacement),
-                    ..
-                }),
+        SemanticErrorKind::Dimension(DimensionError::FloatPowerExponent {
+            replacement: Some(replacement),
             ..
-        }) => Some(serde_json::json!({ "replacement": replacement })),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }),
+        }) => Some(RepairData::ExactExponent {
+            replacement: replacement.clone(),
+        }),
+        // C011: a written integer literal has an exact Dimensionless spelling.
+        SemanticErrorKind::Domain(DomainError::IntBoundOnDimensionlessDomain {
+            literal: Some(literal),
             ..
-        }) => name
+        }) => Some(RepairData::DimensionlessBound {
+            replacement: format!("{literal}.0"),
+        }),
+        SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }) => name
             .as_bare()
-            .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Dimension)),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name, .. }),
-            ..
-        }) if !name.is_qualified() => {
-            auto_import_data(name.leaf().as_str(), AutoImportCategory::Unit)
+            .map(|name| auto_import_data(name.as_str(), AutoImportCategory::Dimension)),
+        SemanticErrorKind::Dimension(DimensionError::UnknownUnit { name, .. })
+            if !name.is_qualified() =>
+        {
+            Some(auto_import_data(
+                name.leaf().as_str(),
+                AutoImportCategory::Unit,
+            ))
         }
         // Structural `Fin(N)` axes are never importable.
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }),
-            ..
-        }) => name
+        SemanticErrorKind::Index(IndexError::UnknownIndex { name, .. }) => name
             .declared_name()
-            .and_then(|name| auto_import_data(name.as_str(), AutoImportCategory::Index)),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Struct(StructError::UnknownStructType { name, .. }),
-            ..
-        }) => auto_import_data(name.to_string(), AutoImportCategory::Type),
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Struct(StructError::UnknownLocalRef { name, .. }),
-            ..
-        }) => match name {
-            UnknownLocal::Named(name) => auto_import_data(name.as_str(), AutoImportCategory::Term),
-            UnknownLocal::Unbound(name) => {
-                auto_import_data(name.as_str(), AutoImportCategory::Term)
+            .map(|name| auto_import_data(name.as_str(), AutoImportCategory::Index)),
+        SemanticErrorKind::Struct(StructError::UnknownStructType { name, .. }) => {
+            Some(auto_import_data(name.to_string(), AutoImportCategory::Type))
+        }
+        SemanticErrorKind::Struct(StructError::UnknownLocalRef { name, .. }) => match name {
+            UnknownLocal::Named(name) => {
+                Some(auto_import_data(name.as_str(), AutoImportCategory::Term))
             }
-            UnknownLocal::Slot(_) => None,
+            UnknownLocal::Unbound(name) => {
+                Some(auto_import_data(name.as_str(), AutoImportCategory::Term))
+            }
         },
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. }),
-            ..
-        }) if name.qualifier().is_empty() => {
-            auto_import_data(name.leaf().as_str(), AutoImportCategory::Term)
+        SemanticErrorKind::Name(NameError::UnknownGraphRef { name, .. })
+            if name.qualifier().is_empty() =>
+        {
+            Some(auto_import_data(
+                name.leaf().as_str(),
+                AutoImportCategory::Term,
+            ))
         }
         _ => None,
     }
@@ -502,7 +494,7 @@ fn compile_error_to_diagnostics_in_source(
 fn compile_error_to_diagnostics(error: &CompileError) -> Vec<Diagnostic> {
     // Static URL literal — always parses.
     let fallback_uri = Url::parse("file:///unknown").unwrap();
-    compile_error_to_diagnostics_grouped(error, &fallback_uri)
+    compile_error_to_diagnostics_grouped(error, &DocumentUris::new(&fallback_uri, []))
         .into_values()
         .flatten()
         .collect()
@@ -713,6 +705,44 @@ mod tests {
     }
 
     #[test]
+    fn package_mode_errors_route_by_source_origin_not_display_name() {
+        use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
+
+        // `Url::from_file_path` needs a platform-absolute path (a drive on Windows).
+        let base = std::path::absolute(std::env::temp_dir())
+            .unwrap()
+            .join("graphcal-test");
+        let root = base.join("project/src/my_app/main.gcl");
+        let dependency = base.join("cache/unit_lib/lib.gcl");
+        let mut sources = SourceRegistry::new();
+        // Package mode displays a file as `<package instance>:<path>`; with an
+        // `_` in the package name that is not even a valid URL.
+        let mut register = |path: &std::path::PathBuf, package: &str| {
+            sources.register_with_origin(
+                SourceOrigin::File(path.clone()),
+                format!("{package}:{}", path.display()),
+                Arc::new("node x".to_string()),
+            )
+        };
+        let in_root = register(&root, "pkg-my_app");
+        let in_dependency = register(&dependency, "pkg-unit_lib-0123");
+        let root_uri = Url::from_file_path(&root).unwrap();
+        let documents = DocumentUris::new(&root_uri, []);
+
+        for (source, expected) in [
+            (in_root, root_uri),
+            (in_dependency, Url::from_file_path(&dependency).unwrap()),
+        ] {
+            let error = CompileError::semantic(
+                SemanticError::internal_error("failure", source, DiagnosticAnchor::WholeFile),
+                &sources,
+            );
+            let grouped = compile_error_to_diagnostics_grouped(&error, &documents);
+            assert_eq!(grouped.keys().collect::<Vec<_>>(), [&expected]);
+        }
+    }
+
+    #[test]
     fn source_less_internal_anchor_uses_the_whole_document_range() {
         let source = "node x";
         let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
@@ -772,18 +802,12 @@ mod tests {
                 )
             })
             .expect("expected unknown-dimension diagnostic");
-        let auto_import: AutoImportDiagnosticData = serde_json::from_value(
-            diagnostic
-                .data
-                .clone()
-                .expect("expected bare-name auto-import payload"),
-        )
-        .unwrap();
-
-        assert_eq!(auto_import.auto_import_name, "Missing");
         assert_eq!(
-            auto_import.auto_import_category,
-            AutoImportCategory::Dimension
+            RepairData::of(diagnostic),
+            Some(RepairData::AutoImport {
+                name: "Missing".to_string(),
+                category: AutoImportCategory::Dimension,
+            })
         );
     }
 
@@ -849,7 +873,7 @@ mod tests {
             diagnostic.code,
             Some(NumberOrString::String("graphcal::N009".to_string()))
         );
-        assert!(diagnostic.message.contains("Term alias `E`"));
+        assert!(diagnostic.message.contains("constructor alias `E`"));
         assert_eq!(diagnostic.range.start, Position::new(0, 26));
         assert_eq!(diagnostic.range.end, Position::new(0, 27));
     }
@@ -867,6 +891,22 @@ mod tests {
         );
         assert_eq!(diagnostic.range.start, Position::new(0, 30));
         assert_eq!(diagnostic.range.end, Position::new(0, 33));
+    }
+
+    #[test]
+    fn unit_name_spelled_like_a_local_is_reported_at_the_unit() {
+        let source = "index Leg = { A, B };\n\
+                      node torque: Dimensionless[Leg] = for m: Leg { 5.0 N * m };\n";
+        let diagnostics = produce_diagnostics(source, "test.gcl");
+        let [diagnostic] = diagnostics.as_slice() else {
+            panic!("expected one diagnostic, got {diagnostics:?}");
+        };
+        assert_eq!(
+            diagnostic.code,
+            Some(NumberOrString::String("graphcal::N037".to_string()))
+        );
+        assert_eq!(diagnostic.range.start, Position::new(1, 55));
+        assert_eq!(diagnostic.range.end, Position::new(1, 56));
     }
 
     #[test]
@@ -1181,6 +1221,24 @@ param event: Datetime<TT>(
     }
 
     #[test]
+    fn non_canonical_civil_datetime_literals_show_the_required_form() {
+        for source in [
+            "node bad: Datetime<TT> = epoch<TT>(\"2024-11-05 12:00:00\");",
+            "node bad: Datetime = datetime(\"2024-11-05T12:00\", \"UTC\");",
+        ] {
+            let diagnostics = produce_diagnostics(source, "test.gcl");
+            assert!(diagnostics.iter().any(|diagnostic| {
+                matches!(
+                    &diagnostic.code,
+                    Some(NumberOrString::String(code)) if code == "graphcal::D028"
+                ) && diagnostic
+                    .message
+                    .contains("`YYYY-MM-DDTHH:MM:SS[.fraction]`")
+            }));
+        }
+    }
+
+    #[test]
     fn dst_gap_and_fold_have_distinct_check_diagnostics() {
         let cases = [
             (
@@ -1238,7 +1296,7 @@ param event: Datetime<TT>(
 
     #[test]
     fn invalid_datetime_timezone_points_at_the_timezone_argument() {
-        let source = "node bad: Datetime = datetime(\"2024-11-05T10:00\", \"Not/A_Timezone\");";
+        let source = "node bad: Datetime = datetime(\"2024-11-05T10:00:00\", \"Not/A_Timezone\");";
         let diagnostics = produce_diagnostics(source, "test.gcl");
         let diagnostic = diagnostics
             .iter()
@@ -1249,8 +1307,8 @@ param event: Datetime<TT>(
                 )
             })
             .expect("expected D007 timezone diagnostic");
-        assert_eq!(diagnostic.range.start.character, 50);
-        assert_eq!(diagnostic.range.end.character, 66);
+        assert_eq!(diagnostic.range.start.character, 53);
+        assert_eq!(diagnostic.range.end.character, 69);
         assert!(diagnostic.message.contains("bundled IANA tzdb"));
     }
 
@@ -1422,7 +1480,10 @@ param event: Datetime<TT>(
                 &diagnostic.code,
                 Some(NumberOrString::String(code)) if code == "graphcal::D020"
             ) && diagnostic.message.contains("`(1/4)`")
-                && diagnostic.data == Some(serde_json::json!({ "replacement": "(1/4)" }))
+                && RepairData::of(diagnostic)
+                    == Some(RepairData::ExactExponent {
+                        replacement: "(1/4)".to_string(),
+                    })
         }));
     }
 
@@ -1551,10 +1612,13 @@ param event: Datetime<TT>(
             code.is_some_and(|c| matches!(c, NumberOrString::String(s) if s.contains("N002"))),
             "expected N002 error code, got {code:?}"
         );
-        let auto_import: AutoImportDiagnosticData =
-            serde_json::from_value(diags[0].data.clone().expect("auto-import payload")).unwrap();
-        assert_eq!(auto_import.auto_import_name, "nonexistent");
-        assert_eq!(auto_import.auto_import_category, AutoImportCategory::Term);
+        assert_eq!(
+            RepairData::of(&diags[0]),
+            Some(RepairData::AutoImport {
+                name: "nonexistent".to_string(),
+                category: AutoImportCategory::Term,
+            })
+        );
     }
 
     #[test]
@@ -1692,7 +1756,7 @@ param event: Datetime<TT>(
     #[test]
     fn repeated_include_producer_has_both_selection_spans() {
         let source = "dag producer { pub node value: Dimensionless = 1.0; }\n\
-                      include producer()::{ value as first, value as second };";
+                      include producer()::{ value as alpha, value as beta };";
         let diagnostics = produce_diagnostics(source, "test.gcl");
         let [diagnostic] = diagnostics.as_slice() else {
             panic!("expected one diagnostic, got {diagnostics:?}");

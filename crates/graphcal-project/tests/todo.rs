@@ -221,6 +221,26 @@ fn graph_export_keeps_marker_edges_including_constants_without_inventing_a_value
 }
 
 #[test]
+fn graph_export_draws_an_unfinished_constant_as_a_dashed_constant() {
+    use graphcal_project::graph_ir::{
+        dot::{GraphView, render},
+        project_tir,
+    };
+    let project = LoadedProject::from_source(
+        "const node g0: Acceleration = 9.80665 m/s^2; const node v: Velocity = todo<Velocity> { @g0 };",
+        "todo.gcl",
+    )
+    .unwrap();
+    let checked = ProjectCompiler::new(&project).check().unwrap();
+    let dot = render(&project_tir(checked.tir()).unwrap(), GraphView::Flat);
+    assert!(
+        dot.contains("[label=\"v\\nVelocity\\nTODO\", shape=box, style=\"rounded,dashed\"]"),
+        "{dot}"
+    );
+    assert!(dot.contains("[label=\"g0\\nAcceleration\", shape=box, style=rounded]"));
+}
+
+#[test]
 fn rocket_checks_and_evaluates_independent_nodes() {
     let source = r"
 param dry_mass: Mass = 1200.0 kg;
@@ -338,7 +358,7 @@ fn holes_keep_the_surrounding_formula_type_checked() {
 }
 
 #[test]
-fn holes_are_rejected_outside_node_formulas_and_in_malformed_shapes() {
+fn holes_are_rejected_outside_formulas_and_in_malformed_shapes() {
     for source in [
         "node x = todo<Length> {};",
         "node x: Length = todo {};",
@@ -347,7 +367,7 @@ fn holes_are_rejected_outside_node_formulas_and_in_malformed_shapes() {
         "node x: Length = todo<Length>;",
         "node x: Length = todo<Length(min: 0.0 m)> {};",
         "param x: Length = todo<Length> {};",
-        "const node x: Length = todo<Length> {};",
+        "const unit u: Length = (todo<Dimensionless> {}) m;",
         "assert a = todo<Bool> {};",
         "node x: Length = todo<Length> { 1.0 m };",
         "node x: Length = todo<Length> { @y + @z };",
@@ -514,4 +534,234 @@ fn keyed_interfaces_are_checked_like_reads() {
         let source = format!("{RECURRENCE}{body}");
         assert!(!check(&source), "unexpectedly accepted: {body}");
     }
+}
+
+#[test]
+fn reachable_unfinished_names_each_unfinished_declaration_once_by_its_definition() {
+    let loaded = LoadedProject::from_source(
+        r"
+dag partial {
+    pub node missing: Length = todo<Length> {};
+    pub node known: Length = 2.0 m;
+}
+dag unused { node pending: Length = todo<Length> {}; }
+include partial() as a;
+include partial() as b;
+node direct: Length = todo<Length> {};
+node blocked: Length = @direct + @a::missing;
+",
+        "todo.gcl",
+    )
+    .unwrap();
+    let checked = ProjectCompiler::new(&loaded).check().unwrap();
+    let names = checked
+        .tir()
+        .reachable_unfinished()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        ["todo.direct", "todo.partial.missing", "todo.unused.pending"]
+    );
+}
+
+/// The diagnostic code of the error rejecting `source`.
+fn rejection_code(source: &str) -> String {
+    let error = compile_and_eval(source)
+        .map(|_| ())
+        .expect_err("source must be rejected");
+    miette::Diagnostic::code(&error)
+        .expect("error must have a code")
+        .to_string()
+}
+
+#[test]
+fn unfinished_constants_have_no_value_and_block_what_reads_them() {
+    let evaluation = compile_and_eval(
+        r"
+const node g0: Acceleration = 9.80665 m/s^2;
+const node isp: Time = 300.0 s;
+const node v_exhaust: Velocity = todo<Velocity> { @isp, @g0 };
+const node doubled: Velocity = 2.0 * @v_exhaust;
+const node bounded: Velocity(min: 0.0 m/s) = @doubled;
+const node static_rule: Length = if true { 1.0 m } else { todo<Length> {} };
+node reads_constant: Velocity = 3.0 * @doubled;
+node independent: Velocity = @isp * @g0;
+unit scaled: Length = (@static_rule / 1.0 m) m;
+node uses_unit: Length = 2.0 scaled;
+assert positive = @doubled > 0.0 m/s;
+plot chart = { mark: point, encode: { x: @doubled, y: 1.0 m } };
+",
+    )
+    .unwrap();
+    assert!(matches!(
+        result(&evaluation, "v_exhaust"),
+        Err(NodeUnavailable::Todo { .. })
+    ));
+    assert!(matches!(
+        result(&evaluation, "static_rule"),
+        Err(NodeUnavailable::Todo { .. })
+    ));
+    for blocked in ["doubled", "bounded", "reads_constant", "uses_unit"] {
+        assert!(
+            matches!(
+                result(&evaluation, blocked),
+                Err(NodeUnavailable::Blocked { failed_deps, .. }) if failed_deps.is_empty()
+            ),
+            "{blocked}: {:?}",
+            result(&evaluation, blocked)
+        );
+    }
+    assert!(result(&evaluation, "independent").is_ok());
+    assert!(evaluation.is_incomplete());
+    assert!(!evaluation.has_errors());
+}
+
+#[test]
+fn a_bound_reading_an_unfinished_constant_is_a_compile_error() {
+    const UNFINISHED: &str = "const node lo: Length = todo<Length> {};\n";
+    for declaration in [
+        "param x: Length(min: @lo) = 1.0 m;",
+        "node y: Length(max: 2.0 * @lo) = 1.0 m;",
+        "const node lo2: Length = @lo; const node z: Length(min: @lo2) = 1.0 m;",
+        "type Box { Box(value: Length(min: @lo)) } node b: Box = Box(value: 2.0 m);",
+    ] {
+        assert_eq!(
+            rejection_code(&format!("{UNFINISHED}{declaration}")),
+            "graphcal::C010",
+            "{declaration}"
+        );
+    }
+}
+
+#[test]
+fn a_constant_hole_names_only_constants() {
+    for source in [
+        "param m: Mass = 1.0 kg; const node c: Mass = todo<Mass> { @m };",
+        "node n: Mass = 1.0 kg; const node c: Mass = todo<Mass> { @n };",
+    ] {
+        assert_eq!(rejection_code(source), "graphcal::N005", "{source}");
+    }
+    // Interface entries are dependencies, so they close cycles.
+    assert_eq!(
+        rejection_code("const node a: Length = todo<Length> { @b }; const node b: Length = @a;"),
+        "graphcal::G001"
+    );
+}
+
+#[test]
+fn includes_and_calls_see_the_unfinished_constants_of_their_template() {
+    let evaluation = compile_and_eval(
+        r"
+dag inner {
+    pub const node k: Length = todo<Length> {};
+    pub node out: Length = 2.0 * @k;
+    pub node free: Length = 1.0 m;
+}
+include inner() as i;
+node via_free: Length = @inner()::free;
+node via_out: Length = @inner()::out;
+",
+    )
+    .unwrap();
+    assert!(result(&evaluation, "via_free").is_ok());
+    assert!(matches!(
+        result(&evaluation, "via_out"),
+        Err(NodeUnavailable::Blocked { .. })
+    ));
+    assert!(matches!(
+        result(&evaluation, "i::k"),
+        Err(NodeUnavailable::Todo { .. })
+    ));
+    assert!(matches!(
+        result(&evaluation, "i::out"),
+        Err(NodeUnavailable::Blocked { .. })
+    ));
+}
+
+/// A package `review` whose entry `src/review/main.gcl` (`main`) includes
+/// `review.lib`, binding its port to an expression over `review.consts`.
+fn write_binding_package(main: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("graphcal.toml"),
+        "[package]\nname = \"review\"\n",
+    )
+    .unwrap();
+    let package = dir.path().join("src").join("review");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("consts.gcl"),
+        "pub const node c_done: Dimensionless = 3.0;\n\
+         pub const node c_todo: Dimensionless = todo<Dimensionless> {};\n",
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("lib.gcl"),
+        "param x: Dimensionless = 1.0;\npub node y: Dimensionless = @x * 2.0;\n",
+    )
+    .unwrap();
+    let entry = package.join("main.gcl");
+    std::fs::write(&entry, main).unwrap();
+    (dir, entry)
+}
+
+fn check_package(entry: &std::path::Path) -> graphcal_project::project_compiler::CheckedProject {
+    let project = graphcal_project::loader::load_project(
+        entry,
+        None,
+        &graphcal_io::RealFileSystem::default(),
+    )
+    .unwrap();
+    ProjectCompiler::new(&project).check().unwrap()
+}
+
+#[test]
+fn an_include_binding_reading_an_unfinished_constant_is_reachable() {
+    // `check --deny-todo` counts `reachable_unfinished`; it must agree with
+    // evaluation, which blocks everything downstream of the binding.
+    let (_dir, entry) = write_binding_package(
+        "import review.consts as c;\n\
+         include review.lib(x: c::c_todo) as inst;\n\
+         node out: Dimensionless = @inst::y;\n",
+    );
+    let checked = check_package(&entry);
+    let names = checked
+        .tir()
+        .reachable_unfinished()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(names.as_slice(), [name] if name.ends_with("consts.c_todo")),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn graph_export_draws_the_constant_reads_of_an_include_binding() {
+    use graphcal_project::graph_ir::{
+        dot::{GraphView, render},
+        project_tir,
+    };
+    let (_dir, entry) = write_binding_package(
+        "import review.consts as c;\n\
+         param k: Dimensionless = 1.0;\n\
+         include review.lib(x: @k + c::c_done) as inst;\n\
+         node out: Dimensionless = @inst::y;\n",
+    );
+    let checked = check_package(&entry);
+    let dot = render(&project_tir(checked.tir()).unwrap(), GraphView::Flat);
+    let constant = dot
+        .lines()
+        .find(|line| line.contains("consts.c_done\""))
+        .and_then(|line| line.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no c_done node: {dot}"));
+    let port = dot
+        .lines()
+        .find(|line| line.contains("[label=\"x\\nDimensionless\""))
+        .and_then(|line| line.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no port node: {dot}"));
+    assert!(dot.contains(&format!("{constant} -> {port};")), "{dot}");
 }

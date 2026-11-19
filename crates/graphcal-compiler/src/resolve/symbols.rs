@@ -12,7 +12,6 @@ use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameName
 use crate::syntax::index_name::{IndexName, IndexNameNamespace, IndexVariantName};
 use crate::syntax::module_name::ScopeSegment;
 use crate::syntax::names::{NameAtom, NameDef, NameNamespace, NamePath};
-use crate::syntax::phase::never;
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::type_name::{
     ConstructorName, ConstructorNameNamespace, StructTypeName, StructTypeNameNamespace,
@@ -244,14 +243,16 @@ pub struct ModuleSymbols {
     /// Index symbols a selective include projects as this module's own
     /// declarations because their port is bound to a structural `Fin(N)`.
     pub(super) finite_index_projections: HashMap<IndexName, FiniteIndex>,
-    /// Nominal type symbols a selective include projects as this module's
-    /// own declarations, specialized by the include's Static bindings.
+    /// Nominal type symbols a selective include projects into this module,
+    /// specialized by the include's Static bindings. Their identity (and
+    /// that of their constructors) is owned by the include's instance, so
+    /// an alias or a second projection never collides with another type.
     pub(super) struct_type_projections:
         HashMap<StructTypeName, StaticProjection<StructTypeNameNamespace>>,
 }
 
-/// A template declaration that one selective include projects as an
-/// importer-owned declaration specialized by the include's Static bindings.
+/// A template declaration that one selective include projects into the
+/// importer, specialized by the include's Static bindings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticProjection<Ns: NameNamespace> {
     template: ResolvedName<Ns>,
@@ -285,14 +286,29 @@ impl<Ns: NameNamespace> StaticProjection<Ns> {
 pub struct DimensionProjection {
     projection: StaticProjection<DimNameNamespace>,
     ports: Vec<DimensionPortBinding>,
+    /// The selection item that projects the dimension, in the including
+    /// module's source.
+    selected_at: Span,
 }
 
 impl DimensionProjection {
     pub(super) const fn new(
         projection: StaticProjection<DimNameNamespace>,
         ports: Vec<DimensionPortBinding>,
+        selected_at: Span,
     ) -> Self {
-        Self { projection, ports }
+        Self {
+            projection,
+            ports,
+            selected_at,
+        }
+    }
+
+    /// The selection item that projects the dimension, in the including
+    /// module's source.
+    #[must_use]
+    pub const fn selected_at(&self) -> Span {
+        self.selected_at
     }
 
     /// The template's own dimension the projection specializes.
@@ -518,7 +534,7 @@ impl ModuleSymbols {
                 |symbols| &mut symbols.units,
                 &u.name,
                 u.visibility.into(),
-                u.constness,
+                u.constness(),
             ),
             ast::DeclKind::Type(t) => self.declare_type(t),
             ast::DeclKind::Index(i) => self.declare_index(i),
@@ -531,7 +547,7 @@ impl ModuleSymbols {
                 clippy::uninhabited_references,
                 reason = "Sugar(Infallible) proves this arm unreachable"
             )]
-            ast::DeclKind::Sugar(s) => never(*s),
+            ast::DeclKind::Sugar(s) => match *s {},
         }
     }
 

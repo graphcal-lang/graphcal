@@ -1,9 +1,10 @@
 //! Tests of the client's typed, process-free parts.
 
 use graphcal_model_protocol::{
-    Axis, AxisKind, BaseDimensionName, DescribeDocument, Dimension, Exponent, IndexName, KeyType,
-    ModelInterface, OutputDescription, ParameterDescription, PortName, PortWire, QuantityType,
-    UnitSpelling, VariantName, WireType,
+    Axis, AxisKind, BaseDimension, BaseDimensionName, DeclaredName, DescribeDocument, Dimension,
+    Exponent, IndexName, KeyType, ModelInterface, OutputDescription, PackageName,
+    ParameterDescription, PortName, PortWire, QuantityType, UnitSpelling, UnsupportedReason,
+    VariantName, WireType,
 };
 
 use crate::{Bool, ClientError, GraphcalCommand, Int, Key, Model, Quantity};
@@ -15,24 +16,27 @@ fn name(name: &str) -> PortName {
 fn model() -> Model {
     let length = WireType::Quantity(
         QuantityType::new(
-            Dimension::from_iter([(
-                BaseDimensionName::new("Length").unwrap(),
+            Dimension::new([(
+                BaseDimension::prelude(BaseDimensionName::new("Length").unwrap()),
                 Exponent::new(1, 1).unwrap(),
-            )]),
+            )])
+            .unwrap(),
             Some(UnitSpelling::new("m").unwrap()),
         )
         .unwrap(),
     );
     let mode = WireType::Key(KeyType::new(
-        Axis::new(
-            IndexName::new("Mode").unwrap(),
-            AxisKind::Named {
-                variants: vec![
-                    VariantName::new("A").unwrap(),
-                    VariantName::new("B").unwrap(),
-                ],
-            },
-        )
+        Axis::new(AxisKind::Named {
+            index: DeclaredName::new(
+                PackageName::new("model").unwrap(),
+                Vec::new(),
+                IndexName::new("Mode").unwrap(),
+            ),
+            variants: vec![
+                VariantName::new("A").unwrap(),
+                VariantName::new("B").unwrap(),
+            ],
+        })
         .unwrap(),
     ));
     let interface = ModelInterface::new(
@@ -57,7 +61,8 @@ fn model() -> Model {
                 name("at"),
                 "Datetime<UTC>",
                 PortWire::Unsupported {
-                    reason: "not supported".to_owned(),
+                    reason: UnsupportedReason::NoCanonicalUnit,
+                    message: "not supported".to_owned(),
                 },
                 None,
                 true,
@@ -150,7 +155,8 @@ fn sessions_can_read_every_supported_output() {
                 name("trace"),
                 "Trace",
                 PortWire::Unsupported {
-                    reason: "not supported".to_owned(),
+                    reason: UnsupportedReason::NoCanonicalUnit,
+                    message: "not supported".to_owned(),
                 },
             ),
             OutputDescription::new(name("count"), "Int", PortWire::Supported(WireType::Int)),

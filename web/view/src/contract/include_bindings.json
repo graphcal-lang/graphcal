@@ -11,7 +11,7 @@
   "indexes": [],
   "nodes": [
     {
-      "id": "p:review/f:src/f:review/f:main/n:k",
+      "id": "p:review/f:review/f:main/n:k",
       "label": "k",
       "name": "k",
       "module": "review.main",
@@ -52,7 +52,7 @@
       "presentation": []
     },
     {
-      "id": "p:review/f:src/f:review/f:main/n:y",
+      "id": "p:review/f:review/f:main/n:y",
       "label": "y",
       "name": "y",
       "module": "review.main",
@@ -66,7 +66,7 @@
       "unit": null,
       "pub": false,
       "deps": [
-        "p:review/f:src/f:review/f:main/s:p/n:out"
+        "p:review/f:review/f:main/s:p/n:out"
       ],
       "expr": "@p::out",
       "doc": null,
@@ -95,7 +95,7 @@
       "presentation": []
     },
     {
-      "id": "p:review/f:src/f:review/f:main/s:p/n:out",
+      "id": "p:review/f:review/f:main/s:p/n:out",
       "label": "p::out",
       "name": "out",
       "module": "review.lib",
@@ -103,7 +103,7 @@
       "origin": {
         "kind": "included",
         "instance": {
-          "id": "p:review/f:src/f:review/f:main/s:p",
+          "id": "p:review/f:review/f:main/s:p",
           "name": "p",
           "bound": true
         }

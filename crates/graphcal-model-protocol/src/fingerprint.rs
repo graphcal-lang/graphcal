@@ -14,8 +14,10 @@ const PREFIX: &str = "sha256:";
 /// The SHA-256 digest of a [`ModelInterface`]'s canonical JSON encoding.
 ///
 /// Two interfaces have the same fingerprint exactly when their parameters,
-/// outputs, types, units, domains, and defaults agree. A change to a
-/// formula that keeps the interface keeps the fingerprint.
+/// outputs, types, units, domains, defaults, and the reasons of unsupported
+/// ports agree. A change to a formula that keeps the interface keeps the
+/// fingerprint, and so does rewording an unsupported port's message: only
+/// its [`UnsupportedReason`](crate::UnsupportedReason) code is hashed.
 ///
 /// Spelled `sha256:` followed by 64 lowercase hexadecimal digits.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -39,7 +41,8 @@ impl InterfaceFingerprint {
     )]
     pub fn of(interface: &ModelInterface) -> Self {
         // Serializing typed structs with ordered maps is deterministic.
-        let canonical = serde_json::to_vec(interface).unwrap_or_default();
+        let canonical =
+            serde_json::to_vec(&interface.without_unsupported_messages()).unwrap_or_default();
         Self(Sha256::digest(&canonical).into())
     }
 
@@ -130,6 +133,38 @@ mod tests {
         ] {
             assert!(InterfaceFingerprint::parse(spelling).is_err(), "{spelling}");
         }
+    }
+
+    #[test]
+    fn fingerprint_hashes_reason_codes_not_messages() {
+        use crate::interface::OutputDescription;
+        use crate::label::PortName;
+        use crate::unsupported_reason::UnsupportedReason;
+        use crate::wire_type::PortWire;
+
+        let interface = |reason, message: &str| {
+            crate::interface::ModelInterface::new(
+                Vec::new(),
+                vec![OutputDescription::new(
+                    PortName::new("x").unwrap(),
+                    "T",
+                    PortWire::Unsupported {
+                        reason,
+                        message: message.to_owned(),
+                    },
+                )],
+            )
+            .unwrap()
+        };
+        let original = interface(UnsupportedReason::NoCanonicalUnit, "old wording");
+        assert_eq!(
+            InterfaceFingerprint::of(&original),
+            InterfaceFingerprint::of(&interface(UnsupportedReason::NoCanonicalUnit, "new"))
+        );
+        assert_ne!(
+            InterfaceFingerprint::of(&original),
+            InterfaceFingerprint::of(&interface(UnsupportedReason::InvalidAxis, "old wording"))
+        );
     }
 
     #[test]

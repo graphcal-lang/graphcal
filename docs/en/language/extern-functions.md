@@ -390,6 +390,10 @@ Package handling:
 - **Ad-hoc files** (no `graphcal.toml` anywhere above) load plugins
   unpinned — there is no lock regime to audit against, and the sandbox
   plus resource bounds still apply.
+- **Loose scripts** (a `graphcal.toml` above, but outside the package
+  namespace `<source_dir>/<package>/`) cannot import Wasm plugins at all:
+  `graphcal.lock` does not cover them, so their plugin imports fail with
+  M038. Move the file into the package namespace directory to use plugins.
 - **Dependency packages** may declare Wasm plugins and need no separate
   `[[plugin]]` entries. Their locked tree hash includes the manifest, source
   directory, and every Wasm artifact imported by those sources, including
@@ -450,10 +454,13 @@ let result = ProjectCompiler::new(&project)
     .eval(&overrides)?;
 ```
 
-Native registry entries carry no manifest, so their declarations are
-trusted as-is — appropriate for embedder-controlled functions. The CLI
+Every registry entry carries a signature: a Wasm plugin's comes from its
+manifest, and a native entry registers its own. A declaration is always
+checked against it (W005), so no declaration is trusted as-is. The CLI
 and language server inject the built-in demo plugin (`"graphcal:demo"`:
 `lerp`, `inverse`, `geometric_mean`, `normalize`, `matrix_transpose`,
 `dv_range`) so extern
 declarations — including array and struct-returning ones — can be
-exercised without any plugin file.
+exercised without any plugin file. A demo declaration whose dimensional
+shape differs from the demo's own signature (for example
+`fn inverse<D: Dim>(x: D) -> D;` instead of `-> D^-1`) fails with W005.

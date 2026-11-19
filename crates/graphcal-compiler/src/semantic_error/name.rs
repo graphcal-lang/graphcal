@@ -6,18 +6,19 @@
 
 use thiserror::Error;
 
-use crate::builtin::{BuiltinArity, BuiltinFn};
+use crate::builtin::{BuiltinArity, BuiltinFn, RemovedBuiltinFn};
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
 use crate::expression_source::ExpressionSourceError;
 use crate::generic_param::{
     GenericApplicationTarget, GenericArgArity, render_accepted_constraints,
 };
-use crate::hir::expr::{TypeSystemRef, UnappliedFunctionRef};
+use crate::hir::expr::UnappliedFunctionRef;
 use crate::hir::types::IndexRef;
 use crate::resolve::category::DeclSymbolKind;
 use crate::resolved_name::ResolvedConstructorName;
 use crate::semantic::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
+use crate::syntax::ast::MulDivOp;
 use crate::syntax::function_name::FnName;
 use crate::syntax::index_name::IndexVariantName;
 use crate::syntax::index_name::QualifiedIndexVariantName;
@@ -28,6 +29,19 @@ use crate::syntax::names::NamePath;
 use crate::syntax::span::Span;
 use crate::syntax::type_name::GenericParamName;
 use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
+
+/// Where a unit name that is also a visible local was written; selects which
+/// fixes the diagnostic can offer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnitNameSite {
+    /// The first unit of a quantity literal (`2.0 s`).
+    LiteralLeading,
+    /// A unit that continues a quantity literal after `*` or `/`
+    /// (`2.0 m / s`), where the source may have meant arithmetic on the local.
+    LiteralContinuation(MulDivOp),
+    /// A unit of a `->` conversion target.
+    ConversionTarget,
+}
 
 /// The function an arity diagnostic names: a closed built-in or a plugin
 /// function spelled by its declared name.
@@ -134,19 +148,19 @@ pub enum NameError {
     },
     #[error("{owner_kind} `{owner}` references unknown plot `{name}`")]
     UnknownPlotReference {
-        owner_kind: &'static str,
+        owner_kind: crate::declaration_kind::DeclarationKind,
         owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
     },
     #[error("`{name}` is a {actual_kind}, not a plot")]
     CompositionReferencesNonPlot {
-        owner_kind: &'static str,
-        actual_kind: &'static str,
+        owner_kind: crate::declaration_kind::DeclarationKind,
+        actual_kind: crate::declaration_kind::DeclarationKind,
         name: ScopedName,
     },
     #[error("{owner_kind} `{owner}` lists plot `{name}` more than once")]
     DuplicatePlotReference {
-        owner_kind: &'static str,
+        owner_kind: crate::declaration_kind::DeclarationKind,
         owner: crate::syntax::decl_name::DeclName,
         name: ScopedName,
     },
@@ -161,6 +175,8 @@ pub enum NameError {
     TimeScaleInValuePosition { scale: TimeScale },
     #[error("unknown function `{name}`")]
     UnknownFunction { name: NamePath },
+    #[error("built-in function `{function}` was removed")]
+    RemovedBuiltinFunction { function: RemovedBuiltinFn },
     #[error("function `{function}` uses positional arguments")]
     NamedArgumentsOnFunction {
         function: UnappliedFunctionRef,
@@ -218,7 +234,10 @@ pub enum NameError {
     ExpressionIdentity { source: ExpressionSourceError },
     #[error("unknown match pattern `{path}`")]
     UnknownPattern { path: NamePath },
-    #[error("constructor `{constructor}` requires named field arguments")]
+    #[error(
+        "constructor `{}` requires named field arguments",
+        constructor.to_unowned_def_name()
+    )]
     PositionalArgumentsOnConstructor {
         constructor: ResolvedConstructorName,
     },
@@ -228,17 +247,30 @@ pub enum NameError {
     DuplicateLocalBinding { name: LocalName },
     #[error("local binding `{name}` shadows a visible Term")]
     LocalBindingShadowsTerm { name: LocalName },
-    #[error(
-        "{} cannot be used as a value",
-        reference.surface_description()
-    )]
-    TypeSystemRefAsValue { reference: TypeSystemRef },
     #[error("{function}() expects {arity} arguments, got {got}")]
     WrongOptionalArity {
         function: BuiltinFn,
         arity: BuiltinArity,
         got: usize,
     },
+    #[error("unit `{name}` has the same name as a local in scope")]
+    UnitNameIsLocal {
+        name: LocalName,
+        site: UnitNameSite,
+        local: Span,
+    },
+}
+
+/// How to replace a call to a removed built-in function.
+const fn removed_builtin_help(function: RemovedBuiltinFn) -> &'static str {
+    match function {
+        RemovedBuiltinFn::ToJd | RemovedBuiltinFn::ToMjd => {
+            "a Julian date depends on its time scale, and this function silently read every scale as UTC. Subtract datetimes in the scale your formula needs instead, for example `(to_tt(@t) - epoch<TT>(\"2000-01-01T12:00:00\")) / (1.0 day)` for TT days since J2000.0; for a Unix timestamp use `to_unix(@t)` on a `Datetime<UTC>`"
+        }
+        RemovedBuiltinFn::FromJd | RemovedBuiltinFn::FromMjd => {
+            "a Julian date depends on its time scale, and this function silently read it as UTC. Add a duration to an epoch in the scale your data uses instead, for example `epoch<TT>(\"2000-01-01T12:00:00\") + @days_since_j2000 * 1.0 day`; for a Unix timestamp use `from_unix(seconds)`"
+        }
+    }
 }
 
 impl DiagnosticKind for NameError {
@@ -255,6 +287,7 @@ impl DiagnosticKind for NameError {
             Self::BareGraphDeclarationRef { .. } => "graphcal::N017",
             Self::TimeScaleInValuePosition { .. } => "graphcal::N018",
             Self::UnknownFunction { .. } => "graphcal::N004",
+            Self::RemovedBuiltinFunction { .. } => "graphcal::N038",
             Self::NamedArgumentsOnFunction { .. } => "graphcal::N015",
             Self::GraphRefInConst { .. } => "graphcal::N005",
             Self::WrongArity { .. } => "graphcal::N006",
@@ -274,8 +307,8 @@ impl DiagnosticKind for NameError {
             Self::UnsupportedFunctionGenericArgs { .. } => "graphcal::N032",
             Self::DuplicateLocalBinding { .. } => "graphcal::N033",
             Self::LocalBindingShadowsTerm { .. } => "graphcal::N034",
-            Self::TypeSystemRefAsValue { .. } => "graphcal::N035",
             Self::WrongOptionalArity { .. } => "graphcal::N036",
+            Self::UnitNameIsLocal { .. } => "graphcal::N037",
         }
     }
 
@@ -303,11 +336,13 @@ impl DiagnosticKind for NameError {
                 Some(format!("no Term named `{scale}` is in scope"))
             }
             Self::UnknownFunction { .. } => Some("unknown function".to_owned()),
+            Self::RemovedBuiltinFunction { .. } => Some("no longer a built-in function".to_owned()),
             Self::NamedArgumentsOnFunction { .. } => {
                 Some("named arguments are not allowed in function calls".to_owned())
             }
             Self::GraphRefInConst { .. } => Some("@ reference not allowed here".to_owned()),
             Self::WrongArity { .. } => Some("wrong number of arguments".to_owned()),
+            Self::UnitNameIsLocal { name, .. } => Some(format!("read as the unit `{name}`")),
             Self::UnknownTypeName { .. }
             | Self::IndexLabelAsType { .. }
             | Self::IndexAsType { .. }
@@ -324,16 +359,15 @@ impl DiagnosticKind for NameError {
             | Self::UnsupportedFunctionGenericArgs { .. }
             | Self::DuplicateLocalBinding { .. }
             | Self::LocalBindingShadowsTerm { .. }
-            | Self::TypeSystemRefAsValue { .. }
             | Self::WrongOptionalArity { .. } => Some("error here".to_owned()),
         }
     }
 
     fn help(&self) -> Option<String> {
         match self {
-            Self::DuplicateName { .. } => Some("each name must be unique within a file".to_owned()),
+            Self::DuplicateName { .. } => Some("each name must be unique within its file or `dag` body".to_owned()),
             Self::DuplicateConstructorField { .. } => Some("constructor field names must be unique; remove or rename one declaration".to_owned()),
-            Self::BuiltinNameShadowed { .. } => Some("choose a different name; prelude dimensions, built-in types, prelude units, and built-in numeric constants cannot be redefined in their namespaces".to_owned()),
+            Self::BuiltinNameShadowed { .. } => Some("choose a different name; names the language reserves (prelude dimensions, types and units, built-in functions and constants, time scales, and keywords such as `scan`) cannot be redeclared".to_owned()),
             Self::InvalidPlotProperty { context, .. } => Some(context.valid_properties()),
             Self::UnknownPlotReference { .. } => Some("`plots:` entries must name `plot` declarations visible in this file".to_owned()),
             Self::CompositionReferencesNonPlot { actual_kind, owner_kind, .. } => Some(format!("{owner_kind}s compose `plot` declarations; they cannot nest other {actual_kind}s")),
@@ -342,6 +376,7 @@ impl DiagnosticKind for NameError {
             Self::BareGraphDeclarationRef { kind, name, .. } => Some(format!("write `@{name}` to reference this {kind}")),
             Self::TimeScaleInValuePosition { scale, .. } => Some(format!("time scales are Static atoms; use `{scale}` in `Datetime<{scale}>` or `epoch<{scale}>(...)`")),
             Self::UnknownFunction { .. } => Some("check function name and ensure it is defined".to_owned()),
+            Self::RemovedBuiltinFunction { function } => Some(removed_builtin_help(*function).to_owned()),
             Self::NamedArgumentsOnFunction { function, arguments } => Some(format!(
                 "write `{function}({})`",
                 arguments
@@ -351,6 +386,7 @@ impl DiagnosticKind for NameError {
                     .join(", ")
             )),
             Self::GraphRefInConst { .. } => Some("const expressions are evaluated at compile time and cannot reference params or nodes".to_owned()),
+            Self::UnitNameIsLocal { name, site, .. } => Some(unit_name_is_local_help(name, *site)),
             Self::WrongArity { .. }
             | Self::UnknownTypeName { .. }
             | Self::IndexLabelAsType { .. }
@@ -368,7 +404,6 @@ impl DiagnosticKind for NameError {
             | Self::UnsupportedFunctionGenericArgs { .. }
             | Self::DuplicateLocalBinding { .. }
             | Self::LocalBindingShadowsTerm { .. }
-            | Self::TypeSystemRefAsValue { .. }
             | Self::WrongOptionalArity { .. } => None,
         }
     }
@@ -383,6 +418,10 @@ impl DiagnosticKind for NameError {
                 span: *first,
                 text: format!("first `{field}` field declared here"),
             }],
+            Self::UnitNameIsLocal { name, local, .. } => vec![SecondaryLabel {
+                span: *local,
+                text: format!("local `{name}` bound here"),
+            }],
             Self::BuiltinNameShadowed { .. }
             | Self::InvalidPlotProperty { .. }
             | Self::UnknownPlotReference { .. }
@@ -392,6 +431,7 @@ impl DiagnosticKind for NameError {
             | Self::BareGraphDeclarationRef { .. }
             | Self::TimeScaleInValuePosition { .. }
             | Self::UnknownFunction { .. }
+            | Self::RemovedBuiltinFunction { .. }
             | Self::NamedArgumentsOnFunction { .. }
             | Self::GraphRefInConst { .. }
             | Self::WrongArity { .. }
@@ -411,8 +451,28 @@ impl DiagnosticKind for NameError {
             | Self::UnsupportedFunctionGenericArgs { .. }
             | Self::DuplicateLocalBinding { .. }
             | Self::LocalBindingShadowsTerm { .. }
-            | Self::TypeSystemRefAsValue { .. }
             | Self::WrongOptionalArity { .. } => Vec::new(),
+        }
+    }
+}
+
+/// The fixes for a unit name that is also a local in scope: inside a quantity
+/// literal the source may have meant arithmetic on the local, which needs the
+/// literal closed by parentheses; otherwise only renaming the local helps.
+fn unit_name_is_local_help(name: &LocalName, site: UnitNameSite) -> String {
+    let rename = format!("to use the unit `{name}`, rename the local");
+    match site {
+        UnitNameSite::LiteralContinuation(op) => {
+            let (verb, operator) = match op {
+                MulDivOp::Mul => ("multiply", '*'),
+                MulDivOp::Div => ("divide", '/'),
+            };
+            format!(
+                "a quantity literal reads `{operator} {name}` as part of its unit; to {verb} by the local `{name}`, close the literal with parentheses, as in `(2.0 m) {operator} {name}`; {rename}"
+            )
+        }
+        UnitNameSite::LiteralLeading | UnitNameSite::ConversionTarget => {
+            format!("unit names and local names must not coincide where both are visible; {rename}")
         }
     }
 }

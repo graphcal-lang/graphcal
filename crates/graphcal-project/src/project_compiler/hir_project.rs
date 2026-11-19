@@ -62,19 +62,4 @@ impl<Mode> HirProject<'_, Mode> {
     pub const fn root(&self) -> &DagId {
         self.files.root().root.dag_id()
     }
-
-    /// Number of physical modules represented by this HIR project.
-    #[must_use]
-    pub const fn module_count(&self) -> usize {
-        self.files.len()
-    }
-
-    /// Number of file-root and inline-DAG HIR modules in the project.
-    #[must_use]
-    pub fn dag_count(&self) -> usize {
-        self.files
-            .iter()
-            .map(|file| 1usize.saturating_add(file.inline_dags.len()))
-            .sum()
-    }
 }

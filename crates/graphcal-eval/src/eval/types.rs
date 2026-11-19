@@ -179,6 +179,35 @@ impl Value {
         }
     }
 
+    /// Number of nested indexed axes: 0 for a non-indexed value, 1 for one
+    /// axis, and so on. An indexed value has one element type, so its first
+    /// entry stands for every entry; an empty axis counts as one.
+    #[must_use]
+    pub fn index_depth(&self) -> usize {
+        match self {
+            Self::Indexed { entries, .. } => entries
+                .values()
+                .next()
+                .map_or(1, |entry| entry.index_depth().saturating_add(1)),
+            _ => 0,
+        }
+    }
+
+    /// Whether a display shows this value as a grid over its index axes: two
+    /// or more axes whose leaves are single cells. A leaf struct with fields
+    /// has no single cell, so such a value is listed entry by entry.
+    #[must_use]
+    pub fn displays_as_grid(&self) -> bool {
+        fn leaf(value: &Value) -> &Value {
+            match value {
+                Value::Indexed { entries, .. } => entries.values().next().map_or(value, leaf),
+                _ => value,
+            }
+        }
+        self.index_depth() >= 2
+            && !matches!(leaf(self), Self::Struct { fields, .. } if !fields.is_empty())
+    }
+
     /// Display label for an indexed entry key.
     ///
     /// This is an I/O helper: it renders optional coordinate-index labels and falls
@@ -575,7 +604,9 @@ pub fn datetime_literal(
     epoch: &hifitime::Epoch,
     scale: graphcal_compiler::semantic::time_scale::TimeScale,
 ) -> String {
-    let (year, month, day, hour, minute, second, nanos) = epoch.to_gregorian(scale.to_hifitime());
+    let (year, month, day, hour, minute, second, nanos) =
+        crate::time_scale_conversion::to_time_scale(*epoch, scale)
+            .to_gregorian(scale.to_hifitime());
     let fractional = if nanos == 0 {
         String::new()
     } else {
@@ -615,7 +646,12 @@ fn epoch_to_jiff_timestamp(
     epoch: &hifitime::Epoch,
 ) -> Result<jiff::Timestamp, EpochProjectionError> {
     const NANOS_PER_SECOND: i128 = 1_000_000_000;
-    let unix_nanos = epoch.to_unix_duration().total_nanoseconds();
+    let unix_nanos = crate::time_scale_conversion::to_time_scale(
+        *epoch,
+        graphcal_compiler::semantic::time_scale::TimeScale::UTC,
+    )
+    .to_unix_duration()
+    .total_nanoseconds();
     let seconds = unix_nanos.div_euclid(NANOS_PER_SECOND);
     let nanoseconds = unix_nanos.rem_euclid(NANOS_PER_SECOND);
     let seconds = i64::try_from(seconds).map_err(|_| EpochProjectionError::SecondsOutOfRange)?;
@@ -1147,7 +1183,7 @@ mod tests {
         assert_eq!(value.display_label(&render()), None);
 
         let finite = graphcal_compiler::semantic::index_def::FiniteIndex::try_from_u64(3).unwrap();
-        let key = KeyValue::at(IndexAxis::finite(finite).unwrap(), 2).unwrap();
+        let key = KeyValue::at(IndexAxis::finite(finite), 2).unwrap();
         assert_eq!(KeyRendering::of(&key), KeyRendering::Position(2));
         assert_eq!(
             Value::Key(key)

@@ -31,7 +31,9 @@ pub use in_memory_fs::{InMemoryFileSystem, InMemoryFileSystemError};
 pub use ingestion::ProjectIngestionPolicy;
 pub use limits::{ByteLimit, EntryLimit};
 pub use overlay_fs::{OverlayFileSystem, OverlayFileSystemError};
-pub use reader::{BoundedFileHash, FileSystemEntryKind, FileSystemReadError, FileSystemReader};
+pub use reader::{
+    BoundedFileHash, FileSystemEntryKind, FileSystemReadError, FileSystemReader, OutsideRootError,
+};
 pub use real_fs::RealFileSystem;
 pub use source_tree::{
     SourceTreeHash, SourceTreeHashError, SourceTreeHashLimits, SourceTreeSnapshot,

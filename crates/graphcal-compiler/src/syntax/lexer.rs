@@ -3,10 +3,7 @@ use crate::syntax::comments::{BlankLine, Comment, CommentBody, CommentDelimiter,
 use crate::syntax::span::{Span, Spanned};
 use crate::syntax::token::{LexicalItem, LexicalToken, Token, TriviaToken};
 use logos::Logos;
-use peek_cache::{PeekCache, SourceItem};
 use std::num::NonZeroUsize;
-
-const LEXER_MAX_LOOKAHEAD: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
 /// Complete output of lexing one physical source string.
 ///
@@ -37,52 +34,63 @@ impl TokenizedSource {
     pub const fn first_error_span(&self) -> Option<Span> {
         self.first_error_span
     }
+
+    /// Formatter trivia collected while lexing, by value.
+    #[must_use]
+    pub(crate) fn into_source_metadata(self) -> SourceMetadata {
+        self.source_metadata
+    }
 }
 
 /// Tokenize one source string to completion.
 #[must_use]
 pub fn tokenize(source: &str) -> TokenizedSource {
-    let mut lexer = Lexer::new(source);
-    let tokens = std::iter::from_fn(|| lexer.next_token()).collect();
-    let first_error_span = lexer.first_error_span();
-    let source_metadata = lexer.into_source_metadata();
-    TokenizedSource {
-        tokens,
-        source_metadata,
-        first_error_span,
+    let never_interrupted: Result<_, std::convert::Infallible> =
+        tokenize_with_checkpoints(source, NonZeroUsize::MAX, || Ok(()));
+    match never_interrupted {
+        Ok(tokenized) => tokenized,
     }
 }
 
-/// A peekable wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
+/// Tokenize one source string, calling `checkpoint` after every `interval`
+/// syntax tokens and stopping with its error as soon as it fails.
+pub(crate) fn tokenize_with_checkpoints<E>(
+    source: &str,
+    interval: NonZeroUsize,
+    mut checkpoint: impl FnMut() -> Result<(), E>,
+) -> Result<TokenizedSource, E> {
+    let mut lexer = Lexer::new(source);
+    let mut tokens = Vec::new();
+    while let Some(token) = lexer.next_token() {
+        tokens.push(token);
+        if tokens.len() % interval == 0 {
+            checkpoint()?;
+        }
+    }
+    let first_error_span = lexer.first_error_span();
+    let source_metadata = lexer.into_source_metadata();
+    Ok(TokenizedSource {
+        tokens,
+        source_metadata,
+        first_error_span,
+    })
+}
+
+/// A streaming wrapper around `logos::Lexer` that yields `(Token, Span)` pairs.
 ///
-/// # Internal design
-///
-/// The inner `logos::Lexer` is **only** advanced by `read_next_token()`, which
-/// adapts the tokenizer into the generic private peek cache. `Lexer` cannot read
-/// or take the cache slots directly; the cache fields are private to a nested
-/// module, and its public methods fill the first slot before returning or
-/// consuming it.
-///
-/// ```text
-///   cache = []             (initial / just consumed)
-///       │
-///       ▼  cache calls read_next_token()
-///   cache = [Token(_), ...] (token ready)
-///   cache.eof_seen = true   (EOF)
-///       │
-///       ▼  cache.next() takes the token
-///   cache = [...]           (remaining lookahead)
-/// ```
+/// Trivia (whitespace and comments) is recorded into [`SourceMetadata`] as it
+/// is skipped. The lexer deliberately offers no lookahead and is not `Clone`:
+/// the parser tokenizes the whole source once with [`tokenize`] and looks
+/// ahead over the resulting token slice, so speculative parsing never copies
+/// recorded comments.
 ///
 /// When the underlying `logos::Lexer` encounters an unrecognized character, the
 /// span of the *first* such character is recorded in `first_error_span` and the
 /// character is skipped. The parser surfaces this as a `ParseErrorKind::UnknownToken`
 /// when a top-level `parse_*` entry point finishes, regardless of whether the
 /// downstream parse happened to succeed.
-#[derive(Clone)]
 pub struct Lexer<'src> {
     inner: logos::Lexer<'src, LexicalToken>,
-    peek_cache: PeekCache<(Token, Span)>,
     source: &'src str,
     source_metadata: SourceMetadata,
     /// Span of the first unrecognized character encountered during lexing, if any.
@@ -94,102 +102,42 @@ impl<'src> Lexer<'src> {
     pub fn new(source: &'src str) -> Self {
         Self {
             inner: LexicalToken::lexer(source),
-            peek_cache: PeekCache::new(LEXER_MAX_LOOKAHEAD),
             source,
             source_metadata: SourceMetadata::default(),
             first_error_span: None,
         }
     }
 
-    /// Peek at the next token without consuming it.
-    pub(crate) fn peek(&mut self) -> Option<&Token> {
-        self.peek_with_span().map(|(tok, _)| tok)
-    }
-
-    /// Peek at the token after the next token without consuming either one.
-    pub(crate) fn peek_second(&mut self) -> Option<&Token> {
-        self.peek_token_at(1)
-    }
-
-    /// Peek at the third token from the current position without consuming any token.
-    pub(crate) fn peek_third(&mut self) -> Option<&Token> {
-        self.peek_token_at(2)
-    }
-
-    /// Peek at the next token and its span without consuming it.
-    ///
-    /// This delegates to the cache, which fills its first slot before returning
-    /// a reference to it.
-    pub(crate) fn peek_with_span(&mut self) -> Option<(&Token, Span)> {
-        let inner = &mut self.inner;
-        let source = self.source;
-        let source_metadata = &mut self.source_metadata;
-        let first_error_span = &mut self.first_error_span;
-        self.peek_cache
-            .peek(|| read_next_token(inner, source, source_metadata, first_error_span))
-            .map(|(tok, span)| (tok, *span))
-    }
-
-    fn peek_token_at(&mut self, offset: usize) -> Option<&Token> {
-        self.peek_with_span_at(offset).map(|(tok, _)| tok)
-    }
-
-    fn peek_with_span_at(&mut self, offset: usize) -> Option<(&Token, Span)> {
-        let inner = &mut self.inner;
-        let source = self.source;
-        let source_metadata = &mut self.source_metadata;
-        let first_error_span = &mut self.first_error_span;
-        self.peek_cache
-            .peek_at(offset, || {
-                read_next_token(inner, source, source_metadata, first_error_span)
-            })
-            .map(|(tok, span)| (tok, *span))
-    }
-
-    /// Return the span of the first unrecognized character encountered during lexing.
+    /// Return the span of the first unrecognized character encountered so far.
     ///
     /// Returns `None` if the lexer has not yet seen any invalid input. The value
-    /// is set lazily as tokens are consumed; callers that need an up-to-date
-    /// answer at a specific point should ensure lexing has progressed past the
-    /// region of interest (e.g., by draining the remaining tokens).
+    /// is set lazily as tokens are consumed.
     #[must_use]
     pub(crate) const fn first_error_span(&self) -> Option<Span> {
         self.first_error_span
     }
 
-    /// Consume and return the next token and its span.
-    ///
-    /// The cache fills its first slot before taking from it, so this method
-    /// cannot accidentally consume an uninitialized cache slot.
+    /// Consume and return the next syntax token and its span, recording any
+    /// trivia skipped on the way.
     pub fn next_token(&mut self) -> Option<(Token, Span)> {
-        let inner = &mut self.inner;
-        let source = self.source;
-        let source_metadata = &mut self.source_metadata;
-        let first_error_span = &mut self.first_error_span;
-        self.peek_cache
-            .next(|| read_next_token(inner, source, source_metadata, first_error_span))
+        read_next_token(
+            &mut self.inner,
+            self.source,
+            &mut self.source_metadata,
+            &mut self.first_error_span,
+        )
     }
 
     /// Get the source text corresponding to a span.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn slice_at(&self, span: Span) -> &'src str {
         &self.source[span.offset()..span.offset() + span.len()]
     }
 
-    /// Return the total length (in bytes) of the source string.
-    #[must_use]
-    pub(crate) const fn source_len(&self) -> usize {
-        self.source.len()
-    }
-
     #[must_use]
     pub(crate) fn into_source_metadata(self) -> SourceMetadata {
         self.source_metadata
-    }
-
-    #[must_use]
-    pub(crate) const fn source_metadata(&self) -> &SourceMetadata {
-        &self.source_metadata
     }
 }
 
@@ -198,11 +146,9 @@ fn read_next_token(
     source: &str,
     source_metadata: &mut SourceMetadata,
     first_error_span: &mut Option<Span>,
-) -> SourceItem<(Token, Span)> {
+) -> Option<(Token, Span)> {
     loop {
-        let Some(result) = inner.next() else {
-            break SourceItem::Eof;
-        };
+        let result = inner.next()?;
         let slice_span = inner.span();
         let span = Span::new(slice_span.start, slice_span.end - slice_span.start);
         match result.map(LexicalToken::classify) {
@@ -212,7 +158,7 @@ fn read_next_token(
             Ok(LexicalItem::Trivia(TriviaToken::Comment)) => {
                 record_comment(source, span, source_metadata);
             }
-            Ok(LexicalItem::Syntax(token)) => break SourceItem::Item((token, span)),
+            Ok(LexicalItem::Syntax(token)) => break Some((token, span)),
             Err(()) => {
                 if first_error_span.is_none() {
                     *first_error_span = Some(span);
@@ -253,80 +199,8 @@ fn record_blank_lines(source: &str, span: Span, source_metadata: &mut SourceMeta
     });
 }
 
-mod peek_cache {
-    use std::collections::VecDeque;
-    use std::num::NonZeroUsize;
-
-    #[derive(Clone)]
-    pub(super) struct PeekCache<T> {
-        items: VecDeque<T>,
-        eof_seen: bool,
-        max_lookahead: NonZeroUsize,
-    }
-
-    impl<T> PeekCache<T> {
-        pub(super) fn new(max_lookahead: NonZeroUsize) -> Self {
-            Self {
-                items: VecDeque::with_capacity(max_lookahead.get()),
-                eof_seen: false,
-                max_lookahead,
-            }
-        }
-
-        pub(super) fn peek<F>(&mut self, load_next: F) -> Option<&T>
-        where
-            F: FnMut() -> SourceItem<T>,
-        {
-            self.peek_at(0, load_next)
-        }
-
-        pub(super) fn peek_at<F>(&mut self, offset: usize, load_next: F) -> Option<&T>
-        where
-            F: FnMut() -> SourceItem<T>,
-        {
-            debug_assert!(offset < self.max_lookahead.get());
-            if offset >= self.max_lookahead.get() {
-                return None;
-            }
-
-            self.fill_until(offset, load_next);
-            self.items.get(offset)
-        }
-
-        pub(super) fn next<F>(&mut self, load_next: F) -> Option<T>
-        where
-            F: FnMut() -> SourceItem<T>,
-        {
-            self.fill_until(0, load_next);
-            self.items.pop_front()
-        }
-
-        fn fill_until<F>(&mut self, offset: usize, mut load_next: F)
-        where
-            F: FnMut() -> SourceItem<T>,
-        {
-            // Private callers preserve this invariant: `peek_at` validates
-            // arbitrary offsets, and `next` only asks for slot 0, which is
-            // guaranteed by the nonzero lookahead bound.
-            debug_assert!(offset < self.max_lookahead.get());
-            while self.items.len() <= offset && !self.eof_seen {
-                match load_next() {
-                    SourceItem::Item(item) => self.items.push_back(item),
-                    SourceItem::Eof => self.eof_seen = true,
-                }
-            }
-        }
-    }
-
-    pub(super) enum SourceItem<T> {
-        Item(T),
-        Eof,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::peek_cache::SourceItem;
     use super::*;
 
     #[test]
@@ -357,28 +231,6 @@ mod tests {
     }
 
     #[test]
-    fn peek_does_not_consume() {
-        let input = "param x";
-        let mut lexer = Lexer::new(input);
-
-        assert_eq!(lexer.peek(), Some(&Token::Param));
-        assert_eq!(lexer.peek(), Some(&Token::Param));
-
-        lexer.next_token();
-        assert_eq!(lexer.peek(), Some(&Token::Ident));
-    }
-
-    #[test]
-    fn peek_with_span_returns_correct_span() {
-        let input = "const node g0 = 9.80665;";
-        let mut lexer = Lexer::new(input);
-
-        let (tok, span) = lexer.peek_with_span().unwrap();
-        assert_eq!(*tok, Token::Const);
-        assert_eq!(lexer.slice_at(span), "const");
-    }
-
-    #[test]
     fn lexer_accepts_exponent_digit_separators() {
         let input = "1e1_0";
         let mut lexer = Lexer::new(input);
@@ -386,16 +238,6 @@ mod tests {
         assert_eq!(tok, Token::Number);
         assert_eq!(lexer.slice_at(span), "1e1_0");
         assert!(lexer.next_token().is_none());
-    }
-
-    #[test]
-    fn exhaust_lexer() {
-        let input = "42";
-        let mut lexer = Lexer::new(input);
-        let (tok, _) = lexer.next_token().unwrap();
-        assert_eq!(tok, Token::Number);
-        assert!(lexer.next_token().is_none());
-        assert!(lexer.peek().is_none());
     }
 
     #[test]
@@ -414,21 +256,6 @@ mod tests {
         assert_eq!(lexer.slice_at(span), "x");
 
         assert!(lexer.next_token().is_none());
-    }
-
-    #[test]
-    fn lookahead_does_not_consume() {
-        let input = "param x = 1.0;";
-        let mut lexer = Lexer::new(input);
-
-        assert_eq!(lexer.peek(), Some(&Token::Param));
-        assert_eq!(lexer.peek_second(), Some(&Token::Ident));
-        assert_eq!(lexer.peek_third(), Some(&Token::Eq));
-
-        let (token, _) = lexer.next_token().unwrap();
-        assert_eq!(token, Token::Param);
-        let (token, _) = lexer.next_token().unwrap();
-        assert_eq!(token, Token::Ident);
     }
 
     #[test]
@@ -488,6 +315,26 @@ mod tests {
     }
 
     #[test]
+    fn failing_checkpoint_stops_tokenization() {
+        let source = "x ".repeat(10_000);
+        let interval = NonZeroUsize::new(100).unwrap();
+        let mut checkpoints = 0;
+        let result = tokenize_with_checkpoints(&source, interval, || {
+            checkpoints += 1;
+            if checkpoints == 3 { Err(()) } else { Ok(()) }
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            checkpoints, 3,
+            "tokenization continued after the failed checkpoint"
+        );
+
+        let tokenized = tokenize_with_checkpoints(&source, interval, || Ok::<_, ()>(()))
+            .expect("checkpoints succeed");
+        assert_eq!(tokenized.tokens().len(), 10_000);
+    }
+
+    #[test]
     fn spans_are_byte_accurate() {
         //          0123456789...
         let input = "node delta_v = @v_exhaust * ln(@mass_ratio);";
@@ -500,56 +347,5 @@ mod tests {
         let (_, span) = lexer.next_token().unwrap(); // delta_v
         assert_eq!(span.offset(), 5);
         assert_eq!(span.len(), 7);
-    }
-
-    #[test]
-    fn peek_cache_uses_supplied_items_without_lexer_knowledge() {
-        let mut cache = PeekCache::<u8>::new(NonZeroUsize::new(2).unwrap());
-        let mut next = 0;
-
-        assert_eq!(
-            cache.peek(|| {
-                next += 1;
-                SourceItem::Item(next)
-            }),
-            Some(&1)
-        );
-        assert_eq!(
-            cache.peek(|| {
-                next += 1;
-                SourceItem::Item(next)
-            }),
-            Some(&1)
-        );
-        assert_eq!(
-            cache.next(|| {
-                next += 1;
-                SourceItem::Item(next)
-            }),
-            Some(1)
-        );
-        assert_eq!(
-            cache.next(|| {
-                next += 1;
-                SourceItem::Item(next)
-            }),
-            Some(2)
-        );
-        assert_eq!(next, 2);
-    }
-
-    #[test]
-    fn peek_cache_respects_caller_supplied_lookahead() {
-        let mut cache = PeekCache::<u8>::new(NonZeroUsize::new(4).unwrap());
-        let mut next = 0;
-
-        assert_eq!(
-            cache.peek_at(3, || {
-                next += 1;
-                SourceItem::Item(next)
-            }),
-            Some(&4)
-        );
-        assert_eq!(next, 4);
     }
 }

@@ -25,12 +25,12 @@ use serde::Serialize;
 
 use crate::PlaygroundRequest;
 use crate::bindings::{
-    BindingPathSegmentView, BindingRequest, BrowserBindingRequest, StructuredBindingRequest,
-    StructuredValueRequest, bind_browser_one, bind_one,
+    BindingPathSegmentView, BindingRequest, BrowserBindingRequest, bind_browser_one,
 };
 use crate::diagnostics::{DiagnosticView, compile_error_view};
 use crate::output::EvaluationView;
 use crate::project::{ProjectValidationError, RequestErrorView, VirtualProject};
+use graphcal_report::report_ir::collect_doc_captions;
 
 /// A checked in-memory project ready for repeated evaluation.
 pub struct PreparedPlayground {
@@ -75,36 +75,24 @@ pub enum PrepareOutcome {
 /// the complete validated snapshot, including pinned plugin binaries.
 #[must_use]
 pub fn prepare(request: PlaygroundRequest) -> PrepareOutcome {
-    let project = match VirtualProject::try_from(request) {
-        Ok(project) => project,
-        Err(error) => {
-            return PrepareOutcome::Rejected {
-                error: RequestErrorView::from(&error),
-            };
-        }
-    };
-
-    prepare_virtual(&project, BrowserCapabilities::SourcesOnly, ViewDemand::Skip)
+    prepare_request(request, ViewDemand::Skip)
 }
 
 /// [`prepare`], also projecting the entry file's view model for
 /// [`PreparedPlayground::evaluate_view`].
 #[must_use]
 pub fn prepare_view(request: PlaygroundRequest) -> PrepareOutcome {
-    let project = match VirtualProject::try_from(request) {
-        Ok(project) => project,
-        Err(error) => {
-            return PrepareOutcome::Rejected {
-                error: RequestErrorView::from(&error),
-            };
-        }
-    };
+    prepare_request(request, ViewDemand::Project)
+}
 
-    prepare_virtual(
-        &project,
-        BrowserCapabilities::SourcesOnly,
-        ViewDemand::Project,
-    )
+/// Validate a text-only playground request and prepare it with `view`.
+fn prepare_request(request: PlaygroundRequest, view: ViewDemand) -> PrepareOutcome {
+    match VirtualProject::try_from(request) {
+        Ok(project) => prepare_virtual(&project, BrowserCapabilities::SourcesOnly, view),
+        Err(error) => PrepareOutcome::Rejected {
+            error: RequestErrorView::from(&error),
+        },
+    }
 }
 
 /// Prepare an offline report snapshot, including sandboxed Wasm plugins.
@@ -167,8 +155,6 @@ fn prepare_virtual(
         };
     }
 
-    let report =
-        crate::browser_report::ReportMetadata::from_loaded(&loaded, project.entry_display());
     let mut registry = demo_registry();
     graphcal_plugin_host::register_project_plugins(
         &graphcal_plugin_host::PluginHost::new(),
@@ -194,8 +180,12 @@ fn prepare_virtual(
         });
     match prepared {
         Ok((prepared, view)) => PrepareOutcome::Prepared(Box::new(PreparedPlayground {
+            report: crate::browser_report::ReportMetadata::new(
+                &loaded,
+                project.entry_display(),
+                collect_doc_captions(prepared.tir().root()),
+            ),
             prepared,
-            report,
             view,
         })),
         Err(error) => PrepareOutcome::CompileError {
@@ -394,31 +384,15 @@ impl PreparedPlayground {
             .collect()
     }
 
-    /// Bind the supplied closed values and evaluate the full project view.
+    /// Evaluate browser bindings, including recursively structured values.
     ///
     /// Unbound parameters fall back to their compiled defaults. Every
     /// rejected binding is reported (not just the first) so a controls panel
     /// can annotate each offending input.
     #[must_use]
-    pub fn evaluate(&self, bindings: &[BindingRequest]) -> EvaluateOutcome {
-        match self.evaluate_result(bindings) {
-            Ok(result) => EvaluateOutcome::Evaluated {
-                evaluation: EvaluationView::from(&result),
-            },
-            Err(EvaluationFailure::BindingErrors(errors)) => {
-                EvaluateOutcome::BindingErrors { errors }
-            }
-            Err(
-                EvaluationFailure::EvalError(message) | EvaluationFailure::NeedsValues(message),
-            ) => EvaluateOutcome::EvalError { message },
-        }
-    }
-
-    /// Evaluate browser bindings, including recursively structured values.
-    #[must_use]
     pub fn evaluate_browser(&self, bindings: &[BrowserBindingRequest]) -> EvaluateOutcome {
         match self.evaluate_browser_result(bindings) {
-            Ok(result) => EvaluateOutcome::Evaluated {
+            Ok((result, _)) => EvaluateOutcome::Evaluated {
                 evaluation: EvaluationView::from(&result),
             },
             Err(EvaluationFailure::BindingErrors(errors)) => {
@@ -452,7 +426,7 @@ impl PreparedPlayground {
             return EvaluateViewOutcome::UnknownInstance;
         };
         match self.evaluate_browser_result(bindings) {
-            Ok(result) => {
+            Ok((result, _)) => {
                 let mut projection = projection.clone();
                 projection.attach_evaluation(&result);
                 EvaluateViewOutcome::Evaluated {
@@ -475,167 +449,15 @@ impl PreparedPlayground {
     }
 
     /// Evaluate browser bindings and render a static report from the same
-    /// result. Structured bindings are rendered canonically only for the
-    /// provenance reproduction command.
+    /// result. Its reproduction command spells every binding as the CLI
+    /// accepts it.
     #[must_use]
     pub fn evaluate_report_browser(
         &self,
         bindings: &[BrowserBindingRequest],
     ) -> EvaluateReportOutcome {
         match self.evaluate_browser_result(bindings) {
-            Ok(result) => {
-                let rendered = bindings
-                    .iter()
-                    .map(|binding| self.render_browser_binding(binding))
-                    .collect::<Result<Vec<_>, _>>();
-                match rendered.and_then(|bindings| self.report.render(&result, &bindings)) {
-                    Ok(html) => EvaluateReportOutcome::Evaluated {
-                        evaluation: EvaluationView::from(&result),
-                        html,
-                    },
-                    Err(message) => EvaluateReportOutcome::EvalError { message },
-                }
-            }
-            Err(EvaluationFailure::BindingErrors(errors)) => {
-                EvaluateReportOutcome::BindingErrors { errors }
-            }
-            Err(
-                EvaluationFailure::EvalError(message) | EvaluationFailure::NeedsValues(message),
-            ) => EvaluateReportOutcome::EvalError { message },
-        }
-    }
-
-    fn evaluate_browser_result(
-        &self,
-        bindings: &[BrowserBindingRequest],
-    ) -> Result<EvalResult, EvaluationFailure> {
-        let mut builder = self.prepared.binding_builder();
-        let errors = bindings
-            .iter()
-            .filter_map(|binding| {
-                bind_browser_one(&mut builder, binding)
-                    .err()
-                    .map(|error| BindingErrorView {
-                        name: binding.name().to_string(),
-                        message: error.message,
-                        path: error.path,
-                    })
-            })
-            .collect::<Vec<_>>();
-        if !errors.is_empty() {
-            return Err(EvaluationFailure::BindingErrors(errors));
-        }
-        let row = builder
-            .finish()
-            .map_err(|error| EvaluationFailure::NeedsValues(error.to_string()))?;
-        self.prepared
-            .evaluate(&row)
-            .map_err(|error| EvaluationFailure::EvalError(error.to_string()))
-    }
-
-    fn render_browser_binding(
-        &self,
-        binding: &BrowserBindingRequest,
-    ) -> Result<BindingRequest, String> {
-        match binding {
-            BrowserBindingRequest::Expression(binding) => Ok(binding.clone()),
-            BrowserBindingRequest::Structured(StructuredBindingRequest { name, value }) => {
-                let declared_name = graphcal_compiler::syntax::decl_name::DeclName::try_new(name)
-                    .map_err(|error| error.to_string())?;
-                let port = self
-                    .prepared
-                    .parameter_ports()
-                    .iter()
-                    .find(|port| port.name() == &declared_name)
-                    .ok_or_else(|| format!("unknown parameter `{name}`"))?;
-                let mut expr = String::new();
-                self.render_structured_value(value, port.value_schema(), &mut expr)?;
-                Ok(BindingRequest {
-                    name: name.clone(),
-                    expr,
-                })
-            }
-        }
-    }
-
-    fn render_structured_value(
-        &self,
-        value: &StructuredValueRequest,
-        schema: &ModelValueSchema,
-        output: &mut String,
-    ) -> Result<(), String> {
-        use std::fmt::Write as _;
-
-        match (value, schema) {
-            (StructuredValueRequest::Literal { expr }, _) => output.push_str(expr),
-            (
-                StructuredValueRequest::Algebraic {
-                    definition,
-                    constructor,
-                    fields,
-                },
-                ModelValueSchema::Algebraic(expected),
-            ) => {
-                let graph = self.prepared.model_schema_graph();
-                if graph.definition_index(expected) != Some(*definition) {
-                    return Err("structured constructor has the wrong definition".to_string());
-                }
-                let constructor = graph
-                    .definition_at(*definition)
-                    .and_then(|definition| definition.constructors().get(*constructor))
-                    .ok_or_else(|| "structured constructor does not exist".to_string())?;
-                if fields.len() != constructor.fields().len() {
-                    return Err("structured constructor has the wrong field count".to_string());
-                }
-                write!(output, "{}(", constructor.name()).map_err(|error| error.to_string())?;
-                for (index, (field, field_schema)) in
-                    fields.iter().zip(constructor.fields()).enumerate()
-                {
-                    if index > 0 {
-                        output.push_str(", ");
-                    }
-                    write!(output, "{}: ", field_schema.name())
-                        .map_err(|error| error.to_string())?;
-                    self.render_structured_value(field, field_schema.value(), output)?;
-                }
-                output.push(')');
-            }
-            (
-                StructuredValueRequest::Indexed { entries },
-                ModelValueSchema::Indexed { element, axis },
-            ) => {
-                let axis_name = match axis.kind() {
-                    ModelIndexKind::Finite { index } => index.to_string(),
-                    ModelIndexKind::Named { .. } | ModelIndexKind::Coordinate { .. } => axis
-                        .identity()
-                        .declared_resolved()
-                        .and_then(|name| self.prepared.source_index_path(name))
-                        .map(|path| path.to_string())
-                        .ok_or_else(|| "indexed axis is not visible at the boundary".to_string())?,
-                };
-                write!(output, "table[{axis_name}] {{ ").map_err(|error| error.to_string())?;
-                for entry in entries {
-                    self.render_structured_value(entry, element, output)?;
-                    output.push_str("; ");
-                }
-                output.push('}');
-            }
-            (StructuredValueRequest::Algebraic { .. }, _) => {
-                return Err("unexpected algebraic structured value".to_string());
-            }
-            (StructuredValueRequest::Indexed { .. }, _) => {
-                return Err("unexpected indexed structured value".to_string());
-            }
-        }
-        Ok(())
-    }
-
-    /// Evaluate once and derive both the complete view and static report from
-    /// that exact result.
-    #[must_use]
-    pub fn evaluate_report(&self, bindings: &[BindingRequest]) -> EvaluateReportOutcome {
-        match self.evaluate_result(bindings) {
-            Ok(result) => match self.report.render(&result, bindings) {
+            Ok((result, spelled)) => match self.report.render(&result, &spelled) {
                 Ok(html) => EvaluateReportOutcome::Evaluated {
                     evaluation: EvaluationView::from(&result),
                     html,
@@ -651,19 +473,23 @@ impl PreparedPlayground {
         }
     }
 
-    fn evaluate_result(
+    /// Evaluate browser bindings; on success, also return each binding as
+    /// the CLI spells it.
+    fn evaluate_browser_result(
         &self,
-        bindings: &[BindingRequest],
-    ) -> Result<EvalResult, EvaluationFailure> {
+        bindings: &[BrowserBindingRequest],
+    ) -> Result<(EvalResult, Vec<BindingRequest>), EvaluationFailure> {
         let mut builder = self.prepared.binding_builder();
+        let mut spelled = Vec::with_capacity(bindings.len());
         let mut errors = Vec::new();
         for binding in bindings {
-            if let Err(message) = bind_one(&mut builder, binding) {
-                errors.push(BindingErrorView {
-                    name: binding.name.clone(),
-                    message,
-                    path: Vec::new(),
-                });
+            match bind_browser_one(&mut builder, binding) {
+                Ok(binding) => spelled.push(binding),
+                Err(error) => errors.push(BindingErrorView {
+                    name: binding.name().to_string(),
+                    message: error.message,
+                    path: error.path,
+                }),
             }
         }
         if !errors.is_empty() {
@@ -674,6 +500,7 @@ impl PreparedPlayground {
             .map_err(|error| EvaluationFailure::NeedsValues(error.to_string()))?;
         self.prepared
             .evaluate(&row)
+            .map(|result| (result, spelled))
             .map_err(|error| EvaluationFailure::EvalError(error.to_string()))
     }
 }
@@ -726,14 +553,10 @@ fn value_schema_view(
 ) -> ValueSchemaView {
     match schema {
         ModelValueSchema::Quantity(quantity) => ValueSchemaView::Quantity {
-            unit: quantity
-                .canonical_unit()
-                .map(|unit| unit.label().to_string()),
+            unit: quantity.canonical_unit().map(str::to_owned),
         },
         ModelValueSchema::Complex(quantity) => ValueSchemaView::Complex {
-            unit: quantity
-                .canonical_unit()
-                .map(|unit| unit.label().to_string()),
+            unit: quantity.canonical_unit().map(str::to_owned),
         },
         ModelValueSchema::Bool => ValueSchemaView::Boolean,
         ModelValueSchema::Int => ValueSchemaView::Integer,
@@ -798,9 +621,7 @@ fn control_view(port: &ParameterPort, prepared: &PreparedProject) -> ControlView
                 _ => (None, None),
             };
             ControlView::Quantity {
-                unit: quantity
-                    .canonical_unit()
-                    .map(|unit| unit.label().to_string()),
+                unit: quantity.canonical_unit().map(str::to_owned),
                 lower_si,
                 upper_si,
             }
@@ -1102,6 +923,13 @@ mod tests {
         prepared_or_panic(prepare(single_file(source)))
     }
 
+    fn expression_binding(name: &str, expr: &str) -> BrowserBindingRequest {
+        BrowserBindingRequest::Expression(BindingRequest {
+            name: name.to_string(),
+            expr: expr.to_string(),
+        })
+    }
+
     fn prepare_view_ok(source: &str) -> PreparedPlayground {
         prepared_or_panic(prepare_view(single_file(source)))
     }
@@ -1168,13 +996,8 @@ assert positive = @delta_v > 0.0 m/s;
     #[test]
     fn evaluated_view_follows_bindings() {
         let prepared = prepare_view_ok(DELTA_V);
-        let outcome = prepared.evaluate_view(
-            &[BrowserBindingRequest::Expression(BindingRequest {
-                name: "isp".to_string(),
-                expr: "450.0 s".to_string(),
-            })],
-            &ViewTarget::Module,
-        );
+        let outcome =
+            prepared.evaluate_view(&[expression_binding("isp", "450.0 s")], &ViewTarget::Module);
         let EvaluateViewOutcome::Evaluated { view } = outcome else {
             panic!("expected an evaluated view, got {outcome:?}");
         };
@@ -1192,10 +1015,7 @@ assert positive = @delta_v > 0.0 m/s;
         // A rejected binding answers with the structure, untouched by the
         // evaluation before it.
         let outcome = prepared.evaluate_view(
-            &[BrowserBindingRequest::Expression(BindingRequest {
-                name: "isp".to_string(),
-                expr: "@nowhere".to_string(),
-            })],
+            &[expression_binding("isp", "@nowhere")],
             &ViewTarget::Module,
         );
         let EvaluateViewOutcome::BindingErrors { view, errors } = outcome else {
@@ -1217,13 +1037,8 @@ assert positive = @delta_v > 0.0 m/s;
         assert!(view.nodes.iter().all(|node| node.value.is_none()));
         assert!(view.nodes.iter().any(|node| node.name == "twice"));
 
-        let outcome = prepared.evaluate_view(
-            &[BrowserBindingRequest::Expression(BindingRequest {
-                name: "span".to_string(),
-                expr: "3.0 m".to_string(),
-            })],
-            &ViewTarget::Module,
-        );
+        let outcome =
+            prepared.evaluate_view(&[expression_binding("span", "3.0 m")], &ViewTarget::Module);
         assert!(
             matches!(&outcome, EvaluateViewOutcome::Evaluated { .. }),
             "{outcome:?}"
@@ -1281,16 +1096,13 @@ assert positive = @delta_v > 0.0 m/s;
     fn repeated_evaluation_binds_closed_values() {
         let prepared = prepare_ok(DELTA_V);
 
-        let baseline = prepared.evaluate(&[]);
+        let baseline = prepared.evaluate_browser(&[]);
         let EvaluateOutcome::Evaluated { evaluation } = baseline else {
             panic!("expected baseline evaluation");
         };
         assert!(!evaluation.has_errors);
 
-        let outcome = prepared.evaluate(&[BindingRequest {
-            name: "isp".to_string(),
-            expr: "450.0 s".to_string(),
-        }]);
+        let outcome = prepared.evaluate_browser(&[expression_binding("isp", "450.0 s")]);
         let EvaluateOutcome::Evaluated { evaluation } = outcome else {
             panic!("expected evaluation with binding");
         };
@@ -1345,12 +1157,7 @@ assert positive = @delta_v > 0.0 m/s;
             fields[0].value,
             ValueView::Bool { value: true, .. }
         ));
-        let rendered = prepared.render_browser_binding(&binding).unwrap();
-        assert_eq!(rendered.expr, "Switch(enabled: true)");
-        assert!(matches!(
-            prepared.evaluate(std::slice::from_ref(&rendered)),
-            EvaluateOutcome::Evaluated { .. }
-        ));
+        assert_round_trip(&prepared, &binding, "Switch(enabled: true)");
         let EvaluateReportOutcome::Evaluated { html, .. } =
             prepared.evaluate_report_browser(&[binding])
         else {
@@ -1419,16 +1226,222 @@ assert positive = @delta_v > 0.0 m/s;
         ));
     }
 
+    /// Assert that `binding` is spelled `expected` for the CLI, and that the
+    /// spelling binds to exactly the value the structured binding did.
+    fn assert_round_trip(
+        prepared: &PreparedPlayground,
+        binding: &BrowserBindingRequest,
+        expected: &str,
+    ) {
+        let Ok((structured, spelled)) =
+            prepared.evaluate_browser_result(std::slice::from_ref(binding))
+        else {
+            panic!("expected the structured binding to evaluate");
+        };
+        assert_eq!(spelled.len(), 1);
+        assert_eq!(spelled[0].expr, expected);
+        let spelled: Vec<_> = spelled
+            .into_iter()
+            .map(BrowserBindingRequest::Expression)
+            .collect();
+        let Ok((reparsed, _)) = prepared.evaluate_browser_result(&spelled) else {
+            panic!("the canonical spelling `{expected}` does not bind");
+        };
+        assert_eq!(
+            reparsed.entry_params().collect::<Vec<_>>(),
+            structured.entry_params().collect::<Vec<_>>()
+        );
+    }
+
+    fn indexed_literals(rows: &[&[&str]]) -> StructuredValueRequest {
+        StructuredValueRequest::Indexed {
+            entries: rows
+                .iter()
+                .map(|row| StructuredValueRequest::Indexed {
+                    entries: row
+                        .iter()
+                        .map(|expr| StructuredValueRequest::Literal {
+                            expr: (*expr).to_string(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn structured_multi_axis_bindings_flatten_to_tuple_keys() {
+        let prepared = prepare_ok(
+            "pub index Category = { Alpha, Beta };\n\
+             param m: Dimensionless[Fin(2), Fin(2)] = for i: Fin(2) { for j: Fin(2) { 1.0 } };\n\
+             param g: Length[Category, Fin(2)] = for c: Category { for j: Fin(2) { 1.0 m } };",
+        );
+        let binding = |name: &str, rows: &[&[&str]]| {
+            BrowserBindingRequest::Structured(StructuredBindingRequest {
+                name: name.to_string(),
+                value: indexed_literals(rows),
+            })
+        };
+        let outcome = prepared.evaluate_browser(&[
+            binding("m", &[&["1.0", "2.0"], &["3.0", "4.0"]]),
+            binding("g", &[&["1.0 m", "2.0 m"], &["3.0 m", "4.0 km"]]),
+        ]);
+        let EvaluateOutcome::Evaluated { evaluation } = outcome else {
+            panic!("expected the rank-2 bindings to evaluate, got {outcome:?}");
+        };
+        let body = |name: &str| {
+            let declaration = evaluation
+                .values
+                .iter()
+                .find(|value| value.name == name)
+                .expect("declared value");
+            serde_json::to_value(&declaration.outcome).expect("serializable outcome")["body"]
+                .clone()
+        };
+        assert_eq!(
+            body("m"),
+            serde_json::json!({
+                "kind": "grid",
+                "body": { "columns": ["#0", "#1"], "rows": [["#0", ["1", "2"]], ["#1", ["3", "4"]]] },
+            })
+        );
+        assert_eq!(
+            body("g"),
+            serde_json::json!({
+                "kind": "grid",
+                "body": {
+                    "columns": ["#0", "#1"],
+                    "rows": [["Alpha", ["1 m", "2 m"]], ["Beta", ["3 m", "4 km"]]],
+                },
+            })
+        );
+
+        // A leaf error still names its full entry path.
+        let EvaluateOutcome::BindingErrors { errors } =
+            prepared.evaluate_browser(&[binding("g", &[&["1.0 m", "2.0 m"], &["3.0 m", "4.0 s"]])])
+        else {
+            panic!("expected an entry-local unit error");
+        };
+        assert!(matches!(
+            errors[0].path.as_slice(),
+            [
+                BindingPathSegmentView::Entry { index: 1 },
+                BindingPathSegmentView::Entry { index: 1 }
+            ]
+        ));
+    }
+
+    #[test]
+    fn structured_bindings_round_trip_through_their_cli_spelling() {
+        let prepared = prepare_ok(
+            "pub index Category = { Alpha, Beta };\n\
+             pub index Side = { Left, Right };\n\
+             pub type Pt { Pt(x: Length, ys: Length[Fin(2)]) }\n\
+             param h: Dimensionless[Category] = { Category#Alpha: 1.0, Category#Beta: 2.0 };\n\
+             param f: Dimensionless[Fin(2)] = table[Fin(2)] { 1.0; 2.0; };\n\
+             param m: Dimensionless[Fin(2), Fin(2)] = for i: Fin(2) { for j: Fin(2) { 1.0 } };\n\
+             param g: Length[Category, Fin(2)] = for c: Category { for j: Fin(2) { 1.0 m } };\n\
+             param n: Int[Fin(2), Category] = for i: Fin(2) { for c: Category { 1 } };\n\
+             param cube: Int[Side, Fin(2), Category] = for s: Side { for i: Fin(2) { for c: Category { 1 } } };\n\
+             param p: Pt[Category] = for c: Category { Pt(x: 1.0 m, ys: table[Fin(2)] { 1.0 m; 2.0 m; }) };",
+        );
+        let leaf = |expr: &str| StructuredValueRequest::Literal {
+            expr: expr.to_string(),
+        };
+        let structured = |name: &str, value: StructuredValueRequest| {
+            BrowserBindingRequest::Structured(StructuredBindingRequest {
+                name: name.to_string(),
+                value,
+            })
+        };
+        assert_round_trip(
+            &prepared,
+            &structured(
+                "h",
+                StructuredValueRequest::Indexed {
+                    entries: vec![leaf("5.0"), leaf("6.0 // trailing comment")],
+                },
+            ),
+            "table[Category] { Alpha: 5.0; Beta: 6.0; }",
+        );
+        assert_round_trip(
+            &prepared,
+            &structured(
+                "f",
+                StructuredValueRequest::Indexed {
+                    entries: vec![leaf("(5.0)"), leaf("6")],
+                },
+            ),
+            "table[Fin(2)] { 5.0; 6; }",
+        );
+        assert_round_trip(
+            &prepared,
+            &structured("m", indexed_literals(&[&["1.0", "2.0"], &["3.0", "4.0"]])),
+            "table[Fin(2), Fin(2)] { 1.0, 2.0; 3.0, 4.0; }",
+        );
+        assert_round_trip(
+            &prepared,
+            &structured(
+                "g",
+                indexed_literals(&[&["1.0 m", "2.0 m"], &["3.0 m", "4.0 km"]]),
+            ),
+            "table[Category, Fin(2)] { Alpha: 1.0 m, 2.0 m; Beta: 3.0 m, 4.0 km; }",
+        );
+        assert_round_trip(
+            &prepared,
+            &structured("n", indexed_literals(&[&["1", "2"], &["3", "4"]])),
+            "table[Fin(2), Category] { : Alpha, Beta; 1, 2; 3, 4; }",
+        );
+        let slice = |offset: i32| StructuredValueRequest::Indexed {
+            entries: (0..2)
+                .map(|row| StructuredValueRequest::Indexed {
+                    entries: (0..2)
+                        .map(|column| leaf(&(offset + row * 2 + column).to_string()))
+                        .collect(),
+                })
+                .collect(),
+        };
+        assert_round_trip(
+            &prepared,
+            &structured(
+                "cube",
+                StructuredValueRequest::Indexed {
+                    entries: vec![slice(0), slice(4)],
+                },
+            ),
+            "table[Side, Fin(2), Category] { [Side#Left] : Alpha, Beta; 0, 1; 2, 3; \
+             [Side#Right] : Alpha, Beta; 4, 5; 6, 7; }",
+        );
+        let point = |x: &str| StructuredValueRequest::Algebraic {
+            definition: 0,
+            constructor: 0,
+            fields: vec![
+                leaf(x),
+                StructuredValueRequest::Indexed {
+                    entries: vec![leaf("3.0 m"), leaf("4.0 m")],
+                },
+            ],
+        };
+        assert_round_trip(
+            &prepared,
+            &structured(
+                "p",
+                StructuredValueRequest::Indexed {
+                    entries: vec![point("1.0 m"), point("2.0 km")],
+                },
+            ),
+            "table[Category] { Alpha: Pt(x: 1.0 m, ys: table[Fin(2)] { 3.0 m; 4.0 m; }); \
+             Beta: Pt(x: 2.0 km, ys: table[Fin(2)] { 3.0 m; 4.0 m; }); }",
+        );
+    }
+
     #[test]
     fn report_escapes_captions_and_tracks_bound_baseline_without_an_engine() {
         let source = "/// Speed <unsafe> & caption\nparam speed: Velocity = 1.0 m/s;\nnode doubled: Velocity = @speed * 2.0;";
         let prepared = prepare_ok(source);
-        let binding = BindingRequest {
-            name: "speed".to_string(),
-            expr: "36.0 km/h".to_string(),
-        };
+        let binding = expression_binding("speed", "36.0 km/h");
         let EvaluateReportOutcome::Evaluated { evaluation, html } =
-            prepared.evaluate_report(std::slice::from_ref(&binding))
+            prepared.evaluate_report_browser(std::slice::from_ref(&binding))
         else {
             panic!("expected report");
         };
@@ -1441,7 +1454,8 @@ assert positive = @delta_v > 0.0 m/s;
         assert!(!html.contains("vega.min.js"));
         assert!(!html.contains("wasm"));
 
-        let EvaluateReportOutcome::Evaluated { html, .. } = prepared.evaluate_report(&[]) else {
+        let EvaluateReportOutcome::Evaluated { html, .. } = prepared.evaluate_report_browser(&[])
+        else {
             panic!("expected reset report");
         };
         assert!(!html.contains("speed=36.0 km/h"));
@@ -1460,15 +1474,9 @@ dag chart {
 include chart(k: @k)::{ points as renamed };
 ",
         );
-        for bindings in [
-            vec![],
-            vec![BindingRequest {
-                name: "k".to_string(),
-                expr: "2.0 m".to_string(),
-            }],
-        ] {
+        for bindings in [vec![], vec![expression_binding("k", "2.0 m")]] {
             let EvaluateReportOutcome::Evaluated { evaluation, html } =
-                prepared.evaluate_report(&bindings)
+                prepared.evaluate_report_browser(&bindings)
             else {
                 panic!("expected report");
             };
@@ -1481,21 +1489,17 @@ include chart(k: @k)::{ points as renamed };
     fn report_binding_rejection_is_recoverable_and_reports_all_errors() {
         let prepared = prepare_ok(DELTA_V);
         let bad = [
-            BindingRequest {
-                name: "isp".to_string(),
-                expr: "2.0 kg".to_string(),
-            },
-            BindingRequest {
-                name: "missing".to_string(),
-                expr: "1.0".to_string(),
-            },
+            expression_binding("isp", "2.0 kg"),
+            expression_binding("missing", "1.0"),
         ];
-        let EvaluateReportOutcome::BindingErrors { errors } = prepared.evaluate_report(&bad) else {
+        let EvaluateReportOutcome::BindingErrors { errors } =
+            prepared.evaluate_report_browser(&bad)
+        else {
             panic!("expected binding errors");
         };
         assert_eq!(errors.len(), 2);
         assert!(matches!(
-            prepared.evaluate_report(&[]),
+            prepared.evaluate_report_browser(&[]),
             EvaluateReportOutcome::Evaluated { .. }
         ));
     }
@@ -1503,16 +1507,10 @@ include chart(k: @k)::{ points as renamed };
     #[test]
     fn every_rejected_binding_is_reported() {
         let prepared = prepare_ok(DELTA_V);
-        let outcome = prepared.evaluate(&[
-            BindingRequest {
-                name: "isp".to_string(),
-                // Wrong dimension: a mass is not a time.
-                expr: "450.0 kg".to_string(),
-            },
-            BindingRequest {
-                name: "unknown".to_string(),
-                expr: "1.0".to_string(),
-            },
+        let outcome = prepared.evaluate_browser(&[
+            // Wrong dimension: a mass is not a time.
+            expression_binding("isp", "450.0 kg"),
+            expression_binding("unknown", "1.0"),
         ]);
         let EvaluateOutcome::BindingErrors { errors } = outcome else {
             panic!("expected binding errors, got {outcome:?}");
@@ -1525,10 +1523,7 @@ include chart(k: @k)::{ points as renamed };
     #[test]
     fn out_of_domain_binding_is_rejected() {
         let prepared = prepare_ok(DELTA_V);
-        let outcome = prepared.evaluate(&[BindingRequest {
-            name: "isp".to_string(),
-            expr: "1000.0 s".to_string(),
-        }]);
+        let outcome = prepared.evaluate_browser(&[expression_binding("isp", "1000.0 s")]);
         assert!(
             matches!(outcome, EvaluateOutcome::BindingErrors { .. }),
             "a value outside the declared domain must be rejected at binding time"
@@ -1538,10 +1533,7 @@ include chart(k: @k)::{ points as renamed };
     #[test]
     fn expression_injection_is_rejected() {
         let prepared = prepare_ok(DELTA_V);
-        let outcome = prepared.evaluate(&[BindingRequest {
-            name: "isp".to_string(),
-            expr: "@g0 * 40.0 s^2/m".to_string(),
-        }]);
+        let outcome = prepared.evaluate_browser(&[expression_binding("isp", "@g0 * 40.0 s^2/m")]);
         assert!(
             matches!(outcome, EvaluateOutcome::BindingErrors { .. }),
             "references must be rejected: readers bind closed values only"
@@ -1588,19 +1580,10 @@ include chart(k: @k)::{ points as renamed };
              param mode: Key<Mode> = Mode#Nominal;\n\
              node out: Dimensionless = if @enabled { 1.0 } else { 0.0 };\n",
         );
-        let outcome = prepared.evaluate(&[
-            BindingRequest {
-                name: "enabled".to_string(),
-                expr: "false".to_string(),
-            },
-            BindingRequest {
-                name: "retries".to_string(),
-                expr: "3".to_string(),
-            },
-            BindingRequest {
-                name: "mode".to_string(),
-                expr: "Mode#Safe".to_string(),
-            },
+        let outcome = prepared.evaluate_browser(&[
+            expression_binding("enabled", "false"),
+            expression_binding("retries", "3"),
+            expression_binding("mode", "Mode#Safe"),
         ]);
         let EvaluateOutcome::Evaluated { evaluation } = outcome else {
             panic!("expected evaluation, got {outcome:?}");

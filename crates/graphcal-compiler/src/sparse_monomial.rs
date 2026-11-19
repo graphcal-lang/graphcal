@@ -88,12 +88,6 @@ impl<K> MonomialFactorError<K> {
     }
 }
 
-impl<K, E> Default for SparseMonomial<K, E> {
-    fn default() -> Self {
-        Self::one()
-    }
-}
-
 impl<K, E> SparseMonomial<K, E> {
     /// The unit monomial (empty product).
     #[must_use]
@@ -101,12 +95,6 @@ impl<K, E> SparseMonomial<K, E> {
         Self {
             factors: BTreeMap::new(),
         }
-    }
-
-    /// Number of factors.
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.factors.len()
     }
 
     /// Whether this is the unit monomial (no factors).

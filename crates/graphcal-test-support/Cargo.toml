@@ -8,10 +8,9 @@ description = "Typed generators and semantic test oracles for Graphcal"
 repository.workspace = true
 license.workspace = true
 
-[dependencies]
-graphcal-compiler = { workspace = true }
-
+# The generators are native-only, so are their dependencies.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
+graphcal-compiler = { workspace = true }
 proptest = { workspace = true }
 
 [lints]

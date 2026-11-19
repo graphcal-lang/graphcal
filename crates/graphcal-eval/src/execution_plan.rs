@@ -40,6 +40,7 @@ use thiserror::Error;
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::constant_pools::ConstantReference;
 use crate::domain_constraint::ResolvedDomainConstraint;
+use crate::unfinished_reach::UnfinishedReachMemo;
 
 /// An index into one [`IndexVec`], whose items are pushed in the order of
 /// their indices.
@@ -500,7 +501,7 @@ impl<'p> ClosureDag<'p> {
 }
 
 /// `name` qualified by `scopes`, then by its own qualifier.
-fn qualified(scopes: &[ScopeSegment], name: &ScopedName) -> ScopedName {
+pub(crate) fn qualified(scopes: &[ScopeSegment], name: &ScopedName) -> ScopedName {
     let qualifier = scopes
         .iter()
         .chain(name.qualifier())
@@ -758,7 +759,8 @@ fn plan_recurrence<'p>(
                 .ok_or_else(|| StepIndexError::NotARecurrenceBody(declaration.key.clone()))?;
             match &axis {
                 None => axis = Some(member_body.axis().clone()),
-                Some(first) if first.len() == member_body.axis().len() => {}
+                // R4: every member steps along the group's axis, by identity.
+                Some(first) if first.matches(member_body.axis()) => {}
                 Some(_) => return Err(StepIndexError::AxisMismatch(declaration.key.clone())),
             }
             planned.push(RecurrenceMemberPlan {
@@ -997,13 +999,12 @@ impl<'a, 'p> Entry<'a, 'p> {
 /// A compiled execution plan ready for runtime evaluation.
 pub struct ExecPlan<'p> {
     program: &'p CheckedProgram,
-    has_unfinished_definitions: bool,
+    /// The reachability answers of the program's unfinished declarations;
+    /// `None` when every declaration is finished.
+    unfinished_reach: Option<UnfinishedReachMemo>,
     declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     /// The callable of each DAG of the program, by registry position.
     callables: IndexVec<DagPosition, CallablePlan<'p>>,
-    /// The callee of each call slot of each DAG of the program, by registry
-    /// position, then by slot.
-    calls: IndexVec<DagPosition, Box<[DagPosition]>>,
 }
 
 impl<'p> ExecPlan<'p> {
@@ -1027,22 +1028,19 @@ impl<'p> ExecPlan<'p> {
             .map(prepare)
             .collect::<Result<Vec<_>, _>>()
             .map(IndexVec::from_items)?;
-        let registry = program.tir().dag_registry();
-        let calls = IndexVec::from_items(
-            registry
-                .positioned()
-                .map(|(caller, _)| registry.callee_positions(caller).into())
-                .collect(),
-        );
         let has_unfinished_definitions = declarations.values().any(|declaration| {
             matches!(declaration.body, PlannedBody::Computed(ComputedBody::Todo))
-        });
+        }) || program
+            .facts()
+            .consts()
+            .unfinished_constants()
+            .next()
+            .is_some();
         Ok(Self {
             program,
-            has_unfinished_definitions,
+            unfinished_reach: has_unfinished_definitions.then(UnfinishedReachMemo::default),
             declarations,
             callables,
-            calls,
         })
     }
 
@@ -1060,7 +1058,13 @@ impl<'p> ExecPlan<'p> {
 
     /// Whether any declaration of the program is unfinished.
     pub(crate) const fn has_unfinished_definitions(&self) -> bool {
-        self.has_unfinished_definitions
+        self.unfinished_reach.is_some()
+    }
+
+    /// The reachability answers shared by every evaluation of this plan;
+    /// `None` when every declaration is finished.
+    pub(crate) const fn unfinished_reach(&self) -> Option<&UnfinishedReachMemo> {
+        self.unfinished_reach.as_ref()
     }
 
     /// The root DAG's callable.
@@ -1109,7 +1113,8 @@ impl<'p> ExecPlan<'p> {
     pub fn callees_of(&self, owner: &DagId) -> Option<Vec<&CallablePlan<'p>>> {
         let registry = self.tir().dag_registry();
         registry.get_positioned(owner).map(|(caller, _)| {
-            self.calls[caller]
+            registry
+                .callee_positions(caller)
                 .iter()
                 .map(|&callee| &self.callables[callee])
                 .collect()
@@ -1123,7 +1128,7 @@ impl<'p> ExecPlan<'p> {
     /// has a callable.
     #[must_use]
     pub(crate) fn call(&self, call: ScopedCall<'_>) -> &CallablePlan<'p> {
-        &self.callables[self.calls[call.caller()][call.get().index()]]
+        &self.callables[call.callee()]
     }
 
     /// Any value declaration of the program.
@@ -1151,7 +1156,7 @@ impl std::fmt::Debug for ExecPlan<'_> {
             .field("program", self.program)
             .field(
                 "has_unfinished_definitions",
-                &self.has_unfinished_definitions,
+                &self.has_unfinished_definitions(),
             )
             .field("declarations", &declarations)
             .field("callables", &self.callables.items)

@@ -12,8 +12,7 @@
 //! the tree that holds them.
 
 use crate::builtin::{
-    BuiltinConst, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn, LinearAlgebraFn,
-    ScalarFn, TimeScaleConversionFn,
+    BuiltinConst, DatetimeField, IntDivisionFn, LinearAlgebraFn, ScalarFn, TimeScaleConversionFn,
 };
 use crate::exact_rational::ExactRational;
 
@@ -26,13 +25,13 @@ pub enum ArithOp {
     Div,
 }
 
-/// An integer arithmetic operator.
+/// An integer arithmetic operator. Integer division is not an operator: it
+/// is a built-in that names its rounding ([`IExpr::Division`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntArithOp {
     Add,
     Sub,
     Mul,
-    Div,
     Mod,
 }
 
@@ -41,6 +40,20 @@ pub enum IntArithOp {
 pub enum ScaleOp {
     Mul,
     Div,
+}
+
+/// Where an `Int` becomes an exact `Dimensionless` real quantity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntConversion {
+    /// An explicit `to_float(n)`.
+    ToFloat,
+    /// An `Int` operand of `*` or `/` whose other operand is a real or
+    /// complex quantity. Checking inserts this conversion, so the source has
+    /// no call for it.
+    Scaling,
+    /// The runtime `Int` exponent of a `Dimensionless` base in `^`. Checking
+    /// inserts this conversion, so the source has no call for it.
+    Exponent,
 }
 
 /// Moving a datetime by a duration.
@@ -132,15 +145,15 @@ pub enum QExpr<C> {
     Abs(C),
     /// `exp(x)` of a dimensionless real quantity.
     Exp(C),
-    /// `to_float(n)`.
-    FromInt(C),
-    /// `coord(k)`: the coordinate of a coordinate-axis key.
-    Coordinate(C),
-    /// A numeric epoch count of a datetime.
-    FromDatetime {
-        function: DatetimeToNumericFn,
+    /// An `Int` converted exactly; values binary64 cannot represent fail.
+    FromInt {
+        conversion: IntConversion,
         arg: C,
     },
+    /// `coord(k)`: the coordinate of a coordinate-axis key.
+    Coordinate(C),
+    /// `to_unix(t)`: the Unix time of a UTC datetime.
+    UnixTime(C),
 }
 
 /// An operation whose checked result is an `Int`.
@@ -151,6 +164,12 @@ pub enum IExpr<C> {
         op: IntArithOp,
         lhs: C,
         rhs: C,
+    },
+    /// A `div_*` built-in: the quotient rounded in the direction it names.
+    Division {
+        function: IntDivisionFn,
+        dividend: C,
+        divisor: C,
     },
     /// A power with an exact non-negative integer exponent; the exponent's
     /// syntax stays a child of the node.
@@ -254,16 +273,8 @@ pub enum DExpr<C> {
     },
     /// `duration + datetime`.
     ShiftAfter { duration: C, datetime: C },
-    /// A UTC datetime from a numeric epoch count given as a quantity.
-    FromQuantity {
-        function: DatetimeFromNumericFn,
-        arg: C,
-    },
-    /// A UTC datetime from a numeric epoch count given as an `Int`.
-    FromInt {
-        function: DatetimeFromNumericFn,
-        arg: C,
-    },
+    /// `from_unix(seconds)`: the UTC datetime a Unix time names.
+    FromUnixTime(C),
     /// A datetime re-expressed in another time scale.
     ToScale {
         conversion: TimeScaleConversionFn,
@@ -313,12 +324,12 @@ impl<C> QExpr<C> {
             },
             Self::Abs(arg) => QExpr::Abs(f(arg)?),
             Self::Exp(arg) => QExpr::Exp(f(arg)?),
-            Self::FromInt(arg) => QExpr::FromInt(f(arg)?),
-            Self::Coordinate(arg) => QExpr::Coordinate(f(arg)?),
-            Self::FromDatetime { function, arg } => QExpr::FromDatetime {
-                function: *function,
+            Self::FromInt { conversion, arg } => QExpr::FromInt {
+                conversion: *conversion,
                 arg: f(arg)?,
             },
+            Self::Coordinate(arg) => QExpr::Coordinate(f(arg)?),
+            Self::UnixTime(arg) => QExpr::UnixTime(f(arg)?),
         })
     }
 
@@ -338,9 +349,9 @@ impl<C> QExpr<C> {
             Self::ComplexPart { arg, .. }
             | Self::Abs(arg)
             | Self::Exp(arg)
-            | Self::FromInt(arg)
+            | Self::FromInt { arg, .. }
             | Self::Coordinate(arg)
-            | Self::FromDatetime { arg, .. } => vec![arg],
+            | Self::UnixTime(arg) => vec![arg],
         }
     }
 }
@@ -357,6 +368,15 @@ impl<C> IExpr<C> {
                 op: *op,
                 lhs: f(lhs)?,
                 rhs: f(rhs)?,
+            },
+            Self::Division {
+                function,
+                dividend,
+                divisor,
+            } => IExpr::Division {
+                function: *function,
+                dividend: f(dividend)?,
+                divisor: f(divisor)?,
             },
             Self::ExactPower {
                 base,
@@ -387,6 +407,9 @@ impl<C> IExpr<C> {
             Self::Literal(_) => Vec::new(),
             Self::Neg(operand) => vec![operand],
             Self::Arith { lhs, rhs, .. } => vec![lhs, rhs],
+            Self::Division {
+                dividend, divisor, ..
+            } => vec![dividend, divisor],
             Self::ExactPower {
                 base,
                 exponent_expr,
@@ -532,14 +555,7 @@ impl<C> DExpr<C> {
                 duration: f(duration)?,
                 datetime: f(datetime)?,
             },
-            Self::FromQuantity { function, arg } => DExpr::FromQuantity {
-                function: *function,
-                arg: f(arg)?,
-            },
-            Self::FromInt { function, arg } => DExpr::FromInt {
-                function: *function,
-                arg: f(arg)?,
-            },
+            Self::FromUnixTime(arg) => DExpr::FromUnixTime(f(arg)?),
             Self::ToScale { conversion, arg } => DExpr::ToScale {
                 conversion: *conversion,
                 arg: f(arg)?,
@@ -554,9 +570,7 @@ impl<C> DExpr<C> {
                 datetime, duration, ..
             } => vec![datetime, duration],
             Self::ShiftAfter { duration, datetime } => vec![duration, datetime],
-            Self::FromQuantity { arg, .. }
-            | Self::FromInt { arg, .. }
-            | Self::ToScale { arg, .. } => {
+            Self::FromUnixTime(arg) | Self::ToScale { arg, .. } => {
                 vec![arg]
             }
         }
@@ -599,23 +613,6 @@ pub enum LinearAlgebraCall<C> {
 }
 
 impl<C> LinearAlgebraCall<C> {
-    /// The function this call applies.
-    #[must_use]
-    pub const fn function(&self) -> LinearAlgebraFn {
-        match self {
-            Self::Dot { .. } => LinearAlgebraFn::Dot,
-            Self::Matmul { .. } => LinearAlgebraFn::Matmul,
-            Self::Transpose(_) => LinearAlgebraFn::Transpose,
-            Self::Trace(_) => LinearAlgebraFn::Trace,
-            Self::Norm(_) => LinearAlgebraFn::Norm,
-            Self::Cross { .. } => LinearAlgebraFn::Cross,
-            Self::Outer { .. } => LinearAlgebraFn::Outer,
-            Self::Solve { .. } => LinearAlgebraFn::Solve,
-            Self::Inverse(_) => LinearAlgebraFn::Inverse,
-            Self::Determinant(_) => LinearAlgebraFn::Determinant,
-        }
-    }
-
     /// The call of `function` on `args`, if they are as many as it takes.
     #[must_use]
     pub fn try_new(function: LinearAlgebraFn, args: Vec<C>) -> Option<Self> {

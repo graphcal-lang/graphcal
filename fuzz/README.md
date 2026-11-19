@@ -14,6 +14,10 @@ untrusted syntax and serialization boundaries.
 | `plugin_manifest` | protocol manifest limit | Accepted manifests encode/decode identically. |
 | `plugin_section` | 512 KiB | Extracted manifests embed/extract identically from a minimal Wasm module. |
 | `generated_project` | 4 KiB mapped to a typed model | Valid projects reach checking and evaluation without an internal error. |
+| `model_request` | 256 KiB Arrow IPC stream | Accepted request batches re-encode identically; requests of up to 64 rows evaluate without an internal failure and their results round-trip. Panics inside `arrow-ipc`'s own reader are contained as rejected streams (an upstream defect). |
+| `json_parameters` | 64 KiB UTF-8 | The CLI's `--params-json` conversion is total, and its parameter expressions bind to a prepared project without panicking. |
+| `plugin_result` | 64 KiB mapped to a result kind and raw slots | Accepted plugin results agree exactly with the slots they were decoded from. |
+| `report_bundle` | 256 KiB UTF-8 | Accepted report bundles re-encode canonically, and mounting them does not panic. |
 
 ## Local workflow
 

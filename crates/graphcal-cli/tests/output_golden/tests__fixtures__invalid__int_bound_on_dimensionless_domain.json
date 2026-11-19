@@ -1,0 +1,24 @@
+{
+  "check": {
+    "code": "graphcal::C011",
+    "labels": [
+      {
+        "length": 1,
+        "location": {
+          "column": 38,
+          "line": 2,
+          "source": "<root>/tests/fixtures/invalid/int_bound_on_dimensionless_domain.gcl"
+        },
+        "offset": 117,
+        "primary": false
+      }
+    ],
+    "related": [],
+    "severity": null,
+    "source": null
+  },
+  "eval": {
+    "exit_code": 2,
+    "stdout": ""
+  }
+}

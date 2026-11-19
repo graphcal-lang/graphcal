@@ -1,0 +1,11 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+invalid number literal
+    Diagnostic severity: error
+Begin snippet for exponent_out_of_range.gcl starting at line 1, column 1
+
+snippet line 1: node x: Length = 1.0 m^99999999999;
+    label at line 1, columns 24 to 34: exponent is out of range
+diagnostic code: graphcal::P003

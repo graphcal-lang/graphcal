@@ -442,10 +442,12 @@ positions.
 
 Units are referenced only in unit syntax, such as quantity literals and conversion
 targets. A unit name can match a type, index, or value leaf without changing
-which declaration a type, index, or value position resolves. The reverse lookup
-is deliberately strict: if unit syntax finds a same-spelled non-unit declaration,
-it reports that wrong-universe declaration instead of silently falling through
-to a prelude or registry unit with a different semantic identity.
+which declaration a type, index, or value position resolves. Value declarations
+are always read with `@`, so a `node s` does not affect the unit `s`. A local
+bound by a `match` pattern, a `for` binding, or a `scan`/`unfold` lambda is read
+by its bare name, though, so unit syntax must not use a unit name that is also
+a local in scope: with a local `s`, `2.0 m / s` is an error (`N037`). Write
+`(2.0 m) / s` to divide by the local, or rename the local to use the unit.
 
 ## Type Categories
 
@@ -535,6 +537,10 @@ const node seven: Int = 7;
 ```
 
 Integer arithmetic uses checked operations -- overflow is a runtime error, not silent wraparound.
+`/` is not defined for two `Int` operands; integer division is written with
+`div_trunc`, `div_floor`, or `div_ceil`, which name the rounding direction.
+An `Int` can scale a real or complex quantity in `*` and `/`; see
+[Arithmetic Operators](expressions.md#arithmetic-operators).
 
 #### Bool
 
@@ -587,16 +593,22 @@ Datetime values follow **point-vs-vector** semantics:
 
 | Operation | Result | Notes |
 |-----------|--------|-------|
-| `Datetime - Datetime` | `Time` | Both must be the same time scale |
-| `Datetime + Time` | `Datetime` | Add a duration |
-| `Time + Datetime` | `Datetime` | Add a duration (commuted form) |
-| `Datetime - Time` | `Datetime` | Subtract a duration |
+| `Datetime - Datetime` | `Time` | Both must be the same non-UTC time scale |
+| `Datetime + Time` | `Datetime` | Add a duration (not in UTC) |
+| `Time + Datetime` | `Datetime` | Add a duration (commuted form; not in UTC) |
+| `Datetime - Time` | `Datetime` | Subtract a duration (not in UTC) |
 | `Datetime == Datetime` | `Bool` | Equality comparison |
 | `Datetime < Datetime` | `Bool` | Ordering comparison |
 
 Datetime values cannot be added together, multiplied, divided, or used as the right-hand operand of duration subtraction (`Time - Datetime`).
 
 Cross-scale operations are type errors: `Datetime<UTC> - Datetime<TT>` does not compile. Use explicit time scale conversion functions (`to_utc`, `to_tt`, etc.) first.
+
+UTC values can be compared but not subtracted or shifted (`D044`). UTC labels
+skip leap seconds, so a UTC difference across one would be a second short of
+the elapsed time. Compute in TAI instead: `to_tai(@end) - to_tai(@start)` for
+an elapsed time, and `to_utc(to_tai(@start) + 90.0 min)` for a shifted UTC
+datetime.
 
 Calendar extractors (`year`, `month`, `day`, `hour`, `minute`, `second`,
 `weekday`, and `day_of_year`) use the value's declared `Datetime<S>` scale.
@@ -745,7 +757,8 @@ T(min: expr, max: expr)[I]        // constrained indexed type (element-wise)
 Here `T` must be a quantity type, `Int`, or `Datetime<S>`, and `I` is an
 index axis. Both `min` and `max` are optional—you can specify one or both.
 Bounds are inclusive compile-time constant expressions. Each bound must have
-the type required by `T`; in particular, `Int` bounds are exactly `Int`, and
+the type required by `T`; in particular, `Int` bounds are exactly `Int`,
+`Dimensionless` bounds are `Dimensionless` numbers (`0.0`, not `0`), and
 datetime bounds are exactly the target `Datetime<S>` scale.
 
 ### Supported Types
@@ -1116,7 +1129,16 @@ axes or element pairing explicit.
 
 ## Type Conversions
 
-Graphcal has **no implicit type conversions**. You must use explicit conversion functions:
+Graphcal has **no implicit type conversions**. You must use explicit conversion
+functions. The only arithmetic that mixes `Int` with a quantity is `*` or `/`
+with one `Int` operand and one real or complex quantity operand, and `^` with a
+`Dimensionless` base and an `Int` exponent. The `Int` is
+read as an exact `Dimensionless` value, so `n * q` and `q / n` keep the dimension `D` of `q`, and `n / q` has
+dimension `Dimensionless / D` (see [Arithmetic Operators](expressions.md#arithmetic-operators)).
+The exponent in `q ^ 2` is exact exponent syntax, not an `Int` operand. A
+runtime `Int` exponent such as `@q ^ @n` is rejected when `q` has a physical
+dimension, because the value of `n` would decide the result dimension (see
+[Power exponents](expressions.md#power-exponents)):
 
 | Function | From | To | Example |
 |----------|------|----|---------|
@@ -1248,8 +1270,8 @@ This section lists the type of each expression form and the constraints the comp
 |-----------|-------------|------------|
 | `a + b` | type of `a` | Same numeric kind and dimension |
 | `a - b` | type of `a` | Same numeric kind and dimension |
-| `a * b` | numeric kind lifted over `dim(a) * dim(b)` | Supports real×real, real×complex, complex×real, and complex×complex |
-| `a / b` | numeric kind lifted over `dim(a) / dim(b)` | Supports real÷real, real÷complex, complex÷real, and complex÷complex |
+| `a * b` | numeric kind lifted over `dim(a) * dim(b)` | Supports Int×Int, real×real, real×complex, complex×real, complex×complex, and Int with a real or complex quantity on either side |
+| `a / b` | numeric kind lifted over `dim(a) / dim(b)` | Supports real÷real, real÷complex, complex÷real, complex÷complex, and Int with a real or complex quantity on either side; not defined for two `Int` operands (use `div_trunc`, `div_floor`, or `div_ceil`) |
 | `a % b` | `Int` | Both operands must be `Int`; quantity remainder is not defined |
 | `a ^ n` | `dim(a) ^ n` | Real quantities or integers only; `n` is dimensionless and a dimensioned base requires an exact integer or parenthesized rational |
 | `-a` | type and dimension of `a` | Real quantity, complex quantity, or integer |

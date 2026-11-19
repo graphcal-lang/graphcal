@@ -8,9 +8,7 @@ use crate::resolved_name::{
     ResolvedConstructorName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
 };
 use crate::semantic::index_def::FiniteIndex;
-use crate::syntax::ast::{
-    BindableVisibility, ExprKind, ImportKind, InputBindingCategory, UnresolvedRef,
-};
+use crate::syntax::ast::{BindableVisibility, ImportKind, InputBindingCategory};
 use crate::syntax::dimension::{DimName, DimNameNamespace, UnitName, UnitNameNamespace};
 use crate::syntax::import_category::ImportItemNamespace;
 use crate::syntax::index_name::{IndexName, IndexNameNamespace};
@@ -49,11 +47,12 @@ impl ModuleResolver {
         let has_static_bindings = include
             .param_bindings
             .iter()
-            .any(|binding| binding.category != InputBindingCategory::Unmarked);
+            .any(|binding| binding.category() != InputBindingCategory::Unmarked);
         let has_dimension_bindings = include
             .param_bindings
             .iter()
-            .any(|binding| binding.category == InputBindingCategory::Dimension);
+            .any(|binding| binding.category() == InputBindingCategory::Dimension);
+        let instance = owner.instance_child(include.instance_scope());
         for item in items {
             let category = match item.namespace {
                 ImportItemNamespace::Type => Some(InputBindingCategory::Type),
@@ -63,13 +62,12 @@ impl ModuleResolver {
             };
             let binding = category.and_then(|category| {
                 include.param_bindings.iter().find(|binding| {
-                    binding.category == category && binding.name.name == item.name.name
+                    binding.category() == category && binding.name.name == item.name.name
                 })
             });
-            let binding_path = binding.and_then(|binding| match &binding.value.kind {
-                ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => Some(path.to_name_path()),
-                _ => None,
-            });
+            let binding_path = binding
+                .and_then(|binding| binding.value.static_name())
+                .map(|name| name.value.clone());
             let visibility = BindableVisibility::from(item.visibility);
             let local = item.local_name_atom().clone();
             let source = item.name.name.atom();
@@ -108,7 +106,7 @@ impl ModuleResolver {
                             Symbol::new(
                                 ResolvedStructTypeName::from_def(
                                     super::mint::ResolverMint(()),
-                                    owner.clone(),
+                                    instance.clone(),
                                     source_name,
                                 ),
                                 visibility,
@@ -148,6 +146,7 @@ impl ModuleResolver {
                                 include.instance_scope(),
                             ),
                             dimension_port_bindings(include),
+                            local_span,
                         );
                         let entry = self.entry_mut(owner)?;
                         entry.scope.selected_dimensions.remove(&local_name);
@@ -171,9 +170,27 @@ impl ModuleResolver {
                         continue;
                     }
                     let selected = match binding_path {
-                        Some(path) => self
-                            .resolve_dimension_path(owner, &path)?
-                            .rebind(visibility, local_span),
+                        // A dimension port may be bound to a prelude
+                        // dimension, which no module declares. A target that
+                        // names no dimension at all keeps the port's own
+                        // identity here: the include's binding check rejects
+                        // it at the include.
+                        Some(path) => match self.resolve_dimension_path(owner, &path) {
+                            Ok(symbol) => symbol.rebind(visibility, local_span),
+                            Err(error) => {
+                                match super::prelude::prelude_type_scope()
+                                    .resolve_dimension_path(&path)
+                                {
+                                    Some(prelude) => {
+                                        Symbol::new(prelude, visibility, local_span, ())
+                                    }
+                                    None => self
+                                        .template_export::<DimNameNamespace>(template, source)
+                                        .map_err(|_| error)?
+                                        .rebind(visibility, local_span),
+                                }
+                            }
+                        },
                         None => self
                             .template_export::<DimNameNamespace>(template, source)?
                             .rebind(visibility, local_span),
@@ -245,7 +262,7 @@ impl ModuleResolver {
                     };
                     let owner_type = &constructor.data().owner_type;
                     if include.param_bindings.iter().any(|binding| {
-                        binding.category == InputBindingCategory::Type
+                        binding.category() == InputBindingCategory::Type
                             && binding.name.name.atom() == owner_type.atom()
                     }) {
                         return Err(ModuleResolveError::ConstructorOwnerRebound {
@@ -264,22 +281,20 @@ impl ModuleResolver {
                             candidate.namespace == ImportItemNamespace::Type
                                 && candidate.name.name.atom() == owner_type.atom()
                         });
+                    // A constructor of a type this include projects belongs
+                    // to the projection: the instance owns both, and its own
+                    // symbols already declare the constructor.
                     let constructor = if has_specialized_owner {
-                        let specialized = Symbol::new(
+                        Symbol::new(
                             ResolvedConstructorName::from_def(
                                 super::mint::ResolverMint(()),
-                                owner.clone(),
+                                instance.clone(),
                                 constructor.resolved().to_unowned_def_name(),
                             ),
                             visibility,
                             local_span,
                             constructor.data().clone(),
-                        );
-                        self.entry_mut(owner)?.symbols.constructors.insert(
-                            specialized.resolved().to_unowned_def_name(),
-                            specialized.clone(),
-                        );
-                        specialized
+                        )
                     } else {
                         constructor
                     };
@@ -330,13 +345,16 @@ fn dimension_port_bindings(include: &ast::IncludeDecl) -> Vec<DimensionPortBindi
     include
         .param_bindings
         .iter()
-        .filter(|binding| binding.category == InputBindingCategory::Dimension)
-        .filter_map(|binding| match &binding.value.kind {
-            ExprKind::UnresolvedRef(UnresolvedRef::Path(path)) => Some(DimensionPortBinding::new(
-                DimName::classify(binding.name.name.atom().clone()),
-                path.to_name_path(),
-            )),
-            _ => None,
+        .filter_map(|binding| match &binding.value {
+            ast::BindingValue::Dimension(dim) => dim.as_lone_name().map(|name| {
+                DimensionPortBinding::new(
+                    DimName::classify(binding.name.name.atom().clone()),
+                    name.value.clone(),
+                )
+            }),
+            ast::BindingValue::Value(_)
+            | ast::BindingValue::Type(_)
+            | ast::BindingValue::Index(_) => None,
         })
         .collect()
 }
@@ -345,12 +363,15 @@ fn dimension_port_bindings(include: &ast::IncludeDecl) -> Vec<DimensionPortBindi
 /// `Fin(N)`.
 ///
 /// Any other value is rejected by the include's binding validation.
-fn finite_index_binding(value: &ast::Expr) -> Option<FiniteIndex> {
-    match value.index_binding_arg()? {
-        ast::IndexExpr::Finite { cardinality, .. } => {
-            FiniteIndex::try_from_u64(concrete_nat_value(&cardinality)?).ok()
+fn finite_index_binding(value: &ast::BindingValue) -> Option<FiniteIndex> {
+    match value {
+        ast::BindingValue::Index(ast::IndexExpr::Finite { cardinality, .. }) => {
+            FiniteIndex::try_from_u64(concrete_nat_value(cardinality)?).ok()
         }
-        ast::IndexExpr::Name(_) | ast::IndexExpr::BareNat(_) => None,
+        ast::BindingValue::Index(ast::IndexExpr::Name(_) | ast::IndexExpr::BareNat(_))
+        | ast::BindingValue::Value(_)
+        | ast::BindingValue::Type(_)
+        | ast::BindingValue::Dimension(_) => None,
     }
 }
 

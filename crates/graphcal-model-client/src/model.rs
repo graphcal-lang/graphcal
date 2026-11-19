@@ -3,8 +3,9 @@
 use std::marker::PhantomData;
 
 use graphcal_model_protocol::{
-    DescribeDocument, Domain, FiniteF64, InterfaceFingerprint, KeyRef, KeyType, KeyValue,
-    ModelInterface, PortName, PortWire, VariantName,
+    DescribeDocument, Domain, FiniteF64, InputSlot, InterfaceFingerprint, KeyRef, KeyType,
+    KeyValue, ModelInterface, OutputSlot, PortName, PortWire, ResolvedUnit, SessionSchema,
+    UnitSpelling, VariantName,
 };
 
 use crate::command::GraphcalCommand;
@@ -54,6 +55,43 @@ impl Model {
     #[must_use]
     pub const fn document(&self) -> &DescribeDocument {
         &self.document
+    }
+
+    /// Run `graphcal model unit` to resolve unit expressions in the scope of
+    /// the model's entry file, in order.
+    ///
+    /// Use the result to convert quantities read in their canonical SI unit,
+    /// such as fields of a structured output, into units of your choice; a
+    /// [`ResolvedUnit`] converts only quantities of its own dimension.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] when the executable cannot run, a unit does
+    /// not resolve to a fixed-scale unit, or the printed document is
+    /// invalid.
+    pub fn resolve_units(&self, units: &[UnitSpelling]) -> Result<Vec<ResolvedUnit>, ClientError> {
+        let output = self
+            .command
+            .unit(units)
+            .output()
+            .map_err(ClientError::Spawn)?;
+        if !output.status.success() {
+            return Err(ClientError::Units {
+                status: output.status,
+                stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            });
+        }
+        let resolved: Vec<ResolvedUnit> =
+            serde_json::from_slice(&output.stdout).map_err(ClientError::UnitsDocument)?;
+        if resolved.len() != units.len()
+            || resolved
+                .iter()
+                .zip(units)
+                .any(|(resolved, unit)| resolved.unit() != unit)
+        {
+            return Err(ClientError::UnitsMismatch);
+        }
+        Ok(resolved)
     }
 
     /// The model interface.
@@ -124,9 +162,10 @@ impl Model {
 
 fn port_detail<K: Kind>(name: &PortName, wire: &PortWire) -> Result<K::Detail, ClientError> {
     match wire {
-        PortWire::Unsupported { reason } => Err(ClientError::UnsupportedPort {
+        PortWire::Unsupported { reason, message } => Err(ClientError::UnsupportedPort {
             name: name.clone(),
-            reason: reason.clone(),
+            reason: *reason,
+            message: message.clone(),
         }),
         PortWire::Supported(wire) => K::detail(wire).ok_or_else(|| ClientError::KindMismatch {
             name: name.clone(),
@@ -152,16 +191,27 @@ impl<K: Kind> InputHandle<K> {
         self.port.name()
     }
 
-    /// The wire details: the [`QuantityType`](graphcal_model_protocol::QuantityType)
-    /// of a quantity or the [`KeyType`](graphcal_model_protocol::KeyType) of a key.
+    /// The wire details as the model describes them: the
+    /// [`QuantityType`](graphcal_model_protocol::QuantityType) of a quantity
+    /// in its canonical unit, or the
+    /// [`KeyType`](graphcal_model_protocol::KeyType) of a key.
+    ///
+    /// A session that carries the parameter in a chosen unit (see
+    /// [`SessionBuilder::vary_in`](crate::SessionBuilder::vary_in)) exchanges
+    /// values in that unit; [`Session::input`](crate::Session::input) gives
+    /// the parameter as the session carries it.
     #[must_use]
     pub const fn detail(&self) -> &K::Detail {
         &self.detail
     }
 
-    /// The declared domain, in the wire unit.
+    /// The declared domain, in the canonical unit.
+    ///
+    /// A session in a chosen unit converts the domain into that unit; read
+    /// it from [`Session::input`](crate::Session::input) before sampling
+    /// values for that session.
     #[must_use]
-    pub const fn domain(&self) -> Option<&Domain> {
+    pub const fn canonical_domain(&self) -> Option<&Domain> {
         self.domain.as_ref()
     }
 
@@ -173,6 +223,23 @@ impl<K: Kind> InputHandle<K> {
 
     pub(crate) const fn port(&self) -> &PortIdentity {
         &self.port
+    }
+
+    /// The slot of this parameter in `schema`, a session of `model`.
+    ///
+    /// The handle is checked against `model` before its name is looked up,
+    /// so a same-named parameter of another model is never matched.
+    pub(crate) fn slot_in(
+        &self,
+        model: ModelId,
+        schema: &SessionSchema,
+    ) -> Result<InputSlot, ClientError> {
+        self.port.ensure_model(model)?;
+        schema
+            .input_slot(self.name().as_str())
+            .ok_or_else(|| ClientError::NotVaried {
+                name: self.name().clone(),
+            })
     }
 }
 
@@ -312,7 +379,13 @@ impl<K: Kind> OutputHandle<K> {
         self.port.name()
     }
 
-    /// The wire details of the output.
+    /// The wire details of the output as the model describes them, with
+    /// quantities in their canonical unit.
+    ///
+    /// A session that reads the output in a chosen unit (see
+    /// [`SessionBuilder::output_in`](crate::SessionBuilder::output_in))
+    /// returns values in that unit; [`Session::output`](crate::Session::output)
+    /// gives the output as the session carries it.
     #[must_use]
     pub const fn detail(&self) -> &K::Detail {
         &self.detail
@@ -320,5 +393,22 @@ impl<K: Kind> OutputHandle<K> {
 
     pub(crate) const fn port(&self) -> &PortIdentity {
         &self.port
+    }
+
+    /// The slot of this output in `schema`, a session of `model`.
+    ///
+    /// The handle is checked against `model` before its name is looked up,
+    /// so a same-named output of another model is never matched.
+    pub(crate) fn slot_in(
+        &self,
+        model: ModelId,
+        schema: &SessionSchema,
+    ) -> Result<OutputSlot, ClientError> {
+        self.port.ensure_model(model)?;
+        schema
+            .output_slot(self.name().as_str())
+            .ok_or_else(|| ClientError::NotRead {
+                name: self.name().clone(),
+            })
     }
 }

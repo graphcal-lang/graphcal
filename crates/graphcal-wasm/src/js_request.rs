@@ -151,6 +151,28 @@ pub fn decode_report_bundle(
         .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
+/// The manifest text a browser host passes to `packageLayout`.
+pub enum ManifestText {
+    /// The text, copied after it was proven to fit the per-file limit.
+    Within(String),
+    /// The text exceeds [`MAX_PLAYGROUND_FILE_BYTES`]; it was not copied.
+    TooLarge,
+}
+
+/// Bound the manifest text before copying it into linear memory. A manifest
+/// is one project file, so it shares the per-file limit of the request.
+pub fn decode_manifest_text(value: JsValue) -> Result<ManifestText, JsValue> {
+    let text = value
+        .dyn_into::<JsString>()
+        .map_err(|_| JsValue::from_str("expected manifest text string"))?;
+    Ok(
+        match BoundedJsString::<MAX_PLAYGROUND_FILE_BYTES>::new(text) {
+            Ok(text) => ManifestText::Within(text.into_string()),
+            Err(StringLimitExceeded) => ManifestText::TooLarge,
+        },
+    )
+}
+
 #[derive(Debug, Clone, Copy)]
 struct StringLimitExceeded;
 

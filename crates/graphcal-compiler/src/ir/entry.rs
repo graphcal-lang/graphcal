@@ -80,6 +80,16 @@ impl BodyPhase for Syntax {
     type CompositionFields = InScope<Vec<PlotField>>;
 }
 
+/// Where a value declaration's body comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueOrigin {
+    /// Written in source by the DAG that owns it.
+    Source,
+    /// Generated for a selective include item: the body reads the output of
+    /// the include's instance, whose interface is checked on its own.
+    IncludeAlias,
+}
+
 /// A `const node` declaration.
 #[derive(Debug, Clone)]
 pub struct ConstEntry<P: BodyPhase> {
@@ -87,6 +97,8 @@ pub struct ConstEntry<P: BodyPhase> {
     pub doc: Option<String>,
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
+    /// Whether the body is authored or a generated include alias.
+    pub(crate) origin: ValueOrigin,
     pub type_ann: P::TypeAnnotation,
     pub(crate) expr: P::Expr,
     pub span: Span,
@@ -121,6 +133,8 @@ pub struct NodeEntry<P: BodyPhase> {
     pub doc: Option<String>,
     /// Canonical identity: the owning DAG and the local name in it.
     pub(crate) identity: ResolvedDeclName,
+    /// Whether the body is authored or a generated include alias.
+    pub(crate) origin: ValueOrigin,
     pub type_ann: P::TypeAnnotation,
     pub definition: P::Expr,
     pub span: Span,
@@ -226,6 +240,20 @@ impl_entry_identity!(
     FigureEntry,
     LayerEntry,
 );
+
+macro_rules! impl_entry_origin {
+    ($($entry:ident),* $(,)?) => {$(
+        impl<P: BodyPhase> $entry<P> {
+            /// Whether the body is authored or a generated include alias.
+            #[must_use]
+            pub const fn origin(&self) -> ValueOrigin {
+                self.origin
+            }
+        }
+    )*};
+}
+
+impl_entry_origin!(ConstEntry, NodeEntry);
 
 /// One value, assertion, or visualization declaration.
 #[derive(Debug, Clone)]

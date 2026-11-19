@@ -509,17 +509,20 @@ fn node_attrs(
     } else {
         label
     };
-    let mut attrs = match node.kind {
-        GraphNodeKind::Const => format!("label=\"{label}\", shape=box, style=rounded"),
-        GraphNodeKind::Param => format!("label=\"{label}\", shape=ellipse"),
-        GraphNodeKind::Node => format!("label=\"{label}\", shape=box"),
-        GraphNodeKind::External => {
+    let mut attrs = match (node.kind, node.is_unfinished) {
+        (GraphNodeKind::Const, false) => {
+            format!("label=\"{label}\", shape=box, style=rounded")
+        }
+        (GraphNodeKind::Const, true) => {
+            format!("label=\"{label}\", shape=box, style=\"rounded,dashed\"")
+        }
+        (GraphNodeKind::Param, _) => format!("label=\"{label}\", shape=ellipse"),
+        (GraphNodeKind::Node, false) => format!("label=\"{label}\", shape=box"),
+        (GraphNodeKind::Node | GraphNodeKind::External, true)
+        | (GraphNodeKind::External, false) => {
             format!("label=\"{label}\", shape=box, style=dashed")
         }
     };
-    if node.is_unfinished {
-        attrs.push_str(", style=dashed");
-    }
     if emphasize_output && node.is_public_output {
         attrs.push_str(", peripheries=2, color=\"#2E7D32\", penwidth=2");
     }

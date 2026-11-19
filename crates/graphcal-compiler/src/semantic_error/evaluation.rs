@@ -39,12 +39,6 @@ impl EvaluatorFailure {
     pub fn new(failure: impl std::error::Error + Send + Sync + 'static) -> Self {
         Self(Arc::new(failure))
     }
-
-    /// The failure as `T`, when it is one.
-    #[must_use]
-    pub fn downcast_ref<T: std::error::Error + 'static>(&self) -> Option<&T> {
-        self.0.downcast_ref()
-    }
 }
 
 impl std::fmt::Display for EvaluatorFailure {
@@ -87,7 +81,7 @@ mod tests {
     #[test]
     fn runtime_failures_keep_their_type_and_render_as_e001() {
         let failure = EvaluatorFailure::new(Sentinel);
-        assert!(failure.downcast_ref::<Sentinel>().is_some());
+        assert!(failure.0.downcast_ref::<Sentinel>().is_some());
         assert_eq!(format!("{failure:?}"), "Sentinel");
         let error = EvaluationError::Runtime(failure);
         assert_eq!(error.to_string(), "sentinel failure");

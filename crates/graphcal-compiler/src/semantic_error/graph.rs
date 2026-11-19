@@ -90,8 +90,6 @@ pub enum GraphError {
         name: DeclName,
         reason: RecurrenceRejection,
     },
-    #[error("unknown dag `{name}`")]
-    UnknownDag { name: DagId },
     #[error("unknown param `{name}` in DAG call to `{dag_name}`")]
     UnknownDagParam { name: DeclName, dag_name: DagId },
     #[error(
@@ -117,9 +115,10 @@ pub enum GraphError {
     /// include expansion re-entered back to it.
     #[error("recursive DAG instantiation: {}", format_template_cycle(templates))]
     RecursiveDagInstantiation { templates: Vec<DagId> },
-    /// A `todo<T> { … }` hole outside the body of a runtime `node`.
-    #[error("`todo` holes are allowed only in `node` formulas")]
-    TodoHoleOutsideNode,
+    /// A `todo<T> { … }` hole outside the formula of a `node` or a
+    /// `const node`.
+    #[error("`todo` holes are allowed only in `node` and `const node` formulas")]
+    TodoHoleOutsideFormula,
 }
 
 impl DiagnosticKind for GraphError {
@@ -127,14 +126,13 @@ impl DiagnosticKind for GraphError {
         match self {
             Self::DagCallInCompileTime { .. } => "graphcal::G007",
             Self::CyclicDependency { .. } | Self::RejectedRecurrence { .. } => "graphcal::G001",
-            Self::UnknownDag { .. } => "graphcal::G002",
             Self::UnknownDagParam { .. } => "graphcal::G003",
             Self::MissingDagBindings { .. } => "graphcal::G004",
             Self::UnknownDagOutput { .. } => "graphcal::G005",
             Self::DagArgTypeMismatch { .. } => "graphcal::G006",
             Self::InlineDagTargetNotFound { .. } => "graphcal::G008",
             Self::RecursiveDagInstantiation { .. } => "graphcal::G009",
-            Self::TodoHoleOutsideNode => "graphcal::G010",
+            Self::TodoHoleOutsideFormula => "graphcal::G010",
         }
     }
 
@@ -145,7 +143,6 @@ impl DiagnosticKind for GraphError {
             }
             Self::CyclicDependency { .. } => Some("involved in cycle".to_owned()),
             Self::RejectedRecurrence { reason, .. } => Some(reason.label()),
-            Self::UnknownDag { .. } => Some("unknown dag".to_owned()),
             Self::UnknownDagParam { dag_name, .. } => Some(format!("not a param in `{dag_name}`")),
             Self::MissingDagBindings { .. } => Some("missing binding(s)".to_owned()),
             Self::UnknownDagOutput { dag_name, .. } => {
@@ -155,7 +152,7 @@ impl DiagnosticKind for GraphError {
             Self::InlineDagTargetNotFound { .. } | Self::RecursiveDagInstantiation { .. } => {
                 Some("error here".to_owned())
             }
-            Self::TodoHoleOutsideNode => Some("unfinished formula not allowed here".to_owned()),
+            Self::TodoHoleOutsideFormula => Some("unfinished formula not allowed here".to_owned()),
         }
     }
 
@@ -164,12 +161,11 @@ impl DiagnosticKind for GraphError {
             Self::DagCallInCompileTime { .. } => Some("a DAG call is an anonymous runtime include; call it from a `node`, `param` default, assertion, or visualization expression instead".to_owned()),
             Self::CyclicDependency { .. } => Some("declarations cannot form dependency cycles".to_owned()),
             Self::RejectedRecurrence { reason, .. } => Some(reason.help()),
-            Self::UnknownDag { .. } => Some("the inline call references a dag that is not declared in this file".to_owned()),
             Self::UnknownDagParam { .. } => Some("the binding name must match a `param` declared in the called DAG".to_owned()),
             Self::MissingDagBindings { .. } => Some("every required `param` declared in the DAG must be bound at each `include` or call site".to_owned()),
             Self::UnknownDagOutput { .. } => Some("the projection after `)::` must name a param input port, an explicitly exported node, or a public include-output alias in the called DAG".to_owned()),
             Self::DagArgTypeMismatch { .. } => Some("the binding expression must have the same type as the DAG's param declaration".to_owned()),
-            Self::TodoHoleOutsideNode => Some("only a `node` can be unfinished; write the formula here".to_owned()),
+            Self::TodoHoleOutsideFormula => Some("only a `node` or `const node` formula can be unfinished; write this expression in full".to_owned()),
             Self::InlineDagTargetNotFound { .. }
             | Self::RecursiveDagInstantiation { .. }=> None,
         }
@@ -180,14 +176,13 @@ impl DiagnosticKind for GraphError {
             Self::DagCallInCompileTime { .. }
             | Self::CyclicDependency { .. }
             | Self::RejectedRecurrence { .. }
-            | Self::UnknownDag { .. }
             | Self::UnknownDagParam { .. }
             | Self::MissingDagBindings { .. }
             | Self::UnknownDagOutput { .. }
             | Self::DagArgTypeMismatch { .. }
             | Self::InlineDagTargetNotFound { .. }
             | Self::RecursiveDagInstantiation { .. }
-            | Self::TodoHoleOutsideNode => Vec::new(),
+            | Self::TodoHoleOutsideFormula => Vec::new(),
         }
     }
 }

@@ -16,8 +16,6 @@ use crate::desugar::desugared_ast::{self as ast, TypeDecl, TypeDeclBody};
 use crate::ir::static_substitution::{InstanceIndexBindingTarget, StaticSubstitution};
 use crate::nat::{NatOverflowError, NatPolyForm};
 use crate::resolve::ModuleResolver;
-use crate::resolve::namespace::Namespace;
-use crate::resolve::reserved_name::validate_reserved_name;
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::semantic::time_zone::TimeZoneRegistry;
 use crate::semantic_error::SemanticError;
@@ -321,6 +319,7 @@ fn find_non_earlier_type_reference(
         TypeExprKind::ComplexApplication { generic_args }
         | TypeExprKind::KeyApplication { generic_args } => generic_args
             .iter()
+            .flatten()
             .find_map(|arg| find_non_earlier_generic_reference(arg, current_index, positions)),
         TypeExprKind::DatetimeApplication { type_args } => type_args.iter().find_map(|type_arg| {
             find_non_earlier_type_reference(type_arg, current_index, positions)
@@ -357,25 +356,11 @@ fn lower_generic_params(
                 default,
                 param.name.span,
             ));
-            let atom = param.name.value.atom();
-            let visible = lowering.module.visible_span(Namespace::Static, atom);
-            if validate_reserved_name(Namespace::Static, atom).is_err() || visible.is_some() {
-                return Err(super::diagnostics::hir_lower_error_to_graphcal(
-                    &super::lower::HirLowerError::GenericParamShadowsStatic {
-                        name: param.name.value.clone(),
-                        original: visible,
-                        duplicate: param.name.span,
-                    },
-                    src,
-                )
-                .into());
-            }
             scope
-                .insert_binding(super::lower::GenericParamBinding::new(
-                    id,
-                    param.constraint,
-                    param.name.span,
-                ))
+                .insert_declared_binder(
+                    super::lower::GenericParamBinding::new(id, param.constraint, param.name.span),
+                    lowering.module,
+                )
                 .map_err(|error| super::diagnostics::hir_lower_error_to_graphcal(&error, src))?;
             Ok((lowered, scope))
         },
@@ -452,10 +437,10 @@ fn invariant_error(message: String, src: SourceId, span: Span) -> SemanticError 
     )
 }
 
-/// Specialize a template's nominal definition as the importer-owned
-/// definition `identity` through `substitution`: the include's Static
-/// bindings plus the template declarations the same include projects as
-/// importer-owned declarations.
+/// Specialize a template's nominal definition as the projected definition
+/// `identity` (owned by the projecting include's instance) through
+/// `substitution`: the include's Static bindings plus the template
+/// declarations the same include projects.
 ///
 /// Constructors and generic parameters are re-owned by `identity`; every
 /// signature reference the substitution names is replaced. Domain bounds

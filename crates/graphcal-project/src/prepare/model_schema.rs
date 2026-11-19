@@ -139,32 +139,11 @@ impl ModelConstructorSchema {
     }
 }
 
-/// Canonical boundary unit attached to a quantity schema.
-#[derive(Debug, Clone, PartialEq)]
-pub struct ModelUnitSchema {
-    label: String,
-    scale_to_si: f64,
-}
-
-impl ModelUnitSchema {
-    /// Canonical source-like unit label.
-    #[must_use]
-    pub fn label(&self) -> &str {
-        &self.label
-    }
-
-    /// Multiplicative scale from this unit to SI.
-    #[must_use]
-    pub const fn scale_to_si(&self) -> f64 {
-        self.scale_to_si
-    }
-}
-
 /// One real or complex physical quantity family.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModelQuantitySchema {
     dimension: graphcal_compiler::dimension::Dimension,
-    canonical_unit: Option<ModelUnitSchema>,
+    canonical_unit: Option<String>,
 }
 
 impl ModelQuantitySchema {
@@ -174,10 +153,10 @@ impl ModelQuantitySchema {
         &self.dimension
     }
 
-    /// Canonical SI boundary unit for dimensioned quantities.
+    /// Canonical SI boundary unit label for dimensioned quantities.
     #[must_use]
-    pub const fn canonical_unit(&self) -> Option<&ModelUnitSchema> {
-        self.canonical_unit.as_ref()
+    pub fn canonical_unit(&self) -> Option<&str> {
+        self.canonical_unit.as_deref()
     }
 }
 
@@ -237,12 +216,6 @@ pub struct ModelAlgebraicTypeSchema {
 }
 
 impl ModelAlgebraicTypeSchema {
-    /// Concrete nominal type identity represented by this definition.
-    #[must_use]
-    pub const fn id(&self) -> &ModelTypeId {
-        &self.id
-    }
-
     /// Constructors in source order.
     #[must_use]
     pub fn constructors(&self) -> &[ModelConstructorSchema] {
@@ -412,11 +385,7 @@ fn model_quantity_schema(
                 &tir.registry().dimensions.base_unit_symbols(),
             )
         })
-        .flatten()
-        .map(|label| ModelUnitSchema {
-            label,
-            scale_to_si: 1.0,
-        });
+        .flatten();
     ModelQuantitySchema {
         dimension: dimension.clone(),
         canonical_unit,
@@ -434,9 +403,9 @@ fn model_index_schema(
             kind: ModelIndexKind::Finite { index: finite },
         });
     }
-    let axis = IndexAxis::resolve(tir, index).ok_or_else(|| {
+    let axis = IndexAxis::resolve(tir, index).map_err(|error| {
         SemanticError::internal_error(
-            format!("model index `{index}` has no concrete definition"),
+            format!("model index `{index}` has no concrete axis: {error}"),
             source,
             DiagnosticAnchor::WholeFile,
         )

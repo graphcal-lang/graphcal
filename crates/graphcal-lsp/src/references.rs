@@ -40,14 +40,14 @@ pub fn references(
                 .collect()
         },
         |project| {
+            let mut lines = project.line_indexes();
             target_keys
                 .iter()
                 .flat_map(|target| project.references(target))
                 .filter_map(|occurrence| {
-                    let document = project.document(&occurrence.uri)?;
                     Some(Location {
+                        range: lines.range(&occurrence)?,
                         uri: occurrence.uri,
-                        range: LineIndex::new(&document.source).span_to_range(occurrence.span),
                     })
                 })
                 .collect()
@@ -57,10 +57,9 @@ pub fn references(
     if include_declaration {
         let project_location = analysis.project_symbols.complete().and_then(|project| {
             let definition = project.definition(&resolved.key)?;
-            let document = project.document(&definition.occurrence.uri)?;
             Some(Location {
+                range: project.line_indexes().range(&definition.occurrence)?,
                 uri: definition.occurrence.uri,
-                range: LineIndex::new(&document.source).span_to_range(definition.occurrence.span),
             })
         });
         if let Some(location) = project_location

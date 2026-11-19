@@ -226,37 +226,7 @@ pub struct GraphIr {
     edges: Vec<GraphEdge>,
 }
 
-impl GraphNode {
-    /// The declaration or call output this node projects.
-    #[must_use]
-    pub const fn id(&self) -> &GraphNodeId {
-        &self.id
-    }
-
-    /// The declaration kind behind this node.
-    #[must_use]
-    pub const fn kind(&self) -> GraphNodeKind {
-        self.kind
-    }
-
-    /// Whether this calculated node is a public output of its source template.
-    #[must_use]
-    pub const fn is_public_output(&self) -> bool {
-        self.is_public_output
-    }
-
-    /// Whether the source definition is an explicit TODO rather than a formula.
-    #[must_use]
-    pub const fn is_unfinished(&self) -> bool {
-        self.is_unfinished
-    }
-
-    /// Human-readable resolved type, when known.
-    #[must_use]
-    pub fn type_label(&self) -> Option<&str> {
-        self.type_label.as_deref()
-    }
-}
+impl GraphNode {}
 
 impl GraphEdge {
     /// The node read.
@@ -279,43 +249,18 @@ impl GraphCluster {
         &self.id
     }
 
-    /// The enclosing cluster, if any.
-    #[must_use]
-    pub const fn parent(&self) -> Option<&DagId> {
-        self.parent.as_ref()
-    }
-
     /// Semantic provenance of this cluster.
     #[must_use]
     pub const fn kind(&self) -> &GraphClusterKind {
         &self.kind
     }
-
-    /// Canonical identities of the nodes this cluster directly owns.
-    #[must_use]
-    pub fn node_ids(&self) -> &[GraphNodeId] {
-        &self.node_ids
-    }
 }
 
 impl GraphIr {
-    /// Projected declarations in deterministic source/module order, then the
-    /// outputs inline calls read.
-    #[must_use]
-    pub fn nodes(&self) -> &[GraphNode] {
-        &self.nodes
-    }
-
     /// The root source module first, then the remaining clusters.
     #[must_use]
     pub fn clusters(&self) -> &[GraphCluster] {
         &self.clusters
-    }
-
-    /// Placeholder nodes for dependencies declared outside the expanded DAGs.
-    #[must_use]
-    pub fn external(&self) -> &[GraphNode] {
-        &self.external
     }
 
     /// Dataflow edges, deduplicated and sorted.
@@ -700,7 +645,6 @@ const fn node_kind(category: ValueDeclCategory) -> GraphNodeKind {
 mod tests {
     use super::*;
     use graphcal_compiler::ir::lower::lower;
-    use graphcal_compiler::resolve::ModuleResolver;
     use graphcal_compiler::syntax::parser::Parser;
     use graphcal_compiler::tir::typed::ProjectTypeStore;
 
@@ -711,10 +655,8 @@ mod tests {
         let file = graphcal_compiler::desugar::desugared_ast::File::from(raw_file);
         let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
         let src = sources.register("test.gcl", Arc::new(source.to_string()));
-        let ir = lower(&file, "test.gcl", src).unwrap();
-        let resolver =
-            ModuleResolver::without_edges([(ir.dag_id().clone(), file.declarations.as_slice())])
-                .unwrap();
+        let graphcal_compiler::ir::lower::LoweredFile { hir: ir, resolver } =
+            lower(&file, "test.gcl", src).unwrap();
         let mut project_types = ProjectTypeStore::default();
         project_types.insert_graphcal_prelude().unwrap();
         project_types.insert_module(ir.definitions()).unwrap();
@@ -740,6 +682,7 @@ mod tests {
         .instantiate(
             &graphcal_compiler::tir::typed::CheckedOverrideDependencies::default(),
             src,
+            &cancellation,
         )
         .unwrap()
         .check(src, &cancellation)

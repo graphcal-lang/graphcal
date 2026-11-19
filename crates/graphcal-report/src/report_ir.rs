@@ -9,6 +9,9 @@
 use std::collections::BTreeMap;
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::tir::typed::CheckedDag;
+use graphcal_compiler::tir::typed::declaration_view::{DeclarationKind, ValueDeclaration};
 use graphcal_eval::eval::{AssertResult, EvalAssertion, EvalOutputView, EvalResult};
 use thiserror::Error;
 
@@ -110,12 +113,15 @@ pub struct SourceDigest {
     pub sha256: String,
 }
 
+/// `///` captions of value declarations, by declaration identity.
+pub type DocCaptions = BTreeMap<ResolvedDeclName, String>;
+
 /// Everything needed to derive one auto-report.
 pub struct ReportInputs<'a> {
     pub title: &'a str,
     pub result: &'a EvalResult,
-    /// Doc captions keyed by declaration display name.
-    pub docs: &'a BTreeMap<String, String>,
+    /// Doc captions of value declarations, keyed by identity.
+    pub docs: &'a DocCaptions,
     pub provenance: Provenance,
 }
 
@@ -126,20 +132,19 @@ pub enum ReportBuildError {
     UnknownPlotReference(#[from] UnknownPlotReference),
 }
 
-/// Collect `///` doc captions from one entry file, keyed by name.
+/// Captions of the entry DAG's own value declarations, keyed by identity.
 ///
-/// Nested `dag` declarations are intentionally skipped: their members
-/// surface under instance-qualified names, not bare ones.
+/// Keying by the checked declaration identity (not by name) keeps a unit,
+/// type or index that shares a parameter's name from captioning it, and an
+/// included DAG's members (reported under other identities) out.
 #[must_use]
-pub fn collect_doc_captions(
-    file: &graphcal_compiler::desugar::desugared_ast::File,
-) -> BTreeMap<String, String> {
-    file.declarations
-        .iter()
-        .filter_map(|declaration| {
-            let doc = declaration.doc.as_ref()?;
-            let name = declaration.kind.declared_name()?;
-            Some((name.atom().to_string(), doc.text().to_string()))
+pub fn collect_doc_captions(root: &CheckedDag) -> DocCaptions {
+    root.declarations()
+        .filter_map(|declaration| match declaration.kind() {
+            DeclarationKind::Value(ValueDeclaration { doc: Some(doc), .. }) => {
+                Some((declaration.identity().clone(), doc.to_string()))
+            }
+            _ => None,
         })
         .collect()
 }
@@ -176,7 +181,7 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
             },
         };
         let card = ValueCard {
-            doc: inputs.docs.get(&name).cloned(),
+            doc: inputs.docs.get(&entry.identity).cloned(),
             name,
             kind: entry.category,
             body,

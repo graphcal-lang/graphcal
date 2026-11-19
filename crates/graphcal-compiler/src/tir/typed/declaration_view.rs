@@ -60,7 +60,7 @@ pub struct ValueDeclaration<'d> {
     pub span: Span,
     /// The source range of its defining expression after `=`, enclosing
     /// parentheses included: a const body, a param default, or a node
-    /// formula. `None` for a required param or a `todo` node.
+    /// formula (a `todo` hole included). `None` only for a required param.
     pub definition: Option<Span>,
     /// Its `///` documentation, if any.
     pub doc: Option<&'d str>,

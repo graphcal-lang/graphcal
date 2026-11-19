@@ -7,7 +7,7 @@ use arrow_schema::{DataType, Field, Fields, Metadata, Schema, SchemaRef};
 use thiserror::Error;
 
 use super::metadata::{FieldMetadata, METADATA_KEY, SchemaMetadata, StreamKind};
-use super::value_array::data_type;
+use super::value_array::{Presence, data_type};
 use crate::label::PortName;
 use crate::session::SessionSchema;
 use crate::unit_scale::SiScale;
@@ -86,12 +86,15 @@ pub fn input_fields(session: &SessionSchema) -> Fields {
         .inputs()
         .iter()
         .map(|input| {
-            Field::new(input.name().as_str(), data_type(input.wire()), false).with_metadata(
-                metadata(&FieldMetadata::Input {
-                    wire: input.wire().clone(),
-                    domain: input.domain().copied(),
-                }),
+            Field::new(
+                input.name().as_str(),
+                data_type(input.wire(), Presence::Always),
+                false,
             )
+            .with_metadata(metadata(&FieldMetadata::Input {
+                wire: input.wire().clone(),
+                domain: input.domain().copied(),
+            }))
         })
         .collect()
 }
@@ -105,20 +108,25 @@ pub fn request_schema(session: &SessionSchema) -> SchemaRef {
     ))
 }
 
-/// The fields of `session`'s read outputs in session order: one nullable
-/// field per output, named after it and carrying its wire type as
-/// `graphcal` metadata.
+/// The fields of `session`'s read outputs in session order.
+///
+/// There is one nullable field per output, named after it and carrying its
+/// wire type as `graphcal` metadata. Every nested child is nullable too, and
+/// null exactly below a null value.
 #[must_use]
 pub fn output_fields(session: &SessionSchema) -> Fields {
     session
         .outputs()
         .iter()
         .map(|output| {
-            Field::new(output.name().as_str(), data_type(output.wire()), true).with_metadata(
-                metadata(&FieldMetadata::Output {
-                    wire: output.wire().clone(),
-                }),
+            Field::new(
+                output.name().as_str(),
+                data_type(output.wire(), Presence::Nullable),
+                true,
             )
+            .with_metadata(metadata(&FieldMetadata::Output {
+                wire: output.wire().clone(),
+            }))
         })
         .collect()
 }

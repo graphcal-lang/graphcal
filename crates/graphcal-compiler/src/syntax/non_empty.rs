@@ -6,7 +6,7 @@
 //! type instead.
 
 use std::num::NonZeroUsize;
-use std::ops::{Index, IndexMut};
+use std::ops::Index;
 
 use thiserror::Error;
 
@@ -91,18 +91,6 @@ impl<T> AtLeastTwo<T> {
 }
 
 impl<T> AtLeastTwo<T> {
-    /// Borrow the elements as a slice.
-    #[must_use]
-    pub fn as_slice(&self) -> &[T] {
-        &self.items
-    }
-
-    /// The first element.
-    #[must_use]
-    pub fn first(&self) -> &T {
-        &self.items[0]
-    }
-
     /// Map owned items while preserving the two-or-more invariant.
     #[must_use]
     pub fn map<U>(self, f: impl FnMut(T) -> U) -> AtLeastTwo<U> {
@@ -247,6 +235,14 @@ impl<T> NonEmpty<T> {
         self.items.push(item);
     }
 
+    /// Borrow every item, preserving non-emptiness.
+    #[must_use]
+    pub fn as_refs(&self) -> NonEmpty<&T> {
+        NonEmpty {
+            items: self.items.iter().collect(),
+        }
+    }
+
     /// Map borrowed items while preserving non-emptiness.
     #[must_use]
     pub fn map_ref<U>(&self, f: impl FnMut(&T) -> U) -> NonEmpty<U> {
@@ -282,20 +278,6 @@ impl<T> NonEmpty<T> {
         Ok(NonEmpty {
             items: self.items.iter().map(f).collect::<Result<_, _>>()?,
         })
-    }
-}
-
-impl<T> TryFrom<Vec<T>> for NonEmpty<T> {
-    type Error = EmptyVecError;
-
-    fn try_from(value: Vec<T>) -> Result<Self, Self::Error> {
-        Self::try_from_vec(value)
-    }
-}
-
-impl<T> From<(T, Vec<T>)> for NonEmpty<T> {
-    fn from((first, rest): (T, Vec<T>)) -> Self {
-        Self::new(first, rest)
     }
 }
 
@@ -340,20 +322,6 @@ impl<T> Index<usize> for NonEmpty<T> {
     }
 }
 
-impl<T> IndexMut<usize> for NonEmpty<T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.items[index]
-    }
-}
-
-impl<T, const N: usize> TryFrom<[T; N]> for NonEmpty<T> {
-    type Error = EmptyVecError;
-
-    fn try_from(value: [T; N]) -> Result<Self, Self::Error> {
-        Self::try_from_vec(value.into_iter().collect())
-    }
-}
-
 /// A non-empty sequence whose elements are pairwise distinct.
 ///
 /// Order is preserved: consumers such as named-index variants treat the
@@ -394,6 +362,12 @@ impl<T: Eq + std::hash::Hash> NonEmptyUnique<T> {
 }
 
 impl<T> NonEmptyUnique<T> {
+    /// Borrow the distinct items as a non-empty sequence.
+    #[must_use]
+    pub const fn as_non_empty(&self) -> &NonEmpty<T> {
+        &self.items
+    }
+
     /// Borrow the distinct items in order.
     #[must_use]
     pub fn as_slice(&self) -> &[T] {
@@ -431,9 +405,9 @@ mod tests {
         assert_eq!(pair.clone().zip_exact(vec![3]), Err(vec![3]));
         assert_eq!(pair.clone().zip_exact(vec![3, 4, 5]), Err(vec![3, 4, 5]));
         let zipped = pair.zip_exact(vec!['a', 'b']).unwrap();
-        assert_eq!(zipped.as_slice(), &[(1, 'a'), (2, 'b')]);
+        assert_eq!(zipped.items.as_slice(), &[(1, 'a'), (2, 'b')]);
         let mapped = zipped.map(|(n, _)| n * 10);
-        assert_eq!(*mapped.first(), 10);
+        assert_eq!(mapped.items[0], 10);
         assert_eq!(mapped[1], 20);
         assert_eq!(mapped.into_iter().collect::<Vec<_>>(), vec![10, 20]);
     }

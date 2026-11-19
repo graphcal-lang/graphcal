@@ -146,7 +146,7 @@ fn check_rigid_value_bodies(
     ctx: &DimCheckContext<'_>,
     failure: RigidFailure<'_>,
 ) -> Result<(), Outcome<SemanticError>> {
-    for (kind, name, declaration, annotation, expression) in ctx
+    for (kind, name, origin, declaration, annotation, expression) in ctx
         .env
         .dag
         .consts()
@@ -154,6 +154,7 @@ fn check_rigid_value_bodies(
             (
                 DeclarationKind::ConstNode,
                 entry.name(),
+                entry.origin,
                 entry.identity(),
                 &entry.type_ann,
                 &*entry.expr,
@@ -163,6 +164,7 @@ fn check_rigid_value_bodies(
             (
                 DeclarationKind::Node,
                 entry.name(),
+                entry.origin,
                 entry.identity(),
                 &entry.type_ann,
                 &*entry.definition,
@@ -181,7 +183,7 @@ fn check_rigid_value_bodies(
             &body,
             failure,
             expression.span,
-            check_decl_expr_type(ctx, name, &declaration, annotation, expression),
+            check_decl_expr_type(ctx, origin, &declaration, annotation, expression),
         )?;
     }
     Ok(())

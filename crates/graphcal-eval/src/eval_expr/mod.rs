@@ -1,20 +1,24 @@
 mod aggregations;
 mod arithmetic;
+mod binary_scale;
 mod complex;
 mod context;
-mod conversions;
+mod coordinate_search;
 mod datetime;
+mod exact_binary_sum;
 mod hir_eval;
 pub mod j2000_seconds;
+mod kernel_checkpoint;
 mod linear_algebra;
 mod linear_algebra_error;
 mod linear_algebra_lu;
 pub mod numeric;
 mod operations;
 mod presentation;
+mod product_sum;
+mod range_safe_product;
 mod runtime_failure;
 mod unit_scale;
-mod work_budget;
 
 pub use crate::constant_pools::RuntimeValueMap;
 pub use crate::runtime_value::RuntimeValue;

@@ -5,36 +5,27 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use graphcal_compiler::declaration_category::DeclCategory;
-use graphcal_compiler::desugar::desugared_ast::{Expr, ExprKind as AstExprKind};
+use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
-use graphcal_compiler::hir::ExprLoweringContext;
-use graphcal_compiler::hir::expr::ExprKind as HirExprKind;
-use graphcal_compiler::hir::lower::{GenericScope, ModuleScope};
 use graphcal_compiler::outcome::{CancellationMode, Outcome, without_cancellation};
 use graphcal_compiler::resolve::ModuleResolver;
 use graphcal_compiler::semantic::checked_type::CheckedType;
-use graphcal_compiler::semantic::index_def::ConcreteIndexKind;
-use graphcal_compiler::semantic::time_scale::TimeScale;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::index::IndexError;
 use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::source_registry::RegisteredSource;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::static_interface::StaticInputKind;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::{IndexEntryKey, IndexVariantName};
 use graphcal_compiler::syntax::module_name::ScopedName;
-use graphcal_compiler::syntax::span::Span;
-use graphcal_eval::runtime_value::{IndexAxis, KeyValue, RuntimeValue};
+use graphcal_eval::runtime_value::RuntimeValue;
 use miette::{NamedSource, SourceSpan};
-use thiserror::Error;
 
 use crate::binding_error::{BindingError, BindingValueKind};
 use crate::compile_error::CompileError;
-use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_eval::domain_constraint::{ResolvedDomainConstraint, ResolvedDomainConstraintRef};
-use graphcal_eval::eval::bindings::{RuntimeParameterBinding, RuntimeParameterBindings};
-use graphcal_eval::eval::types::{EvalResult, Value};
-use graphcal_eval::eval_expr::{EvalSession, RuntimeValueMap};
+use graphcal_eval::eval::bindings::RuntimeParameterBinding;
+use graphcal_eval::eval::types::EvalResult;
 
 use crate::project_compiler::{
     CheckedEntryInterface, CheckedProject, CheckedProjectRuntimeParts, CompiledFile,
@@ -42,38 +33,28 @@ use crate::project_compiler::{
 };
 use graphcal_eval::host_fns::HostFunctionRegistry;
 
-use super::model_schema::{
-    ModelIndexKind, ModelIndexSchema, ModelSchemaGraph, ModelSchemaGraphBuilder, ModelTypeId,
-    ModelValueSchema,
-};
+use super::model_schema::{ModelSchemaGraph, ModelSchemaGraphBuilder};
 use super::output::apply_include_debug_names;
 
-#[path = "binding_compile.rs"]
 mod binding_compile;
-#[path = "model_axis.rs"]
 mod model_axis;
-#[path = "model_port.rs"]
 mod model_port;
-#[path = "model_session.rs"]
 mod model_session;
-#[path = "model_unit.rs"]
 mod model_unit;
-#[path = "model_value.rs"]
 mod model_value;
-#[path = "model_wire.rs"]
 mod model_wire;
+mod structured_source;
 
 use binding_compile::build_parameter_ports;
 pub use binding_compile::{
     ExternalValue, ParameterBindingRow, StructuredBindingError, StructuredBindingErrorKind,
-    StructuredBindingPathSegment, StructuredValueExpr,
+    StructuredBindingPathSegment, StructuredLiteral, StructuredLiteralError, StructuredValueExpr,
 };
 pub use model_port::{
-    InclusiveBounds, InclusiveBoundsError, ModelDefinitionError, ModelExecutionError,
-    ModelOutputPort, ModelRowFailure, ModelRowOutcome, ParameterDomain, ParameterPort,
-    PreparedModel,
+    InclusiveBounds, InclusiveBoundsError, ModelExecutionError, ModelOutputPort, ModelRowFailure,
+    ModelRowOutcome, ParameterDomain, ParameterPort,
 };
-pub use model_session::{ModelInterfaceError, ModelSession, ModelSessionError};
+pub use model_session::{FixedParameters, ModelInterfaceError, ModelSession, ModelSessionError};
 pub use model_unit::ModelUnitError;
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
@@ -105,13 +86,7 @@ pub struct ParameterValue {
     binding: RuntimeParameterBinding,
 }
 
-impl ParameterValue {
-    /// Parameter position this value was validated for.
-    #[must_use]
-    pub const fn position(&self) -> ParameterPosition {
-        self.position
-    }
-}
+impl ParameterValue {}
 
 /// Builder for one prepared-project binding row.
 pub struct ParameterBindingBuilder<'project> {
@@ -147,7 +122,7 @@ impl ParameterBindingBuilder<'_> {
             .map_err(|error| CompileError::ExternalBinding {
                 name: name.clone(),
                 reason: error.to_string(),
-                src: src.clone(),
+                src: RegisteredSource::detached(src.name(), Arc::clone(src.inner())),
                 span,
             })?;
         self.bind_value(value)
@@ -225,52 +200,6 @@ impl ParameterBindingBuilder<'_> {
             RuntimeParameterBinding::plain(RuntimeValue::Bool(value)),
         )
     }
-
-    /// Bind a named-index category by its typed variant identity.
-    pub fn bind_named_key(
-        &mut self,
-        position: ParameterPosition,
-        variant: &IndexVariantName,
-    ) -> Result<(), CompileError> {
-        let port = self.project.port_at(position)?;
-        let CheckedType::Key(index) = &port.declared_type else {
-            return Err(self.project.binding_kind_error(port, BindingValueKind::Key));
-        };
-        // A checked `Key<I>` port type names an index the checked program defines.
-        let Some(axis) = IndexAxis::resolve(self.project.tir(), index) else {
-            return Err(CompileError::semantic(
-                SemanticError::internal_error(
-                    format!(
-                        "index `{index}` of parameter `{}` is not defined",
-                        port.name
-                    ),
-                    self.project.source,
-                    DiagnosticAnchor::Source(port.span),
-                ),
-                &self.project.sources,
-            ));
-        };
-        if !matches!(axis.kind(), ConcreteIndexKind::Named { .. }) {
-            return Err(self.project.port_error(port, |name, src, span| {
-                BindingError::KeyIndexNotNamed { name, src, span }
-            }));
-        }
-        let Some(key) = KeyValue::for_entry(axis, &IndexEntryKey::named(variant.clone())) else {
-            return Err(self.project.port_error(port, |name, src, span| {
-                BindingError::UnknownCategory {
-                    name,
-                    variant: variant.clone(),
-                    index: index.clone(),
-                    src,
-                    span,
-                }
-            }));
-        };
-        self.insert(
-            position,
-            RuntimeParameterBinding::plain(RuntimeValue::Key(key)),
-        )
-    }
 }
 struct ProjectOutputAssembly {
     output_surface: HashSet<ScopedName>,
@@ -293,6 +222,24 @@ pub struct PreparedProject {
     output_ports: Vec<ModelOutputPort>,
     schema_graph: Arc<ModelSchemaGraph>,
     output_assembly: ProjectOutputAssembly,
+}
+
+impl PreparedProject {
+    /// The named `entries` in parameter-port order, followed by the names
+    /// that name no parameter, by name. Binding a map in this order makes
+    /// the error reported for several bad bindings independent of the map's
+    /// iteration order.
+    fn in_parameter_order<'a, V>(
+        &self,
+        entries: impl IntoIterator<Item = (&'a DeclName, V)>,
+    ) -> Vec<(&'a DeclName, V)> {
+        let mut entries = entries.into_iter().collect::<Vec<_>>();
+        entries.sort_by_key(|(name, _)| {
+            let port = self.parameter_lookup.get(*name).copied();
+            (port.is_none(), port, *name)
+        });
+        entries
+    }
 }
 
 impl std::fmt::Debug for PreparedProject {
@@ -593,12 +540,34 @@ impl PreparedProject {
                 continue;
             };
             if let Some(imported) = self.output_assembly.imported_values.get(name) {
+                let value = match imported.value().value() {
+                    Ok(value) => value,
+                    Err(unfinished) => {
+                        let module_paths = self.output_assembly.display_names.module_paths();
+                        entries.push(graphcal_eval::eval::EvalEntry {
+                            name: name.clone(),
+                            outcome: Err(unfinished.reason(imported.value().key()).map_names(
+                                |declaration| {
+                                    module_paths
+                                        .name(declaration.owner(), declaration.leaf())
+                                        .map_or_else(
+                                            || {
+                                                graphcal_eval::eval::OutputDeclName::Unnamed(
+                                                    declaration.clone(),
+                                                )
+                                            },
+                                            graphcal_eval::eval::OutputDeclName::Invoked,
+                                        )
+                                },
+                            )),
+                            category: decl_type,
+                            identity: imported.value().key().clone(),
+                        });
+                        continue;
+                    }
+                };
                 let presented = presentations.get(imported.value().key()).map_or_else(
-                    || {
-                        graphcal_eval::runtime_presentation::PresentedRef::plain(
-                            imported.value().value(),
-                        )
-                    },
+                    || graphcal_eval::runtime_presentation::PresentedRef::plain(value),
                     |presented| presented.as_ref(),
                 );
                 let (value, diagnostics) = graphcal_eval::eval::public_projection::project(
@@ -754,7 +723,7 @@ impl<Mode: CancellationMode> ProjectCompiler<'_, HostFunctionRegistry, Mode> {
         let prepared = self.prepare()?;
         mode.run(|cancellation| {
             let mut bindings = prepared.binding_builder();
-            for (name, expression) in overrides {
+            for (name, expression) in prepared.in_parameter_order(overrides) {
                 cancellation.checkpoint()?;
                 bindings.bind_expression(name, expression)?;
             }

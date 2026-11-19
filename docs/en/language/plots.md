@@ -137,7 +137,8 @@ All channels of one plot are flattened onto a single shared row set:
 
 Booleans encode as the labels `"true"`/`"false"`, index keys as their
 rendered form (label, position, or coordinate), datetimes as ISO 8601
-timestamps with a temporal axis, and numbers as quantitative data. Plot a
+timestamps on a temporal axis titled "Datetime (UTC)" (a datetime in another
+time scale is plotted as its UTC instant), and numbers as quantitative data. Plot a
 coordinate axis quantitatively by extracting the coordinate explicitly
 (`for t: Step { coord(t) }`).
 

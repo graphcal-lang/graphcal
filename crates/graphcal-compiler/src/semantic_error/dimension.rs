@@ -65,29 +65,59 @@ pub struct PlotChannelAxes {
     pub axes: Vec<IndexTypeRef<Symbolic>>,
 }
 
-impl std::fmt::Display for PlotChannelAxes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "`{}` ranges over ", self.channel)?;
-        if self.axes.is_empty() {
-            return f.write_str("no index");
+impl PlotChannelAxes {
+    /// Render the channel's axes, owner-qualifying a declared axis only when
+    /// `qualify` says its source spelling alone would be ambiguous.
+    fn render(&self, qualify: &dyn Fn(&IndexTypeRef<Symbolic>) -> bool) -> String {
+        let axes = self
+            .axes
+            .iter()
+            .map(|index| match index.declared_resolved() {
+                Some(declared) if qualify(index) => format!("`{declared}`"),
+                _ => format!("`{}`", index.display_name()),
+            })
+            .collect::<Vec<_>>();
+        if axes.is_empty() {
+            format!("`{}` ranges over no index", self.channel)
+        } else {
+            format!("`{}` ranges over {}", self.channel, axes.join(" × "))
         }
-        for (position, index) in self.axes.iter().enumerate() {
-            if position > 0 {
-                f.write_str(" × ")?;
-            }
-            match index.declared_resolved() {
-                Some(declared) => declared.fmt(f)?,
-                None => index.display_name().fmt(f)?,
-            }
-        }
-        Ok(())
     }
 }
 
+/// One channel alone, with every axis in its source spelling.
+impl std::fmt::Display for PlotChannelAxes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.render(&|_| false))
+    }
+}
+
+/// All channels of one mismatch. Axes are spelled as written, except that two
+/// distinct axes with one spelling (`a::Axis` and `b::Axis`) are qualified by
+/// their owners so the diagnostic does not contradict itself.
 fn format_channel_axes(channels: &[PlotChannelAxes]) -> String {
+    let mut owners_by_spelling: std::collections::HashMap<
+        &crate::syntax::index_name::IndexName,
+        std::collections::HashSet<&crate::resolved_name::ResolvedIndexName>,
+    > = std::collections::HashMap::new();
+    for index in channels.iter().flat_map(|channel| &channel.axes) {
+        if let (Some(spelling), Some(identity)) = (index.declared_name(), index.declared_resolved())
+        {
+            owners_by_spelling
+                .entry(spelling)
+                .or_default()
+                .insert(identity);
+        }
+    }
+    let qualify = |index: &IndexTypeRef<Symbolic>| {
+        index
+            .declared_name()
+            .and_then(|spelling| owners_by_spelling.get(spelling))
+            .is_some_and(|owners| owners.len() > 1)
+    };
     channels
         .iter()
-        .map(ToString::to_string)
+        .map(|channel| channel.render(&qualify))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -193,6 +223,18 @@ impl PartialEq for DatetimeLiteralError {
 
 impl Eq for DatetimeLiteralError {}
 
+impl DatetimeLiteralError {
+    /// Whether the literal was rejected for naming a leap second (`:60`).
+    #[must_use]
+    pub const fn is_leap_second(&self) -> bool {
+        matches!(
+            self,
+            Self::Offset(crate::datetime_literal::ParseOffsetDateTimeLiteralError::LeapSecond)
+                | Self::Civil(crate::datetime_literal::ParseCivilDateTimeLiteralError::LeapSecond)
+        )
+    }
+}
+
 impl std::fmt::Display for DatetimeLiteralError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -201,6 +243,25 @@ impl std::fmt::Display for DatetimeLiteralError {
             Self::Zoned(error) => error.fmt(f),
             Self::Epoch(error) => error.fmt(f),
         }
+    }
+}
+
+/// Datetime arithmetic that `Datetime<UTC>` does not define, because a UTC
+/// reading skips every leap second.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UtcArithmetic {
+    /// `Datetime<UTC> - Datetime<UTC>`.
+    Difference,
+    /// `Datetime<UTC> ± Time` or `Time + Datetime<UTC>`.
+    Shift,
+}
+
+impl std::fmt::Display for UtcArithmetic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Difference => "the difference of two `Datetime<UTC>` values",
+            Self::Shift => "shifting a `Datetime<UTC>` by a duration",
+        })
     }
 }
 
@@ -233,6 +294,10 @@ pub enum DimensionError {
     NonConstUnitInConst { name: UnitRef },
     #[error("dimension exponent overflow")]
     DimensionOverflow,
+    #[error("`/` is not defined for two `Int` operands")]
+    IntOperandDivision,
+    #[error("{operation} is not defined")]
+    UtcDatetimeArithmetic { operation: UtcArithmetic },
     #[error("dimension mismatch: expected {expected}, found {found}")]
     DimensionMismatch {
         expected: Box<MismatchOperand>,
@@ -280,8 +345,8 @@ pub enum DimensionError {
         declared: DimensionSpelling,
         definition: DimensionSpelling,
     },
-    #[error("dynamic unit `{name}` requires a scalar Dimensionless scale, but found {found}")]
-    DynamicUnitScaleTypeMismatch { name: UnitRef, found: TypeSpelling },
+    #[error("unit `{name}` requires an Int or scalar Dimensionless scale, but found {found}")]
+    UnitScaleTypeMismatch { name: UnitRef, found: TypeSpelling },
     #[error("unknown unit `{name}`")]
     UnknownUnit { name: UnitRef },
     #[error("unknown dimension `{name}`")]
@@ -313,6 +378,8 @@ pub enum DimensionError {
         dim: DimensionSpelling,
         rejection: BaseUnitRejection,
     },
+    #[error("cannot declare unit `{name}` over required dimension port `{port}`")]
+    UnitOverRequiredDimensionPort { name: UnitName, port: DimName },
     #[error("user-defined units on dimension `{dim}` are not supported")]
     AffineProneUnitDefinition { dim: DimensionSpelling },
     // --- Domain constraint errors ---
@@ -380,6 +447,8 @@ impl DiagnosticKind for DimensionError {
             Self::NonConstUnitInConst { .. } => "graphcal::D018",
             Self::DimensionOverflow => "graphcal::D010",
             Self::DimensionMismatch { .. } => "graphcal::D001",
+            Self::IntOperandDivision => "graphcal::D043",
+            Self::UtcDatetimeArithmetic { .. } => "graphcal::D044",
             Self::IndexedShapeMismatch { .. } => "graphcal::D011",
             Self::LinearAlgebraShapeMismatch { .. } => "graphcal::D022",
             Self::IndexedComparisonOperand { .. } => "graphcal::D019",
@@ -389,7 +458,7 @@ impl DiagnosticKind for DimensionError {
             Self::MaterializedShapeTooLarge { .. } => "graphcal::D035",
             Self::DimensionMismatchInAnnotation { .. } => "graphcal::D002",
             Self::UnitDefinitionDimensionMismatch { .. } => "graphcal::D031",
-            Self::DynamicUnitScaleTypeMismatch { .. } => "graphcal::D032",
+            Self::UnitScaleTypeMismatch { .. } => "graphcal::D032",
             Self::UnknownUnit { .. } => "graphcal::D003",
             Self::UnknownDimension { .. } => "graphcal::D004",
             Self::CyclicDimension { .. } => "graphcal::D008",
@@ -399,7 +468,8 @@ impl DiagnosticKind for DimensionError {
             Self::ConversionDimensionMismatch { .. } => "graphcal::D006",
             Self::NestedConversion => "graphcal::D012",
             Self::IneffectiveConversion => "graphcal::D013",
-            Self::InvalidBaseUnitDeclaration { .. } => "graphcal::D036",
+            Self::InvalidBaseUnitDeclaration { .. }
+            | Self::UnitOverRequiredDimensionPort { .. } => "graphcal::D036",
             Self::AffineProneUnitDefinition { .. } => "graphcal::D014",
             Self::InvalidTimezone { .. } => "graphcal::D007",
             Self::InvalidDatetimeLiteral { .. } => "graphcal::D028",
@@ -431,6 +501,8 @@ impl DiagnosticKind for DimensionError {
             Self::NonConstUnitInConst { .. } => Some("unit is not const".to_owned()),
             Self::DimensionOverflow => Some("overflow here".to_owned()),
             Self::DimensionMismatch { found, .. } => Some(found.found_label()),
+            Self::IntOperandDivision => Some("both operands are Int".to_owned()),
+            Self::UtcDatetimeArithmetic { .. } => Some("UTC readings skip leap seconds".to_owned()),
             Self::IndexedShapeMismatch { rhs, .. } => Some(format!("has type {rhs}")),
             Self::LinearAlgebraShapeMismatch { mismatch, .. } => {
                 Some(format!("found {}", mismatch.found()))
@@ -452,7 +524,7 @@ impl DiagnosticKind for DimensionError {
             Self::UnitDefinitionDimensionMismatch { definition, .. } => {
                 Some(format!("this unit expression has dimension {definition}"))
             }
-            Self::DynamicUnitScaleTypeMismatch { found, .. } => {
+            Self::UnitScaleTypeMismatch { found, .. } => {
                 Some(format!("this scale expression has type {found}"))
             }
             Self::UnknownUnit { .. } => Some("unknown unit".to_owned()),
@@ -481,6 +553,9 @@ impl DiagnosticKind for DimensionError {
                 }
                 BaseUnitRejection::NotBaseDimension => format!("`{dim}` is not a base dimension"),
             }),
+            Self::UnitOverRequiredDimensionPort { port, .. } => Some(format!(
+                "`{port}` is a required port; the binding owns its canonical unit"
+            )),
             Self::AffineProneUnitDefinition { .. } => {
                 Some("unit defined on an affine-prone dimension".to_owned())
             }
@@ -522,6 +597,9 @@ impl DiagnosticKind for DimensionError {
             Self::NonConstUnitInConst { .. } => Some("`const node` bodies and `const unit` definitions can only use prelude units, `base unit`, or `const unit` declarations; use `node` or plain `unit` for runtime-unit calculations".to_owned()),
             Self::DimensionOverflow => Some("dimension exponents are stored as `i32`; reduce the magnitude of the exponent".to_owned()),
             Self::DimensionMismatch { help, .. } => Some(help.to_string()),
+            Self::IntOperandDivision => Some("integer division must name its rounding. `div_trunc(a, b)` rounds toward zero and reproduces the previous result of `a / b`, but it may not be the rounding you need: `div_floor(a, b)` or `div_ceil(a, b)` is often intended. For a real quotient write `to_float(a) / b`. While `a` is below `2 ^ 52` in magnitude, `to_int(round(to_float(a) / b))` gives the nearest Int and `to_int(to_float(a) / b)` fails unless the division is exact; for larger values, binary64 rounding can break both guarantees".to_owned()),
+            Self::UtcDatetimeArithmetic { operation: UtcArithmetic::Difference } => Some("a UTC difference across a leap second is one second short of the elapsed time; subtract in TAI instead, for example `to_tai(@end) - to_tai(@start)`".to_owned()),
+            Self::UtcDatetimeArithmetic { operation: UtcArithmetic::Shift } => Some("a UTC shift across a leap second lands one second off; shift in TAI and convert back, for example `to_utc(to_tai(@start) + 90.0 min)`".to_owned()),
             Self::LinearAlgebraShapeMismatch { function, mismatch } => Some(mismatch.help(*function)),
             Self::FloatPowerExponent { replacement } => Some(replacement.as_ref().map_or_else(
                 || "write the exponent as an exact integer or parenthesized rational".to_owned(),
@@ -531,6 +609,7 @@ impl DiagnosticKind for DimensionError {
                 BaseUnitRejection::CanonicalUnitTaken { .. } => "a dimension can have only one canonical base unit; if another multiplicative unit is valid for this dimension, define its scale explicitly with `const unit` or `unit`".to_owned(),
                 BaseUnitRejection::NotBaseDimension => format!("`base unit` can only define the canonical unit of a bare base dimension; define `{name}` with an explicit `const unit` or `unit` scale instead"),
             }),
+            Self::UnitOverRequiredDimensionPort { name, port } => Some(format!("a template cannot define units over a required dimension port: each include binds `{port}` to a concrete dimension that already has its own units; remove `{name}` and take values of `{port}` through a `param` input port, which the including module writes in its own units")),
             Self::IndexedShapeMismatch { .. } => Some("element-wise operands must be indexed by the same axes in the same order; an unindexed operand broadcasts to every key".to_owned()),
             Self::IndexedComparisonOperand { .. } => Some("comparison operators do not broadcast; use an explicit `for` comprehension and compare individual indexed elements in its body".to_owned()),
             Self::MultiAxisAggregation { .. } => Some("reduce one axis at a time with an explicit `for` comprehension; total- and partial-axis aggregation are not yet defined".to_owned()),
@@ -539,7 +618,7 @@ impl DiagnosticKind for DimensionError {
             Self::MaterializedShapeTooLarge { maximum, .. } => Some(format!("reduce one or more axis cardinalities so their product is at most {maximum}")),
             Self::DimensionMismatchInAnnotation { .. } => Some("the declared type must match the inferred dimension of the expression".to_owned()),
             Self::UnitDefinitionDimensionMismatch { .. } => Some("the unit expression on the right-hand side must have exactly the declared dimension".to_owned()),
-            Self::DynamicUnitScaleTypeMismatch { .. } => Some("use an unindexed Dimensionless quantity; Bool, Int, structures, indexed values, and dimensioned quantities are not valid unit scales".to_owned()),
+            Self::UnitScaleTypeMismatch { .. } => Some("use an Int or an unindexed Dimensionless quantity; Bool, structures, indexed values, and dimensioned quantities are not valid unit scales".to_owned()),
             Self::UnknownUnit { .. } => Some("a bare unit name must be declared in this file, selectively imported, or part of the prelude; units of a module imported with an alias are referenced as `alias::unit`".to_owned()),
             Self::UnknownDimension { .. } => Some("dimension must be declared or part of the prelude".to_owned()),
             Self::CyclicDimension { .. } => Some("derived dimensions cannot form dependency cycles".to_owned()),
@@ -547,9 +626,10 @@ impl DiagnosticKind for DimensionError {
             Self::RuntimeExponentForDimensionedBase => Some("use an exact integer such as `2` or a parenthesized rational such as `(3/2)`".to_owned()),
             Self::ConversionDimensionMismatch { .. } => Some("the `->` conversion operator can only change units within the same dimension".to_owned()),
             Self::NestedConversion => Some("an expression carries at most one `->` target; remove the inner conversion — only the outermost target takes effect".to_owned()),
-            Self::IneffectiveConversion => Some("a conversion only affects how a declaration's final value is displayed; move it to the top level of the declaration (or a selected `if`/`match` branch, constructor field, map entry, for-comprehension body, or scan/unfold init), or remove it".to_owned()),
+            Self::IneffectiveConversion => Some("a conversion only affects how a declaration's final value is displayed; move it to the top level of the declaration (or a selected `if`/`match` branch, constructor field, map entry, for-comprehension body, `scan` source, or `scan`/`unfold` init or step body), or remove it".to_owned()),
             Self::AffineProneUnitDefinition { .. } => Some("common units of this dimension (e.g. \u{b0}C, \u{b0}F for Temperature) are affine scales with an offset; a purely multiplicative `unit` definition would display silently wrong values. Keep values in the base unit, or model the offset explicitly in your expressions".to_string()),
             Self::InvalidTimezone { tzdb_version, .. } => Some(format!("use a name present in Graphcal's bundled IANA tzdb {tzdb_version}, such as \"UTC\", \"America/New_York\", or \"Asia/Tokyo\"")),
+            Self::InvalidDatetimeLiteral { reason, .. } if reason.is_leap_second() => Some("leap seconds are not supported in any time scale; to name the instant of a UTC leap second, write it in TAI, for example `epoch<TAI>(\"2017-01-01T00:00:36\")` for `2016-12-31T23:59:60Z`".to_owned()),
             Self::InvalidDatetimeLiteral { expectation, .. } => Some(format!("{expectation}")),
             Self::EpochTimeScaleArgumentCount { .. } => Some("write a supported scale in angle brackets, for example `epoch<TT>(\"2024-11-05T12:00:00\")`".to_owned()),
             Self::InvalidEpochTimeScaleArgument | Self::UnsupportedEpochTimeScale { .. } => Some(format!(
@@ -571,6 +651,8 @@ impl DiagnosticKind for DimensionError {
             | Self::NonConstUnitInConst { .. }
             | Self::DimensionOverflow
             | Self::DimensionMismatch { .. }
+            | Self::IntOperandDivision
+            | Self::UtcDatetimeArithmetic { .. }
             | Self::IndexedShapeMismatch { .. }
             | Self::LinearAlgebraShapeMismatch { .. }
             | Self::IndexedComparisonOperand { .. }
@@ -580,7 +662,7 @@ impl DiagnosticKind for DimensionError {
             | Self::MaterializedShapeTooLarge { .. }
             | Self::DimensionMismatchInAnnotation { .. }
             | Self::UnitDefinitionDimensionMismatch { .. }
-            | Self::DynamicUnitScaleTypeMismatch { .. }
+            | Self::UnitScaleTypeMismatch { .. }
             | Self::UnknownUnit { .. }
             | Self::UnknownDimension { .. }
             | Self::CyclicDimension { .. }
@@ -591,6 +673,7 @@ impl DiagnosticKind for DimensionError {
             | Self::NestedConversion
             | Self::IneffectiveConversion
             | Self::InvalidBaseUnitDeclaration { .. }
+            | Self::UnitOverRequiredDimensionPort { .. }
             | Self::AffineProneUnitDefinition { .. }
             | Self::InvalidTimezone { .. }
             | Self::InvalidDatetimeLiteral { .. }

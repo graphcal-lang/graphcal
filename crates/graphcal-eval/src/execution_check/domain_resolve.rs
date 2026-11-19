@@ -1,7 +1,6 @@
 //! Domain-bound resolution and compile-time constraint validation.
 
 use graphcal_compiler::declaration_category::ValueDeclCategory;
-use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::semantic_error::domain::{DomainBoundSpelling, DomainError, DomainSubject};
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -18,7 +17,7 @@ use graphcal_compiler::tir::typed::{
     CheckedDag, CheckedTir, DeclarationBody, ResolvedValueType, Scoped, StructFieldConstraintKey,
 };
 
-use crate::constant_pools::RuntimeValueMap;
+use crate::constant_pools::{ConstPool, RuntimeValueMap};
 use crate::deferred_field_checks::DeferredFieldChecks;
 use crate::domain_constraint::{
     DomainInstant, ResolvedDomainBound as EvaluatedDomainBound,
@@ -37,15 +36,17 @@ use std::rc::Rc;
 /// earlier by TIR checking.
 ///
 /// Const constraints are also checked against their already-evaluated values.
+///
+/// `const_values` holds the constants of every DAG under their canonical
+/// identities, the DAG's own included, so bounds read it without a per-DAG copy.
 pub(super) fn resolve_domain_constraints_for_dag(
     dag: &CheckedDag,
     const_values: &RuntimeValueMap,
-    all_const_values: &RuntimeValueMap,
+    consts: &ConstPool,
     ctx: &EvalSession<'_>,
 ) -> Result<HashMap<ResolvedDeclName, ResolvedDomainConstraint>, Outcome<SemanticError>> {
     let (tir, src, cancellation) = (ctx.tir, ctx.src, &ctx.cancellation);
     cancellation.checkpoint()?;
-    let visible_const_values = visible_values_with_imports(const_values, all_const_values);
 
     let mut constraints = HashMap::new();
     // Constants first, then parameters, then nodes, each in source order.
@@ -90,10 +91,11 @@ pub(super) fn resolve_domain_constraints_for_dag(
             domain_bounds,
             &DomainSubject::Declaration(name.clone()),
             target,
-            &visible_const_values,
+            const_values,
             BoundCheckingContext {
                 evaluation: &ctx.for_decl(&resolved_key).with_src(constraint_src),
                 bindings: &HashMap::new(),
+                consts,
             },
             constraint_src,
         )?;
@@ -121,6 +123,8 @@ pub(super) fn resolve_domain_constraints_for_dag(
 struct BoundCheckingContext<'a, 'b> {
     evaluation: &'a EvalSession<'b>,
     bindings: &'a HashMap<graphcal_compiler::hir::types::GenericParamId, u64>,
+    /// The constants, to reject a bound that reads an unfinished one.
+    consts: &'a ConstPool,
 }
 
 /// Evaluate a declaration's or field's stored HIR domain bounds into the
@@ -142,19 +146,10 @@ fn resolve_constraint_from_bounds(
             src,
             &"a quantity",
             |value, bound| {
-                let quantity = match value {
-                    RuntimeValue::Quantity(value) => *value,
-                    RuntimeValue::Int(value) => {
-                        match FiniteQuantity::try_new(
-                            exact_domain_int_bound(*value, src, bound.value.span)
-                                .map_err(Outcome::Failed)?,
-                        ) {
-                            Ok(quantity) => quantity,
-                            Err(_) => return Ok(None),
-                        }
-                    }
-                    _ => return Ok(None),
+                let RuntimeValue::Quantity(quantity) = value else {
+                    return Ok(None);
                 };
+                let quantity = *quantity;
                 Ok(Some((
                     quantity,
                     quantity_bound_spelling(&bound.value, quantity.get()),
@@ -222,6 +217,23 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             let tree = graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
                 ctx.evaluation.tir, scoped_bound, ctx.bindings,
             )?;
+            if let Some(constant) = tree
+                .root()
+                .referenced_declarations()
+                .into_iter()
+                .find(|declaration| ctx.consts.unfinished(declaration).is_some())
+            {
+                return Err(SemanticError::located(
+                    bound.src,
+                    bound.value.span,
+                    DomainError::DomainBoundReadsUnfinishedConstant {
+                        name: display_name.clone(),
+                        bound_name: bound.kind,
+                        constant: constant.leaf().clone(),
+                    },
+                )
+                .into());
+            }
             let runtime_value = eval_root(&tree, values, ctx.evaluation)?;
             let (value, display) = read(&runtime_value, bound)?.ok_or_else(|| {
                 SemanticError::internal_error(
@@ -282,6 +294,20 @@ fn collect_concrete_nominal_applications(
                 if let CheckedGenericArg::Type(type_arg) = arg {
                     collect_concrete_nominal_applications(type_arg, tir, src, applications)?;
                 }
+            }
+            // A required type the module leaves unbound (`pub(bind) type T;`)
+            // has no constructors, so it carries no field constraints; an
+            // include binds it to a concrete type checked where it is bound.
+            if tir
+                .struct_type_def(identity.resolved())
+                .is_some_and(|definition| {
+                    matches!(
+                        definition.kind(),
+                        graphcal_compiler::hir::nominal::NominalTypeKind::Required
+                    )
+                })
+            {
+                return Ok(());
             }
             let application = ConcreteNominalApplication {
                 identity: identity.clone(),
@@ -383,55 +409,43 @@ pub(super) fn resolve_struct_field_constraints(
     })
 }
 
-/// Evaluated constants whose field constraints are still being resolved.
-/// This is deliberately not an executable/checked DAG artifact.
-pub(super) struct DagConstScope<'a> {
-    pub values: &'a RuntimeValueMap,
-    pub source: SourceId,
+/// The source of every DAG of one checked TIR, at the DAG's position in its
+/// registry: field-bound diagnostics point into the source of the DAG that
+/// owns the nominal type.
+pub(super) struct DagSources {
+    by_position: Vec<SourceId>,
 }
 
-/// The constant scope of every DAG of one checked TIR, at the DAG's position
-/// in its registry.
-pub(super) struct ConstScopes<'a> {
-    by_position: Vec<DagConstScope<'a>>,
-}
-
-impl<'a> ConstScopes<'a> {
-    /// The scope `scope` gives each DAG of `tir`, in position order.
-    pub(super) fn new(
-        tir: &'a CheckedTir,
-        mut scope: impl FnMut(
-            graphcal_compiler::tir::typed::dag_position::DagPosition,
-            &'a CheckedDag,
-        ) -> DagConstScope<'a>,
-    ) -> Self {
+impl DagSources {
+    /// The source `source` gives each DAG of `tir`, in position order.
+    pub(super) fn new(tir: &CheckedTir, mut source: impl FnMut(&CheckedDag) -> SourceId) -> Self {
         Self {
             by_position: tir
                 .dag_registry()
                 .positioned()
-                .map(|(position, dag)| scope(position, dag))
+                .map(|(_, dag)| source(dag))
                 .collect(),
         }
     }
 
-    /// The constant scope of the DAG at `position` of the TIR the scopes
-    /// were made for.
-    fn at(
-        &self,
-        position: graphcal_compiler::tir::typed::dag_position::DagPosition,
-    ) -> &DagConstScope<'a> {
-        &self.by_position[position.index()]
+    /// The source of the DAG at `position` of the TIR the sources were made
+    /// for.
+    fn at(&self, position: graphcal_compiler::tir::typed::dag_position::DagPosition) -> SourceId {
+        self.by_position[position.index()]
     }
 }
 
-struct FieldConstraintResolutionContext<'a> {
-    tir: &'a CheckedTir,
-    const_scopes: &'a ConstScopes<'a>,
-    all_const_values: &'a RuntimeValueMap,
-    fallback_src: SourceId,
-    field_checks: &'a Rc<DeferredFieldChecks>,
-    sources: &'a SourceRegistry,
-    cancellation: &'a graphcal_compiler::cancellation::CancellationToken,
+/// What resolving the field constraints of a checked TIR reads.
+pub(super) struct FieldConstraintResolutionContext<'a> {
+    pub(super) tir: &'a CheckedTir,
+    pub(super) dag_sources: &'a DagSources,
+    /// The constants of every DAG under their canonical identities.
+    pub(super) const_values: &'a RuntimeValueMap,
+    pub(super) consts: &'a ConstPool,
+    pub(super) fallback_src: SourceId,
+    pub(super) field_checks: &'a Rc<DeferredFieldChecks>,
+    pub(super) sources: &'a SourceRegistry,
+    pub(super) cancellation: &'a graphcal_compiler::cancellation::CancellationToken,
 }
 
 type DagFieldConstraints = HashMap<
@@ -475,9 +489,7 @@ fn resolve_application_field_constraints(
             )
         })?;
     let type_def = nominal.definition();
-    let constants = ctx.const_scopes.at(nominal.position());
-    let owner_src = constants.source;
-    let visible_const_values = visible_values_with_imports(constants.values, ctx.all_const_values);
+    let owner_src = ctx.dag_sources.at(nominal.position());
     let nat_bindings = generic_nat_bindings(
         type_def,
         &application.generic_args,
@@ -496,7 +508,7 @@ fn resolve_application_field_constraints(
         let field = constrained.field();
         let field_semantics = field.semantics();
         let display_name = DomainSubject::ConstructorField(Box::new((
-            field.member().constructor().name().clone(),
+            field.member().constructor().name(),
             field.field().name().clone(),
         )));
         let first_bound = bounds.get().first();
@@ -511,10 +523,11 @@ fn resolve_application_field_constraints(
             bounds,
             &display_name,
             target,
-            &visible_const_values,
+            ctx.const_values,
             BoundCheckingContext {
                 evaluation: &application_ctx.with_src(*constraint_src),
                 bindings: &nat_bindings,
+                consts: ctx.consts,
             },
             *constraint_src,
         )?;
@@ -564,27 +577,13 @@ fn collect_field_constraint_applications(
 }
 
 pub(super) fn resolve_struct_field_constraints_for_dags(
-    tir: &CheckedTir,
-    const_scopes: &ConstScopes<'_>,
-    all_const_values: &RuntimeValueMap,
-    src: SourceId,
-    sources: &SourceRegistry,
-    cancellation: &graphcal_compiler::cancellation::CancellationToken,
-    field_checks: &Rc<DeferredFieldChecks>,
+    context: &FieldConstraintResolutionContext<'_>,
 ) -> Result<DagFieldConstraints, Outcome<SemanticError>> {
-    cancellation.checkpoint()?;
-    let context = FieldConstraintResolutionContext {
-        tir,
-        const_scopes,
-        all_const_values,
-        fallback_src: src,
-        field_checks,
-        sources,
-        cancellation,
-    };
+    context.cancellation.checkpoint()?;
+    let (tir, src) = (context.tir, context.fallback_src);
     let mut grouped = DagFieldConstraints::new();
     for application in collect_field_constraint_applications(tir, src)? {
-        let (owner, entries) = resolve_application_field_constraints(&application, &context)?;
+        let (owner, entries) = resolve_application_field_constraints(&application, context)?;
         grouped.entry(owner).or_default().extend(entries);
     }
     Ok(grouped)
@@ -598,29 +597,22 @@ fn resolve_struct_field_constraints_with_cancellation(
     sources: &SourceRegistry,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<HashMap<StructFieldConstraintKey, ResolvedDomainConstraint>, Outcome<SemanticError>> {
-    let empty = RuntimeValueMap::new();
-    let const_scopes = ConstScopes::new(tir, |_, dag| DagConstScope {
-        values: if dag.dag_id() == tir.root_dag_id() {
-            const_values
-        } else {
-            &empty
-        },
-        source: src,
-    });
-    let all_const_values = visible_values_with_imports(const_values, &empty);
+    let dag_sources = DagSources::new(tir, |_| src);
     let field_checks = Rc::new(DeferredFieldChecks::default());
-    let constraints = resolve_struct_field_constraints_for_dags(
-        tir,
-        &const_scopes,
-        &all_const_values,
-        src,
-        sources,
-        cancellation,
-        &field_checks,
-    )?
-    .into_values()
-    .flatten()
-    .collect();
+    let constraints =
+        resolve_struct_field_constraints_for_dags(&FieldConstraintResolutionContext {
+            tir,
+            dag_sources: &dag_sources,
+            const_values,
+            consts: &ConstPool::default(),
+            fallback_src: src,
+            field_checks: &field_checks,
+            sources,
+            cancellation,
+        })?
+        .into_values()
+        .flatten()
+        .collect();
     check_deferred_field_constraints(&field_checks, &constraints, cancellation)?;
     Ok(constraints)
 }
@@ -715,21 +707,6 @@ fn resolve_constraint_target(
     })
 }
 
-/// Format a bound expression for display (e.g., `"100 kg"`, `"0.01 N"`).
-///
-/// For simple expressions (numbers, quantity literals, unary negation), the
-/// original syntactic form is preserved. For complex expressions, the
-/// pre-evaluated SI value is displayed as a fallback — no re-evaluation needed.
-fn exact_domain_int_bound(
-    value: i64,
-    src: SourceId,
-    span: graphcal_compiler::syntax::span::Span,
-) -> Result<f64, SemanticError> {
-    crate::eval_expr::numeric::exact_i64_to_f64(value).map_err(|_| {
-        SemanticError::located(src, span, DomainError::InexactIntDomainBound { value })
-    })
-}
-
 /// How a quantity bound is spelled: as written when it is a literal, by its
 /// SI value otherwise.
 fn quantity_bound_spelling(
@@ -739,7 +716,6 @@ fn quantity_bound_spelling(
     use graphcal_compiler::hir::expr::ExprKind;
     match expr.kind() {
         ExprKind::Number(n) => DomainBoundSpelling::Number(*n),
-        ExprKind::Integer(n) => DomainBoundSpelling::Integer(*n),
         ExprKind::QuantityLiteral { value, unit } => DomainBoundSpelling::Quantity {
             value: *value,
             unit: unit.clone(),
@@ -751,20 +727,6 @@ fn quantity_bound_spelling(
         // Fallback: display the already-evaluated SI value.
         _ => DomainBoundSpelling::Number(si_value),
     }
-}
-
-/// Local constants shadow the constants visible from every checked DAG.
-fn visible_values_with_imports(
-    local_const_values: &RuntimeValueMap,
-    known_const_values: &RuntimeValueMap,
-) -> RuntimeValueMap {
-    let mut values = known_const_values.clone();
-    values.extend(
-        local_const_values
-            .iter()
-            .map(|(name, value)| (name.clone(), value.clone())),
-    );
-    values
 }
 
 #[cfg(test)]

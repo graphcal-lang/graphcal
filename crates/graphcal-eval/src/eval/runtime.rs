@@ -29,7 +29,7 @@ mod value_entries;
 
 use evaluated_root::EvaluatedRoot;
 pub use root_loop::{EvalLoopResult, run_eval_loop_with_bindings};
-pub use root_outcome::{RootFailure, RootOutcome};
+pub use root_outcome::{FailureOrigin, RootFailure, RootOutcome};
 
 /// One completed runtime evaluation before project-level public output assembly.
 ///

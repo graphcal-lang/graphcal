@@ -21,9 +21,13 @@
 //! record's schema metadata lets [`RecordSchema::decode`] restore the session
 //! schema without the model.
 //!
-//! Wire types map to `Float64` (quantity), `Int64` (int), `Boolean` (bool),
-//! and `Dictionary<Int32, Utf8>` (key). Received keys are resolved by their
-//! dictionary value, never by dictionary code.
+//! Wire types map to `Float64` (quantity, and datetime in seconds since
+//! J2000), `Struct{re, im}` of `Float64` (complex), `Int64` (int), `Boolean`
+//! (bool), `FixedSizeList` (indexed), and `Struct` (record or tagged union).
+//! A key maps by its axis: `Dictionary<Int32, Utf8>` on a named index,
+//! `UInt32` on `Fin(n)`, and `Float64` (the SI coordinate) on a coordinate
+//! index. Received named keys are resolved by their dictionary value, never
+//! by dictionary code.
 
 mod metadata;
 mod output;

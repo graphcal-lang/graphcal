@@ -4,6 +4,7 @@ use crate::builtin::{BuiltinFn, ConversionFn, DatetimeConstructorFn};
 use crate::dimension::Dimension;
 use crate::hir::expr::{Expr, ExprKind};
 use crate::outcome::Outcome;
+use crate::semantic::time_scale::TimeScale;
 use crate::semantic_error::SemanticError;
 use crate::semantic_error::dimension::DimensionError;
 use crate::semantic_error::dimension_mismatch::{
@@ -13,10 +14,12 @@ use crate::semantic_error::index::IndexError;
 
 use crate::semantic::checked_type::{CheckedType, Symbolic};
 use crate::tir::dim_check::helpers::expect_quantity;
+use crate::tir::operator_typing::{self, Operand};
 
 use super::context::Infer;
 
 impl Infer<'_> {
+    /// Infer `to_float(n)` or `to_int(x)`.
     pub(super) fn infer_hir_type_conversion(
         &self,
         kind: ConversionFn,
@@ -24,23 +27,15 @@ impl Infer<'_> {
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
         let arg_type = self.infer_arg(&args[0])?;
         match kind {
-            ConversionFn::ToFloat => {
-                if arg_type != CheckedType::Int {
-                    return Err(SemanticError::located(
-                        self.env.src,
-                        args[0].span,
-                        DimensionError::DimensionMismatch {
-                            expected: Box::new(MismatchOperand::Expected(OperandExpectation::Int)),
-                            found: Box::new(MismatchOperand::Type(
-                                arg_type.spelling(&self.env.registry.dimensions),
-                            )),
-                            help: Box::new(MismatchRule::ToFloatInt),
-                        },
-                    )
-                    .into());
-                }
-                Ok(CheckedType::Quantity(Dimension::dimensionless()))
-            }
+            ConversionFn::ToFloat => operator_typing::to_float_rule(
+                &Operand {
+                    ty: arg_type,
+                    span: args[0].span,
+                },
+                &self.env.registry.dimensions,
+                self.env.src,
+            )
+            .map_err(Outcome::Failed),
             ConversionFn::ToInt => {
                 // A `Fin`-axis key exposes its position: the position is the
                 // key's semantic content. Named and coordinate keys stay opaque.
@@ -277,6 +272,41 @@ impl Infer<'_> {
                 .observations()
                 .record_contextual(arg, self.env.src)
         })
+    }
+
+    /// `to_unix(t)` reads the label of a `Datetime<UTC>`; any other scale
+    /// must be converted explicitly with `to_utc` first (#2246, decision D2).
+    pub(super) fn infer_hir_to_unix(
+        &self,
+        name: BuiltinFn,
+        args: &[Expr],
+    ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
+        let arg_type = self.infer_arg(&args[0])?;
+        match arg_type {
+            CheckedType::Datetime(TimeScale::UTC) => {
+                Ok(CheckedType::Quantity(Dimension::dimensionless()))
+            }
+            CheckedType::Datetime(_) => Err(SemanticError::located(
+                self.env.src,
+                args[0].span,
+                DimensionError::DimensionMismatch {
+                    expected: Box::new(MismatchOperand::Type(
+                        CheckedType::<Symbolic>::Datetime(TimeScale::UTC)
+                            .spelling(&self.env.registry.dimensions),
+                    )),
+                    found: Box::new(MismatchOperand::Type(
+                        arg_type.spelling(&self.env.registry.dimensions),
+                    )),
+                    help: Box::new(MismatchRule::UnixTimeOfUtcOnly),
+                },
+            )
+            .into()),
+            _ => self.infer_hir_datetime_unary(
+                name,
+                args,
+                CheckedType::Quantity(Dimension::dimensionless()),
+            ),
+        }
     }
 
     pub(super) fn infer_hir_datetime_unary(

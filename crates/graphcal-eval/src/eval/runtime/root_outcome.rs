@@ -18,7 +18,7 @@ use graphcal_compiler::syntax::module_name::ScopedName;
 use graphcal_compiler::display::source_display_names::SourceDisplayNames;
 
 use crate::eval::output_decl_name::{OutputDeclName, OutputUnavailable};
-use crate::eval::types::{AssertResult, EvalAssertion, RuntimeUnavailable};
+use crate::eval::types::{AssertResult, EvalAssertion, NodeUnavailable, RuntimeUnavailable};
 use crate::eval_expr::{EvalSession, RuntimeValueMap};
 use crate::execution_plan::{Entry, ExecPlan};
 use crate::host_fns::HostFunctionRegistry;
@@ -53,6 +53,10 @@ pub enum RootFailure<'o> {
     Declaration {
         name: ScopedName,
         reason: OutputUnavailable,
+        /// The declarations that failed by themselves and that `reason`
+        /// fails because of, followed through every failed dependency; empty
+        /// when `reason` is itself such a failure.
+        origins: Vec<FailureOrigin>,
     },
     /// An assertion did not pass.
     Assertion {
@@ -61,6 +65,14 @@ pub enum RootFailure<'o> {
     },
     /// A call reached unfinished formulas of the DAG it invoked.
     UnfinishedCalls(Vec<OutputDeclName>),
+}
+
+/// A declaration that failed by itself, as opposed to failing because a
+/// dependency did: where a reported dependency failure originates.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FailureOrigin {
+    pub name: OutputDeclName,
+    pub message: String,
 }
 
 impl RootOutcome {
@@ -186,6 +198,7 @@ impl RootOutcome {
                 .map(|reason| RootFailure::Declaration {
                     name,
                     reason: names.present(reason),
+                    origins: self.failure_origins(reason, &names),
                 })
         });
         // Otherwise the smallest failed declaration of a semantic instance:
@@ -209,6 +222,7 @@ impl RootOutcome {
                 .map(|(_, name, reason)| RootFailure::Declaration {
                     name,
                     reason: names.present(reason),
+                    origins: self.failure_origins(reason, &names),
                 })
         });
         let assertion = || {
@@ -235,5 +249,52 @@ impl RootOutcome {
             })
         };
         declaration.or_else(assertion).or_else(unfinished)
+    }
+
+    /// The declarations that failed by themselves and that `reason` fails
+    /// because of, in identity order. Failed dependencies are followed until
+    /// a declaration whose own evaluation failed; dependencies that are only
+    /// unfinished are not failures and are not followed.
+    fn failure_origins(
+        &self,
+        reason: &RuntimeUnavailable,
+        names: &RootNames<'_>,
+    ) -> Vec<FailureOrigin> {
+        let mut visited = BTreeSet::new();
+        let mut origins = BTreeSet::new();
+        let mut pending = failed_dependencies(reason).to_vec();
+        while let Some(declaration) = pending.pop() {
+            if !visited.insert(declaration.clone()) {
+                continue;
+            }
+            match self.errors.get(&declaration) {
+                Some(NodeUnavailable::EvalFailed { .. }) => {
+                    origins.insert(declaration);
+                }
+                Some(dependent) => pending.extend(failed_dependencies(dependent).iter().cloned()),
+                // A failure recorded outside this evaluation's declarations,
+                // e.g. inside an invoked call, has its cause in its message.
+                None => {}
+            }
+        }
+        origins
+            .into_iter()
+            .filter_map(|declaration| match self.errors.get(&declaration) {
+                Some(NodeUnavailable::EvalFailed { message }) => Some(FailureOrigin {
+                    name: names.name(&declaration),
+                    message: message.clone(),
+                }),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// The dependencies whose failure `reason` reports.
+fn failed_dependencies(reason: &RuntimeUnavailable) -> &[ResolvedDeclName] {
+    match reason {
+        NodeUnavailable::DependencyFailed { failed_deps } => failed_deps.as_slice(),
+        NodeUnavailable::Blocked { failed_deps, .. } => failed_deps,
+        NodeUnavailable::EvalFailed { .. } | NodeUnavailable::Todo { .. } => &[],
     }
 }

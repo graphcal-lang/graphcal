@@ -1,0 +1,17 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+non-exhaustive map literal: missing 1 entries; first missing entry is (Mode#Boost, Phase#Cruise)
+    Diagnostic severity: error
+Begin snippet for non_exhaustive_map.gcl starting at line 2, column 1
+
+snippet line 2: index Phase = { Launch, Cruise };
+snippet line 3: node x: Dimensionless[Mode, Phase] = {
+    label starting at line 3, column 38: error here
+snippet line 4:     (Mode#Normal, Phase#Launch): 1.0,
+snippet line 5:     (Mode#Normal, Phase#Cruise): 1.0,
+snippet line 6:     (Mode#Boost, Phase#Launch): 1.0,
+snippet line 7: };
+    label ending at line 7, column 1: error here
+diagnostic code: graphcal::I033

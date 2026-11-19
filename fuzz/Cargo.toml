@@ -60,12 +60,47 @@ name = "generated_project"
 path = "fuzz_targets/generated_project.rs"
 test = false
 
+[[bin]]
+bench = false
+doc = false
+name = "json_parameters"
+path = "fuzz_targets/json_parameters.rs"
+test = false
+
+[[bin]]
+bench = false
+doc = false
+name = "model_request"
+path = "fuzz_targets/model_request.rs"
+test = false
+
+[[bin]]
+bench = false
+doc = false
+name = "report_bundle"
+path = "fuzz_targets/report_bundle.rs"
+test = false
+
+[[bin]]
+bench = false
+doc = false
+name = "plugin_result"
+path = "fuzz_targets/plugin_result.rs"
+test = false
+
 [dependencies]
+arrow-ipc = "60.0.0"
 graphcal-compiler = { path = "../crates/graphcal-compiler" }
+graphcal-eval = { path = "../crates/graphcal-eval" }
 graphcal-fmt = { path = "../crates/graphcal-fmt" }
 graphcal-io = { path = "../crates/graphcal-io" }
+graphcal-model-protocol = { path = "../crates/graphcal-model-protocol", features = ["arrow"] }
 graphcal-package = { path = "../crates/graphcal-package" }
 graphcal-plugin-abi = { path = "../crates/graphcal-plugin-abi" }
 graphcal-project = { path = "../crates/graphcal-project" }
 graphcal-test-support = { path = "../crates/graphcal-test-support" }
+indexmap = "2.13.0"
 libfuzzer-sys = "0.4"
+miette = "7.6.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["raw_value"] }

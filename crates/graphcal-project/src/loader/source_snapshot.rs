@@ -9,28 +9,29 @@
 
 use crate::load_error::LoadError;
 
+use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use miette::NamedSource;
-
 use graphcal_compiler::syntax::module_path_key::ModulePathKey;
 
+use super::module_file::{ModuleFileFailure, ModuleFilePath};
 use super::module_path::ModuleTarget;
+use super::same_file_reference::{LexicalSite, PathScope, SameFileScope, StemReference};
 use crate::compile_error::CompileError;
 use graphcal_compiler::cancellation::CancellationToken;
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::desugar::desugared_ast::{Declaration, File};
 use graphcal_compiler::import_cycle::ImportChainFile;
 use graphcal_compiler::outcome::Outcome;
+use graphcal_compiler::syntax::token::SourceIdentifier;
 use graphcal_package::PackageName;
 
 use super::budget::PackageAuthorityError;
 use graphcal_compiler::source_id::SourceId;
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{RegisteredSource, SourceOrigin, SourceRegistry};
 use graphcal_compiler::syntax::ast::{DeclKind, ModulePath};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::parser::Parser;
@@ -163,26 +164,74 @@ pub(super) enum ModuleRoot {
 }
 
 impl ModuleRoot {
-    /// The module path that names `file` (a canonical path) in this tree.
-    pub(super) fn module_path_of(&self, file: &Path) -> Option<ModulePathKey> {
-        use graphcal_compiler::syntax::names::NameAtom;
-        use graphcal_compiler::syntax::non_empty::NonEmpty;
-        use std::path::Component;
-
-        let atoms = match self {
-            Self::SourceDir(dir) => file
-                .strip_prefix(dir)
-                .ok()?
-                .with_extension("")
-                .components()
-                .map(|component| match component {
-                    Component::Normal(segment) => NameAtom::parse(segment.to_str()?).ok(),
-                    _ => None,
-                })
-                .collect::<Option<Vec<_>>>()?,
-            Self::Standalone => vec![NameAtom::parse(file.file_stem()?.to_str()?).ok()?],
+    /// How `file` (a canonical path) refers to its own root by its stem: a
+    /// self-reference in a standalone file only. In a package the stem is an
+    /// ordinary first path segment, and a DAG body that spells it is rejected.
+    pub(super) fn stem_reference(&self, file: &Path) -> StemReference {
+        let Some(stem) = file
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .and_then(|stem| SourceIdentifier::parse(stem).ok())
+            .map(SourceIdentifier::into_atom)
+        else {
+            return StemReference::Unspellable;
         };
-        NonEmpty::try_from_vec(atoms).ok().map(ModulePathKey::new)
+        match self {
+            Self::Standalone => StemReference::SelfReference(stem),
+            Self::SourceDir(_) => StemReference::RejectedInDagBody {
+                stem,
+                module_path: self.module_path_of(file),
+            },
+        }
+    }
+
+    /// The source directory `source_dir` of a package tree, canonicalized
+    /// through `reader` like the module files below it, so a file's path
+    /// below it is found even when the source directory is reached through
+    /// a symlink.
+    pub(super) fn source_dir(
+        reader: &dyn graphcal_io::FileSystemReader,
+        source_dir: PathBuf,
+    ) -> Self {
+        Self::SourceDir(reader.canonicalize(&source_dir).unwrap_or(source_dir))
+    }
+
+    /// The path of `file` (a canonical path in the tree rooted at
+    /// `tree_root`) that its [`DagId`](graphcal_compiler::dag_id::DagId) is
+    /// built from: relative to the source directory, so the identity mirrors
+    /// the module path the user writes and not the filesystem layout, or
+    /// relative to the tree root for a standalone file.
+    ///
+    /// A package module file outside its source directory is rejected
+    /// before it is loaded (`graphcal::M042`), so the fallback to the tree
+    /// root never names a package module; `LoadedFiles` refuses two modules
+    /// with one identity in any case.
+    pub(super) fn identity_path(&self, file: &Path, tree_root: &Path) -> PathBuf {
+        let root = match self {
+            Self::SourceDir(dir) => dir.as_path(),
+            Self::Standalone => tree_root,
+        };
+        file.strip_prefix(root)
+            .or_else(|_| file.strip_prefix(tree_root))
+            .unwrap_or(file)
+            .to_path_buf()
+    }
+
+    /// The module path that names `file` (a canonical path) in this tree:
+    /// its [`ModuleFilePath`] below the source directory, or a standalone
+    /// file's stem when that is an identifier.
+    pub(super) fn module_path_of(&self, file: &Path) -> Option<ModulePathKey> {
+        use graphcal_compiler::syntax::non_empty::NonEmpty;
+
+        match self {
+            Self::SourceDir(dir) => ModuleFilePath::parse(file.strip_prefix(dir).ok()?)
+                .ok()
+                .map(|module_file| module_file.module_path()),
+            Self::Standalone => {
+                let stem = SourceIdentifier::parse(file.file_stem()?.to_str()?).ok()?;
+                Some(ModulePathKey::new(NonEmpty::singleton(stem.into_atom())))
+            }
+        }
     }
 }
 
@@ -194,8 +243,9 @@ pub(super) struct ParsedFile {
     /// Identity of the text in the project's source registry; core
     /// diagnostics refer to it.
     pub(super) source_id: SourceId,
-    /// The registered text under its name, for the loader's own diagnostics.
-    pub(super) named_source: NamedSource<Arc<String>>,
+    /// The registered text with its origin and name, for the loader's own
+    /// diagnostics.
+    pub(super) registered_source: RegisteredSource,
     pub(super) ast: File,
 }
 
@@ -205,17 +255,18 @@ impl ParsedFile {
         (self.source, self.source_id, self.ast)
     }
 
-    /// Register `source` under the diagnostic `name` in `sources`, then parse
-    /// and desugar it, rendering a parse failure against the registered text.
-    /// This is the loader's only parse sequence.
+    /// Register `source` from `origin` under the diagnostic `name` in
+    /// `sources`, then parse and desugar it, rendering a parse failure
+    /// against the registered text. This is the loader's only parse sequence.
     pub(super) fn parse(
         sources: &mut SourceRegistry,
+        origin: SourceOrigin,
         name: &str,
         source: Arc<String>,
         cancellation: &CancellationToken,
     ) -> Result<Self, Outcome<CompileError>> {
-        let source_id = sources.register(name, Arc::clone(&source));
-        let named_source = sources.renderable(source_id);
+        let source_id = sources.register_with_origin(origin, name, Arc::clone(&source));
+        let registered_source = sources.renderable(source_id);
         let registered: &SourceRegistry = sources;
         let raw_ast = Parser::new(&source)
             .parse_file_with_cancellation(cancellation)
@@ -225,7 +276,7 @@ impl ParsedFile {
         Ok(Self {
             source,
             source_id,
-            named_source,
+            registered_source,
             ast: File::from(raw_ast),
         })
     }
@@ -239,6 +290,8 @@ impl ParsedFile {
 pub(super) struct ParsedSource<K> {
     location: ModuleLocation,
     file: ParsedFile,
+    /// The same-file names the file's dependency paths can spell.
+    same_file: SameFileScope,
     resolutions: HashMap<ModulePathKey, ModuleResolution<K>>,
 }
 
@@ -248,6 +301,7 @@ impl<K: SourceKey> ParsedSource<K> {
     pub(super) fn resolve<E>(
         location: ModuleLocation,
         file: ParsedFile,
+        stem: StemReference,
         mut resolve: impl FnMut(&ModulePath) -> Result<ModuleResolution<K>, E>,
     ) -> Result<Self, E> {
         let mut resolutions = HashMap::new();
@@ -256,9 +310,11 @@ impl<K: SourceKey> ParsedSource<K> {
                 slot.insert(resolve(dependency.path)?);
             }
         }
+        let same_file = SameFileScope::new(&file.ast.declarations, stem);
         Ok(Self {
             location,
             file,
+            same_file,
             resolutions,
         })
     }
@@ -267,8 +323,8 @@ impl<K: SourceKey> ParsedSource<K> {
         &self.location
     }
 
-    pub(super) const fn named_source(&self) -> &NamedSource<Arc<String>> {
-        &self.file.named_source
+    pub(super) const fn registered_source(&self) -> &RegisteredSource {
+        &self.file.registered_source
     }
 
     /// Identity of this file's text in the project's source registry.
@@ -286,9 +342,27 @@ impl<K: SourceKey> ParsedSource<K> {
         self.resolutions.get(&path.key())
     }
 
+    /// The same-file names this file's dependency paths can spell.
+    pub(super) const fn same_file(&self) -> &SameFileScope {
+        &self.same_file
+    }
+
+    /// Dependency paths that name a module through package resolution, in
+    /// load order; same-file references never drive loading.
+    pub(super) fn loading_dependencies(&self) -> Vec<DependencyPath<'_>> {
+        dependency_paths(self.ast())
+            .into_iter()
+            .filter(|dependency| {
+                self.same_file
+                    .classify(dependency.path, dependency.site.lexical())
+                    == PathScope::Package
+            })
+            .collect()
+    }
+
     /// Other files this file loads, in load order (duplicates retained).
     pub(super) fn dependency_files<'a>(&'a self, this_file: &K) -> Vec<&'a K> {
-        loading_dependency_paths(self.ast(), file_stem(this_file.path()))
+        self.loading_dependencies()
             .into_iter()
             .filter_map(|dependency| match self.resolution(dependency.path) {
                 Some(ModuleResolution::Resolved(resolved)) if resolved.file != *this_file => {
@@ -355,15 +429,16 @@ pub(super) enum ResolveFailure {
     UnknownDependency { package: PackageName },
     /// The lockfile or package authority is inconsistent.
     PackageAuthority(PackageAuthorityError),
+    /// A candidate file exists but could not be inspected (for example a
+    /// symlink loop or a permission failure). `reason` is host text.
+    Unreadable { file: PathBuf, reason: String },
+    /// The file was found but cannot be loaded under the path that reached it.
+    ModuleFile(ModuleFileFailure),
 }
 
 impl ResolveFailure {
     /// Render this failure at the importing `path` of the file `src`.
-    pub(super) fn to_error(
-        &self,
-        path: &ModulePath,
-        src: &NamedSource<Arc<String>>,
-    ) -> CompileError {
+    pub(super) fn to_error(&self, path: &ModulePath, src: &RegisteredSource) -> CompileError {
         let src = src.clone();
         let span = path.span().into();
         match self {
@@ -403,12 +478,18 @@ impl ResolveFailure {
                 message: error.to_string(),
             }
             .into(),
+            Self::Unreadable { file, reason } => LoadError::SourceReadFailed {
+                path: file.clone(),
+                reason: reason.clone(),
+            }
+            .into(),
+            Self::ModuleFile(failure) => failure.to_load_error().into(),
         }
     }
 }
 
 /// Error for a path that resolved outside the permitted source root.
-pub(super) fn outside_root(path: &ModulePath, src: NamedSource<Arc<String>>) -> LoadError {
+pub(super) fn outside_root(path: &ModulePath, src: RegisteredSource) -> LoadError {
     LoadError::ImportOutsideRoot {
         path: path.key(),
         src,
@@ -424,14 +505,28 @@ pub(super) enum FileRootDependencyKind {
 }
 
 /// Where a dependency path is declared within its file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum DependencySite {
     FileRoot(FileRootDependencyKind),
-    DagBody,
+    /// The body of the inline DAG at `owner`, its path from the file root
+    /// (non-empty).
+    DagBody {
+        owner: Vec<DeclName>,
+    },
+}
+
+impl DependencySite {
+    /// The lexical place of this site, for same-file classification.
+    pub(super) fn lexical(&self) -> LexicalSite<'_> {
+        match self {
+            Self::FileRoot(_) => LexicalSite::FileRoot,
+            Self::DagBody { owner } => LexicalSite::DagBody(owner),
+        }
+    }
 }
 
 /// One import/include path together with its declaration site.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct DependencyPath<'a> {
     pub(super) path: &'a ModulePath,
     pub(super) site: DependencySite,
@@ -450,7 +545,8 @@ pub(super) const fn file_root_dependency(
 /// Every import/include path in `ast`: file-root declarations in order, then
 /// inline-DAG bodies in preorder.
 pub(super) fn dependency_paths(ast: &File) -> Vec<DependencyPath<'_>> {
-    ast.declarations
+    let mut paths: Vec<_> = ast
+        .declarations
         .iter()
         .filter_map(|declaration| {
             file_root_dependency(declaration).map(|(path, kind)| DependencyPath {
@@ -458,77 +554,35 @@ pub(super) fn dependency_paths(ast: &File) -> Vec<DependencyPath<'_>> {
                 site: DependencySite::FileRoot(kind),
             })
         })
-        .chain(
-            inline_dag_dependency_paths(&ast.declarations)
-                .into_iter()
-                .map(|path| DependencyPath {
-                    path,
-                    site: DependencySite::DagBody,
-                }),
-        )
-        .collect()
+        .collect();
+    push_inline_dag_dependency_paths(&ast.declarations, &mut Vec::new(), &mut paths);
+    paths
 }
 
-/// Dependency paths that can name another file, in load order. Single-segment
-/// paths naming a same-file inline DAG or the file's own stem are same-file
-/// references and never drive loading.
-pub(super) fn loading_dependency_paths<'a>(
-    ast: &'a File,
-    file_stem: &str,
-) -> Vec<DependencyPath<'a>> {
-    let dag_names = collect_inline_dag_names(&ast.declarations);
-    dependency_paths(ast)
-        .into_iter()
-        .filter(|dependency| !is_same_file_reference(dependency.path, &dag_names, file_stem))
-        .collect()
-}
-
-fn is_same_file_reference(path: &ModulePath, dag_names: &HashSet<String>, file_stem: &str) -> bool {
-    let [segment] = path.segments() else {
-        return false;
-    };
-    dag_names.contains(segment.name.as_str()) || segment.name.as_str() == file_stem
-}
-
-pub(super) fn collect_inline_dag_names(declarations: &[Declaration]) -> HashSet<String> {
-    declarations
-        .iter()
-        .flat_map(|decl| match &decl.kind {
-            DeclKind::Dag(dag) => {
-                let mut names = collect_inline_dag_names(&dag.body);
-                names.insert(dag.name.value.to_string());
-                names
-            }
-            _ => HashSet::new(),
-        })
-        .collect()
-}
-
-fn inline_dag_dependency_paths(declarations: &[Declaration]) -> Vec<&ModulePath> {
-    declarations
-        .iter()
-        .flat_map(|decl| match &decl.kind {
-            DeclKind::Dag(dag) => {
-                let body_paths = dag
-                    .body
-                    .iter()
-                    .filter_map(|body_decl| match &body_decl.kind {
-                        DeclKind::Import(import_decl) => Some(import_decl.path()),
-                        DeclKind::Include(include_decl) => Some(&include_decl.path),
-                        _ => None,
-                    });
-                body_paths
-                    .chain(inline_dag_dependency_paths(&dag.body))
-                    .collect::<Vec<_>>()
-            }
-            _ => Vec::new(),
-        })
-        .collect()
-}
-
-/// UTF-8 file stem used for file-root self references (empty when absent).
-pub(super) fn file_stem(path: &Path) -> &str {
-    path.file_stem()
-        .and_then(|stem| stem.to_str())
-        .unwrap_or("")
+fn push_inline_dag_dependency_paths<'a>(
+    declarations: &'a [Declaration],
+    owner: &mut Vec<DeclName>,
+    out: &mut Vec<DependencyPath<'a>>,
+) {
+    for declaration in declarations {
+        let DeclKind::Dag(dag) = &declaration.kind else {
+            continue;
+        };
+        owner.push(dag.name.value.clone());
+        out.extend(dag.body.iter().filter_map(|body_decl| {
+            let path = match &body_decl.kind {
+                DeclKind::Import(import_decl) => import_decl.path(),
+                DeclKind::Include(include_decl) => &include_decl.path,
+                _ => return None,
+            };
+            Some(DependencyPath {
+                path,
+                site: DependencySite::DagBody {
+                    owner: owner.clone(),
+                },
+            })
+        }));
+        push_inline_dag_dependency_paths(&dag.body, owner, out);
+        owner.pop();
+    }
 }

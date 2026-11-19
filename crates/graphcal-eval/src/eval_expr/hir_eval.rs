@@ -23,15 +23,49 @@ use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap, Pr
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::context::EvalSession;
+use super::kernel_checkpoint::KernelCheckpoint;
 use super::operations::read_shape;
-use super::runtime_failure::{
-    ExternFailure, InlineAssertionFailure, RuntimeFailure, UnboundReference,
-};
+use super::runtime_failure::{ExternFailure, InlineAssertionFailure, RuntimeFailure};
 use super::unit_scale::{checked_unit_scaled_value, resolve_unit_scale};
 use crate::constant_pools::RuntimeValueMap;
 use graphcal_compiler::tir::texpr::MapLayout;
 
 pub type HirLocalValueMap<'a> = graphcal_compiler::hir::expr::LocalEnv<'a, EvaluatedRuntimeValue>;
+
+/// A state the checker rules out, so that only a bug in the evaluator
+/// reaches it: reported as an internal error, never as a runtime failure of
+/// the program.
+#[derive(Debug, thiserror::Error)]
+enum EvaluatorBug {
+    #[error("constant `{0}` is not bound where it is read")]
+    UnboundConstant(ResolvedDeclName),
+    #[error("a local variable is not bound where it is read")]
+    UnboundLocal,
+    #[error("graph reference `@{0}` is not bound where it is read")]
+    UnboundGraphRef(ResolvedDeclName),
+    #[error("unfold steps along `{0}`, which is not coordinate-valued")]
+    UnfoldWithoutCoordinates(IndexTypeRef),
+}
+
+impl EvaluatorBug {
+    /// The internal error reporting this state at `span`.
+    #[cold]
+    fn at(self, span: Span, ctx: &EvalSession<'_>) -> SemanticError {
+        ctx.internal_error(self.to_string(), span)
+    }
+}
+
+/// Check that an `unfold` steps along a coordinate axis, as checking proved.
+fn require_coordinates(
+    axis: &IndexAxis,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> Result<(), SemanticError> {
+    match axis.coordinate_data() {
+        Some(_) => Ok(()),
+        None => Err(EvaluatorBug::UnfoldWithoutCoordinates(axis.index().clone()).at(span, ctx)),
+    }
+}
 
 fn index_ref_matches_resolved(
     actual: &IndexTypeRef,
@@ -228,14 +262,7 @@ fn eval_member_element(
             body,
             axis,
         } => {
-            if axis.coordinate_data().is_none() {
-                return Err(ctx
-                    .runtime_error(
-                        RuntimeFailure::UnfoldWithoutCoordinates(axis.index().clone()),
-                        recurrence.axis.span,
-                    )
-                    .into());
-            }
+            require_coordinates(axis, recurrence.axis.span, ctx)?;
             let Some(previous) = element.previous() else {
                 return eval_texpr_evaluated(init, values, presentation_values, &root_locals, ctx);
             };
@@ -378,7 +405,7 @@ fn eval_texpr_inner(
         NodeKind::Const(target) => match target.value {
             ConstRef::Decl(declaration) => {
                 let value = values.get(&declaration).cloned().ok_or_else(|| {
-                    ctx.runtime_error(UnboundReference::Constant(declaration.clone()), target.span)
+                    EvaluatorBug::UnboundConstant(declaration.clone()).at(target.span, ctx)
                 })?;
                 Ok(presentation_values
                     .and_then(|presented| presented.get(&declaration))
@@ -391,7 +418,7 @@ fn eval_texpr_inner(
         NodeKind::Local(local) => local_values
             .get(local.value)
             .cloned()
-            .ok_or_else(|| ctx.runtime_error(UnboundReference::Local, local.span))
+            .ok_or_else(|| EvaluatorBug::UnboundLocal.at(local.span, ctx))
             .map_err(Outcome::Failed),
         NodeKind::DatetimeLiteral(literal) => Ok(plain(RuntimeValue::Datetime(
             super::operations::datetime_literal(literal),
@@ -399,10 +426,12 @@ fn eval_texpr_inner(
         NodeKind::Aggregate { function, arg } => match function {
             AggregationFn::Key(function) => {
                 let quantities = operands.quantities(arg)?;
-                Ok(plain(RuntimeValue::Key(super::aggregations::extremum_key(
-                    function,
-                    &quantities,
-                ))))
+                let mut control = KernelCheckpoint::new(&ctx.cancellation);
+                super::aggregations::extremum_key(function, &quantities, &mut control)
+                    .map(|key| plain(RuntimeValue::Key(key)))
+                    .map_err(|outcome| {
+                        outcome.map_failed(|invariant| invariant_error(invariant, span, ctx))
+                    })
             }
             AggregationFn::Value(ValueAggregation::Count) => {
                 super::aggregations::count_entries(&operands.rank_one(arg)?)
@@ -412,9 +441,10 @@ fn eval_texpr_inner(
             AggregationFn::Value(function) => super::aggregations::aggregate_quantities(
                 function,
                 operands.quantities(arg)?.values().as_slice(),
+                &mut KernelCheckpoint::new(&ctx.cancellation),
             )
             .map(plain)
-            .map_err(|failure| ctx.failure_error(failure, span).into()),
+            .map_err(|outcome| ctx.outcome_error(outcome, span)),
         },
         NodeKind::LinearAlgebra(call) => {
             super::linear_algebra::evaluate(&call, span, &operands, ctx).map(plain)
@@ -567,12 +597,9 @@ fn resolve_graph_ref<'a>(
     values: &'a RuntimeValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<&'a RuntimeValue, SemanticError> {
-    values.get(&target.value).ok_or_else(|| {
-        ctx.runtime_error(
-            UnboundReference::GraphRef(target.value.clone()),
-            target.span,
-        )
-    })
+    values
+        .get(&target.value)
+        .ok_or_else(|| EvaluatorBug::UnboundGraphRef(target.value.clone()).at(target.span, ctx))
 }
 
 fn clone_graph_ref_value(value: &RuntimeValue) -> RuntimeValue {
@@ -682,7 +709,8 @@ fn eval_key_form<'t>(
     }
 }
 
-/// The key a coordinate search of `axis` for `quantity` selects.
+/// The key a coordinate search of `axis` for `quantity` selects. Only the
+/// selected key is built.
 fn coordinate_search(
     search: CoordinateSearch,
     axis: &IndexAxis,
@@ -690,48 +718,26 @@ fn coordinate_search(
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<KeyValue, SemanticError> {
-    let keys = KeyValue::all(axis);
-    let mut best: Option<(&KeyValue, f64)> = None;
-    // A coordinate axis has one finite coordinate per key.
-    for (key, coordinate) in keys.iter().zip(axis.coordinates()) {
-        let coordinate = coordinate.get();
-        let candidate = match search {
-            CoordinateSearch::Floor => coordinate <= quantity,
-            CoordinateSearch::Ceil => coordinate >= quantity,
-            CoordinateSearch::Nearest => true,
-        };
-        if !candidate {
-            continue;
-        }
-        let better = match (&best, search) {
-            (None, _) => true,
-            // Nearest: strictly closer wins, so midpoint ties keep
-            // the earlier position (toward the axis start).
-            (Some((_, incumbent)), CoordinateSearch::Nearest) => {
-                (coordinate - quantity).abs() < (incumbent - quantity).abs()
-            }
-            // Floor: the greatest coordinate at or below the target.
-            (Some((_, incumbent)), CoordinateSearch::Floor) => coordinate > *incumbent,
-            // Ceil: the smallest coordinate at or above the target.
-            (Some((_, incumbent)), CoordinateSearch::Ceil) => coordinate < *incumbent,
-        };
-        if better {
-            best = Some((key, coordinate));
-        }
-    }
-    best.map(|(key, _)| key.clone()).ok_or_else(|| {
-        ctx.runtime_error(
+    let Some(position) =
+        super::coordinate_search::search_position(search, axis.coordinates(), quantity)
+    else {
+        return Err(ctx.runtime_error(
             RuntimeFailure::NoCoordinate {
                 search,
                 axis: axis.index().clone(),
             },
             span,
+        ));
+    };
+    // A coordinate axis has one coordinate per key.
+    KeyValue::at(axis.clone(), position).ok_or_else(|| {
+        ctx.internal_error(
+            format!("coordinate position {position} is not a key of its axis"),
+            span,
         )
     })
 }
 
-/// Evaluate `argmin`/`argmax`: the key of the extremum entry on the reduced
-/// axis.
 /// The expression of one plugin-call argument, in the argument's scope.
 fn argument_node(arg: Scoped<'_, TExternArg>) -> Scoped<'_, TExpr> {
     arg.map(|arg| &arg.value)
@@ -976,7 +982,7 @@ fn eval_index_access(
             ScopedIndexArg::Var(local) => {
                 let bound = local_values
                     .get(local.value)
-                    .ok_or_else(|| ctx.runtime_error(UnboundReference::Local, local.span))?;
+                    .ok_or_else(|| EvaluatorBug::UnboundLocal.at(local.span, ctx))?;
                 EntrySelector::Key(read_shape(
                     bound.value().into_owned(),
                     "a key",
@@ -1030,7 +1036,7 @@ fn recurrence_read<'s>(
         Some(ScopedIndexArg::Var(local)) => {
             let bound = local_values
                 .get(local.value)
-                .ok_or_else(|| ctx.runtime_error(UnboundReference::Local, local.span))?;
+                .ok_or_else(|| EvaluatorBug::UnboundLocal.at(local.span, ctx))?;
             let key = read_shape(
                 bound.value().into_owned(),
                 "a key",
@@ -1154,14 +1160,7 @@ fn eval_unfold(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    if index_axis.coordinate_data().is_none() {
-        return Err(ctx
-            .runtime_error(
-                RuntimeFailure::UnfoldWithoutCoordinates(index_axis.index().clone()),
-                recurrence.axis.span,
-            )
-            .into());
-    }
+    require_coordinates(index_axis, recurrence.axis.span, ctx)?;
     let evaluated_init =
         eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
     let mut previous_state = evaluated_init.clone();
@@ -1269,6 +1268,9 @@ fn eval_dag_call(
     caller_locals: &HirLocalValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    // Calls nest and repeat without bound on the work they multiply (#2251):
+    // every call observes cancellation before it allocates its frame.
+    ctx.cancellation.checkpoint()?;
     let target = call.target();
     let plan = ctx.execution_plan()?;
     let callable = plan.call(call);
@@ -1411,7 +1413,12 @@ fn check_inline_dag_asserts(
             body.map(|entry| &*entry.body),
             ef,
             &mut |expr| eval_root(&context.executable(expr)?, dag_values, &context),
-        )?;
+        )
+        .map_err(|aborted| {
+            aborted.into_outcome(|invariant| {
+                context.internal_error(invariant.to_string(), body.get().span)
+            })
+        })?;
         match result {
             crate::eval::types::AssertResult::Pass => {}
             crate::eval::types::AssertResult::Fail { message } => {

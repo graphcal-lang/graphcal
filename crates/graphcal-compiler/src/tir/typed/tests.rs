@@ -520,7 +520,9 @@ fn repeated_store_insertion_preserves_canonical_definition_handles() {
     let file = crate::desugar::desugared_ast::File::from(raw_file);
     let src = crate::source_registry::SourceRegistry::new()
         .register("store.gcl", Arc::new(source.to_string()));
-    let ir = crate::ir::lower::lower(&file, "store.gcl", src).unwrap();
+    let ir = crate::ir::lower::lower(&file, "store.gcl", src)
+        .unwrap()
+        .hir;
     let owner = ir.dag_id().clone();
     let index_name = ResolvedIndexName::for_test(
         owner.clone(),
@@ -561,8 +563,11 @@ fn check_draft(
     draft: TirDraft,
     src: crate::source_id::SourceId,
 ) -> Result<CheckedTir, SemanticError> {
-    let instantiated = draft.instantiate(&CheckedOverrideDependencies::default(), src)?;
-    crate::outcome::without_cancellation(|cancellation| instantiated.check(src, cancellation))
+    crate::outcome::without_cancellation(|cancellation| {
+        draft
+            .instantiate(&CheckedOverrideDependencies::default(), src, cancellation)?
+            .check(src, cancellation)
+    })
 }
 
 fn importer_tir(path: &str, stores: &[&DagStore]) -> CheckedTir {
@@ -757,7 +762,7 @@ fn lower_store_hir(source: &str) -> crate::ir::model::HirDag {
     let file = crate::desugar::desugared_ast::File::from(raw);
     let src = crate::source_registry::SourceRegistry::new()
         .register("same.gcl", Arc::new(source.to_string()));
-    crate::ir::lower::lower(&file, "same.gcl", src).unwrap()
+    crate::ir::lower::lower(&file, "same.gcl", src).unwrap().hir
 }
 
 #[test]
@@ -920,24 +925,23 @@ fn project_type_store_rejects_an_unused_recursive_type() {
 }
 
 #[test]
-fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
+fn tir_builder_merges_equivalent_externs_and_rejects_competing_signatures() {
     let mut builder = parse_and_type_resolve_builder(
         r#"import plugin "graphcal:demo" as first {
             fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
         }"#,
     )
     .unwrap();
-    let identical = parse_and_type_resolve(
+    // RES-9: binder and parameter names are not part of the signature.
+    let renamed = parse_and_type_resolve(
         r#"
         import plugin "graphcal:demo" as second {
-            fn lerp<D: Dim>(a: D, b: D, t: Dimensionless) -> D;
+            fn lerp<E: Dim>(lo: E, hi: E, frac: Dimensionless) -> E;
         }"#,
     )
     .unwrap();
-    let (key, function) = identical.extern_functions().iter().next().unwrap();
-    builder
-        .insert_extern_function(key.clone(), function.clone())
-        .unwrap();
+    let function = renamed.extern_functions().values().next().unwrap();
+    builder.insert_extern_function(function.clone()).unwrap();
 
     let competing = parse_and_type_resolve(
         r#"import plugin "graphcal:demo" as third {
@@ -945,14 +949,25 @@ fn tir_builder_accepts_identical_externs_and_rejects_competing_signatures() {
         }"#,
     )
     .unwrap();
-    let (key, function) = competing.extern_functions().iter().next().unwrap();
-    let expected_key = key.clone();
+    let function = competing.extern_functions().values().next().unwrap();
     let error = builder
-        .insert_extern_function(key.clone(), function.clone())
+        .insert_extern_function(function.clone())
         .unwrap_err();
 
-    assert_eq!(error.plugin, expected_key.plugin);
-    assert_eq!(error.name, expected_key.name);
+    assert!(
+        matches!(
+            &error,
+            SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind: crate::semantic_error::SemanticErrorKind::Plugin(
+                    crate::semantic_error::plugin::PluginError::InvalidExternSignature {
+                        error: crate::semantic_error::plugin::ExternSignatureError::ConflictingSignature { .. },
+                    }
+                ),
+                ..
+            })
+        ),
+        "expected W001, got {error:?}"
+    );
 }
 
 /// Single-file integration helper: lower + type-resolve + compile each
@@ -1033,10 +1048,8 @@ fn tir_builder_preserves_root_and_rejects_duplicate_dag_identity() {
         .register("test.gcl", Arc::new(source.to_string()));
     let root_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
-    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(root_id.clone(), &file.declarations);
-    let resolver = modules.build().unwrap();
+    let crate::ir::lower::LoweredFile { hir: ir, resolver } =
+        crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
@@ -1207,10 +1220,8 @@ fn module_aware_type_resolve_records_semantic_deps() {
         .register("test.gcl", Arc::new(source.to_string()));
     let dag_id =
         crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new("test.gcl")).unwrap();
-    let ir = crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
-    let mut modules = crate::resolve::builder::TestModules::default();
-    modules.add(dag_id.clone(), &file.declarations);
-    let resolver = modules.build().unwrap();
+    let crate::ir::lower::LoweredFile { hir: ir, resolver } =
+        crate::ir::lower::lower(&file, "test.gcl", src).unwrap();
     let mut project_types = ProjectTypeStore::default();
     project_types.insert_graphcal_prelude().unwrap();
     project_types.insert_module(ir.definitions()).unwrap();
@@ -2061,7 +2072,7 @@ fn instance_graph_splits_canonical_bodies_from_materialized_instances() {
         })
         .unwrap();
     // The joined table pairs every local body with its own fact.
-    let joined = graph.join(canonical, instances);
+    let joined = graph.join(&tir.dags, canonical, instances);
     assert_eq!(tir.dags.with_local_facts(&joined).count(), 4);
     assert!(
         tir.dags
@@ -2134,13 +2145,15 @@ fn imported_slots_keep_their_position_when_localized() {
         .dags
         .map_local(|_, dag| Ok::<_, ()>(dag.dag_id().clone()))
         .unwrap();
-    assert!(tir.dags.local_fact_at(&facts, imported).is_none());
+    assert!(tir.dags.local_fact(&facts, leaf_id).is_none());
     assert!(tir.dags.local_with_fact(&facts, leaf_id).is_none());
     assert_eq!(
-        tir.dags
-            .local_fact_at(&facts, super::dag_position::DagPosition::ROOT),
+        tir.dags.local_fact(&facts, tir.root_dag_id()),
         Some(tir.root_dag_id())
     );
+    let unknown = crate::dag_id::DagId::root_in_package("elsewhere", "elsewhere");
+    assert!(tir.dags.local_fact(&facts, &unknown).is_none());
+    assert!(tir.dags.local_with_fact(&facts, &unknown).is_none());
 
     // Localizing the import copies its body into a local slot at the same
     // position; it is then visited with the local bodies.
@@ -2151,6 +2164,29 @@ fn imported_slots_keep_their_position_when_localized() {
     assert!(tir.dags.shared(leaf_id).is_none());
     assert_eq!(tir.dags.local_iter().count(), 2);
     assert_eq!(tir.dags.len(), 2);
+    // A localized import is not owned by the root's file.
+    assert_eq!(
+        tir.local_dags()
+            .map(|(dag_id, _)| dag_id.clone())
+            .collect::<Vec<_>>(),
+        [tir.root_dag_id().clone()]
+    );
+
+    // The facts mapped before localization no longer match the local
+    // bodies, so pairing them fails loudly instead of truncating, even when
+    // the looked-up DAG is unknown.
+    let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tir.dags.local_fact(&facts, &unknown).is_none()
+    }));
+    assert!(stale.is_err());
+    let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tir.dags.local_with_fact(&facts, &unknown).is_none()
+    }));
+    assert!(stale.is_err());
+    let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tir.dags.map_local_facts(facts, |_, fact| fact)
+    }));
+    assert!(stale.is_err());
 }
 
 #[test]

@@ -2,12 +2,12 @@
 //! files and manifests before any module is compiled.
 //!
 //! The loader is the shell that owns file names and source text, so its
-//! located diagnostics carry the [`NamedSource`] they point into.
+//! located diagnostics carry the [`RegisteredSource`] they point into.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
-use miette::{Diagnostic, NamedSource, SourceSpan};
+use graphcal_compiler::source_registry::RegisteredSource;
+use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::import_cycle::ImportCycle;
@@ -47,7 +47,7 @@ pub enum LoadError {
     ImportFileNotFound {
         path: ModulePathKey,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("referenced here")]
         span: SourceSpan,
     },
@@ -62,7 +62,7 @@ pub enum LoadError {
     ImportOutsideRoot {
         path: ModulePathKey,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("resolves outside project root")]
         span: SourceSpan,
     },
@@ -76,7 +76,7 @@ pub enum LoadError {
         path_first: NameAtom,
         package_name: PackageName,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("should start with `{package_name}`")]
         span: SourceSpan,
     },
@@ -91,7 +91,7 @@ pub enum LoadError {
     StdlibNotImplemented {
         path: ModulePathKey,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("stdlib not yet available")]
         span: SourceSpan,
     },
@@ -106,8 +106,23 @@ pub enum LoadError {
     CrossFileImportInVirtualPackage {
         path: ModulePathKey,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("not reachable from a virtual-package file")]
+        span: SourceSpan,
+    },
+
+    #[error("wasm plugin \"{plugin}\" imported from a file outside the package namespace")]
+    #[diagnostic(
+        code(graphcal::M038),
+        help(
+            "this file has a `graphcal.toml` above it but lives outside the package namespace (`<source_dir>/<package>.gcl` or under `<source_dir>/<package>/`; a symlinked module counts where it really lives), so `graphcal.lock` cannot pin its plugins. Move the file into the package namespace directory, then run `graphcal deps lock` to pin the plugin."
+        )
+    )]
+    WasmPluginOutsidePackageNamespace {
+        plugin: graphcal_compiler::syntax::plugin::PluginPath,
+        #[source_code]
+        src: RegisteredSource,
+        #[label("plugin binaries load only from files covered by graphcal.lock pins")]
         span: SourceSpan,
     },
 
@@ -121,8 +136,22 @@ pub enum LoadError {
     FileRootSelfImport {
         path: ModulePathKey,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("this import resolves to its own file root")]
+        span: SourceSpan,
+    },
+
+    #[error("`{stem}` in a DAG body of a package file does not name this file")]
+    #[diagnostic(code(graphcal::M037))]
+    PackageFileStemInDagBody {
+        /// The one-segment path, which is the file's own stem.
+        stem: NameAtom,
+        /// How to name this file, or the module `stem` names.
+        #[help]
+        help: String,
+        #[source_code]
+        src: RegisteredSource,
+        #[label("spelled like this file's stem")]
         span: SourceSpan,
     },
 
@@ -139,28 +168,109 @@ pub enum LoadError {
         /// The importing package.
         package: PackageName,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("not a dependency of `{package}`")]
         span: SourceSpan,
     },
+
+    /// An existing source file that could not be read. `reason` is host text
+    /// (an OS error or the exhausted loader budget).
+    #[error("could not read source file `{}`: {reason}", path.display())]
+    #[diagnostic(
+        code(graphcal::M039),
+        help(
+            "Graphcal source files must be readable regular `.gcl` files within the loader's resource limits"
+        )
+    )]
+    SourceReadFailed { path: PathBuf, reason: String },
+
+    /// A package source file whose path names no module. `reason` says which
+    /// directory name or file stem is not a module path segment.
+    #[error("invalid module file name `{}`: {reason}", path.display())]
+    #[diagnostic(
+        code(graphcal::M040),
+        help(
+            "every directory and `.gcl` file stem below the source directory is a module path segment, so it must be a lower_snake_case Graphcal identifier that is not a keyword; rename it (for example `my-helpers.gcl` to `my_helpers.gcl`)"
+        )
+    )]
+    InvalidModuleFileName { path: PathBuf, reason: String },
+
+    /// A module file reached under a spelling that differs from its directory
+    /// entry, which a case-insensitive filesystem would otherwise accept.
+    #[error("{}", spelling_mismatch_message(path, on_disk.as_deref()))]
+    #[diagnostic(
+        code(graphcal::M041),
+        help(
+            "module paths must match file and directory names exactly, including letter case, so a project loads the same way on every filesystem; correct the spelling or rename the file"
+        )
+    )]
+    ModuleFileSpellingMismatch {
+        /// The path as requested, up to the first mismatched component.
+        path: PathBuf,
+        /// The directory entry that differs only in letter case, if any.
+        on_disk: Option<String>,
+    },
+
+    /// A module file that a symlink below the source directory leads out of
+    /// it; its module identity would be ambiguous.
+    #[error(
+        "module file `{}` lies outside the package's source directory `{}`",
+        path.display(),
+        source_dir.display()
+    )]
+    #[diagnostic(
+        code(graphcal::M042),
+        help(
+            "a module is named by its path below the source directory, so a module file must live there; move the file below the source directory instead of linking to it from there"
+        )
+    )]
+    ModuleOutsideSourceDir {
+        /// The file the symlink resolves to.
+        path: PathBuf,
+        /// The package's source directory.
+        source_dir: PathBuf,
+    },
+}
+
+fn spelling_mismatch_message(path: &std::path::Path, on_disk: Option<&str>) -> String {
+    on_disk.map_or_else(
+        || {
+            format!(
+                "module file `{}` matches no directory entry exactly",
+                path.display()
+            )
+        },
+        |on_disk| {
+            format!(
+                "module file `{}` is spelled `{on_disk}` on disk",
+                path.display()
+            )
+        },
+    )
 }
 
 impl LoadError {
     /// The named source a located loader diagnostic points into; `None` for
     /// failures that precede any readable source.
     #[must_use]
-    pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
+    pub const fn registered_source(&self) -> Option<&RegisteredSource> {
         match self {
             Self::FileNotFound { .. }
             | Self::InvalidSourcePath { .. }
             | Self::CircularImport { .. }
-            | Self::ManifestError { .. } => None,
+            | Self::ManifestError { .. }
+            | Self::SourceReadFailed { .. }
+            | Self::InvalidModuleFileName { .. }
+            | Self::ModuleFileSpellingMismatch { .. }
+            | Self::ModuleOutsideSourceDir { .. } => None,
             Self::ImportFileNotFound { src, .. }
             | Self::ImportOutsideRoot { src, .. }
             | Self::PackageNameMismatch { src, .. }
             | Self::StdlibNotImplemented { src, .. }
             | Self::CrossFileImportInVirtualPackage { src, .. }
+            | Self::WasmPluginOutsidePackageNamespace { src, .. }
             | Self::FileRootSelfImport { src, .. }
+            | Self::PackageFileStemInDagBody { src, .. }
             | Self::UnknownDependency { src, .. } => Some(src),
         }
     }
@@ -168,6 +278,8 @@ impl LoadError {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
@@ -192,12 +304,40 @@ mod tests {
                 },
                 "graphcal::M015",
             ),
+            (
+                LoadError::SourceReadFailed {
+                    path: PathBuf::from("main.gcl"),
+                    reason: "cannot read non-regular file".to_owned(),
+                },
+                "graphcal::M039",
+            ),
+            (
+                LoadError::InvalidModuleFileName {
+                    path: PathBuf::from("src/pkg/MyModule.gcl"),
+                    reason: "`MyModule` is not lower_snake_case".to_owned(),
+                },
+                "graphcal::M040",
+            ),
+            (
+                LoadError::ModuleFileSpellingMismatch {
+                    path: PathBuf::from("src/pkg/Lib.gcl"),
+                    on_disk: Some("lib.gcl".to_owned()),
+                },
+                "graphcal::M041",
+            ),
+            (
+                LoadError::ModuleOutsideSourceDir {
+                    path: PathBuf::from("pkg/foo.gcl"),
+                    source_dir: PathBuf::from("src"),
+                },
+                "graphcal::M042",
+            ),
         ] {
             assert_eq!(
                 error.code().map(|code| code.to_string()).as_deref(),
                 Some(code)
             );
-            assert!(error.named_source().is_none());
+            assert!(error.registered_source().is_none());
         }
     }
 
@@ -207,7 +347,7 @@ mod tests {
 
     #[test]
     fn located_failures_point_into_their_source() {
-        let src = NamedSource::new("main.gcl", Arc::new("import x;".to_owned()));
+        let src = RegisteredSource::detached("main.gcl", Arc::new("import x;".to_owned()));
         let error = LoadError::FileRootSelfImport {
             path: ModulePathKey::new(graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
                 atom("x"),
@@ -216,7 +356,7 @@ mod tests {
             span: (0, 6).into(),
         };
         assert_eq!(
-            error.named_source().map(NamedSource::name),
+            error.registered_source().map(RegisteredSource::name),
             Some("main.gcl")
         );
         assert_eq!(
@@ -227,7 +367,8 @@ mod tests {
 
     #[test]
     fn unknown_dependency_names_the_selector_and_the_importing_package() {
-        let src = NamedSource::new("main.gcl", Arc::new("import units.si::{x};".to_owned()));
+        let src =
+            RegisteredSource::detached("main.gcl", Arc::new("import units.si::{x};".to_owned()));
         let error = LoadError::UnknownDependency {
             name: atom("units"),
             package: PackageName::new("mission").unwrap(),
@@ -243,7 +384,7 @@ mod tests {
             Some("graphcal::M035")
         );
         assert_eq!(
-            error.named_source().map(NamedSource::name),
+            error.registered_source().map(RegisteredSource::name),
             Some("main.gcl")
         );
     }

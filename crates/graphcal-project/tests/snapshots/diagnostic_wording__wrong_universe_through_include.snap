@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(through_include, \"wrong_universe_include.gcl\")"
+---
+`inst::T` is a type, not a dimension
+    Diagnostic severity: error
+Begin snippet for wrong_universe_include.gcl starting at line 2, column 1
+
+snippet line 2: include inner(index Axis: Fin(2)) as inst;
+snippet line 3: dim D = inst::T;
+    label at line 3, columns 9 to 15: error here
+diagnostic code: graphcal::M036

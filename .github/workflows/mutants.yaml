@@ -33,7 +33,7 @@ jobs:
     outputs:
       relevant: ${{ steps.filter.outputs.relevant }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -80,12 +80,12 @@ jobs:
     if: needs.mutation-changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
 
@@ -106,12 +106,18 @@ jobs:
       ${{ github.event_name == 'pull_request'
       && needs.mutation-changes.outputs.relevant == 'true' }}
     continue-on-error: true
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && 'namespace-profile-4x8-ubuntu-2604;overrides.cache-tag=graphcal-mutants-changed-region' || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
 
       - name: Install Rust toolchain
         run: rustup toolchain install --no-self-update
@@ -119,9 +125,10 @@ jobs:
       - name: Install wasm32 target
         run: rustup target add wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
 
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+      - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
@@ -139,7 +146,7 @@ jobs:
 
       - name: Upload changed-region report
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: mutants-changed-${{ github.sha }}
           path: mutants.out
@@ -175,7 +182,7 @@ jobs:
   daily:
     name: daily (${{ matrix.shard.name }})
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.repository == 'graphcal-lang/graphcal' && format('namespace-profile-4x8-ubuntu-2604;overrides.cache-tag=graphcal-mutants-daily-{0}', matrix.shard.name) || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -199,12 +206,18 @@ jobs:
             package: graphcal-eval
             files: -f crates/graphcal-eval/src/runtime_presentation.rs -f crates/graphcal-eval/src/eval/display.rs
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
+      - uses: namespacelabs/nscloud-cache-action@v1.7.0
+        if: runner.environment != 'github-hosted'
+        with:
+          cache: rust
+          path: ~/.rustup
+
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
 
@@ -214,9 +227,10 @@ jobs:
       - name: Install wasm32 target
         run: rustup target add wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: Swatinem/rust-cache@v2.9.3
+        if: runner.environment == 'github-hosted'
 
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+      - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-mutants@${{ env.CARGO_MUTANTS_VERSION }}
 
@@ -227,14 +241,15 @@ jobs:
             || (github.event_name == 'workflow_dispatch' && inputs.audit-baseline) }}
           MUTANT_PACKAGE: ${{ matrix.shard.package }}
           MUTANT_FILES: ${{ matrix.shard.files }}
-        run: >-
-          ./internals/run-mutants-ratcheted.py
-          --in-place --no-shuffle
-          -p "$MUTANT_PACKAGE" $MUTANT_FILES
+        run: |
+          # shellcheck disable=SC2086 # MUTANT_FILES is a space-separated list of file filters
+          ./internals/run-mutants-ratcheted.py \
+            --in-place --no-shuffle \
+            -p "$MUTANT_PACKAGE" $MUTANT_FILES
 
       - name: Upload shard report
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: mutants-${{ matrix.shard.name }}-${{ github.run_id }}
           path: |
@@ -247,7 +262,7 @@ jobs:
       # written discovery outcomes remain useful after interruption.
       - name: Upload shard campaign for aggregation
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: mutant-campaign-${{ matrix.shard.name }}-${{ github.run_id }}
           path: |
@@ -269,19 +284,19 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        uses: astral-sh/setup-uv@v10.3.3
         with:
           version: ${{ env.UV_VERSION }}
 
       # A failed shard may have no artifact, while other shards remain useful.
       - name: Download mutation campaigns
         continue-on-error: true
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        uses: actions/download-artifact@v8.0.2
         with:
           pattern: mutant-campaign-*-${{ github.run_id }}
           path: mutation-reports
@@ -290,7 +305,7 @@ jobs:
         run: ./internals/update-mutants-baseline.py mutation-reports
 
       - name: Create or update mutation finding PR
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
+        uses: peter-evans/create-pull-request@v8.1.1
         with:
           add-paths: .cargo/mutants-baseline.toml
           base: ${{ github.ref_name }}

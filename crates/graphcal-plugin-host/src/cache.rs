@@ -29,18 +29,6 @@ impl PluginCacheLimits {
             max_encoded_bytes,
         }
     }
-
-    /// Maximum resident successful and failed load outcomes.
-    #[must_use]
-    pub const fn max_entries(self) -> usize {
-        self.max_entries
-    }
-
-    /// Maximum aggregate encoded bytes charged to resident outcomes.
-    #[must_use]
-    pub const fn max_encoded_bytes(self) -> usize {
-        self.max_encoded_bytes
-    }
 }
 
 impl Default for PluginCacheLimits {

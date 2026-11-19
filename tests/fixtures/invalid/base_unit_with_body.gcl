@@ -1,0 +1,4 @@
+// A `base unit` has no body; an explicit scale needs `const unit` or `unit`.
+base dim Span;
+base unit foot: Span;
+base unit kfoot: Span = 1000.0 foot;

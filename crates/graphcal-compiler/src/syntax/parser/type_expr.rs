@@ -164,7 +164,7 @@ impl Parser<'_> {
     }
 
     /// Whether the next token continues a dimension expression after a term.
-    fn peeks_dim_operator(&mut self) -> bool {
+    fn peeks_dim_operator(&self) -> bool {
         matches!(
             self.lexer.peek(),
             Some(&Token::Star | &Token::Slash | &Token::Caret)
@@ -173,13 +173,13 @@ impl Parser<'_> {
 
     /// Parse the built-in `Complex<D>` type former into its dedicated syntax variant.
     fn parse_complex_type(&mut self, name_span: Span) -> Result<ElementTypeExpr, ParseError> {
-        // Bare `Complex` is retained with zero arguments so HIR can report the
+        // Bare `Complex` is retained without arguments so HIR can report the
         // missing mandatory dimension with a targeted arity diagnostic.
         let (generic_args, end_span) = if self.lexer.peek() == Some(&Token::Lt) {
             let (generic_args, closing_span) = self.parse_generic_arg_list()?;
-            (generic_args.into_vec(), closing_span)
+            (Some(generic_args), closing_span)
         } else {
-            (Vec::new(), name_span)
+            (None, name_span)
         };
         Ok(ElementTypeExpr {
             kind: TypeExprKind::ComplexApplication { generic_args },
@@ -190,13 +190,13 @@ impl Parser<'_> {
 
     /// Parse the built-in `Key<I>` type former into its dedicated syntax variant.
     fn parse_key_type(&mut self, name_span: Span) -> Result<ElementTypeExpr, ParseError> {
-        // Bare `Key` is retained with zero arguments so HIR can report the
+        // Bare `Key` is retained without arguments so HIR can report the
         // missing mandatory index axis with a targeted arity diagnostic.
         let (generic_args, end_span) = if self.lexer.peek() == Some(&Token::Lt) {
             let (generic_args, closing_span) = self.parse_generic_arg_list()?;
-            (generic_args.into_vec(), closing_span)
+            (Some(generic_args), closing_span)
         } else {
-            (Vec::new(), name_span)
+            (None, name_span)
         };
         Ok(ElementTypeExpr {
             kind: TypeExprKind::KeyApplication { generic_args },
@@ -299,7 +299,7 @@ impl Parser<'_> {
                     self.lexer.next_token();
                     let items = self.parse_dim_term_or_group()?;
                     for mut item in items {
-                        item.op = Self::combine_ops(MulDivOp::Mul, item.op);
+                        item.op = MulDivOp::Mul.compose(item.op);
                         terms.push(item);
                     }
                 }
@@ -307,7 +307,7 @@ impl Parser<'_> {
                     self.lexer.next_token();
                     let items = self.parse_dim_term_or_group()?;
                     for mut item in items {
-                        item.op = Self::combine_ops(MulDivOp::Div, item.op);
+                        item.op = MulDivOp::Div.compose(item.op);
                         terms.push(item);
                     }
                 }
@@ -470,14 +470,6 @@ impl Parser<'_> {
         Ok((value, span))
     }
 
-    /// Combine two `MulDivOp`s: `Mul*Mul=Mul`, `Mul*Div=Div`, `Div*Mul=Div`, `Div*Div=Mul`.
-    const fn combine_ops(outer: MulDivOp, inner: MulDivOp) -> MulDivOp {
-        match (outer, inner) {
-            (MulDivOp::Mul, MulDivOp::Mul) | (MulDivOp::Div, MulDivOp::Div) => MulDivOp::Mul,
-            (MulDivOp::Mul, MulDivOp::Div) | (MulDivOp::Div, MulDivOp::Mul) => MulDivOp::Div,
-        }
-    }
-
     // --- Unit expressions ---
 
     /// Parse a unit expression:
@@ -584,7 +576,7 @@ impl Parser<'_> {
                         )
                     })?;
                     Ok(UnitExprItem {
-                        op: Self::combine_ops(outer_op, item.op),
+                        op: outer_op.compose(item.op),
                         name: item.name,
                         power: if combined_power == Rational::ONE {
                             None
@@ -628,8 +620,15 @@ impl Parser<'_> {
         match self.lexer.next_token() {
             Some((Token::Number, span)) => {
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value: i32 = text.parse().map_err(|_| {
-                    Self::invalid_number(InvalidNumberReason::ExpectedInteger, span)
+                let value: i32 = text.parse().map_err(|error: std::num::ParseIntError| {
+                    let reason = match error.kind() {
+                        std::num::IntErrorKind::PosOverflow
+                        | std::num::IntErrorKind::NegOverflow => {
+                            InvalidNumberReason::ExponentOutOfRange
+                        }
+                        _ => InvalidNumberReason::ExpectedInteger,
+                    };
+                    Self::invalid_number(reason, span)
                 })?;
                 Ok((neg, value, span))
             }
@@ -659,8 +658,14 @@ impl Parser<'_> {
             Some(Token::Number) => {
                 let (_, span) = self.advance()?;
                 let text = self.lexer.slice_at(span).replace('_', "");
-                let value = Self::parse_finite_f64_literal(&text, span)?;
-                Ok(Expr::new(ExprKind::Number(value), span))
+                // The scale is typed like any other literal: `1000` is an
+                // `Int` that scales the unit, `1000.0` a real number.
+                let kind = if Self::is_integer_literal(&text) {
+                    ExprKind::Integer(Self::parse_int_literal_text(&text, span)?)
+                } else {
+                    ExprKind::Number(Self::parse_finite_f64_literal(&text, span)?)
+                };
+                Ok(Expr::new(kind, span))
             }
             Some(Token::LParen) => {
                 let (_, _lp_span) = self.advance()?;
@@ -699,7 +704,7 @@ impl Parser<'_> {
 
     /// Parse one generic argument without guessing its semantic sort.
     ///
-    /// A type-expression parse is attempted on a cloned parser. If it consumes
+    /// A type-expression parse is attempted speculatively. If it consumes
     /// the complete argument, a bare name or name-only product is retained as
     /// [`GenericArg::Ambiguous`]; other type shapes are unambiguously
     /// [`GenericArg::Type`]. Forms involving a literal or `+` are parsed as Nat.
@@ -712,25 +717,28 @@ impl Parser<'_> {
         }
 
         if self.lexer.peek() != Some(&Token::Number) {
-            let mut type_candidate = self.clone();
-            match type_candidate.parse_type_expr() {
+            // `None` rejects a type parse that does not end the argument.
+            let type_candidate = self.speculate(|parser| match parser.parse_type_expr() {
                 Ok(type_expr)
-                    if matches!(
-                        type_candidate.lexer.peek(),
-                        Some(&Token::Comma | &Token::Gt)
-                    ) =>
+                    if matches!(parser.lexer.peek(), Some(&Token::Comma | &Token::Gt)) =>
                 {
-                    *self = type_candidate;
+                    Ok(type_expr)
+                }
+                Ok(_) => Err(None),
+                Err(error) => Err(Some(error)),
+            });
+            match type_candidate {
+                Ok(type_expr) => {
                     return Ok(Self::ambiguous_generic_arg(&type_expr)
                         .map_or(GenericArg::Type(type_expr), GenericArg::Ambiguous));
                 }
-                Err(
+                Err(Some(
                     error @ ParseError {
                         kind: ParseErrorKind::TooDeeplyNested,
                         ..
                     },
-                ) => return Err(error),
-                Ok(_) | Err(_) => {}
+                )) => return Err(error),
+                Err(_) => {}
             }
         }
 
@@ -1187,7 +1195,7 @@ mod tests {
                 TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.leaf().as_str(), "Vec3");
                     assert_eq!(generic_args.len(), 2);
-                    assert_eq!(generic_arg_name(&generic_args[0]), "Length");
+                    assert_eq!(generic_arg_name(generic_args.first()), "Length");
                     assert_eq!(generic_arg_name(&generic_args[1]), "ECI");
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
@@ -1234,7 +1242,7 @@ mod tests {
             panic!("expected type application");
         };
         assert!(matches!(
-            &generic_args[0],
+            generic_args.first(),
             GenericArg::Index(IndexExpr::Finite {
                 cardinality: NatExpr::Add(_, _),
                 ..
@@ -1279,7 +1287,7 @@ mod tests {
                 TypeExprKind::TypeApplication { name, generic_args } => {
                     assert_eq!(name.value.leaf().as_str(), "Timestamp");
                     assert_eq!(generic_args.len(), 1);
-                    assert_eq!(generic_arg_name(&generic_args[0]), "UTC");
+                    assert_eq!(generic_arg_name(generic_args.first()), "UTC");
                 }
                 other => panic!("expected TypeApplication, got {other:?}"),
             },
@@ -1366,11 +1374,14 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::ComplexApplication { generic_args } = &param.type_ann.element.kind else {
+        let TypeExprKind::ComplexApplication {
+            generic_args: Some(generic_args),
+        } = &param.type_ann.element.kind
+        else {
             panic!("expected ComplexApplication");
         };
         assert_eq!(generic_args.len(), 1);
-        assert_eq!(generic_arg_name(&generic_args[0]), "Length");
+        assert_eq!(generic_arg_name(generic_args.first()), "Length");
     }
 
     #[test]
@@ -1382,7 +1393,7 @@ mod tests {
         };
         assert!(matches!(
             &param.type_ann.element.kind,
-            TypeExprKind::ComplexApplication { generic_args } if generic_args.is_empty()
+            TypeExprKind::ComplexApplication { generic_args: None }
         ));
     }
 
@@ -1393,11 +1404,14 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.element.kind else {
+        let TypeExprKind::KeyApplication {
+            generic_args: Some(generic_args),
+        } = &param.type_ann.element.kind
+        else {
             panic!("expected KeyApplication");
         };
         assert_eq!(generic_args.len(), 1);
-        assert_eq!(generic_arg_name(&generic_args[0]), "Maneuver");
+        assert_eq!(generic_arg_name(generic_args.first()), "Maneuver");
     }
 
     #[test]
@@ -1407,12 +1421,15 @@ mod tests {
         let DeclKind::Param(param) = &file.declarations[0].kind else {
             panic!("expected param");
         };
-        let TypeExprKind::KeyApplication { generic_args } = &param.type_ann.element.kind else {
+        let TypeExprKind::KeyApplication {
+            generic_args: Some(generic_args),
+        } = &param.type_ann.element.kind
+        else {
             panic!("expected KeyApplication");
         };
         assert_eq!(generic_args.len(), 1);
         assert!(matches!(
-            &generic_args[0],
+            generic_args.first(),
             GenericArg::Index(IndexExpr::Finite { .. })
         ));
     }
@@ -1426,7 +1443,7 @@ mod tests {
         };
         assert!(matches!(
             &param.type_ann.element.kind,
-            TypeExprKind::KeyApplication { generic_args } if generic_args.is_empty()
+            TypeExprKind::KeyApplication { generic_args: None }
         ));
     }
 

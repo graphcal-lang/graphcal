@@ -7,7 +7,7 @@
 
 use crate::outcome::Outcome;
 use crate::resolved_name::{
-    ResolvedDeclName, ResolvedDimName, ResolvedIndexName, ResolvedStructTypeName,
+    ResolvedDeclName, ResolvedDimName, ResolvedStaticName, ResolvedStructTypeName,
 };
 use crate::semantic_error::attribute::AttributeError;
 use crate::semantic_error::dimension::DimensionError;
@@ -71,6 +71,7 @@ pub use resolved_nominal::*;
 pub mod resolved_type;
 pub use resolved_type::*;
 pub mod scoped_node;
+pub mod unfinished_reach;
 
 impl DagTIR {
     /// Populate the values that callers may project from this DAG.
@@ -135,12 +136,6 @@ pub struct SignatureResolvedHirDag {
 }
 
 impl SignatureResolvedHirDag {
-    /// Borrow the canonical DAG identity.
-    #[must_use]
-    pub const fn dag_id(&self) -> &crate::dag_id::DagId {
-        self.hir.dag_id()
-    }
-
     /// The HIR body other than its declarations.
     const fn hir(&self) -> &HirDag {
         &self.hir
@@ -231,17 +226,28 @@ impl TirDraft {
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<Self, Outcome<SemanticError>> {
         cancellation.checkpoint()?;
-        let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
-        let context_types = Arc::clone(&project_types);
-        let ctx = ModuleTypeContext::new(signed.hir().module(), module_resolver, &context_types);
-        type_resolve_impl(
+        // The root's display-dimension spellings and extern signatures seed
+        // the draft itself; the body resolves exactly like any other DAG's.
+        let mut signed = signed;
+        let display_dimensions = std::mem::take(&mut signed.hir.display_dimensions);
+        let extern_functions = std::mem::take(&mut signed.hir.extern_functions);
+        let root_dag = type_resolve_signed_dag(
             signed,
-            imported_bindings,
+            imported_types,
             src,
-            ctx,
-            project_types,
+            module_resolver,
+            &project_types,
             cancellation,
-        )
+        )?;
+        Ok(Self::new(
+            crate::display::formatting_registry::FormattingRegistry::new(
+                project_types.base_dimensions().clone(),
+                display_dimensions,
+            ),
+            project_types,
+            root_dag,
+            extern_functions,
+        ))
     }
 
     /// Resolve a signature-complete same-file inline DAG's bodies and add it
@@ -264,9 +270,9 @@ impl TirDraft {
         cancellation.checkpoint()?;
         // A nested DAG's `import plugin` signatures join the file's extern
         // map, exactly like the root body's, so calls inside it resolve.
-        self.merge_declared_extern_functions(signed.hir(), src)?;
+        self.merge_declared_extern_functions(signed.hir())?;
         let project_types = self.project_types();
-        let dag = type_resolve_signed_single_with_imported_bindings_and_cancellation(
+        let dag = type_resolve_signed_dag(
             signed,
             imported_types,
             src,
@@ -290,14 +296,16 @@ impl TirDraft {
     ///
     /// # Errors
     ///
-    /// Returns a [`SemanticError`] when an instance cannot be specialized.
+    /// Returns a [`SemanticError`] when an instance cannot be specialized,
+    /// or [`Outcome::Cancelled`] once `cancellation` is cancelled.
     pub fn instantiate(
         self,
         overrides: &CheckedOverrideDependencies,
         src: SourceId,
-    ) -> Result<InstantiatedTir, SemanticError> {
+        cancellation: &crate::cancellation::CancellationToken,
+    ) -> Result<InstantiatedTir, Outcome<SemanticError>> {
         let mut tir = self.finish();
-        let instances = specialization::instantiate_semantic_edges(&mut tir, src)?;
+        let instances = specialization::instantiate_semantic_edges(&mut tir, src, cancellation)?;
         augment_runtime_deps_for_dynamic_units(&mut tir);
         overrides.reconcile(&mut tir);
         Ok(InstantiatedTir { tir, instances })
@@ -347,61 +355,6 @@ fn finalize_hir_dag(
     check_hir_body_policies(dag, surface, module_ctx, src).map_err(Outcome::Failed)
 }
 
-fn type_resolve_impl(
-    signed: SignatureResolvedHirDag,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
-    src: SourceId,
-    module_ctx: ModuleTypeContext<'_>,
-    project_types: Arc<ProjectTypeStore>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<TirDraft, Outcome<SemanticError>> {
-    cancellation.checkpoint()?;
-    let SignatureResolvedHirDag {
-        hir: ir,
-        decls,
-        domain_bounds,
-    } = signed;
-    let imported_bindings_for_hir = imported_bindings.clone();
-    let mut root_dag = type_resolve_dag(
-        decls,
-        src,
-        module_ctx.owner,
-        module_ctx,
-        &imported_bindings_for_hir,
-        domain_bounds,
-        cancellation,
-    )?
-    .with_body(
-        HirBody {
-            included_plots: ir.included_plots,
-            static_ports: ir.static_ports,
-            assumes_map: ir.assumes_map,
-            expected_fail: ir.expected_fail,
-            dynamic_unit_scales: ir.dynamic_unit_scales,
-            semantic_instances: ir.semantic_instances,
-        },
-        imported_bindings,
-        module_ctx,
-        src,
-    )?;
-    finalize_hir_dag(
-        &mut root_dag,
-        &ir.external_surface,
-        module_ctx,
-        src,
-        cancellation,
-    )?;
-    Ok(TirDraft::new(
-        crate::display::formatting_registry::FormattingRegistry::new(
-            project_types.base_dimensions().clone(),
-            ir.display_dimensions,
-        ),
-        project_types,
-        root_dag,
-        ir.extern_functions,
-    ))
-}
-
 /// Resolve type annotations for one DAG body without imports.
 #[cfg(test)]
 pub(crate) fn type_resolve_single_with_modules(
@@ -418,7 +371,7 @@ pub(crate) fn type_resolve_single_with_modules(
             project_types,
             cancellation,
         )?;
-        type_resolve_signed_single_with_imported_bindings_and_cancellation(
+        type_resolve_signed_dag(
             signed,
             &|_| None,
             src,
@@ -429,8 +382,9 @@ pub(crate) fn type_resolve_single_with_modules(
     })
 }
 
-/// Resolve a signature-complete non-root HIR module's bodies.
-fn type_resolve_signed_single_with_imported_bindings_and_cancellation(
+/// Resolve a signature-complete HIR DAG's bodies against its checked
+/// imported interfaces.
+fn type_resolve_signed_dag(
     signed: SignatureResolvedHirDag,
     imported_types: &ImportedConstantTypes<'_>,
     src: SourceId,
@@ -440,30 +394,18 @@ fn type_resolve_signed_single_with_imported_bindings_and_cancellation(
 ) -> Result<DagTIR, Outcome<SemanticError>> {
     cancellation.checkpoint()?;
     let imported_bindings = checked_imported_bindings(signed.hir(), imported_types, src)?;
-    let ctx = ModuleTypeContext::new(signed.hir().module(), module_resolver, project_types);
-    type_resolve_single_impl(signed, imported_bindings, src, ctx, cancellation)
-}
-
-fn type_resolve_single_impl(
-    signed: SignatureResolvedHirDag,
-    imported_bindings: HashMap<ScopedName, ImportedBinding>,
-    src: SourceId,
-    module_ctx: ModuleTypeContext<'_>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<DagTIR, Outcome<SemanticError>> {
-    cancellation.checkpoint()?;
+    let module_ctx = ModuleTypeContext::new(signed.hir().module(), module_resolver, project_types);
     let SignatureResolvedHirDag {
         hir: ir,
         decls,
         domain_bounds,
     } = signed;
-    let imported_bindings_for_hir = imported_bindings.clone();
     let mut dag = type_resolve_dag(
         decls,
         src,
         module_ctx.owner,
         module_ctx,
-        &imported_bindings_for_hir,
+        &imported_bindings,
         domain_bounds,
         cancellation,
     )?
@@ -557,9 +499,15 @@ fn resolve_signature(
 /// exactly as the instance output itself is specialized.
 struct DeclTypeResolver<'a> {
     types: &'a ProjectTypeStore,
-    /// The substitution of the instance each projected name comes from.
-    projection_substitutions:
-        HashMap<&'a DeclName, &'a crate::ir::static_substitution::StaticSubstitution>,
+    /// The substitution of the instance each projected name comes from, with
+    /// the span of the include that projects it.
+    projection_substitutions: HashMap<
+        &'a DeclName,
+        (
+            &'a crate::ir::static_substitution::StaticSubstitution,
+            crate::syntax::span::Span,
+        ),
+    >,
     /// The type view and complete substitution of each such instance.
     views: HashMap<
         &'a crate::ir::static_substitution::StaticSubstitution,
@@ -588,11 +536,16 @@ impl<'a> DeclTypeResolver<'a> {
                     .filter_map(|projection| {
                         crate::ir::instance::InstanceProjection::exposure(projection).selected()
                     })
-                    .map(|exposed| (exposed, record.instance.substitution()))
+                    .map(|exposed| {
+                        (
+                            exposed,
+                            (record.instance.substitution(), record.include_span),
+                        )
+                    })
             })
             .collect::<HashMap<_, _>>();
         let mut views = HashMap::new();
-        for substitution in projection_substitutions.values() {
+        for (substitution, _) in projection_substitutions.values() {
             let complete =
                 complete_substitution::CompleteSubstitution::try_new(substitution, types)
                     .map_err(|error| error.into_graphcal(src))?;
@@ -618,14 +571,16 @@ impl<'a> DeclTypeResolver<'a> {
         let instance = self
             .projection_substitutions
             .get(&identity.to_unowned_def_name())
-            .and_then(|substitution| self.views.get(substitution));
+            .and_then(|(substitution, include_span)| {
+                self.views
+                    .get(substitution)
+                    .map(|instance| (instance, *include_span))
+            });
         match instance {
-            Some((view, complete)) => {
-                resolve_instance_decl_type(decl_type, complete, view, self.src)
+            Some(((view, complete), include_span)) => {
+                resolve_instance_decl_type(decl_type, complete, view, self.src, include_span)
             }
-            None => {
-                type_expr::resolve_hir_decl_type_with_project_types(decl_type, self.src, self.types)
-            }
+            None => type_expr::resolve_hir_decl_type(decl_type, self.src, self.types),
         }
     }
 }
@@ -637,7 +592,7 @@ pub(crate) fn resolve_todo_hole_type(
     src: SourceId,
     types: &ProjectTypeStore,
 ) -> Result<crate::semantic::checked_type::CheckedType, SemanticError> {
-    type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, types)?.to_checked_type(src)
+    type_expr::resolve_hir_decl_type(decl_type, src, types)?.to_checked_type(src)
 }
 
 /// Resolve declaration annotations in the type view `types` (see
@@ -685,19 +640,22 @@ fn instance_type_view<'s>(
 }
 
 /// Resolve a template annotation in `view` (from [`instance_type_view`]) and
-/// specialize it through the include's `substitution`.
+/// specialize it through the include's `substitution`, reporting an exponent
+/// overflow of the specialization at `site` in `src`.
 fn resolve_instance_decl_type(
     decl_type: &crate::hir::types::DeclType,
     substitution: &complete_substitution::CompleteSubstitution<'_>,
     view: &ProjectTypeStore,
     src: SourceId,
+    site: crate::syntax::span::Span,
 ) -> Result<ResolvedDeclType, SemanticError> {
-    let template_type = type_expr::resolve_hir_decl_type_with_project_types(decl_type, src, view)?;
-    specialization::specialize_type(&template_type, substitution, src)
+    let template_type = type_expr::resolve_hir_decl_type(decl_type, src, view)?;
+    specialization::specialize_type(&template_type, substitution)
+        .map_err(specialization::specialization_overflow(src, site))
 }
 
 /// Declaration domain bounds keyed by the canonical declaration they bound.
-type DomainBounds = HashMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>;
+type DomainBounds = indexmap::IndexMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>;
 
 /// Require each value declaration's resolved type to be concrete (constants,
 /// then parameters, then nodes), moving its domain bounds into a table keyed
@@ -706,7 +664,7 @@ fn attach_checked_types(
     decls: crate::ir::decl_table::DeclTable<SignatureResolved>,
     src: SourceId,
 ) -> Result<(crate::ir::decl_table::DeclTable<Typed>, DomainBounds), SemanticError> {
-    let mut domain_bounds = HashMap::new();
+    let mut domain_bounds = DomainBounds::new();
     let decls = decls.try_map(signature_rank, |decl| {
         map_value_annotation(
             decl,
@@ -762,6 +720,7 @@ where
             doc: entry.doc,
             type_ann: map(identity, entry.type_ann)?,
             identity: entry.identity,
+            origin: entry.origin,
             expr: entry.expr,
             span: entry.span,
             definition_range: entry.definition_range,
@@ -779,6 +738,7 @@ where
             doc: entry.doc,
             type_ann: map(identity, entry.type_ann)?,
             identity: entry.identity,
+            origin: entry.origin,
             definition: entry.definition,
             span: entry.span,
             definition_range: entry.definition_range,
@@ -845,7 +805,7 @@ fn type_resolve_dag(
 
     let semantic = DagSemanticBody {
         domain_bounds,
-        dynamic_unit_scales: HashMap::new(),
+        dynamic_unit_scales: indexmap::IndexMap::new(),
         dependencies,
         override_reconciliations,
         bindable_nominals,
@@ -906,61 +866,34 @@ fn collect_resolved_type_defs<'a>(
     Ok(defs)
 }
 
-#[derive(Debug, Clone)]
-enum PublicSignatureDependency {
-    Dimension(Spanned<ResolvedDimName>),
-    Index(Spanned<ResolvedIndexName>),
-    Type(Spanned<ResolvedStructTypeName>),
+/// The kind of declaration a public-signature dependency names, for
+/// diagnostics.
+const fn static_name_declaration_kind(
+    name: &ResolvedStaticName,
+) -> crate::declaration_kind::DeclarationKind {
+    match name {
+        ResolvedStaticName::Dimension(_) => crate::declaration_kind::DeclarationKind::Dimension,
+        ResolvedStaticName::Index(_) => crate::declaration_kind::DeclarationKind::Index,
+        ResolvedStaticName::Type(_) => crate::declaration_kind::DeclarationKind::Type,
+    }
 }
 
-impl PublicSignatureDependency {
-    const fn span(&self) -> Span {
-        match self {
-            Self::Dimension(name) => name.span,
-            Self::Index(name) => name.span,
-            Self::Type(name) => name.span,
-        }
-    }
-
-    fn name(&self) -> crate::syntax::names::NameAtom {
-        match self {
-            Self::Dimension(name) => name.value.atom().clone(),
-            Self::Index(name) => name.value.atom().clone(),
-            Self::Type(name) => name.value.atom().clone(),
-        }
-    }
-
-    const fn kind(&self) -> crate::declaration_kind::DeclarationKind {
-        match self {
-            Self::Dimension(_) => crate::declaration_kind::DeclarationKind::Dimension,
-            Self::Index(_) => crate::declaration_kind::DeclarationKind::Index,
-            Self::Type(_) => crate::declaration_kind::DeclarationKind::Type,
-        }
-    }
-
-    fn is_public(&self, resolver: &ModuleResolver) -> Option<bool> {
-        let visibility = match self {
-            Self::Dimension(name) => resolver.symbol(&name.value).map(SymbolRef::visibility),
-            Self::Index(name) => resolver.symbol(&name.value).map(SymbolRef::visibility),
-            Self::Type(name) => resolver.symbol(&name.value).map(SymbolRef::visibility),
-        };
-        visibility.map(crate::syntax::ast::BindableVisibility::is_public)
-    }
-
-    const fn owner(&self) -> &crate::dag_id::DagId {
-        match self {
-            Self::Dimension(name) => name.value.owner(),
-            Self::Index(name) => name.value.owner(),
-            Self::Type(name) => name.value.owner(),
-        }
-    }
+/// Whether the declaration `name` is public, or `None` when the resolver
+/// has no symbol for it.
+fn static_name_is_public(name: &ResolvedStaticName, resolver: &ModuleResolver) -> Option<bool> {
+    let visibility = match name {
+        ResolvedStaticName::Dimension(name) => resolver.symbol(name).map(SymbolRef::visibility),
+        ResolvedStaticName::Index(name) => resolver.symbol(name).map(SymbolRef::visibility),
+        ResolvedStaticName::Type(name) => resolver.symbol(name).map(SymbolRef::visibility),
+    };
+    visibility.map(crate::syntax::ast::BindableVisibility::is_public)
 }
 
 fn collect_public_signature_generic_arg_dependencies(
     arg: &crate::hir::types::GenericArg,
     defs: &ResolvedTypeDefs,
     visited_defaults: &mut std::collections::HashSet<GenericParamId>,
-    dependencies: &mut Vec<PublicSignatureDependency>,
+    dependencies: &mut Vec<Spanned<ResolvedStaticName>>,
 ) {
     match arg {
         crate::hir::types::GenericArg::Dim(arg) => {
@@ -983,7 +916,7 @@ fn collect_public_signature_generic_arg_dependencies(
 
 fn collect_public_signature_dim_arg_dependencies(
     arg: &crate::hir::types::DimArg,
-    dependencies: &mut Vec<PublicSignatureDependency>,
+    dependencies: &mut Vec<Spanned<ResolvedStaticName>>,
 ) {
     let crate::hir::types::DimArg::Expr(expr) = arg else {
         return;
@@ -992,9 +925,10 @@ fn collect_public_signature_dim_arg_dependencies(
         expr.terms
             .iter()
             .filter_map(|item| match &item.term.target {
-                crate::hir::types::DimTermTarget::Dimension(name) => {
-                    Some(PublicSignatureDependency::Dimension(name.clone()))
-                }
+                crate::hir::types::DimTermTarget::Dimension(name) => Some(Spanned::new(
+                    ResolvedStaticName::Dimension(name.value.clone()),
+                    name.span,
+                )),
                 crate::hir::types::DimTermTarget::GenericParam(_)
                 | crate::hir::types::DimTermTarget::Dimensionless => None,
             }),
@@ -1003,10 +937,13 @@ fn collect_public_signature_dim_arg_dependencies(
 
 fn collect_public_signature_index_dependencies(
     index: &crate::hir::types::IndexRef,
-    dependencies: &mut Vec<PublicSignatureDependency>,
+    dependencies: &mut Vec<Spanned<ResolvedStaticName>>,
 ) {
     if let crate::hir::types::IndexRef::Concrete(name) = index {
-        dependencies.push(PublicSignatureDependency::Index(name.clone()));
+        dependencies.push(Spanned::new(
+            ResolvedStaticName::Index(name.value.clone()),
+            name.span,
+        ));
     }
 }
 
@@ -1014,7 +951,7 @@ fn collect_public_signature_type_dependencies(
     value_type: &crate::hir::types::ValueType,
     defs: &ResolvedTypeDefs,
     visited_defaults: &mut std::collections::HashSet<GenericParamId>,
-    dependencies: &mut Vec<PublicSignatureDependency>,
+    dependencies: &mut Vec<Spanned<ResolvedStaticName>>,
 ) {
     match &value_type.kind {
         crate::hir::types::ValueTypeKind::Builtin(_)
@@ -1024,9 +961,10 @@ fn collect_public_signature_type_dependencies(
                 expr.terms
                     .iter()
                     .filter_map(|item| match &item.term.target {
-                        crate::hir::types::DimTermTarget::Dimension(name) => {
-                            Some(PublicSignatureDependency::Dimension(name.clone()))
-                        }
+                        crate::hir::types::DimTermTarget::Dimension(name) => Some(Spanned::new(
+                            ResolvedStaticName::Dimension(name.value.clone()),
+                            name.span,
+                        )),
                         crate::hir::types::DimTermTarget::GenericParam(_)
                         | crate::hir::types::DimTermTarget::Dimensionless => None,
                     }),
@@ -1036,13 +974,19 @@ fn collect_public_signature_type_dependencies(
             collect_public_signature_index_dependencies(index, dependencies);
         }
         crate::hir::types::ValueTypeKind::Struct(name) => {
-            dependencies.push(PublicSignatureDependency::Type(name.clone()));
+            dependencies.push(Spanned::new(
+                ResolvedStaticName::Type(name.value.clone()),
+                name.span,
+            ));
         }
         crate::hir::types::ValueTypeKind::Complex(arg) => {
             collect_public_signature_dim_arg_dependencies(arg, dependencies);
         }
         crate::hir::types::ValueTypeKind::TypeApplication { name, generic_args } => {
-            dependencies.push(PublicSignatureDependency::Type(name.clone()));
+            dependencies.push(Spanned::new(
+                ResolvedStaticName::Type(name.value.clone()),
+                name.span,
+            ));
             for arg in generic_args {
                 collect_public_signature_generic_arg_dependencies(
                     arg,
@@ -1110,21 +1054,25 @@ fn validate_public_generic_defaults(
                 &mut visited_defaults,
                 &mut dependencies,
             );
-            for dependency in dependencies {
+            for Spanned {
+                value: dependency,
+                span,
+            } in dependencies
+            {
                 if dependency.owner() == &crate::semantic::prelude::prelude_dag_id() {
                     continue;
                 }
-                match dependency.is_public(ctx.resolver) {
+                match static_name_is_public(&dependency, ctx.resolver) {
                     Some(true) => {}
                     Some(false) => {
                         return Err(SemanticError::located(
                             src,
-                            dependency.span(),
+                            span,
                             VisibilityError::PrivateInPublic {
                                 pub_kind: crate::declaration_kind::DeclarationKind::Type,
                                 pub_name: type_name.atom().clone(),
-                                ref_kind: dependency.kind(),
-                                ref_name: dependency.name(),
+                                ref_kind: static_name_declaration_kind(&dependency),
+                                ref_name: dependency.atom().clone(),
                                 pub_span,
                             },
                         ));
@@ -1133,11 +1081,11 @@ fn validate_public_generic_defaults(
                         return Err(SemanticError::internal_error(
                             format!(
                                 "canonical {} `{}` is missing visibility metadata",
-                                dependency.kind(),
-                                dependency.name()
+                                static_name_declaration_kind(&dependency),
+                                dependency.atom()
                             ),
                             src,
-                            crate::diagnostic_anchor::DiagnosticAnchor::Source(dependency.span()),
+                            crate::diagnostic_anchor::DiagnosticAnchor::Source(span),
                         ));
                     }
                 }
@@ -1257,8 +1205,13 @@ impl<'d, 'c> TypeDefCollector<'d, 'c> {
                     substitution,
                     view,
                     definition_src,
+                    annotation.span,
                 )?,
-                None => resolve_hir_decl_type(&annotation.decl_type, definition_src, ctx)?,
+                None => type_expr::resolve_hir_decl_type(
+                    &annotation.decl_type,
+                    definition_src,
+                    ctx.types,
+                )?,
             };
             let bounds = annotation
                 .domain_bounds
@@ -1522,7 +1475,6 @@ impl HirPolicyChecker<'_> {
             | crate::hir::expr::ExprKind::EpochLiteral(_)
             | crate::hir::expr::ExprKind::ZonedDateTimeLiteral(_)
             | crate::hir::expr::ExprKind::IanaTimeZoneLiteral(_)
-            | crate::hir::expr::ExprKind::TypeSystemRef(_)
             | crate::hir::expr::ExprKind::ConstRef(_)
             | crate::hir::expr::ExprKind::LocalRef(_) => Ok(()),
             crate::hir::expr::ExprKind::QuantityLiteral { unit, .. } => {
@@ -1745,10 +1697,8 @@ impl HirPolicyChecker<'_> {
     }
 }
 
-/// Augment runtime deps with transitive dependencies through dynamic units.
-///
-/// When a param/node expression references a dynamic unit (via a unit
-/// literal or conversion), the `@`-references in that unit's scale
+/// Dependency collection: declared dependencies, constructed types, and the
+/// reads that dynamic unit scales add to their users.
 mod collect;
 pub(crate) use collect::dynamic_unit_scale_reads;
 use collect::{
@@ -1866,12 +1816,7 @@ pub(crate) fn rigid_dimension_view(
     ports: &[ResolvedDimName],
     src: SourceId,
 ) -> Result<UncheckedTir, SemanticError> {
-    let rigid_types = tir
-        .project_type_store()
-        .with_rigid_dimensions(ports)
-        .map_err(|_| {
-            SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
-        })?;
+    let rigid_types = rigid_project_types(tir, ports, src)?;
     let mut rigid = tir.clone();
     for port in ports {
         rigid
@@ -1879,21 +1824,74 @@ pub(crate) fn rigid_dimension_view(
             .dimensions
             .register_rigid_dimension(port);
     }
-    let rigid_dag = rigid.dags.localized_mut(position);
+    resolve_rigid_signatures(rigid.dags.localized_mut(position), &rigid_types, src)?;
+    rigid.replace_project_types(rigid_types);
+    Ok(rigid)
+}
+
+/// The DAG at `position` alone, with its source-authored declaration
+/// signatures re-resolved where the optional dimension `ports` are rigid:
+/// what an include binding these ports specializes. Unlike
+/// [`rigid_dimension_view`], no other DAG is copied.
+pub(crate) fn rigid_template_dag(
+    tir: &UncheckedTir,
+    position: dag_position::DagPosition,
+    ports: &[ResolvedDimName],
+    src: SourceId,
+) -> Result<DagTIR, SemanticError> {
+    let rigid_types = rigid_project_types(tir, ports, src)?;
+    let mut template = tir.dags.at(position).clone();
+    resolve_rigid_signatures(&mut template, &rigid_types, src)?;
+    Ok(template)
+}
+
+#[cfg(any(test, feature = "test-identities"))]
+thread_local! {
+    static RIGID_VIEW_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many rigid views (of a template or of the whole TIR) this thread has
+/// built, so tests can bound that work without timing it.
+#[cfg(any(test, feature = "test-identities"))]
+#[must_use]
+pub fn rigid_view_builds_for_test() -> usize {
+    RIGID_VIEW_BUILDS.with(std::cell::Cell::get)
+}
+
+/// The project types in which the optional dimension `ports` are rigid.
+fn rigid_project_types(
+    tir: &UncheckedTir,
+    ports: &[ResolvedDimName],
+    src: SourceId,
+) -> Result<ProjectTypeStore, SemanticError> {
+    #[cfg(any(test, feature = "test-identities"))]
+    RIGID_VIEW_BUILDS.with(|builds| builds.set(builds.get().saturating_add(1)));
+    tir.project_type_store()
+        .with_rigid_dimensions(ports)
+        .map_err(|_| {
+            SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
+        })
+}
+
+/// Re-resolve the source-authored declaration signatures of `dag` in
+/// `rigid_types`.
+fn resolve_rigid_signatures(
+    dag: &mut DagTIR,
+    rigid_types: &ProjectTypeStore,
+    src: SourceId,
+) -> Result<(), SemanticError> {
     let resolved = crate::outcome::without_cancellation(|cancellation| {
         resolve_declared_types(
-            rigid_dag
-                .value_decl_types()
+            dag.value_decl_types()
                 .map(|(identity, annotation)| (identity, &annotation.decl_type)),
-            &rigid_dag.semantic_instances,
-            &rigid_types,
+            &dag.semantic_instances,
+            rigid_types,
             src,
             cancellation,
         )
     })?;
-    rigid_dag.replace_value_decl_types(resolved);
-    rigid.replace_project_types(rigid_types);
-    Ok(rigid)
+    dag.replace_value_decl_types(resolved);
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1903,7 +1901,6 @@ pub(crate) mod specialization;
 mod substitution;
 mod type_expr;
 pub use substitution::{Substitution, SubstitutionError};
-pub use type_expr::resolve_hir_decl_type;
 use type_expr::resolve_hir_generic_arg;
 
 #[cfg(test)]

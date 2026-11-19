@@ -60,12 +60,6 @@ impl VirtualAbsolutePath {
     }
 }
 
-impl AsRef<Path> for VirtualAbsolutePath {
-    fn as_ref(&self) -> &Path {
-        self.as_path()
-    }
-}
-
 /// Invalid virtual absolute path.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum VirtualPathError {

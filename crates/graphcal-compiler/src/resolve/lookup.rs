@@ -138,32 +138,6 @@ impl ModuleResolver {
         })
     }
 
-    /// Return selectively imported DAG bindings as local name → canonical DAG.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ModuleResolveError`] if a selected declaration's canonical
-    /// owner is missing from the project-wide resolver.
-    pub fn selected_dag_imports(
-        &self,
-        owner: &DagId,
-    ) -> Result<Vec<(DeclName, DagId)>, ModuleResolveError> {
-        let scope = self.module_scope(owner)?;
-        Ok(scope
-            .selected_decls
-            .iter()
-            .filter(|(_, imported)| *imported.data() == DeclSymbolKind::Dag)
-            .map(|(local, imported)| {
-                (
-                    local.clone(),
-                    imported
-                        .resolved()
-                        .owner()
-                        .inline_dag_child(imported.resolved().to_unowned_def_name()),
-                )
-            })
-            .collect())
-    }
     /// Resolve a syntactic declaration/value path to the symbol it denotes.
     ///
     /// Bare paths first search local declarations, then selective imports.
@@ -534,7 +508,6 @@ impl ModuleResolver {
             }
             if let Some(actual) = self.visible_surface_kind(owner, Ns::NAMESPACE, atom, false)? {
                 return Err(ModuleResolveError::WrongUniverseName {
-                    owner: owner.clone(),
                     name: path.clone(),
                     expected: Ns::SURFACE_KIND,
                     actual,
@@ -572,7 +545,6 @@ impl ModuleResolver {
             self.visible_surface_kind(&target_ref.owner, Ns::NAMESPACE, leaf, requires_public)?
         {
             return Err(ModuleResolveError::WrongUniverseName {
-                owner: target_ref.owner,
                 name: path.clone(),
                 expected: Ns::SURFACE_KIND,
                 actual,

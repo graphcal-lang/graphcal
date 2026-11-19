@@ -153,13 +153,13 @@ node total: Velocity = sum(for m: Maneuver { @delta_v[m] });
 node largest: Velocity = maximum(for m: Maneuver { @delta_v[m] });
 node combined_sigma: Velocity = rss(for m: Maneuver { @delta_v[m] });
 node n: Int = count(for m: Maneuver { @delta_v[m] });
-node normalized: Velocity = sum(@delta_v) / to_float(count(@delta_v));
+node normalized: Velocity = sum(@delta_v) / count(@delta_v);
 node critical: Key<Maneuver> = argmax(@delta_v);
 node critical_dv: Velocity = @delta_v[@critical];
 ```
 
-`Int` と量の算術が暗黙的に混在することはありません。スカラー計算で濃度が必要な場合は
-`to_float(count(...))` を使用してください。多軸の値は、まず明示的な `for` 内包表記で
+`count` の結果は `Int` です。`Int` は `*` と `/` で量をスカラー倍できますが、`+`、`-`、比較では
+量と混ぜられません([算術演算子](expressions.md#arithmetic-operators)を参照)。多軸の値は、まず明示的な `for` 内包表記で
 単一の軸に射影しなければなりません(`D021`)。全軸および部分軸の集約はまだ定義されていません。
 
 ## インデックスキー { #index-keys }
@@ -694,7 +694,9 @@ param      power_mode_active: Bool[Phase, Component, OperationMode]
 ## 座標インデックス { #coordinate-indexes }
 
 座標インデックスは静的に既知の量としての座標を保持します。境界と間隔は、同じ次元を持つ
-有限のコンパイル時の量でなければなりません。実行時入力や整数(`Int`)値は受け付けられません。
+有限のコンパイル時の量でなければなりません。実行時入力は受け付けられません。各引数には
+ノード本体の式と同じ型規則が適用されるため、`Int` は量を倍率として掛けられます(`2 * 30.0 s`)が、
+`Int` 単独では境界や間隔になりません。
 
 ### 正確なステップの `range` { #exact-step-range }
 

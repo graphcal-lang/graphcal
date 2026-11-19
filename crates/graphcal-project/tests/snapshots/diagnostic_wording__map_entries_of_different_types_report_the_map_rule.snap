@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, \"map_entries.gcl\")"
+---
+dimension mismatch: expected Length, found Time
+    Diagnostic severity: error
+Begin snippet for map_entries.gcl starting at line 1, column 1
+
+snippet line 1: index P = { A, B };
+snippet line 2: node x: Length[P] = { P#A: 1.0 m, P#B: 2.0 s };
+    label at line 2, columns 40 to 44: has type Time
+diagnostic help: every entry of a map literal must have the same type as the first
+diagnostic code: graphcal::D001

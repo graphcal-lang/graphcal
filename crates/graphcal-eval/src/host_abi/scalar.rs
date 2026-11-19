@@ -8,7 +8,7 @@
 
 use std::fmt;
 
-use graphcal_compiler::finite_value::FiniteQuantity;
+use graphcal_compiler::finite_value::{ExactF64ToI64Error, FiniteQuantity, exact_f64_to_i64};
 use graphcal_compiler::function_signature::ScalarValueKind;
 use thiserror::Error;
 
@@ -119,44 +119,14 @@ pub fn decode_bool(value: f64) -> Result<bool, HostScalarError> {
 ///
 /// Returns [`HostScalarError::InvalidInt`] with the failed invariant.
 pub fn decode_int(value: f64) -> Result<i64, HostScalarError> {
-    if !value.is_finite() {
-        return Err(HostScalarError::InvalidInt {
-            value,
-            reason: InvalidIntReason::NonFinite,
-        });
-    }
-
-    let lower_inclusive = -2.0_f64.powi(63);
-    let upper_exclusive = 2.0_f64.powi(63);
-    if value < lower_inclusive || value >= upper_exclusive {
-        return Err(HostScalarError::InvalidInt {
-            value,
-            reason: InvalidIntReason::OutOfRange,
-        });
-    }
-
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "the following binary64 round trip rejects truncated values"
-    )]
-    let converted = value as i64;
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "the binary64 round trip is the exactness check"
-    )]
-    let round_trip = converted as f64;
-    #[expect(
-        clippy::float_cmp,
-        reason = "Int decoding requires exact equality and deliberately accepts signed zero"
-    )]
-    if round_trip != value {
-        return Err(HostScalarError::InvalidInt {
-            value,
-            reason: InvalidIntReason::NonInteger,
-        });
-    }
-
-    Ok(converted)
+    exact_f64_to_i64(value).map_err(|error| HostScalarError::InvalidInt {
+        value,
+        reason: match error {
+            ExactF64ToI64Error::NonFinite { .. } => InvalidIntReason::NonFinite,
+            ExactF64ToI64Error::NonInteger { .. } => InvalidIntReason::NonInteger,
+            ExactF64ToI64Error::OutOfRange { .. } => InvalidIntReason::OutOfRange,
+        },
+    })
 }
 
 /// A Graphcal `Int` whose value crosses the binary64 ABI slot exactly.

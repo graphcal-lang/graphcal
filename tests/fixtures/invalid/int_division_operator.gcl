@@ -1,0 +1,4 @@
+// `/` on two Int operands does not choose a rounding; a `div_*` built-in names it.
+param n: Int = 4;
+param p: Power = 10.0 W;
+node share: Power = @p * to_float(1 / @n);

@@ -58,11 +58,7 @@ pub struct StaticIndexError {
     pub axis: FiniteIndex,
 }
 
-impl StaticIndexRequirement {
-    pub fn check(&self, size: Option<IndexCardinality>) -> Result<Readiness, StaticIndexError> {
-        check_static_position(self.position, self.usage, size)
-    }
-}
+impl StaticIndexRequirement {}
 
 /// Whether a static `position` is in range of an axis of `size`, or awaits it.
 pub fn check_static_position(

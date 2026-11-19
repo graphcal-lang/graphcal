@@ -13,6 +13,7 @@ use super::category::*;
 use super::error::*;
 use super::exports::*;
 use super::namespace::Namespace;
+use super::reserved_name::ReservedName;
 use super::symbols::*;
 use crate::syntax::ast::Ident;
 use crate::syntax::parser::Parser;
@@ -260,6 +261,83 @@ fn unit_import_colliding_with_local_unit_is_rejected() {
             ..
         } if owner == main_id && name.as_str() == "m"
     ));
+}
+
+#[test]
+fn selective_aliases_cannot_take_reserved_spellings() {
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let lib = desugared_source(
+        "pub const unit ft: Length = 0.3048 m;\n\
+         pub dim Foo = Mass;\n\
+         pub type Choice { Only }\n\
+         pub const node one: Dimensionless = 1.0;",
+    );
+    for (items, namespace, reserved, alias) in [
+        (
+            "unit ft as m",
+            Namespace::Unit,
+            ReservedName::PreludeUnit,
+            "m",
+        ),
+        (
+            "dim Foo as Length",
+            Namespace::Static,
+            ReservedName::PreludeDimension,
+            "Length",
+        ),
+        (
+            "type Choice as Bool",
+            Namespace::Static,
+            ReservedName::BuiltinType,
+            "Bool",
+        ),
+        (
+            "one as sum",
+            Namespace::Term,
+            ReservedName::BuiltinFunction(crate::builtin::BuiltinFn::parse("sum").unwrap()),
+            "sum",
+        ),
+        (
+            "Only as scan",
+            Namespace::Term,
+            ReservedName::ContextualCallable,
+            "scan",
+        ),
+    ] {
+        for keyword in ["import", "include"] {
+            let parens = if keyword == "include" { "()" } else { "" };
+            let source = format!("{keyword} lib{parens}::{{ {items} }};");
+            let main = desugared_source(&source);
+            let mut modules = TestModules::default();
+            modules.add(lib_id.clone(), &lib.declarations);
+            modules.add(main_id.clone(), &main.declarations);
+            let path = if keyword == "include" {
+                first_include(&main).0
+            } else {
+                first_import(&main).path()
+            };
+            modules.edge(&main_id, path, &lib_id);
+            let err = modules.build().unwrap_err();
+            let alias_start = source.find(&format!("{alias} }}")).unwrap();
+            assert!(
+                matches!(
+                    &err,
+                    ModuleResolveError::ReservedImportName {
+                        owner,
+                        name,
+                        reserved: actual,
+                        span,
+                        ..
+                    } if owner == &main_id
+                        && name.as_str() == alias
+                        && *actual == reserved
+                        && *span == Span::new(alias_start, alias.len())
+                ),
+                "{source} ({namespace:?}): {err:?}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -607,7 +685,6 @@ fn include_selective_private_decl_is_rejected() {
     let lib = desugared_source("node hidden: Dimensionless = 1.0;");
     let main = desugared_source("include lib()::{ hidden };");
     let include = first_include_decl(&main);
-    let instance_id = main_id.instance_child(include.instance_scope());
 
     let mut modules = TestModules::default();
     modules.add(lib_id.clone(), &lib.declarations);
@@ -615,7 +692,8 @@ fn include_selective_private_decl_is_rejected() {
     modules.edge(&main_id, &include.path, &lib_id);
     let err = modules.build().unwrap_err();
 
-    // The span names the include item, so the diagnostic points at it.
+    // The span names the include item, so the diagnostic points at it, and
+    // the owner is the module the include names, not its internal instance.
     assert!(matches!(
         err,
         ModuleResolveError::PrivateImportItem {
@@ -623,10 +701,64 @@ fn include_selective_private_decl_is_rejected() {
             category: _,
             name,
             span,
-        } if owner == instance_id
+        } if owner == lib_id
             && name.as_str() == "hidden"
             && span == Span::new("include lib()::{ ".len(), "hidden".len())
     ));
+}
+
+/// RES-4: a type and its constructors that a selective include projects
+/// under Static bindings are owned by that include's instance, so aliasing
+/// them or projecting the same template type twice never collides with the
+/// importer's own declarations.
+#[test]
+fn projected_types_and_constructors_are_owned_by_the_include_instance() {
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let lib = desugared_source("pub(bind) index I = { a, b };\npub type T { A(x: Length) }");
+    let main = desugared_source(
+        "index J = { a, b };\n\
+         index K = { c, d, e };\n\
+         type T { A(y: Mass) }\n\
+         include lib(index I: J)::{ type T as U1, A as A1 };\n\
+         include lib(index I: K)::{ type T as U2, A as A2 };",
+    );
+    let includes = main
+        .declarations
+        .iter()
+        .filter_map(|declaration| match &declaration.kind {
+            ast::DeclKind::Include(include) => Some(include),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let mut modules = TestModules::default();
+    modules.add(lib_id.clone(), &lib.declarations);
+    modules.add(main_id.clone(), &main.declarations);
+    for include in &includes {
+        modules.edge(&main_id, &include.path, &lib_id);
+    }
+    let resolver = modules.build().unwrap();
+
+    let own = resolver
+        .resolve_struct_type_path(&main_id, &path(&["T"]))
+        .unwrap()
+        .into_resolved();
+    assert_eq!(own.owner(), &main_id);
+    for (include, (projected, constructor)) in includes.iter().zip([("U1", "A1"), ("U2", "A2")]) {
+        let instance = main_id.instance_child(include.instance_scope());
+        let projected = resolver
+            .resolve_struct_type_path(&main_id, &path(&[projected]))
+            .unwrap()
+            .into_resolved();
+        assert_eq!(projected.owner(), &instance);
+        assert_eq!(projected.atom().as_str(), "T");
+        let constructor = resolver
+            .resolve_constructor_path(&main_id, &path(&[constructor]))
+            .unwrap();
+        assert_eq!(constructor.resolved().owner(), &instance);
+        assert_eq!(constructor.owner_type_identity(), projected);
+    }
 }
 
 #[test]
@@ -1112,8 +1244,8 @@ fn aliased_include_does_not_expose_same_named_file_module() {
 fn source_modules_keep_the_handles_they_took_when_added() {
     let main_id = DagId::root_in_package("test", "main");
     let lib_id = DagId::root_in_package("test", "lib");
-    let main = desugared_source("import lib::{dim Length}; include lib() as inst;");
-    let lib = desugared_source("pub dim Length;");
+    let main = desugared_source("import lib::{dim Extent}; include lib() as inst;");
+    let lib = desugared_source("pub dim Extent;");
     let mut tables = SymbolTables::default();
     let main_handle = tables
         .add_module(main_id.clone(), &main.declarations)
@@ -1122,7 +1254,12 @@ fn source_modules_keep_the_handles_they_took_when_added() {
         .add_module(lib_id.clone(), &lib.declarations)
         .unwrap();
     let targets = |_: &DagId, _: &ModulePath| Some(lib_id.clone());
-    let resolver = tables.scopes(&targets).unwrap().freeze().unwrap();
+    let cancellation = crate::cancellation::CancellationToken::unbounded();
+    let resolver = tables
+        .scopes(&targets, &cancellation)
+        .unwrap()
+        .freeze(&cancellation)
+        .unwrap();
     assert_eq!(resolver.module(main_handle).owner(), &main_id);
     assert_eq!(resolver.module(lib_handle).owner(), &lib_id);
     assert_eq!(resolver.module_handle(&lib_id), Some(lib_handle));
@@ -1132,7 +1269,7 @@ fn source_modules_keep_the_handles_they_took_when_added() {
             .iter()
             .map(|binding| binding.name.as_str())
             .collect::<Vec<_>>(),
-        ["Length"]
+        ["Extent"]
     );
     assert_eq!(resolver.exported_bindings(&lib_id), Ok(exported));
     assert_eq!(
@@ -1227,6 +1364,26 @@ fn alias_respelling_its_local_dag_is_that_dags_own_name() {
     assert!(
         duplicate_term_alias("node velocity: Dimensionless = 1.0;\ninclude velocity();").is_some()
     );
+}
+
+#[test]
+fn two_aliases_of_one_name_collide_at_the_second() {
+    for source in [
+        "dag d {}\ninclude d() as x;\ninclude d() as x;",
+        "dag d {}\ninclude d();\ninclude d();",
+        "dag d {}\nimport d as x;\ninclude d() as x;",
+        "import app.lib;\ninclude app.lib();",
+        "import app.lib as x;\nimport plugin \"p.wasm\" as x { fn f(x: Dimensionless) -> Dimensionless; }",
+    ] {
+        let (_, first, duplicate) =
+            duplicate_term_alias(source).unwrap_or_else(|| panic!("{source:?} should be rejected"));
+        assert!(first.offset() < duplicate.offset(), "{source:?}");
+        assert_eq!(
+            source[first.offset()..first.offset() + first.len()],
+            source[duplicate.offset()..duplicate.offset() + duplicate.len()],
+            "{source:?}"
+        );
+    }
 }
 
 #[test]
@@ -1383,9 +1540,9 @@ fn selective_pub_reexport_resolves_to_original_owner() {
     let leaf_id = DagId::root_in_package("test", "leaf");
     let middle_id = DagId::root_in_package("test", "middle");
     let main_id = DagId::root_in_package("test", "main");
-    let leaf = desugared_source("pub dim Acceleration = Length / Time^2;");
-    let middle = desugared_source("import leaf::{ pub dim Acceleration };");
-    let main = desugared_source("import middle::{ dim Acceleration };");
+    let leaf = desugared_source("pub dim Jerkiness = Length / Time^2;");
+    let middle = desugared_source("import leaf::{ pub dim Jerkiness };");
+    let main = desugared_source("import middle::{ dim Jerkiness };");
     let middle_import = first_import(&middle);
     let main_import = first_import(&main);
 
@@ -1403,16 +1560,16 @@ fn selective_pub_reexport_resolves_to_original_owner() {
             .iter()
             .map(ExportedImportItem::render)
             .collect::<Vec<_>>(),
-        ["dim Acceleration"]
+        ["dim Jerkiness"]
     );
 
     let resolved_name = resolver
-        .resolve_dimension_path(&main_id, &path(&["Acceleration"]))
+        .resolve_dimension_path(&main_id, &path(&["Jerkiness"]))
         .map(crate::resolve::symbols::SymbolRef::into_resolved)
         .unwrap();
 
     assert_eq!(resolved_name.owner(), &leaf_id);
-    assert_eq!(resolved_name.as_str(), "Acceleration");
+    assert_eq!(resolved_name.as_str(), "Jerkiness");
 }
 
 #[test]
@@ -1721,11 +1878,7 @@ fn lenient_registration_keeps_every_recordable_declaration() {
         lenient.add_module_lenient(main_id.clone(), &main.declarations),
         Err(ModuleResolveError::DuplicateModule { .. })
     ));
-    let resolver = lenient
-        .scopes(&super::builder::NoModuleTargets)
-        .unwrap()
-        .freeze()
-        .unwrap();
+    let resolver = lenient.freeze_without_edges().unwrap();
     for name in ["a", "b"] {
         let symbol = resolver.declaration(&main_id, &decl(name)).unwrap();
         assert_eq!(symbol.resolved().owner(), &main_id);

@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+domain bound type mismatch on Dimensionless `efficiency`: min bound is an Int
+    Diagnostic severity: error
+Begin snippet for int_bound_on_dimensionless_domain.gcl starting at line 1, column 1
+
+snippet line 1: // Dimensionless domain bounds must be Dimensionless: an Int bound is rejected.
+snippet line 2: param efficiency: Dimensionless(min: 0, max: 1.0) = 0.9;
+    label at line 2, column 38: Dimensionless bound must not be an Int
+diagnostic help: write `0.0` instead of `0`
+diagnostic code: graphcal::C011

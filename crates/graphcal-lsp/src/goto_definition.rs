@@ -15,3 +15,6 @@ pub fn goto_definition(
     let location = definition_location(&resolved.location, uri, &analysis.source)?;
     Some(GotoDefinitionResponse::Scalar(location))
 }
+
+#[cfg(test)]
+mod tests;

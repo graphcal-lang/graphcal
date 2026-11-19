@@ -13,8 +13,16 @@ use thiserror::Error;
 use toml::{Table, Value};
 use url::{Host, Url};
 
-/// Graphcal's first lockfile schema version.
-pub const LOCK_VERSION: u64 = 1;
+/// Lockfile schema version written by this Graphcal.
+///
+/// Version 2 records the source-tree hash algorithm next to every tree digest.
+/// Version 1 locks are still read. Their digests do not record which files
+/// they cover, so parsing marks them
+/// [`SourceTreeHashAlgorithm::LegacyUnrecordedCoverage`] instead of guessing.
+pub const LOCK_VERSION: u64 = 2;
+
+/// Oldest lockfile schema version this Graphcal can read.
+const LEGACY_LOCK_VERSION: u64 = 1;
 /// Current standard-library identity recorded by the MVP lockfile.
 pub const STDLIB_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Largest per-call plugin fuel budget a project manifest may request.
@@ -31,6 +39,14 @@ pub struct PackageName(String);
 /// A local dependency alias visible in one package instance.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DependencyName(String);
+
+/// First segment of a module path, validated as a package-namespace name.
+///
+/// It names either the importing package itself (its real
+/// [`PackageName`]) or one of its direct [`DependencyName`] aliases; both use
+/// the same lower-snake-case spelling rule.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ModulePackageSelector(String);
 
 /// Opaque identifier for one locked package instance.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -107,11 +123,64 @@ pub enum GitTransport {
 /// the operating system that parses them.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PackageSourceDirectory {
-    components: Vec<SourceDirectoryComponent>,
+    path: PortableRelativePath,
 }
 
+/// A portable path below a package root, stored as validated `/`-separated
+/// components: non-empty, relative, and free of `.`/`..` components,
+/// backslashes, `:` and control characters, so it cannot leave the root and
+/// means the same on every host.
+///
+/// Package source directories and plugin artifact paths both point inside a
+/// package root and share this rule; each adds its own meaning on top.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct SourceDirectoryComponent(String);
+struct PortableRelativePath {
+    components: Vec<String>,
+}
+
+impl PortableRelativePath {
+    fn new(value: &str) -> Result<Self, PackageSourceDirectoryErrorReason> {
+        if value.is_empty() {
+            return Err(PackageSourceDirectoryErrorReason::Empty);
+        }
+        if value.starts_with('/') {
+            return Err(PackageSourceDirectoryErrorReason::Absolute);
+        }
+        if value.contains('\\') {
+            return Err(PackageSourceDirectoryErrorReason::Backslash);
+        }
+        if value.contains(':') {
+            return Err(PackageSourceDirectoryErrorReason::PrefixAmbiguity);
+        }
+        let components = value
+            .split('/')
+            .map(|component| {
+                if component.is_empty() {
+                    Err(PackageSourceDirectoryErrorReason::EmptyComponent)
+                } else if component == "." {
+                    Err(PackageSourceDirectoryErrorReason::CurrentDirectory)
+                } else if component == ".." {
+                    Err(PackageSourceDirectoryErrorReason::ParentDirectory)
+                } else if component.chars().any(char::is_control) {
+                    Err(PackageSourceDirectoryErrorReason::ControlCharacter)
+                } else {
+                    Ok(component.to_string())
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self { components })
+    }
+
+    fn to_path_buf(&self) -> PathBuf {
+        self.components.iter().collect()
+    }
+}
+
+impl fmt::Display for PortableRelativePath {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write_slash_joined(formatter, self.components.iter().map(String::as_str))
+    }
+}
 
 macro_rules! impl_string_newtype {
     ($ty:ty) => {
@@ -128,18 +197,38 @@ macro_rules! impl_string_newtype {
                 f.write_str(&self.0)
             }
         }
-
-        impl AsRef<str> for $ty {
-            fn as_ref(&self) -> &str {
-                self.as_str()
-            }
-        }
     };
 }
 
 impl_string_newtype!(PackageName);
 impl_string_newtype!(DependencyName);
 impl_string_newtype!(PackageInstanceId);
+impl_string_newtype!(ModulePackageSelector);
+
+impl ModulePackageSelector {
+    /// Validate a module path's first segment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ModulePackageSelectorError`] unless `value` is
+    /// `lower_snake_case`, the only spelling a package or dependency name can
+    /// have.
+    pub fn new(value: impl Into<String>) -> Result<Self, ModulePackageSelectorError> {
+        let value = value.into();
+        if is_valid_name(&value) {
+            Ok(Self(value))
+        } else {
+            Err(ModulePackageSelectorError { value })
+        }
+    }
+}
+
+/// A module path's first segment cannot name any package.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("`{value}` cannot name a package: package and dependency names are lower_snake_case")]
+pub struct ModulePackageSelectorError {
+    value: String,
+}
 impl_string_newtype!(GitCommitHash);
 
 impl PackageSourceDirectory {
@@ -151,50 +240,18 @@ impl PackageSourceDirectory {
     /// dot components, backslashes, control characters, or Windows-prefix
     /// ambiguity.
     pub fn new(value: &str) -> Result<Self, PackageSourceDirectoryError> {
-        let invalid = |reason| PackageSourceDirectoryError {
-            value: value.to_string(),
-            reason,
-        };
-        if value.is_empty() {
-            return Err(invalid(PackageSourceDirectoryErrorReason::Empty));
-        }
-        if value.starts_with('/') {
-            return Err(invalid(PackageSourceDirectoryErrorReason::Absolute));
-        }
-        if value.contains('\\') {
-            return Err(invalid(PackageSourceDirectoryErrorReason::Backslash));
-        }
-        if value.contains(':') {
-            return Err(invalid(PackageSourceDirectoryErrorReason::PrefixAmbiguity));
-        }
-        let components = value
-            .split('/')
-            .map(|component| {
-                if component.is_empty() {
-                    Err(invalid(PackageSourceDirectoryErrorReason::EmptyComponent))
-                } else if component == "." {
-                    Err(invalid(PackageSourceDirectoryErrorReason::CurrentDirectory))
-                } else if component == ".." {
-                    Err(invalid(PackageSourceDirectoryErrorReason::ParentDirectory))
-                } else if component.chars().any(char::is_control) {
-                    Err(invalid(PackageSourceDirectoryErrorReason::ControlCharacter))
-                } else {
-                    Ok(SourceDirectoryComponent(component.to_string()))
-                }
+        PortableRelativePath::new(value)
+            .map(|path| Self { path })
+            .map_err(|reason| PackageSourceDirectoryError {
+                value: value.to_string(),
+                reason,
             })
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { components })
     }
 
     /// Materialize the validated components as a host relative path.
     #[must_use]
     pub fn to_path_buf(&self) -> PathBuf {
-        self.components
-            .iter()
-            .fold(PathBuf::new(), |mut path, component| {
-                path.push(&component.0);
-                path
-            })
+        self.path.to_path_buf()
     }
 
     /// Join these validated components below a host filesystem root.
@@ -204,15 +261,24 @@ impl PackageSourceDirectory {
     }
 }
 
+/// Write validated path components separated by `/`, the spelling of both
+/// the relative filesystem paths and the Git repository URL path.
+fn write_slash_joined<'a>(
+    formatter: &mut fmt::Formatter<'_>,
+    components: impl IntoIterator<Item = &'a str>,
+) -> fmt::Result {
+    for (index, component) in components.into_iter().enumerate() {
+        if index > 0 {
+            formatter.write_str("/")?;
+        }
+        formatter.write_str(component)?;
+    }
+    Ok(())
+}
+
 impl fmt::Display for PackageSourceDirectory {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, component) in self.components.iter().enumerate() {
-            if index > 0 {
-                formatter.write_str("/")?;
-            }
-            formatter.write_str(&component.0)?;
-        }
-        Ok(())
+        self.path.fmt(formatter)
     }
 }
 
@@ -390,7 +456,7 @@ impl GitUrl {
     fn new(value: impl Into<String>) -> Result<Self, GitUrlError> {
         let value = value.into();
         let invalid = |reason| GitUrlError {
-            value: value.clone(),
+            value: redact_userinfo(&value),
             reason,
         };
         if value.is_empty() {
@@ -463,14 +529,44 @@ impl fmt::Display for GitUrl {
 
 impl fmt::Display for GitRepositoryPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, component) in self.components.iter().enumerate() {
-            if index > 0 {
-                formatter.write_str("/")?;
-            }
-            formatter.write_str(&component.0)?;
-        }
-        Ok(())
+        write_slash_joined(
+            formatter,
+            self.components.iter().map(|component| component.0.as_str()),
+        )
     }
+}
+
+/// Spelling of a rejected URL that is safe to print.
+///
+/// Rejected URLs end up in terminal output, CI logs, and editor diagnostics,
+/// so any userinfo that may carry a secret is replaced before the error is
+/// built: all userinfo of a non-SSH URL (an HTTPS user name is commonly a
+/// token), and SSH userinfo that contains a `:` password (or a `/`, which
+/// a plain user name never does). A plain SSH user such as `git` is kept
+/// because it helps identify the URL.
+fn redact_userinfo(value: &str) -> String {
+    const REDACTED: &str = "<redacted>";
+    let (scheme, rest) = match value.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, value),
+    };
+    // A password may contain `/`, so the userinfo is conservatively taken to
+    // end at the last `@` before any query or fragment, even if that
+    // over-redacts a repository path containing `@`.
+    let redactable_end = rest.find(['?', '#']).unwrap_or(rest.len());
+    let Some(at) = rest[..redactable_end].rfind('@') else {
+        return value.to_string();
+    };
+    let userinfo = &rest[..at];
+    let ssh_like = scheme.is_none_or(|scheme| scheme.eq_ignore_ascii_case("ssh"));
+    if ssh_like && !userinfo.contains([':', '/']) {
+        return value.to_string();
+    }
+    let host_and_path = &rest[at..];
+    scheme.map_or_else(
+        || format!("{REDACTED}{host_and_path}"),
+        |scheme| format!("{scheme}://{REDACTED}{host_and_path}"),
+    )
 }
 
 fn parse_standard_git_url(value: &str) -> Result<GitUrlKind, GitUrlErrorReason> {
@@ -487,7 +583,7 @@ fn parse_standard_git_url(value: &str) -> Result<GitUrlKind, GitUrlErrorReason> 
         .host()
         .map(|host| host.to_owned())
         .ok_or(GitUrlErrorReason::MissingHost)?;
-    reject_option_shaped(&host.to_string())?;
+    reject_authority_component(&host.to_string())?;
     let path = parse_repository_path(
         parsed
             .path_segments()
@@ -534,7 +630,7 @@ fn parse_scp_git_url(value: &str) -> Result<GitUrlKind, GitUrlErrorReason> {
     if host_text.contains('@') {
         return Err(GitUrlErrorReason::Malformed);
     }
-    reject_option_shaped(host_text)?;
+    reject_authority_component(host_text)?;
     let host = Host::parse(host_text).map_err(|_| GitUrlErrorReason::Malformed)?;
     let user = parse_required_ssh_user(user)?;
     let path = parse_repository_path(path.split('/'))?;
@@ -553,7 +649,7 @@ fn parse_required_ssh_user(value: &str) -> Result<SshUser, GitUrlErrorReason> {
     if value.is_empty() || value.contains('@') {
         return Err(GitUrlErrorReason::Malformed);
     }
-    reject_option_shaped(value)?;
+    reject_authority_component(value)?;
     Ok(SshUser(value.to_string()))
 }
 
@@ -595,8 +691,29 @@ fn parse_repository_path<'a>(
     Ok(GitRepositoryPath { components })
 }
 
+/// Validate an SSH user or a host before it can reach a transport.
+///
+/// Percent-encoding is rejected outright rather than decoded: no real SSH
+/// user name or host name needs it, and Git implementations disagree on
+/// whether to decode it, so `%2DoProxyCommand` could pass this check while a
+/// transport sees `-oProxyCommand`. Rejecting `%` keeps the validated spelling
+/// identical to the one every transport receives.
+fn reject_authority_component(value: &str) -> Result<(), GitUrlErrorReason> {
+    if value.contains('%') {
+        return Err(GitUrlErrorReason::PercentEncodedAuthority);
+    }
+    reject_option_shaped(value)
+}
+
+/// Reject a component that is, or decodes to, an option-shaped argument.
+///
+/// Repository paths keep percent-encoding (it is legitimate there, e.g. for
+/// spaces), so the check covers both the raw `-` and its encoding `%2D`.
 fn reject_option_shaped(value: &str) -> Result<(), GitUrlErrorReason> {
-    if value.starts_with('-') {
+    let encoded_dash = value
+        .get(..3)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("%2d"));
+    if value.starts_with('-') || encoded_dash {
         Err(GitUrlErrorReason::OptionShaped)
     } else {
         Ok(())
@@ -693,6 +810,7 @@ enum GitUrlErrorReason {
     Credentials,
     QueryOrFragment,
     OptionShaped,
+    PercentEncodedAuthority,
 }
 
 impl fmt::Display for GitUrlErrorReason {
@@ -714,6 +832,9 @@ impl fmt::Display for GitUrlErrorReason {
             }
             Self::OptionShaped => {
                 formatter.write_str("must not contain option-shaped authority or path components")
+            }
+            Self::PercentEncodedAuthority => {
+                formatter.write_str("must not percent-encode the user name or host name")
             }
         }
     }
@@ -892,7 +1013,7 @@ pub struct DependencySpec {
     /// match the dependency alias.
     package: Option<PackageName>,
     /// Exact-rev Git source.
-    pub git: GitDependency,
+    pub git: GitSourceId,
 }
 
 impl DependencySpec {
@@ -903,15 +1024,6 @@ impl DependencySpec {
             .clone()
             .unwrap_or_else(|| PackageName(alias.as_str().to_string()))
     }
-}
-
-/// Exact-rev Git dependency source.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GitDependency {
-    /// Repository URL.
-    pub url: GitUrl,
-    /// Required immutable revision.
-    pub rev: GitCommitHash,
 }
 
 /// Manifest parse or validation error.
@@ -1284,15 +1396,16 @@ fn parse_dependency_spec(dependency: &str, item: &Value) -> Result<DependencySpe
 
     Ok(DependencySpec {
         package,
-        git: GitDependency { url: git, rev },
+        git: GitSourceId::new(git, rev),
     })
 }
 
 /// A tool-maintained package-instance lockfile.
 #[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The schema version is not a field: parsing accepts every readable version
+/// and [`Lockfile::to_deterministic_toml`] always writes [`LOCK_VERSION`].
 pub struct Lockfile {
-    /// Lockfile schema version.
-    pub lock_version: u64,
     /// Tool that created the lockfile. Informational only.
     pub created_by: String,
     /// Graphcal toolchain version used for resolution.
@@ -1352,11 +1465,8 @@ impl ValidatedLockfile<'_> {
 /// A validated root-relative path to one WASM plugin artifact.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PluginArtifactPath {
-    components: Vec<PluginPathComponent>,
+    path: PortableRelativePath,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-struct PluginPathComponent(String);
 
 impl PluginArtifactPath {
     /// Parse a portable, plain relative `.wasm` path.
@@ -1371,42 +1481,22 @@ impl PluginArtifactPath {
     )]
     pub fn new(path: impl Into<String>) -> Result<Self, PluginArtifactPathError> {
         let path = path.into();
-        let components = path
-            .split('/')
-            .map(|component| PluginPathComponent(component.to_string()))
-            .collect::<Vec<_>>();
-        let valid_components = !path.contains('\\')
-            && !path.contains(':')
-            && !path.chars().any(char::is_control)
-            && components.iter().all(|component| {
-                !component.0.is_empty() && component.0 != "." && component.0 != ".."
-            });
-        if !valid_components || !path.ends_with(".wasm") {
-            return Err(PluginArtifactPathError { path });
+        match PortableRelativePath::new(&path) {
+            Ok(portable) if path.ends_with(".wasm") => Ok(Self { path: portable }),
+            Ok(_) | Err(_) => Err(PluginArtifactPathError { path }),
         }
-        Ok(Self { components })
     }
 
     /// Materialize the portable path below a filesystem root.
     #[must_use]
     pub fn join_to(&self, root: &Path) -> PathBuf {
-        self.components
-            .iter()
-            .fold(root.to_path_buf(), |path, component| {
-                path.join(&component.0)
-            })
+        root.join(self.path.to_path_buf())
     }
 }
 
 impl fmt::Display for PluginArtifactPath {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for (index, component) in self.components.iter().enumerate() {
-            if index > 0 {
-                formatter.write_str("/")?;
-            }
-            formatter.write_str(&component.0)?;
-        }
-        Ok(())
+        self.path.fmt(formatter)
     }
 }
 
@@ -1505,11 +1595,6 @@ impl Lockfile {
         active_graphcal_version: &str,
         active_stdlib_version: &str,
     ) -> Result<ValidatedLockfile<'_>, LockValidationError> {
-        if self.lock_version != LOCK_VERSION {
-            return Err(LockValidationError::UnsupportedLockVersion {
-                version: self.lock_version,
-            });
-        }
         if self.graphcal_version != active_graphcal_version {
             return Err(LockValidationError::GraphcalVersionMismatch {
                 lockfile: self.graphcal_version.clone(),
@@ -1682,42 +1767,55 @@ impl Lockfile {
     }
 
     fn reject_conflicting_git_source_hashes(&self) -> Result<(), LockValidationError> {
-        let mut sources =
-            BTreeMap::<CanonicalGitSource, (&Sha256Digest, &PackageInstanceId)>::new();
+        self.git_source_pins().map(|_| ())
+    }
+
+    /// Source-tree pins recorded for each immutable Git source.
+    ///
+    /// Unlike [`Self::validated`], this does not require the lock to have been
+    /// written by the running toolchain: a pin binds an immutable `(url,
+    /// commit)` to the tree it hashed, which stays true across upgrades.
+    /// `graphcal deps lock` uses these pins to detect a dependency whose
+    /// contents changed since it was locked.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LockValidationError::ConflictingGitSourceDigest`] when two
+    /// packages pin the same source to different trees.
+    pub fn git_source_pins(
+        &self,
+    ) -> Result<BTreeMap<GitSourceId, SourceTreeHashes>, LockValidationError> {
+        let mut pins = BTreeMap::<GitSourceId, (SourceTreeHashes, &PackageInstanceId)>::new();
         for package in &self.packages {
             let PackageSource::Git {
-                url,
-                commit,
+                source,
                 tree_hashes,
-                ..
             } = &package.source
             else {
                 continue;
             };
-            let source = CanonicalGitSource {
-                url: url.clone(),
-                commit: commit.clone(),
-            };
-            match sources.get(&source) {
-                Some((expected, first)) if *expected != &tree_hashes.sha256 => {
+            match pins.get(source) {
+                Some((expected, first)) if expected != tree_hashes => {
                     return Err(LockValidationError::ConflictingGitSourceDigest(Box::new(
                         GitSourceDigestConflict {
                             first: (*first).clone(),
                             second: package.id.clone(),
-                            url: url.clone(),
-                            commit: commit.clone(),
-                            first_digest: **expected,
+                            git_source: source.clone(),
+                            first_digest: expected.sha256,
                             second_digest: tree_hashes.sha256,
                         },
                     )));
                 }
                 Some(_) => {}
                 None => {
-                    sources.insert(source, (&tree_hashes.sha256, &package.id));
+                    pins.insert(source.clone(), (*tree_hashes, &package.id));
                 }
             }
         }
-        Ok(())
+        Ok(pins
+            .into_iter()
+            .map(|(source, (hashes, _))| (source, hashes))
+            .collect())
     }
 
     fn reject_duplicate_canonical_instances(&self) -> Result<(), LockValidationError> {
@@ -1739,26 +1837,11 @@ impl Lockfile {
         Ok(())
     }
 
-    /// Build a contextual package graph from this already validated lockfile.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`LockValidationError`] if the lockfile is structurally invalid
-    /// for the provided active versions.
-    pub fn package_graph(
-        &self,
-        active_graphcal_version: &str,
-        active_stdlib_version: &str,
-    ) -> Result<PackageGraph, LockValidationError> {
-        self.validated(active_graphcal_version, active_stdlib_version)
-            .map(ValidatedLockfile::package_graph)
-    }
-
     /// Serialize the lockfile in deterministic TOML form.
     #[must_use]
     pub fn to_deterministic_toml(&self) -> String {
         let mut out = String::new();
-        push_kv_u64(&mut out, "lock_version", self.lock_version);
+        push_kv_u64(&mut out, "lock_version", LOCK_VERSION);
         push_kv_string(&mut out, "created_by", &self.created_by);
         push_kv_string(&mut out, "graphcal_version", &self.graphcal_version);
         push_kv_string(&mut out, "stdlib_version", &self.stdlib_version);
@@ -1778,19 +1861,19 @@ impl Lockfile {
                     push_kv_string(&mut out, "path", ".");
                 }
                 PackageSource::Git {
-                    url,
-                    requested_rev,
-                    commit,
+                    source,
                     tree_hashes,
                 } => {
                     push_kv_string(&mut out, "type", "git");
-                    push_kv_string(&mut out, "url", &url.to_string());
-                    push_kv_string(&mut out, "requested_rev", requested_rev.as_str());
-                    push_kv_string(&mut out, "commit", commit.as_str());
+                    push_kv_string(&mut out, "url", &source.url().to_string());
+                    push_kv_string(&mut out, "commit", source.commit().as_str());
                     push_kv_inline_table(
                         &mut out,
                         "tree_hashes",
-                        &[("sha256", &tree_hashes.sha256.to_string())],
+                        &[
+                            ("algorithm", tree_hashes.algorithm.as_str()),
+                            ("sha256", &tree_hashes.sha256.to_string()),
+                        ],
                     );
                 }
             }
@@ -1856,13 +1939,10 @@ pub enum PackageSource {
     Root,
     /// Git source locked to an immutable commit and normalized tree hash.
     Git {
-        /// Repository URL.
-        url: GitUrl,
-        /// Manifest-requested revision.
-        requested_rev: GitCommitHash,
-        /// Immutable fetched commit. The MVP requires this to equal
-        /// `requested_rev`.
-        commit: GitCommitHash,
+        /// Repository URL and the immutable commit the manifest requested.
+        /// Only exact commits can be requested, so the requested and the
+        /// fetched commit are one value.
+        source: GitSourceId,
         /// Normalized source tree hashes.
         tree_hashes: SourceTreeHashes,
     },
@@ -1872,10 +1952,7 @@ impl PackageSource {
     fn canonical_key(&self) -> CanonicalPackageSource {
         match self {
             Self::Root => CanonicalPackageSource::Root,
-            Self::Git { url, commit, .. } => CanonicalPackageSource::Git {
-                url: url.clone(),
-                commit: commit.clone(),
-            },
+            Self::Git { source, .. } => CanonicalPackageSource::Git(source.clone()),
         }
     }
 }
@@ -1883,20 +1960,55 @@ impl PackageSource {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum CanonicalPackageSource {
     Root,
-    Git { url: GitUrl, commit: GitCommitHash },
+    Git(GitSourceId),
 }
 
 /// Hashes for a locked Git source tree.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceTreeHashes {
+    /// Algorithm that selected, framed, and hashed the tree's files.
+    pub algorithm: SourceTreeHashAlgorithm,
     /// SHA-256 digest of the normalized source tree.
     pub sha256: Sha256Digest,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-struct CanonicalGitSource {
-    url: GitUrl,
-    commit: GitCommitHash,
+/// Versioned algorithm that turns a package source tree into its digest.
+///
+/// A digest is only comparable with one computed by the same algorithm, so the
+/// lock records it explicitly. Changing which files a tree hash covers or how
+/// they are framed requires a new variant; every consumer matches on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SourceTreeHashAlgorithm {
+    /// `graphcal.toml`, the declared source directory, and every imported Wasm
+    /// artifact, hashed as SHA-256 over `path NUL length NUL bytes NUL` records
+    /// in portable-path order.
+    GraphcalSourceTreeV1,
+    /// A lock format 1 digest, which recorded no algorithm. Graphcal
+    /// 0.0.1-alpha.31 and later produced [`Self::GraphcalSourceTreeV1`]
+    /// digests; earlier versions used the same framing but covered only
+    /// `graphcal.toml` and the source directory, omitting Wasm artifacts
+    /// imported from outside it. Which of the two a pin is cannot be told from
+    /// the lock alone, so verifiers must accept either coverage explicitly.
+    LegacyUnrecordedCoverage,
+}
+
+impl SourceTreeHashAlgorithm {
+    /// Lockfile spelling of this algorithm.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::GraphcalSourceTreeV1 => "graphcal-source-tree-v1",
+            Self::LegacyUnrecordedCoverage => "legacy-unrecorded-coverage",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "graphcal-source-tree-v1" => Some(Self::GraphcalSourceTreeV1),
+            "legacy-unrecorded-coverage" => Some(Self::LegacyUnrecordedCoverage),
+            _ => None,
+        }
+    }
 }
 
 /// A non-empty, typed path through one dependency cycle.
@@ -1911,11 +2023,6 @@ impl LockedDependencyCycle {
     #[must_use]
     pub const fn start(&self) -> &PackageInstanceId {
         &self.start
-    }
-
-    /// Packages after [`Self::start`] and before the closing edge back to it.
-    pub fn successors(&self) -> impl ExactSizeIterator<Item = &PackageInstanceId> {
-        self.successors.iter()
     }
 }
 
@@ -1932,9 +2039,6 @@ impl fmt::Display for LockedDependencyCycle {
 /// Lockfile validation error.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LockValidationError {
-    /// Unsupported lock schema.
-    #[error("unsupported graphcal.lock version {version}")]
-    UnsupportedLockVersion { version: u64 },
     /// Active Graphcal toolchain version differs from the lockfile.
     #[error("graphcal.lock was resolved with Graphcal {lockfile}, active version is {active}")]
     GraphcalVersionMismatch { lockfile: String, active: String },
@@ -2044,25 +2148,6 @@ pub enum LockValidationError {
     },
 }
 
-/// Validate and bind a lockfile to every materialized package manifest.
-///
-/// # Errors
-///
-/// Returns [`LockValidationError`] unless lock entries and manifests form a
-/// total bijection with identical package names, source directories, and
-/// dependency alias sets, and every dependency target satisfies its manifest
-/// source contract.
-pub fn validate_lock_against_manifests(
-    lockfile: &Lockfile,
-    manifests: &BTreeMap<PackageInstanceId, PackageManifest>,
-    active_graphcal_version: &str,
-    active_stdlib_version: &str,
-) -> Result<ValidatedPackageGraph, LockValidationError> {
-    lockfile
-        .validated(active_graphcal_version, active_stdlib_version)?
-        .bind_manifests(manifests)
-}
-
 impl ValidatedLockfile<'_> {
     /// Bind every reachable lock entry to exactly one materialized manifest.
     ///
@@ -2144,14 +2229,7 @@ impl ValidatedLockfile<'_> {
                     });
                 }
                 match &target.source {
-                    PackageSource::Git {
-                        url,
-                        requested_rev,
-                        commit,
-                        ..
-                    } if url == &spec.git.url
-                        && requested_rev == &spec.git.rev
-                        && commit == &spec.git.rev => {}
+                    PackageSource::Git { source, .. } if source == &spec.git => {}
                     PackageSource::Git { .. } | PackageSource::Root => {
                         return Err(LockValidationError::DependencySourceMismatch {
                             package: package.id.clone(),
@@ -2172,8 +2250,8 @@ impl ValidatedLockfile<'_> {
 /// A package graph whose lock entries are totally matched to materialized
 /// manifests.
 ///
-/// Construction is only available through [`validate_lock_against_manifests`]
-/// or [`ValidatedLockfile::bind_manifests`], so consumers cannot resolve
+/// Construction is only available through
+/// [`ValidatedLockfile::bind_manifests`], so consumers cannot resolve
 /// modules through source metadata that differs from the manifest used for
 /// integrity verification.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2211,7 +2289,7 @@ impl ValidatedPackageGraph {
     pub fn resolve_package_selector(
         &self,
         current: &PackageInstanceId,
-        selector: &str,
+        selector: &ModulePackageSelector,
     ) -> Result<SelectedPackageInstance, PackageResolveError> {
         self.graph.resolve_package_selector(current, selector)
     }
@@ -2254,14 +2332,14 @@ impl PackageGraph {
     pub fn resolve_package_selector(
         &self,
         current: &PackageInstanceId,
-        selector: &str,
+        selector: &ModulePackageSelector,
     ) -> Result<SelectedPackageInstance, PackageResolveError> {
         let current_package = self.packages.get(current).ok_or_else(|| {
             PackageResolveError::UnknownCurrentPackage {
                 package: current.clone(),
             }
         })?;
-        if selector == current_package.name.as_str() {
+        if selector.as_str() == current_package.name.as_str() {
             return Ok(SelectedPackageInstance {
                 package: current.clone(),
                 relation: PackageResolutionRelation::SelfReference,
@@ -2269,11 +2347,12 @@ impl PackageGraph {
         }
         let (name, target) = current_package
             .dependencies
-            .get_key_value(&DependencyName(selector.to_owned()))
+            // Selectors and dependency aliases share one spelling rule.
+            .get_key_value(&DependencyName(selector.as_str().to_owned()))
             .ok_or_else(|| PackageResolveError::UnknownDependency {
                 package: current.clone(),
                 package_name: current_package.name.clone(),
-                name: selector.to_owned(),
+                name: selector.clone(),
             })?;
         Ok(SelectedPackageInstance {
             package: target.clone(),
@@ -2323,8 +2402,8 @@ pub enum PackageResolveError {
         package: PackageInstanceId,
         /// Real name of `package`.
         package_name: PackageName,
-        /// Source spelling of the module path's first segment.
-        name: String,
+        /// The module path's first segment.
+        name: ModulePackageSelector,
     },
 }
 
@@ -2352,6 +2431,23 @@ impl LockfileParseLimits {
 /// Lockfile parse error.
 #[derive(Debug, Error)]
 pub enum LockfileParseError {
+    /// The lock uses a schema version this Graphcal cannot read.
+    #[error(
+        "graphcal.lock uses lock format version {version}, but this Graphcal reads versions {LEGACY_LOCK_VERSION} through {LOCK_VERSION}; it was probably written by a newer Graphcal"
+    )]
+    UnsupportedLockVersion { version: u64 },
+    /// A version 1 lock recorded a fetched commit other than the requested
+    /// exact commit, which no Graphcal can produce.
+    #[error(
+        "graphcal.lock records commit `{commit}` for requested revision `{requested}`; requested and locked commits must be identical"
+    )]
+    RequestedRevisionMismatch {
+        requested: GitCommitHash,
+        commit: GitCommitHash,
+    },
+    /// A tree digest names an algorithm this Graphcal cannot compute.
+    #[error("unsupported source-tree hash algorithm `{algorithm}` in graphcal.lock")]
+    UnsupportedTreeHashAlgorithm { algorithm: String },
     /// TOML syntax failed.
     #[error("invalid TOML in graphcal.lock: {message}")]
     TomlParseError { message: String },
@@ -2434,8 +2530,7 @@ pub fn parse_lockfile_str_with_limits(
             message: e.to_string(),
         })?;
 
-    let lock_version = required_u64(root.get("lock_version"), "lock_version")?;
-    let strict_schema = lock_version == LOCK_VERSION;
+    let schema = LockSchema::from_version(required_u64(root.get("lock_version"), "lock_version")?)?;
     reject_unknown_lock_fields(
         &root,
         "root",
@@ -2448,7 +2543,6 @@ pub fn parse_lockfile_str_with_limits(
             "package",
             "plugin",
         ],
-        strict_schema,
     )?;
     let created_by = required_string(root.get("created_by"), "created_by")?.to_string();
     let graphcal_version =
@@ -2468,15 +2562,14 @@ pub fn parse_lockfile_str_with_limits(
     let packages = package_array
         .iter()
         .enumerate()
-        .map(|(index, package)| parse_locked_package(index, package, strict_schema))
+        .map(|(index, package)| parse_locked_package(index, package, schema))
         .collect::<Result<Vec<_>, _>>()?;
     let plugins = match root.get("plugin") {
-        Some(plugin) => parse_locked_plugins(plugin, strict_schema)?,
+        Some(plugin) => parse_locked_plugins(plugin)?,
         None => Vec::new(),
     };
 
     Ok(Lockfile {
-        lock_version,
         created_by,
         graphcal_version,
         stdlib_version,
@@ -2486,10 +2579,28 @@ pub fn parse_lockfile_str_with_limits(
     })
 }
 
-fn parse_locked_plugins(
-    item: &Value,
-    strict_schema: bool,
-) -> Result<Vec<LockedPlugin>, LockfileParseError> {
+/// Readable lockfile schema. Every readable schema is parsed strictly; a lock
+/// from an unknown schema is rejected rather than guessed at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LockSchema {
+    /// Tree digests carry no algorithm; see
+    /// [`SourceTreeHashAlgorithm::LegacyUnrecordedCoverage`].
+    V1,
+    /// Tree digests name their algorithm.
+    V2,
+}
+
+impl LockSchema {
+    const fn from_version(version: u64) -> Result<Self, LockfileParseError> {
+        match version {
+            LEGACY_LOCK_VERSION => Ok(Self::V1),
+            LOCK_VERSION => Ok(Self::V2),
+            version => Err(LockfileParseError::UnsupportedLockVersion { version }),
+        }
+    }
+}
+
+fn parse_locked_plugins(item: &Value) -> Result<Vec<LockedPlugin>, LockfileParseError> {
     let Some(array) = item.as_array() else {
         return Err(LockfileParseError::InvalidType {
             field: "plugin".to_string(),
@@ -2506,12 +2617,7 @@ fn parse_locked_plugins(
                     expected: "a table",
                 });
             };
-            reject_unknown_lock_fields(
-                table,
-                &format!("plugin[{index}]"),
-                &["path", "sha256"],
-                strict_schema,
-            )?;
+            reject_unknown_lock_fields(table, &format!("plugin[{index}]"), &["path", "sha256"])?;
             let path = required_string(table.get("path"), "plugin.path")?;
             let sha256 = required_string(table.get("sha256"), "plugin.sha256")?;
             Ok(LockedPlugin::new(path, sha256)?)
@@ -2522,7 +2628,7 @@ fn parse_locked_plugins(
 fn parse_locked_package(
     index: usize,
     item: &Value,
-    strict_schema: bool,
+    schema: LockSchema,
 ) -> Result<LockedPackage, LockfileParseError> {
     let Some(table) = item.as_table() else {
         return Err(LockfileParseError::InvalidType {
@@ -2534,7 +2640,6 @@ fn parse_locked_package(
         table,
         &format!("package[{index}]"),
         &["id", "name", "source_dir", "source", "dependencies"],
-        strict_schema,
     )?;
     let id = PackageInstanceId::new(required_string(table.get("id"), "package.id")?)?;
     let name = PackageName::new(required_string(table.get("name"), "package.name")?)?;
@@ -2549,7 +2654,7 @@ fn parse_locked_package(
             .ok_or(LockfileParseError::MissingField {
                 field: "package.source",
             })?;
-    let source = parse_package_source(source_table, strict_schema)?;
+    let source = parse_package_source(source_table, schema)?;
     let dependencies = match table.get("dependencies") {
         Some(dependencies) => parse_package_dependencies(dependencies)?,
         None => BTreeMap::new(),
@@ -2573,12 +2678,12 @@ fn parse_lock_source_dir(value: &str) -> Result<PackageSourceDirectory, Lockfile
 
 fn parse_package_source(
     table: &Table,
-    strict_schema: bool,
+    schema: LockSchema,
 ) -> Result<PackageSource, LockfileParseError> {
     let source_type = required_string(table.get("type"), "package.source.type")?;
     match source_type {
         "path" => {
-            reject_unknown_lock_fields(table, "package.source", &["type", "path"], strict_schema)?;
+            reject_unknown_lock_fields(table, "package.source", &["type", "path"])?;
             let path = required_string(table.get("path"), "package.source.path")?;
             if path != "." {
                 return Err(LockfileParseError::UnsupportedPathSource {
@@ -2588,47 +2693,75 @@ fn parse_package_source(
             Ok(PackageSource::Root)
         }
         "git" => {
-            reject_unknown_lock_fields(
-                table,
-                "package.source",
-                &["type", "url", "requested_rev", "commit", "tree_hashes"],
-                strict_schema,
-            )?;
+            let allowed: &[&str] = match schema {
+                LockSchema::V1 => &["type", "url", "requested_rev", "commit", "tree_hashes"],
+                LockSchema::V2 => &["type", "url", "commit", "tree_hashes"],
+            };
+            reject_unknown_lock_fields(table, "package.source", allowed)?;
             let url = GitUrl::new(required_string(table.get("url"), "package.source.url")?)?;
-            let requested_rev = GitCommitHash::new(required_string(
-                table.get("requested_rev"),
-                "package.source.requested_rev",
-            )?)?;
             let commit = GitCommitHash::new(required_string(
                 table.get("commit"),
                 "package.source.commit",
             )?)?;
+            if schema == LockSchema::V1 {
+                // Version 1 stored the requested revision separately, but only
+                // exact commits could ever be requested.
+                let requested = GitCommitHash::new(required_string(
+                    table.get("requested_rev"),
+                    "package.source.requested_rev",
+                )?)?;
+                if requested != commit {
+                    return Err(LockfileParseError::RequestedRevisionMismatch {
+                        requested,
+                        commit,
+                    });
+                }
+            }
             let hashes = table.get("tree_hashes").and_then(Value::as_table).ok_or(
                 LockfileParseError::MissingField {
                     field: "package.source.tree_hashes",
                 },
             )?;
-            reject_unknown_lock_fields(
-                hashes,
-                "package.source.tree_hashes",
-                &["sha256"],
-                strict_schema,
-            )?;
-            let sha256 = Sha256Digest::new(required_string(
-                hashes.get("sha256"),
-                "package.source.tree_hashes.sha256",
-            )?)?;
+            let tree_hashes = parse_tree_hashes(hashes, schema)?;
             Ok(PackageSource::Git {
-                url,
-                requested_rev,
-                commit,
-                tree_hashes: SourceTreeHashes { sha256 },
+                source: GitSourceId::new(url, commit),
+                tree_hashes,
             })
         }
         other => Err(LockfileParseError::UnsupportedSourceType {
             source_type: other.to_string(),
         }),
     }
+}
+
+fn parse_tree_hashes(
+    hashes: &Table,
+    schema: LockSchema,
+) -> Result<SourceTreeHashes, LockfileParseError> {
+    const TABLE: &str = "package.source.tree_hashes";
+    let algorithm = match schema {
+        LockSchema::V1 => {
+            reject_unknown_lock_fields(hashes, TABLE, &["sha256"])?;
+            SourceTreeHashAlgorithm::LegacyUnrecordedCoverage
+        }
+        LockSchema::V2 => {
+            reject_unknown_lock_fields(hashes, TABLE, &["algorithm", "sha256"])?;
+            let algorithm = required_string(
+                hashes.get("algorithm"),
+                "package.source.tree_hashes.algorithm",
+            )?;
+            SourceTreeHashAlgorithm::parse(algorithm).ok_or_else(|| {
+                LockfileParseError::UnsupportedTreeHashAlgorithm {
+                    algorithm: algorithm.to_string(),
+                }
+            })?
+        }
+    };
+    let sha256 = Sha256Digest::new(required_string(
+        hashes.get("sha256"),
+        "package.source.tree_hashes.sha256",
+    )?)?;
+    Ok(SourceTreeHashes { algorithm, sha256 })
 }
 
 fn parse_package_dependencies(
@@ -2658,17 +2791,17 @@ fn parse_package_dependencies(
 /// Details of contradictory hashes pinned for one canonical Git source.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error(
-    "package ids `{first}` and `{second}` pin Git source `{url}` at `{commit}` to conflicting SHA-256 digests `{first_digest}` and `{second_digest}`"
+    "package ids `{first}` and `{second}` pin Git source `{}` at `{}` to conflicting SHA-256 digests `{first_digest}` and `{second_digest}`",
+    git_source.url(),
+    git_source.commit()
 )]
 pub struct GitSourceDigestConflict {
     /// First package instance using the source.
     pub first: PackageInstanceId,
     /// Second package instance using the source.
     pub second: PackageInstanceId,
-    /// Canonical remote repository URL.
-    pub url: GitUrl,
-    /// Immutable Git commit.
-    pub commit: GitCommitHash,
+    /// The immutable Git source pinned twice.
+    pub git_source: GitSourceId,
     /// Digest pinned by the first package.
     pub first_digest: Sha256Digest,
     /// Contradictory digest pinned by the second package.
@@ -2679,11 +2812,7 @@ fn reject_unknown_lock_fields(
     table: &Table,
     table_name: &str,
     allowed: &[&str],
-    strict_schema: bool,
 ) -> Result<(), LockfileParseError> {
-    if !strict_schema {
-        return Ok(());
-    }
     table
         .keys()
         .find(|field| !allowed.contains(&field.as_str()))
@@ -2779,6 +2908,10 @@ mod tests {
         DependencyName::new(name).unwrap()
     }
 
+    fn selector(value: &str) -> ModulePackageSelector {
+        ModulePackageSelector::new(value).unwrap()
+    }
+
     fn id(value: &str) -> PackageInstanceId {
         PackageInstanceId::new(value).unwrap()
     }
@@ -2805,10 +2938,9 @@ mod tests {
 
     fn git_source_with_digest(url_text: &str, rev_char: char, digest_char: char) -> PackageSource {
         PackageSource::Git {
-            url: url(url_text),
-            requested_rev: hash(rev_char),
-            commit: hash(rev_char),
+            source: GitSourceId::new(url(url_text), hash(rev_char)),
             tree_hashes: SourceTreeHashes {
+                algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
                 sha256: digest(digest_char),
             },
         }
@@ -2835,7 +2967,6 @@ mod tests {
 
     fn lockfile(packages: Vec<LockedPackage>) -> Lockfile {
         Lockfile {
-            lock_version: LOCK_VERSION,
             created_by: "graphcal".to_string(),
             graphcal_version: GRAPHICAL_VERSION.to_string(),
             stdlib_version: STDLIB_VERSION.to_string(),
@@ -2895,10 +3026,7 @@ mod tests {
         ]);
         let dependency_spec = DependencySpec {
             package: None,
-            git: GitDependency {
-                url: url("https://github.com/acme/units.git"),
-                rev: hash('1'),
-            },
+            git: GitSourceId::new(url("https://github.com/acme/units.git"), hash('1')),
         };
         let manifests = BTreeMap::from([
             (
@@ -2945,10 +3073,7 @@ mod tests {
                 dep("bridge"),
                 DependencySpec {
                     package: None,
-                    git: GitDependency {
-                        url: url("https://github.com/acme/bridge.git"),
-                        rev: hash('b'),
-                    },
+                    git: GitSourceId::new(url("https://github.com/acme/bridge.git"), hash('b')),
                 },
             );
         missing_edge_manifests.insert(
@@ -2982,7 +3107,7 @@ units_v1 = { package = "units", git = "https://github.com/acme/units.git", rev =
         assert_eq!(manifest.name, pkg("mission"));
         let spec = manifest.dependencies.get(&dep("units_v1")).unwrap();
         assert_eq!(spec.expected_package_name(&dep("units_v1")), pkg("units"));
-        assert_eq!(spec.git.rev, hash('1'));
+        assert_eq!(spec.git.commit(), &hash('1'));
     }
 
     #[test]
@@ -3325,6 +3450,39 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
                 GitUrlErrorReason::OptionShaped,
             ),
             ("git@host:../repo", GitUrlErrorReason::Malformed),
+            // CLI-7: percent-encoding must not smuggle an option past the check.
+            (
+                "ssh://git@%2DoProxyCommand=x/org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "ssh://%2DoProxyCommand=x@host/org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "ssh://git%40evil@host/org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "%2Doops@host:org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "git@ho%2Dst:org/repo",
+                GitUrlErrorReason::PercentEncodedAuthority,
+            ),
+            (
+                "ssh://git@host/%2DoProxyCommand=x",
+                GitUrlErrorReason::OptionShaped,
+            ),
+            (
+                "git@host:%2doProxyCommand=x",
+                GitUrlErrorReason::OptionShaped,
+            ),
+            (
+                "https://host/org/%2D-upload-pack",
+                GitUrlErrorReason::OptionShaped,
+            ),
         ];
         for (invalid, expected_reason) in cases {
             assert_eq!(
@@ -3336,9 +3494,66 @@ orbital = { git = "https://github.com/acme/orbital.git", rev = "abc123" }
     }
 
     #[test]
+    fn git_urls_keep_percent_encoding_inside_repository_paths() {
+        let url = GitUrl::new("https://host/org/my%20repo.git").unwrap();
+        assert_eq!(url.to_string(), "https://host/org/my%20repo.git");
+    }
+
+    #[test]
     fn manifest_rejects_scp_like_credential_url() {
         let err = GitUrl::new("user:token@example.com/acme/orbital.git").unwrap_err();
         assert_eq!(err.reason, GitUrlErrorReason::Credentials);
+    }
+
+    #[test]
+    fn rejected_git_urls_never_echo_credentials() {
+        for (input, rendered) in [
+            (
+                "https://probe-user:FAKE-TOKEN-1234@graphcal-test.invalid/acme/units.git",
+                "https://<redacted>@graphcal-test.invalid/acme/units.git",
+            ),
+            (
+                "https://FAKE-TOKEN-1234@host/acme/units.git",
+                "https://<redacted>@host/acme/units.git",
+            ),
+            (
+                "SSH://git:FAKE-TOKEN-1234@host/acme/units.git",
+                "SSH://<redacted>@host/acme/units.git",
+            ),
+            (
+                "user:FAKE-TOKEN-1234@example.com/acme/orbital.git",
+                "<redacted>@example.com/acme/orbital.git",
+            ),
+            (
+                "ftp://u:FAKE-TOKEN-1234@host/repo",
+                "ftp://<redacted>@host/repo",
+            ),
+            (
+                "https://user:FAKE/TOKEN-1234@host/acme/units.git",
+                "https://<redacted>@host/acme/units.git",
+            ),
+            (
+                "ssh://git:FAKE/TOKEN-1234@host/acme/units.git",
+                "ssh://<redacted>@host/acme/units.git",
+            ),
+            (
+                "user:FAKE/TOKEN-1234@host:acme/units.git",
+                "<redacted>@host:acme/units.git",
+            ),
+        ] {
+            let error = GitUrl::new(input).unwrap_err();
+            let message = error.to_string();
+            assert!(!message.contains("TOKEN-1234"), "{message}");
+            assert!(message.contains(&format!("`{rendered}`")), "{message}");
+        }
+        // A plain SSH user is not a secret and stays visible.
+        let error = GitUrl::new("ssh://git@host/-oProxyCommand=x").unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("`ssh://git@host/-oProxyCommand=x`"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -3558,7 +3773,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             error,
             LockValidationError::DependencyCycle { cycle }
                 if cycle.start() == &id(&format!("pkg-node-{cycle_start}"))
-                    && cycle.successors().cloned().eq(std::iter::once(id("pkg-node-7999")))
+                    && cycle.successors.iter().cloned().eq(std::iter::once(id("pkg-node-7999")))
         ));
     }
 
@@ -3650,14 +3865,15 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 BTreeMap::new(),
             ),
         ])
-        .package_graph(GRAPHCAL_VERSION, STDLIB_VERSION)
-        .unwrap();
+        .validated(GRAPHCAL_VERSION, STDLIB_VERSION)
+        .unwrap()
+        .package_graph();
 
         let orbital_units = graph
-            .resolve_package_selector(&id("pkg-orbital"), "units")
+            .resolve_package_selector(&id("pkg-orbital"), &selector("units"))
             .unwrap();
         let thermal_units = graph
-            .resolve_package_selector(&id("pkg-thermal"), "units")
+            .resolve_package_selector(&id("pkg-thermal"), &selector("units"))
             .unwrap();
 
         assert_eq!(orbital_units.package, id("pkg-units-v1"));
@@ -3681,11 +3897,12 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 BTreeMap::new(),
             ),
         ])
-        .package_graph(GRAPHCAL_VERSION, STDLIB_VERSION)
-        .unwrap();
+        .validated(GRAPHCAL_VERSION, STDLIB_VERSION)
+        .unwrap()
+        .package_graph();
 
         let selected = graph
-            .resolve_package_selector(&id("pkg-mission"), "mission")
+            .resolve_package_selector(&id("pkg-mission"), &selector("mission"))
             .unwrap();
         assert_eq!(selected.package, id("pkg-mission"));
         assert_eq!(
@@ -3693,13 +3910,10 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             &PackageResolutionRelation::SelfReference
         );
         assert!(matches!(
-            graph.resolve_package_selector(&id("pkg-absent"), "mission"),
+            graph.resolve_package_selector(&id("pkg-absent"), &selector("mission")),
             Err(PackageResolveError::UnknownCurrentPackage { .. })
         ));
-        assert!(matches!(
-            graph.resolve_package_selector(&id("pkg-mission"), "Not-A-Name"),
-            Err(PackageResolveError::UnknownDependency { .. })
-        ));
+        assert!(ModulePackageSelector::new("Not-A-Name").is_err());
     }
 
     #[test]
@@ -3723,11 +3937,12 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
                 BTreeMap::new(),
             ),
         ])
-        .package_graph(GRAPHCAL_VERSION, STDLIB_VERSION)
-        .unwrap();
+        .validated(GRAPHCAL_VERSION, STDLIB_VERSION)
+        .unwrap()
+        .package_graph();
 
         let err = graph
-            .resolve_package_selector(&id("pkg-mission"), "units")
+            .resolve_package_selector(&id("pkg-mission"), &selector("units"))
             .unwrap_err();
 
         assert!(matches!(err, PackageResolveError::UnknownDependency { .. }));
@@ -3780,6 +3995,163 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         parse_lockfile_str_with_limits(&content, LockfileParseLimits::new(2)).unwrap();
     }
 
+    fn units_lock() -> Lockfile {
+        lockfile(vec![
+            package(
+                "pkg-mission",
+                "mission",
+                path_source(),
+                BTreeMap::from([(dep("units"), id("pkg-units"))]),
+            ),
+            package(
+                "pkg-units",
+                "units",
+                git_source("https://github.com/acme/units.git", '1'),
+                BTreeMap::new(),
+            ),
+        ])
+    }
+
+    #[test]
+    fn lock_records_the_tree_hash_algorithm_next_to_each_digest() {
+        let text = units_lock().to_deterministic_toml();
+        assert!(text.starts_with("lock_version = 2\n"), "{text}");
+        assert!(
+            text.contains(&format!(
+                "tree_hashes = {{ algorithm = \"graphcal-source-tree-v1\", sha256 = \"{}\" }}",
+                "1".repeat(64)
+            )),
+            "{text}"
+        );
+        assert_eq!(parse_lockfile_str(&text).unwrap(), units_lock());
+    }
+
+    #[test]
+    fn current_lock_schema_requires_a_known_tree_hash_algorithm() {
+        let text = units_lock().to_deterministic_toml();
+        let unknown = text.replace("graphcal-source-tree-v1", "graphcal-source-tree-v9");
+        assert!(matches!(
+            parse_lockfile_str(&unknown),
+            Err(LockfileParseError::UnsupportedTreeHashAlgorithm { algorithm })
+                if algorithm == "graphcal-source-tree-v9"
+        ));
+        let missing = text.replace("algorithm = \"graphcal-source-tree-v1\", ", "");
+        assert!(matches!(
+            parse_lockfile_str(&missing),
+            Err(LockfileParseError::MissingField {
+                field: "package.source.tree_hashes.algorithm"
+            })
+        ));
+    }
+
+    #[test]
+    fn version_one_locks_keep_their_pins_with_unrecorded_coverage() {
+        let current = units_lock().to_deterministic_toml();
+        let commit = "1".repeat(40);
+        let legacy = current
+            .replace("lock_version = 2", "lock_version = 1")
+            .replace("algorithm = \"graphcal-source-tree-v1\", ", "")
+            .replace(
+                &format!("commit = \"{commit}\""),
+                &format!("requested_rev = \"{commit}\"\ncommit = \"{commit}\""),
+            );
+        let parsed = parse_lockfile_str(&legacy).unwrap();
+        let mut expected = units_lock();
+        let PackageSource::Git { tree_hashes, .. } = &mut expected.packages[1].source else {
+            panic!("fixture dependency is a Git package");
+        };
+        tree_hashes.algorithm = SourceTreeHashAlgorithm::LegacyUnrecordedCoverage;
+        assert_eq!(parsed, expected);
+        // Re-serializing upgrades the schema but keeps the pin's ambiguity.
+        let upgraded = parsed.to_deterministic_toml();
+        assert!(upgraded.contains("algorithm = \"legacy-unrecorded-coverage\""));
+        assert_eq!(parse_lockfile_str(&upgraded).unwrap(), expected);
+        // A version 1 lock never named an algorithm.
+        assert!(matches!(
+            parse_lockfile_str(&legacy.replace("{ sha256", "{ algorithm = \"graphcal-source-tree-v1\", sha256")),
+            Err(LockfileParseError::UnknownField { field, .. }) if field == "algorithm"
+        ));
+    }
+
+    #[test]
+    fn version_one_locks_must_lock_exactly_the_requested_commit() {
+        let commit = "1".repeat(40);
+        let legacy = units_lock()
+            .to_deterministic_toml()
+            .replace("lock_version = 2", "lock_version = 1")
+            .replace("algorithm = \"graphcal-source-tree-v1\", ", "")
+            .replace(
+                &format!("commit = \"{commit}\""),
+                &format!(
+                    "requested_rev = \"{}\"\ncommit = \"{commit}\"",
+                    "2".repeat(40)
+                ),
+            );
+        assert!(matches!(
+            parse_lockfile_str(&legacy),
+            Err(LockfileParseError::RequestedRevisionMismatch { .. })
+        ));
+        // The current schema has a single commit field.
+        let current = units_lock().to_deterministic_toml().replace(
+            &format!("commit = \"{commit}\""),
+            &format!("requested_rev = \"{commit}\"\ncommit = \"{commit}\""),
+        );
+        assert!(matches!(
+            parse_lockfile_str(&current),
+            Err(LockfileParseError::UnknownField { field, .. }) if field == "requested_rev"
+        ));
+    }
+
+    #[test]
+    fn locks_from_unknown_schema_versions_are_rejected_loudly() {
+        for version in [0, 3, 99] {
+            let text = units_lock()
+                .to_deterministic_toml()
+                .replace("lock_version = 2", &format!("lock_version = {version}"));
+            let error = parse_lockfile_str(&text).unwrap_err();
+            assert!(
+                matches!(error, LockfileParseError::UnsupportedLockVersion { version: v } if v == version),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn git_source_pins_ignore_the_toolchain_versions_that_wrote_the_lock() {
+        let mut lock = units_lock();
+        lock.graphcal_version = "0.0.1-alpha.1".to_string();
+        lock.stdlib_version = "0.0.1-alpha.1".to_string();
+        assert!(lock.validated(GRAPHCAL_VERSION, STDLIB_VERSION).is_err());
+        let pins = lock.git_source_pins().unwrap();
+        let source = GitSourceId::new(url("https://github.com/acme/units.git"), hash('1'));
+        assert_eq!(
+            pins.get(&source),
+            Some(&SourceTreeHashes {
+                algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
+                sha256: digest('1'),
+            })
+        );
+        assert_eq!(pins.len(), 1);
+    }
+
+    #[test]
+    fn git_source_pins_reject_contradictory_digests() {
+        let mut lock = units_lock();
+        lock.packages[0]
+            .dependencies
+            .insert(dep("other"), id("pkg-units-copy"));
+        lock.packages.push(package(
+            "pkg-units-copy",
+            "units",
+            git_source_with_digest("https://github.com/acme/units.git", '1', '2'),
+            BTreeMap::new(),
+        ));
+        assert!(matches!(
+            lock.git_source_pins(),
+            Err(LockValidationError::ConflictingGitSourceDigest(_))
+        ));
+    }
+
     #[test]
     fn current_lock_schema_rejects_unknown_fields_at_every_fixed_table_level() {
         let mut lock = lockfile(vec![
@@ -3816,8 +4188,8 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             ),
             (
                 base.replacen(
-                    "tree_hashes = { sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\" }",
-                    "tree_hashes = { sha256 = \"1111111111111111111111111111111111111111111111111111111111111111\", unexpected = true }",
+                    "\"1111111111111111111111111111111111111111111111111111111111111111\" }",
+                    "\"1111111111111111111111111111111111111111111111111111111111111111\", unexpected = true }",
                     1,
                 ),
                 "package.source.tree_hashes",
@@ -3998,6 +4370,35 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     }
 
     #[test]
+    fn plugin_paths_and_source_directories_share_the_portable_path_rule() {
+        for spelling in [
+            "plugins",
+            "a/b",
+            "",
+            "/abs",
+            "a//b",
+            "a/",
+            "./a",
+            "a/../b",
+            "back\\slash",
+            "C:",
+            "control\nname",
+        ] {
+            let directory = PackageSourceDirectory::new(spelling);
+            let plugin = PluginArtifactPath::new(format!("{spelling}/x.wasm"));
+            assert_eq!(directory.is_ok(), plugin.is_ok(), "`{spelling}`");
+            if let (Ok(directory), Ok(plugin)) = (directory, plugin) {
+                assert_eq!(plugin.to_string(), format!("{directory}/x.wasm"));
+                assert_eq!(
+                    plugin.join_to(Path::new("root")),
+                    directory.join_to(Path::new("root")).join("x.wasm")
+                );
+            }
+        }
+        assert!(PluginArtifactPath::new("plugins/x.dll").is_err());
+    }
+
+    #[test]
     fn duplicate_plugin_pins_are_rejected_by_validation() {
         let sha = "0".repeat(64);
         let mut lock = lockfile(vec![package(
@@ -4019,9 +4420,10 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
     #[test]
     fn lockfile_manifest_validation_is_total_and_bijective() {
         let (lock, manifests) = matched_lock_and_manifests();
-        let validated =
-            validate_lock_against_manifests(&lock, &manifests, GRAPHICAL_VERSION, STDLIB_VERSION)
-                .unwrap();
+        let validated = lock
+            .validated(GRAPHICAL_VERSION, STDLIB_VERSION)
+            .and_then(|lock| lock.bind_manifests(&manifests))
+            .unwrap();
         assert_eq!(validated.root(), &id("pkg-mission"));
         assert_eq!(
             validated.manifest(&id("pkg-units")).unwrap().name,
@@ -4031,12 +4433,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         let mut missing_manifest = manifests.clone();
         missing_manifest.remove(&id("pkg-units"));
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &missing_manifest,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&missing_manifest)),
             Err(LockValidationError::MissingPackageManifest { package })
                 if package == id("pkg-units")
         ));
@@ -4052,12 +4449,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             },
         );
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &extra_manifest,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&extra_manifest)),
             Err(LockValidationError::ManifestWithoutLockedPackage { package })
                 if package == id("pkg-extra")
         ));
@@ -4065,12 +4457,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
         let mut wrong_name = manifests.clone();
         wrong_name.get_mut(&id("pkg-mission")).unwrap().name = pkg("other");
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &wrong_name,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&wrong_name)),
             Err(LockValidationError::LockedManifestNameMismatch { package, .. })
                 if package == id("pkg-mission")
         ));
@@ -4081,24 +4468,14 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             .unwrap()
             .source_dir = source_dir("unhashed");
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &wrong_source_dir,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&wrong_source_dir)),
             Err(LockValidationError::LockedManifestSourceDirectoryMismatch { package, .. })
                 if package == id("pkg-units")
         ));
 
         let (missing_edge, missing_edge_manifests) = missing_direct_edge_fixture(&lock, &manifests);
         assert!(matches!(
-            validate_lock_against_manifests(
-                &missing_edge,
-                &missing_edge_manifests,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            missing_edge.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&missing_edge_manifests)),
             Err(LockValidationError::MissingDependencyEdge { dependency, .. })
                 if dependency == dep("units")
         ));
@@ -4110,12 +4487,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             .dependencies
             .clear();
         assert!(matches!(
-            validate_lock_against_manifests(
-                &lock,
-                &undeclared_edge,
-                GRAPHICAL_VERSION,
-                STDLIB_VERSION
-            ),
+            lock.validated(GRAPHICAL_VERSION, STDLIB_VERSION).and_then(|lock| lock.bind_manifests(&undeclared_edge)),
             Err(LockValidationError::UndeclaredDependencyEdge { dependency, .. })
                 if dependency == dep("units")
         ));
@@ -4139,10 +4511,7 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             dep("units_alias"),
             DependencySpec {
                 package: Some(pkg("units")),
-                git: GitDependency {
-                    url: url("https://github.com/acme/units.git"),
-                    rev: hash('1'),
-                },
+                git: GitSourceId::new(url("https://github.com/acme/units.git"), hash('1')),
             },
         );
         let manifests = BTreeMap::from([
@@ -4166,9 +4535,10 @@ mission = { git = "https://github.com/acme/mission.git", rev = "aaaaaaaaaaaaaaaa
             ),
         ]);
 
-        let err =
-            validate_lock_against_manifests(&lock, &manifests, GRAPHICAL_VERSION, STDLIB_VERSION)
-                .unwrap_err();
+        let err = lock
+            .validated(GRAPHICAL_VERSION, STDLIB_VERSION)
+            .and_then(|lock| lock.bind_manifests(&manifests))
+            .unwrap_err();
 
         assert!(matches!(
             err,

@@ -1,0 +1,12 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+index `UTC` shadows a built-in name
+    Diagnostic severity: error
+Begin snippet for time_scale_name.gcl starting at line 1, column 1
+
+snippet line 1: pub index UTC = { A, B };
+    label at line 1, columns 11 to 13: shadows a built-in name
+diagnostic help: choose a different name; names the language reserves (prelude dimensions, types and units, built-in functions and constants, time scales, and keywords such as `scan`) cannot be redeclared
+diagnostic code: graphcal::N009

@@ -38,6 +38,7 @@ mod phase_lift;
 /// - `Box<T>` → `Box::new(lift(*field))`
 /// - `Vec<T>` → `field.into_iter().map(lift).collect()`
 /// - `Option<T>` → `field.map(lift)`
+/// - `NonEmpty<T>` (the compiler's non-empty list) → `field.map(lift)`
 /// - any other type → `From::from(field)`
 ///
 /// where `lift` applies the same rules recursively to `T`. A misclassified

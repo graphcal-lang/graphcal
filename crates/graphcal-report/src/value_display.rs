@@ -71,14 +71,6 @@ pub fn scalar_display(
     }
 }
 
-/// Number of nested indexed axes (0 = scalar, 1 = one axis, ...).
-fn index_depth(value: &Value) -> usize {
-    match value {
-        Value::Indexed { entries, .. } => 1 + entries.values().next().map_or(0, index_depth),
-        _ => 0,
-    }
-}
-
 /// Project one evaluated value into its report display body.
 ///
 /// # Errors
@@ -88,7 +80,13 @@ pub fn project_value_body(
     value: &Value,
     render: &RenderContext,
 ) -> Result<ValueBody, DisplayProjectionError> {
-    match index_depth(value) {
+    if value.index_depth() >= 2 && !value.displays_as_grid() {
+        // Struct leaves have no single cell: list every field entry by entry.
+        let mut entries = Vec::new();
+        flatten_entries(String::new(), value, render, &mut entries)?;
+        return Ok(ValueBody::Entries(entries));
+    }
+    match value.index_depth() {
         0 => match value {
             Value::Struct { fields, .. } if !fields.is_empty() => {
                 let mut entries = Vec::new();
@@ -105,7 +103,7 @@ pub fn project_value_body(
         2 => Ok(ValueBody::Grid(project_grid(value, render)?)),
         _ => {
             let Value::Indexed { entries, .. } = value else {
-                // index_depth >= 3 implies an Indexed value.
+                // An index depth of 3 or more implies an Indexed value.
                 return Ok(ValueBody::Scalar(scalar_display(value, render)?));
             };
             let mut slices = Vec::new();
@@ -284,6 +282,26 @@ mod tests {
         assert_eq!(slices.len(), 2);
         assert_eq!(slices[0].0, "S1");
         assert_eq!(slices[0].1.rows[0].1, vec!["2".to_string()]);
+    }
+
+    #[test]
+    fn multi_axis_struct_leaves_flatten_every_field() {
+        let body = body_of(
+            "pub type Pt { Pt(x: Length, y: Length) }\n\
+             node grid: Pt[Fin(2), Fin(2)] = for i: Fin(2) { for j: Fin(2) { Pt(x: 3.0 m, y: 4.0 m) } };",
+            "grid",
+        );
+        let ValueBody::Entries(entries) = body else {
+            panic!("expected entries, got {body:?}");
+        };
+        assert_eq!(entries.len(), 8);
+        assert_eq!(
+            entries[..2],
+            [
+                ("[#0][#0].x".to_string(), "3 m".to_string()),
+                ("[#0][#0].y".to_string(), "4 m".to_string()),
+            ]
+        );
     }
 
     #[test]

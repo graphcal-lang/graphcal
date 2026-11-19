@@ -12,13 +12,11 @@ use std::collections::BTreeSet;
 
 use crate::builtin::AggregationFn;
 use crate::dag_id::DagId;
-use crate::expression_id::ExprId;
 use crate::hir::expr::{
     ExternFnRef, IndexVariantRef, LocalDef, LocalId, LocalUnit, ResolvedUnitExpr,
     ResolvedUnitExprItem, ResolvedUnitRef, UnfoldRecurrence,
 };
 use crate::resolved_name::{ResolvedDeclName, ResolvedUnitName};
-use crate::semantic::checked_type::CheckedType;
 use crate::semantic::index_axis::IndexAxis;
 use crate::semantic::key_value::{FinKeyShift, KeyValue};
 use crate::semantic::struct_value::StructValue;
@@ -191,13 +189,6 @@ impl<'t> ScopedCall<'t> {
     pub const fn callee(self) -> DagPosition {
         self.scope().callee(*self.get())
     }
-
-    /// The position of the calling DAG, the DAG whose body holds the call,
-    /// in the registry of the program running it.
-    #[must_use]
-    pub const fn caller(self) -> DagPosition {
-        self.scope().position()
-    }
 }
 
 /// The arms of a match node, in the node's scope.
@@ -223,21 +214,9 @@ pub enum ScopedIndexArg<'t> {
 }
 
 impl<'t> Scoped<'t, TExpr> {
-    /// The HIR occurrence this node checks.
-    #[must_use]
-    pub const fn id(self) -> &'t ExprId {
-        self.get().id()
-    }
-
     #[must_use]
     pub const fn span(self) -> Span {
         self.get().span()
-    }
-
-    /// The checked type of the value this node evaluates to.
-    #[must_use]
-    pub const fn ty(self) -> &'t CheckedType {
-        self.get().ty()
     }
 
     /// This node's form, with its children in this node's scope and its
@@ -414,23 +393,22 @@ impl<'t> Scoped<'t, TExpr> {
         });
     }
 
-    /// Every declaration this tree references through `@name`, including
-    /// unselected branches, resolved in its own scope, in handle order.
+    /// Every declaration this tree references, through `@name` or as a
+    /// constant, including unselected branches, resolved in its own scope.
     #[must_use]
-    pub fn graph_refs(self) -> Vec<ResolvedDeclName> {
-        let scope = self.scope();
-        let mut handles = BTreeSet::new();
-        visit_tnodes(TNodeRef::Value(self.get()), &mut |node| {
-            if let TNodeRef::Value(expr) = node
-                && let TExprKind::GraphRef(target) = expr.kind()
-            {
-                handles.insert(&target.value);
+    pub fn referenced_declarations(self) -> BTreeSet<ResolvedDeclName> {
+        let mut references = BTreeSet::new();
+        self.visit(&mut |node| match node.kind() {
+            NodeKind::GraphRef(Spanned { value, .. })
+            | NodeKind::Const(Spanned {
+                value: ConstRef::Decl(value),
+                ..
+            }) => {
+                references.insert(value);
             }
+            _ => {}
         });
-        handles
-            .into_iter()
-            .map(|handle| scope.resolve(handle))
-            .collect()
+        references
     }
 }
 

@@ -137,3 +137,46 @@ fn unknown_dimensions_are_reported_at_the_term() {
         Err(SemanticError::Located(crate::diagnostic::Diagnostic { kind: SemanticErrorKind::Dimension(DimensionError::UnknownDimension { name, .. }), .. })) if name.to_string() == "Missing"
     ));
 }
+
+/// RES-10: extern generic binders share the type-generics rule (N027): they
+/// may not reuse a reserved prelude name or shadow a visible Static name, so
+/// `<Length: Dim>` cannot silently make `Length` mean "any dimension".
+#[test]
+fn generic_binders_may_not_shadow_reserved_or_visible_static_names() {
+    for (source, shadowed) in [
+        (
+            "import plugin \"graphcal:demo\" as d { fn inverse<Length: Dim>(x: Length) -> Length^-1; }",
+            "Length",
+        ),
+        (
+            "pub dim Rate = Length / Time;\n\
+             import plugin \"graphcal:demo\" as d { fn f<Rate: Dim>(x: Rate) -> Rate; }",
+            "Rate",
+        ),
+        (
+            "pub index Axis = { A, B };\n\
+             import plugin \"graphcal:demo\" as d { fn f<D: Dim, Axis: Index>(x: D[Axis]) -> D[Axis]; }",
+            "Axis",
+        ),
+    ] {
+        match lower(source) {
+            Err(SemanticError::Located(crate::diagnostic::Diagnostic {
+                kind:
+                    SemanticErrorKind::Name(
+                        crate::semantic_error::name::NameError::GenericParamShadowsStatic {
+                            name,
+                            ..
+                        },
+                    ),
+                ..
+            })) => assert_eq!(name.to_string(), shadowed),
+            Err(other) => panic!("expected N027 for `{shadowed}`, got {other:?}"),
+            Ok(_) => panic!("expected N027 for `{shadowed}`, but it was accepted"),
+        }
+    }
+    // Duplicate binders keep their extern-specific diagnostic.
+    expect_invalid_signature(
+        "import plugin \"graphcal:demo\" as d { fn f<D: Dim, D: Index>(x: D) -> D; }",
+        "more than once",
+    );
+}

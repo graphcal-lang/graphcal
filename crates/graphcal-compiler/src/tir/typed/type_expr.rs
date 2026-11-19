@@ -50,19 +50,10 @@ struct HirTypeResolutionContext<'a> {
 /// Resolve an already-lowered HIR declaration type into the TIR type
 /// representation.
 ///
-/// This is the new semantic entry point for module-aware TIR type resolution:
-/// source paths should be lowered to HIR first, then TIR consumes canonical
+/// Source paths are lowered to HIR first; TIR consumes canonical
 /// `ResolvedName<Ns>` and lexical generic IDs from HIR instead of performing
 /// source-path lookup itself.
-pub fn resolve_hir_decl_type(
-    decl_type: &crate::hir::types::DeclType,
-    src: SourceId,
-    module_ctx: ModuleTypeContext<'_>,
-) -> Result<ResolvedDeclType, SemanticError> {
-    resolve_hir_decl_type_with_project_types(decl_type, src, module_ctx.types)
-}
-
-pub(super) fn resolve_hir_decl_type_with_project_types(
+pub(super) fn resolve_hir_decl_type(
     decl_type: &crate::hir::types::DeclType,
     src: SourceId,
     project_types: &ProjectTypeStore,

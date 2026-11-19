@@ -25,9 +25,11 @@ mod interpreter_tests;
 pub mod invariant;
 pub mod pipeline_metrics;
 pub mod presentation_evidence;
-pub mod recurrence_slots;
+pub(crate) mod recurrence_slots;
 pub mod runtime_presentation;
 pub mod runtime_value;
 mod static_incompleteness;
 #[cfg(test)]
 mod test_tir;
+pub(crate) mod time_scale_conversion;
+mod unfinished_reach;

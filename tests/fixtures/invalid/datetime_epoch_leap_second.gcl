@@ -1,0 +1,2 @@
+// Error: `:60` is rejected in every time scale, not only in UTC.
+node bad: Datetime<TAI> = epoch<TAI>("2016-12-31T23:59:60");

@@ -29,7 +29,7 @@ icon: material/package-variant
 | `cbrt(x)` | `D -> D^(1/3)` | 立方根（次元は 1/3 倍になる） |
 | `abs(x)` | `D -> D` または `Complex<D> -> D` | 絶対値または複素数の大きさ |
 | `sign(x)` | `D -> Dimensionless` | 値の符号（-1.0、0.0、1.0 のいずれか） |
-| `round(x)` | `Dimensionless -> Dimensionless` | 最も近い整数への丸め |
+| `round(x)` | `Dimensionless -> Dimensionless` | 最も近い整数への丸め。ちょうど中間の値は 0 から遠い方に丸める（`round(2.5)` は `3.0`、`round(-2.5)` は `-3.0`） |
 | `trunc(x)` | `Dimensionless -> Dimensionless` | ゼロ方向への切り捨て |
 | `floor(x)` | `Dimensionless -> Dimensionless` | 負の無限大方向への丸め |
 | `ceil(x)` | `Dimensionless -> Dimensionless` | 正の無限大方向への丸め |
@@ -125,7 +125,7 @@ node shifted: Complex<Length> = @displacement + to_complex(1.0 m);
 
 | 関数 | シグネチャ | 説明 |
 |----------|-----------|-------------|
-| `to_float(x)` | `Int -> Dimensionless` | 整数を binary64 の `Dimensionless` 量に変換 |
+| `to_float(x)` | `Int -> Dimensionless` | 整数を binary64 の `Dimensionless` 量に正確に変換。binary64 で表せない整数は拒否される（絶対値が `2 ^ 53` を超える場合にだけ起こる） |
 | `to_int(x)` | `Dimensionless -> Int` | 整数値の `Dimensionless` 量を正確に変換。小数部を持つ値、非有限値、範囲外の値は拒否される |
 | `to_int(k)` | `Key<Fin(N)> -> Int` | `Fin` インデックスキーの整数位置を取り出す。名前付きキーと座標キーは拒否される |
 
@@ -140,6 +140,41 @@ node nearest: Int = to_int(round(3.7));
 
 整数性の検査は、表現されている binary64 値に対して行われます。その値を
 計算する過程で既に失われた精度を、変換で検出することはできません。
+
+### 整数除算関数 { #integer-division-functions }
+
+`Int` 同士の `/` は定義されていません。整数の商は丸める必要があり、Graphcal
+は丸める方向を代わりに選びません。次の関数は、それぞれ 1 つの方向を名前で
+示します。
+
+| 関数 | シグネチャ | 説明 |
+|----------|-----------|-------------|
+| `div_trunc(a, b)` | `(Int, Int) -> Int` | 商を 0 の方向に丸める |
+| `div_floor(a, b)` | `(Int, Int) -> Int` | 商を負の無限大の方向に丸める |
+| `div_ceil(a, b)` | `(Int, Int) -> Int` | 商を正の無限大の方向に丸める |
+
+商は丸め誤差なしで計算されます。除数がゼロの場合は評価エラーになります。
+`Int` に収まらない唯一の商、つまり `-9223372036854775808` を `-1` で割った
+場合も評価エラーです。3 つの関数の結果が異なるのは割り切れない場合だけで、
+`div_trunc(-7, 2)` は `-3`、`div_floor(-7, 2)` は `-4`、`div_ceil(7, 2)` は
+`4` になります。
+
+```graphcal
+param items: Int = 10;
+param per_rack: Int = 4;
+
+// 3: a partly filled rack still needs a rack.
+node racks: Int = div_ceil(@items, @per_rack);
+// 2: only the completely filled racks.
+node full_racks: Int = div_floor(@items, @per_rack);
+// 2.5: the real quotient.
+node exact_racks: Dimensionless = to_float(@items) / @per_rack;
+```
+
+商を最も近い整数に丸めるには、実数の商を求めてから明示的に丸めます。
+`to_int(round(to_float(a) / b))` と書いてください。結果が正確である
+ことが保証されるのは、`a` の絶対値が `2 ^ 52` 未満の場合だけです。それより大きい
+値では、binary64 の丸めにより結果が近似値になることがあります。
 
 ### インデックスキー関数 { #index-key-functions }
 
@@ -185,9 +220,7 @@ node selected: Pressure = @readings[@channel];
 | `datetime("...")` | `OffsetDateTimeLiteral -> Datetime` | 明示的な `Z` または数値オフセット付きの RFC 3339 を解析 |
 | `datetime("...", "tz")` | `(CivilDateTimeLiteral, TimezoneLiteral) -> Datetime` | ローカルの暦時刻を IANA タイムゾーンで解釈 |
 | `epoch<S>("...")` | `CivilDateTimeLiteral -> Datetime<S>` | 時刻系を持たない暦座標を静的な時刻系 `S` で解釈 |
-| `from_jd(x)` | `Dimensionless -> Datetime` | ユリウス日（UTC）から構築 |
-| `from_mjd(x)` | `Dimensionless -> Datetime` | 修正ユリウス日（UTC）から構築 |
-| `from_unix(x)` | `Dimensionless -> Datetime` | 秒単位の Unix タイムスタンプから構築 |
+| `from_unix(x)` | `Dimensionless -> Datetime` | 秒単位の Unix タイムスタンプから UTC の日時を構築 |
 
 各コンストラクターの解釈元はちょうど 1 つです。
 
@@ -195,11 +228,12 @@ node selected: Pressure = @readings[@channel];
   `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)` を要求します（RFC 3339 では小文字の
   `t` と `z` も許されます）。数値オフセットの時と分は、それぞれ `00..=23` と
   `00..=59` の範囲内でなければなりません。
-- タイムゾーンベースの `datetime` は、オフセット、タイムゾーン、時刻系の接尾辞を
-  含まないローカルの暦座標を要求します。
-- `epoch<S>` は、オフセット、タイムゾーン、時刻系の接尾辞を含まないローカルの
-  暦座標を要求し、`S` はサポートされている単独の時刻系のいずれかでなければ
-  なりません。
+- タイムゾーンベースの `datetime` は、ローカルの暦座標を厳密に
+  `YYYY-MM-DDTHH:MM:SS[.fraction]` の形式（1 引数形式からオフセットを除いたもの）で
+  要求します。オフセット、タイムゾーン、時刻系の接尾辞は含められません。
+- `epoch<S>` は、ローカルの暦座標を同じ `YYYY-MM-DDTHH:MM:SS[.fraction]` の形式で
+  要求します。オフセット、タイムゾーン、時刻系の接尾辞は含められず、`S` は
+  サポートされている単独の時刻系のいずれかでなければなりません。
 
 日時リテラルは検査時に解析されます。無効な暦日付や、解釈元の欠落または矛盾は、
 実行時の失敗ではなくコンパイルエラーです。ローカルの暦時刻も、検査時に
@@ -207,6 +241,10 @@ Graphcal に同梱された tzdb に対して解決されます。夏時間の�
 存在しない時刻や、夏時間の重複によって 2 回現れる時刻は、暗黙にずらしたり
 選択したりせず、拒否されます。特定の瞬間を選ぶには、明示的な数値オフセット
 付きの 1 引数 `datetime` を使用してください。
+
+うるう秒は表現できません。秒の欄が `60` のリテラルは、どのコンストラクターと
+時刻系でも拒否されます。UTC のうるう秒の瞬間は TAI で書いてください。たとえば
+`2016-12-31T23:59:60Z` は `epoch<TAI>("2017-01-01T00:00:36")` です。
 
 #### 時刻系の変換 { #time-scale-conversions }
 
@@ -226,9 +264,14 @@ Graphcal に同梱された tzdb に対して解決されます。夏時間の�
 
 | 関数 | シグネチャ | 説明 |
 |----------|-----------|-------------|
-| `to_jd(x)` | `Datetime -> Dimensionless` | ユリウス日（UTC 日数）に変換 |
-| `to_mjd(x)` | `Datetime -> Dimensionless` | 修正ユリウス日（UTC 日数）に変換 |
-| `to_unix(x)` | `Datetime -> Dimensionless` | Unix タイムスタンプ（1970-01-01 からの秒数）に変換 |
+| `to_unix(x)` | `Datetime -> Dimensionless` | UTC の日時を Unix タイムスタンプ（1970-01-01 からの秒数）に変換 |
+
+`to_unix` と `from_unix` が受け取り、返すのは `Datetime<UTC>` だけです。ほかの
+時刻系は `to_unix(to_utc(@t))` のように明示的に変換してください。Unix
+タイムスタンプは UTC の表記を符号化したものでうるう秒を数えないため、2 つの
+タイムスタンプの差は経過時間ではありません。経過時間には
+`to_tai(@b) - to_tai(@a)` を使います。`from_unix` は `Dimensionless` の秒数を
+受け取ります。`Int` は `from_unix(to_float(@n))` のように変換してください。
 
 #### 抽出関数 { #extraction-functions }
 
@@ -294,10 +337,16 @@ Graphcal は同梱の IANA タイムゾーンデータベースを使うため�
 | `rss(values)` | `D[I] -> D` | 二乗和平方根。スケーリングした累積で計算される |
 | `count(values)` | `T[I] -> Int` | 正確な要素数 |
 
-`mean` は binary64 の入力値を正確に累積し、最終的な商のみを丸めます。
-したがって、大きな中間和が表現可能な平均をオーバーフローさせることはなく、
-桁落ちによってはるかに小さい残りの項が消えることもありません。入力リテラル
-自体は通常の binary64 精度を持ちます。これは 10 進演算ではありません。
+`sum` と `mean` は binary64 の入力値を正確に累積し、最終的な和または商のみを
+丸めます。したがって、結果はインデックスのラベルの順序に依存せず、大きな
+中間和が表現可能な結果をオーバーフローさせることはなく、桁落ちによって
+はるかに小さい残りの項が消えることもありません。入力リテラル自体は通常の
+binary64 精度を持ちます。これは 10 進演算ではありません。
+
+`product` はオーバーフローとアンダーフローを最終結果でのみ検査するため、
+成功するかどうかはインデックスのラベルの順序に依存しません。ただし、結果の
+末尾のビットはその順序に依存することがあり、その差は要素 1 個につき最終桁の
+1 単位程度です。
 
 `argmax` と `argmin` は、極値の値ではなく、その*位置*を
 [インデックスキー](indexes.md#index-keys)として返します。そのため、結果を
@@ -345,8 +394,8 @@ node budget_mean: Mass = sum(@means);   // 150 kg
 node budget_sigma: Mass = rss(@sigmas); // 5 kg
 ```
 
-量の算術で無次元スカラーが必要な場合は、`sum(@values) / to_float(count(@values))`
-のように、個数を明示的に変換してください。複数軸に対する直接の集約は拒否
+個数はそのまま量をスカラー倍できます。たとえば `sum(@values) / count(@values)`
+と書けます。複数軸に対する直接の集約は拒否
 されます。`product(for row: Row { product(for column: Column { @a[row, column] }) })`
 のように、明示的な `for` を使って選択した 1 つの軸ずつ縮約してください。
 
@@ -430,10 +479,6 @@ node A_t: Length[Fin(3), Fin(2)] = transpose(@A);
 ままであり、正確な行列式アルゴリズムではありません。非特異な分解であっても、
 行列式がオーバーフローするか完全にゼロにアンダーフローする場合は評価エラーが
 報告されます。表現可能な非正規化数の行列式は保持されます。
-
-密行列カーネルは、宣言の評価 1 回あたり推定 10,000,000 回の算術演算という
-検査付きの予算を共有します。過大な行列積や 3 乗オーダーの分解などの処理は、
-高コストなカーネルが実行される前に明示的に失敗します。
 
 ## プレリュードの基本次元 { #prelude-base-dimensions }
 

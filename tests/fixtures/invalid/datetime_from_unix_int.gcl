@@ -1,0 +1,4 @@
+// Error: `from_unix` takes a Dimensionless count of seconds; an `Int` must be
+// converted explicitly with `to_float`.
+param seconds: Int = 1730808000;
+node t: Datetime = from_unix(@seconds);

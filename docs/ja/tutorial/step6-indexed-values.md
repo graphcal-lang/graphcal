@@ -58,10 +58,10 @@ node max_dv: Velocity = maximum(for m: Maneuver { @delta_v[m] });
 node min_dv: Velocity = minimum(for m: Maneuver { @delta_v[m] });
 node mean_dv: Velocity = mean(for m: Maneuver { @delta_v[m] });
 node n_maneuvers: Int = count(for m: Maneuver { @delta_v[m] });
-node normalized: Velocity = @total_dv / to_float(@n_maneuvers);
+node normalized: Velocity = @total_dv / @n_maneuvers;
 ```
 
-利用可能な集約関数: `sum`、`maximum`、`minimum`、`mean`、`count`。スカラー量の計算で整数のカウントが必要な場合は、明示的に `to_float` を使ってください。複数軸に対する直接の集約はまだ定義されていません。
+利用可能な集約関数: `sum`、`maximum`、`minimum`、`mean`、`count`。`normalized` のように、`Int` の個数は `*` と `/` で量をスカラー倍できます。複数軸に対する直接の集約はまだ定義されていません。
 
 ## Scan (累積フォールド) { #scan-cumulative-fold }
 

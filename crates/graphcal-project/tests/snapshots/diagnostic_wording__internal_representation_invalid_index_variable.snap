@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+a local of type Int is not a valid index variable
+    Diagnostic severity: error
+Begin snippet for invalid_index_variable.gcl starting at line 7, column 1
+
+snippet line 7: node bad: Dimensionless = match @w {
+snippet line 8:     Wrap(n: k) => @v[k],
+    label at line 8, column 22: error here
+snippet line 9: };
+diagnostic code: graphcal::I019

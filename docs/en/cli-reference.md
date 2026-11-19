@@ -27,6 +27,7 @@ graphcal [OPTIONS] <COMMAND>
 | [`dump`](#graphcal-dump) | Debug-print compiler/evaluator pipeline artifacts (experimental) |
 | [`graph`](#graphcal-graph) | Export the dependency graph of a `.gcl` file (experimental) |
 | [`model describe`](#graphcal-model-describe) | Print a model's batch-evaluation interface |
+| [`model unit`](#graphcal-model-unit) | Print the dimension and SI scale of unit expressions in a model's scope |
 | [`model serve`](#graphcal-model-serve) | Evaluate request batches over stdin/stdout Arrow IPC |
 | [`report build`](#graphcal-report-build) | Build a self-contained HTML report from a model (experimental) |
 | [`deps lock`](#graphcal-deps-lock) | Resolve exact-rev Git dependencies and write `graphcal.lock` |
@@ -67,19 +68,22 @@ pins each referenced `.wasm` file's SHA-256 as a `[[plugin]]` entry. Loading
 enforces the pins: an unpinned or hash-mismatched plugin is a hard error, so
 plugin binaries can only change together with a reviewable lockfile diff.
 
-Dependency-consuming commands (`check`, `eval`, `dump`, `graph`, `model describe`, `model serve`, and the LSP) are
+Dependency-consuming commands (`check`, `eval`, `dump`, `graph`, `model describe`, `model unit`, `model serve`, and the LSP) are
 read-only with respect to packages: they read `graphcal.lock` and cached
 sources, but they do not fetch, create, or update lockfile entries. If the
 lockfile is missing, stale, uses a different Graphcal or standard-library
 version, or references a missing or hash-mismatched cache entry, they fail and
 ask you to run `graphcal deps lock`.
 
-Private Git repositories are supported only when the underlying Git fetch can
-obtain credentials from the current environment. This is intentionally not a
-portable guarantee: SSH may work with a configured key/agent, while HTTPS may
-fail unless a compatible credential helper or non-interactive credential
-provider is available. Do not place credentials directly in `git` URLs in
-`graphcal.toml`. `GRAPHCAL_CACHE_DIR` overrides the cache root.
+Graphcal fetches dependencies with a built-in Git client that ignores your Git
+configuration and Git environment variables: credential helpers,
+`GIT_ASKPASS`/`SSH_ASKPASS`, `insteadOf` rewrites, `core.sshCommand`, and
+`GIT_SSH_COMMAND` have no effect. For a private repository, use an SSH URL:
+Graphcal runs `ssh` (or the program named by `GIT_SSH`), which uses your
+OpenSSH configuration, keys, and agent. A private HTTPS repository can only be
+fetched by typing a username and token at the terminal prompt, so it does not
+work non-interactively, for example in CI. Do not place credentials directly in
+`git` URLs in `graphcal.toml`. `GRAPHCAL_CACHE_DIR` overrides the cache root.
 
 **Examples:**
 
@@ -747,6 +751,31 @@ reason. See [Batch Evaluation](batch-evaluation.md) for the document format.
 
 ---
 
+## `graphcal model unit`
+
+Resolve unit expressions as if written after `->` in the entry file, and print
+each one's dimension and size in the canonical SI unit as a JSON array. A
+batch-evaluation client uses it to show quantities it read in SI units, such as
+fields of a structured output, in units of its choice.
+
+```bash
+graphcal model unit <FILE> <UNIT>... [--root <ROOT>]
+```
+
+**Arguments and options:**
+
+| Item | Description |
+|------|-------------|
+| `<FILE>` | Entry `.gcl` file, whose scope resolves the units |
+| `<UNIT>` | Unit expression with a fixed scale, such as `h` or `km/s`; repeatable |
+| `--root <ROOT>` | Explicit project root |
+
+Base, `const`, and prelude units have a fixed scale; runtime units do not.
+
+**Exit codes:** `0` success; `2` the project failed to compile or a unit did not resolve.
+
+---
+
 ## `graphcal model serve`
 
 Prepare a model once and evaluate request batches from stdin, writing one
@@ -754,7 +783,9 @@ result batch per request to stdout as Arrow IPC streams.
 
 ```bash
 graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=UNIT>]... \
-    (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) [--root <ROOT>]
+    [--param <NAME=VALUE>]... [--params-json <JSON> | --params-json-file <FILE>] \
+    (--expect-fingerprint <FINGERPRINT> | --skip-fingerprint-check) \
+    [--request-timeout <SECONDS> | --print-request-schema] [--root <ROOT>]
 ```
 
 **Arguments and options:**
@@ -762,11 +793,14 @@ graphcal model serve <FILE> --input <NAME>... --output <NAME>... [--unit <NAME=U
 | Item | Description |
 |------|-------------|
 | `<FILE>` | Entry `.gcl` file |
-| `--input <NAME>` | Parameter to vary in requests; repeatable and required. Parameters not listed keep their defaults |
+| `--input <NAME>` | Parameter to vary in requests; repeatable and required. Parameters not listed keep their defaults unless fixed |
 | `--output <NAME>` | Public node to return in results; repeatable and required |
 | `--unit <NAME=UNIT>` | Carry the selected quantity port `NAME` in `UNIT`, a fixed-scale unit expression of the entry file; repeatable |
+| `--param`, `--params-json`, `--params-json-file` | Fix parameters that are not varied to these values in every row, in the formats of `eval`; `--params-json-file -` is not available |
 | `--expect-fingerprint <FINGERPRINT>` | Refuse to start unless the interface fingerprint from `graphcal model describe` matches |
 | `--skip-fingerprint-check` | Serve without checking the fingerprint |
+| `--request-timeout <SECONDS>` | End the session with exit code `1` when one request batch is still evaluating after this many seconds; without it, a request evaluates until it finishes |
+| `--print-request-schema` | Print the session's request-stream schema as an Arrow IPC stream without batches and exit instead of serving |
 | `--root <ROOT>` | Explicit project root |
 
 Exactly one of `--expect-fingerprint` and `--skip-fingerprint-check` is
@@ -844,7 +878,7 @@ Check `.gcl` files without runtime evaluation. This performs parsing, module and
 graphcal check [OPTIONS] [PATHS]...
 ```
 
-Otherwise-valid [unfinished nodes](language/computation-model.md#unfinished-nodes) are summarized without making the check fail. Use `--deny-todo` to require complete formulas, including in unused DAG definitions. This is still a static check, not runtime domain validation.
+Otherwise-valid [unfinished nodes and constants](language/computation-model.md#unfinished-nodes) are summarized without making the check fail. Use `--deny-todo` to require complete formulas, including in unused DAG definitions. Each file counts its own unfinished declarations and those of other modules that it uses; an unused unfinished declaration of an imported module is reported only when that module is checked. To require a whole package to be complete, check its directory. This is still a static check, not runtime domain validation.
 
 **Arguments:**
 

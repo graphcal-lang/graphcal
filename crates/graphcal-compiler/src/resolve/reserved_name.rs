@@ -12,6 +12,7 @@ use crate::semantic::prelude::{prelude_dimension_names, prelude_unit_names};
 use crate::semantic::time_scale::TimeScale;
 use crate::syntax::builtin_type_name::BuiltinTypeName;
 use crate::syntax::names::NameAtom;
+use crate::syntax::token::ContextualKeyword;
 
 /// Closed semantic category that reserves a spelling in one namespace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,28 +67,14 @@ pub fn validate_reserved_name(
                 Some(ReservedName::BuiltinType)
             } else if let Ok(scale) = name.as_str().parse::<TimeScale>() {
                 Some(ReservedName::TimeScale(scale))
-            } else if matches!(name.as_str(), "Fin" | "range" | "linspace") {
-                Some(ReservedName::StaticFormer)
             } else {
-                None
+                contextual_keyword_reservation(name, Namespace::Static)
             }
         }
         Namespace::Term => BuiltinConst::parse(name.as_str())
             .map(ReservedName::BuiltinConstant)
             .or_else(|| BuiltinFn::parse(name.as_str()).map(ReservedName::BuiltinFunction))
-            .or_else(|| {
-                matches!(
-                    name.as_str(),
-                    "scan"
-                        | "unfold"
-                        | "key"
-                        | "fin_key"
-                        | "floor_key"
-                        | "ceil_key"
-                        | "nearest_key"
-                )
-                .then_some(ReservedName::ContextualCallable)
-            }),
+            .or_else(|| contextual_keyword_reservation(name, Namespace::Term)),
         Namespace::Unit => prelude_unit_names()
             .any(|prelude| prelude == name.as_str())
             .then_some(ReservedName::PreludeUnit),
@@ -100,6 +87,47 @@ pub fn validate_reserved_name(
             reserved,
         })
     })
+}
+
+/// The namespace a contextual keyword reserves its spelling in, if any.
+///
+/// Exhaustive, so every new contextual keyword must state its policy.
+/// Keywords whose production is selected by surrounding syntax alone stay
+/// usable as names.
+const fn contextual_keyword_reservation_policy(
+    keyword: ContextualKeyword,
+) -> Option<(Namespace, ReservedName)> {
+    match keyword {
+        ContextualKeyword::Fin | ContextualKeyword::Range | ContextualKeyword::Linspace => {
+            Some((Namespace::Static, ReservedName::StaticFormer))
+        }
+        ContextualKeyword::Scan
+        | ContextualKeyword::Unfold
+        | ContextualKeyword::Key
+        | ContextualKeyword::FinKey
+        | ContextualKeyword::FloorKey
+        | ContextualKeyword::CeilKey
+        | ContextualKeyword::NearestKey => {
+            Some((Namespace::Term, ReservedName::ContextualCallable))
+        }
+        // `todo` is a hole only before `<`; the rest appear only inside
+        // their own declaration or argument syntax.
+        ContextualKeyword::Todo
+        | ContextualKeyword::Step
+        | ContextualKeyword::Points
+        | ContextualKeyword::Plugin
+        | ContextualKeyword::Fn
+        | ContextualKeyword::Bind
+        | ContextualKeyword::Mark
+        | ContextualKeyword::Encode
+        | ContextualKeyword::Plots => None,
+    }
+}
+
+fn contextual_keyword_reservation(name: &NameAtom, namespace: Namespace) -> Option<ReservedName> {
+    ContextualKeyword::parse(name.as_str())
+        .and_then(contextual_keyword_reservation_policy)
+        .and_then(|(reserved_in, reserved)| (reserved_in == namespace).then_some(reserved))
 }
 
 #[cfg(test)]
@@ -133,10 +161,6 @@ mod tests {
             let atom = NameAtom::parse(scale.to_string()).unwrap();
             assert!(validate_reserved_name(Namespace::Static, &atom).is_err());
         }
-        for name in ["Fin", "range", "linspace"] {
-            let atom = NameAtom::parse(name).unwrap();
-            assert!(validate_reserved_name(Namespace::Static, &atom).is_err());
-        }
         for name in prelude_unit_names() {
             let atom = NameAtom::parse(name).unwrap();
             assert!(validate_reserved_name(Namespace::Unit, &atom).is_err());
@@ -148,6 +172,34 @@ mod tests {
         for function in BuiltinFn::all() {
             let atom = NameAtom::parse(function.to_string()).unwrap();
             assert!(validate_reserved_name(Namespace::Term, &atom).is_err());
+        }
+    }
+
+    #[test]
+    fn contextual_keywords_are_reserved_exactly_in_their_policy_namespace() {
+        for &keyword in ContextualKeyword::ALL {
+            let atom = NameAtom::parse(keyword.as_str()).unwrap();
+            let policy = contextual_keyword_reservation_policy(keyword);
+            for namespace in [Namespace::Static, Namespace::Term, Namespace::Unit] {
+                let expected = policy.and_then(|(reserved_in, reserved)| {
+                    (reserved_in == namespace).then_some(reserved)
+                });
+                assert_eq!(
+                    validate_reserved_name(namespace, &atom)
+                        .err()
+                        .map(|error| error.reserved),
+                    expected,
+                    "{keyword} in {namespace:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn static_formers_and_contextual_callables_stay_reserved() {
+        for name in ["Fin", "range", "linspace"] {
+            let atom = NameAtom::parse(name).unwrap();
+            assert!(validate_reserved_name(Namespace::Static, &atom).is_err());
         }
         for name in [
             "scan",

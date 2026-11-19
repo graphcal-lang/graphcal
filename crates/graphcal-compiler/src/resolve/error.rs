@@ -18,6 +18,7 @@ use crate::syntax::type_name::ConstructorName;
 
 use super::category::{DeclSymbolKind, ExportedImportItemKind, SurfaceNameKind, SymbolTable};
 use super::namespace::Namespace;
+use super::reserved_name::ReservedName;
 
 /// What a failed lookup or visibility check searched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -146,6 +147,17 @@ pub enum ModuleResolveError {
         first: Span,
         duplicate: Span,
     },
+    /// A selective import / include item's local name takes a spelling
+    /// reserved in the namespace it occupies (for example `unit ft as m`).
+    #[error("imported {kind} name `{name}` in module `{owner}` is reserved by the {reserved}")]
+    ReservedImportName {
+        owner: DagId,
+        kind: ExportedImportItemKind,
+        name: NameAtom,
+        reserved: ReservedName,
+        /// The local name's source span.
+        span: Span,
+    },
     /// A name was not found where the lookup searched.
     #[error("unknown {category} `{name}` in module `{owner}`")]
     UnknownName {
@@ -161,9 +173,12 @@ pub enum ModuleResolveError {
         span: Span,
     },
     /// A name exists, but in a semantic universe that is not valid here.
-    #[error("in module `{owner}`, `{name}` is {actual}, not {expected}")]
+    ///
+    /// `name` is the path as written at the use site, so the message names
+    /// no owning module: an include instance's owner is an internal identity
+    /// with no source spelling, and a local name's owner is redundant.
+    #[error("`{name}` is {actual}, not {expected}")]
     WrongUniverseName {
-        owner: DagId,
         name: NamePath,
         expected: SurfaceNameKind,
         actual: SurfaceNameKind,
@@ -215,6 +230,36 @@ pub enum ModuleResolveError {
         index: ResolvedIndexName,
         variant: IndexVariantName,
     },
+}
+
+impl ModuleResolveError {
+    /// Report a failed item lookup in an include's `instance` against the
+    /// `template` the include names in source: the instance is an internal
+    /// identity with no source spelling.
+    #[must_use]
+    pub(super) fn reported_in_template(mut self, instance: &DagId, template: &DagId) -> Self {
+        match &mut self {
+            Self::UnknownName { owner, .. }
+            | Self::WrongImportCategory { owner, .. }
+            | Self::IncludeItemNotProjectable { owner, .. }
+            | Self::PrivateName { owner, .. }
+            | Self::PrivateImportItem { owner, .. }
+                if owner == instance =>
+            {
+                *owner = template.clone();
+            }
+            _ => {}
+        }
+        self
+    }
+}
+
+/// A cancellable resolver stage that fails with a [`ModuleResolveError`]
+/// reports it as [`Outcome::Failed`](crate::outcome::Outcome::Failed).
+impl From<ModuleResolveError> for crate::outcome::Outcome<ModuleResolveError> {
+    fn from(error: ModuleResolveError) -> Self {
+        Self::Failed(error)
+    }
 }
 
 /// A [`ModuleResolveError`] raised while registering the import/include edges

@@ -1,11 +1,15 @@
+use graphcal_compiler::builtin::IntDivisionFn;
 use graphcal_compiler::exact_rational::ExactRational;
-use graphcal_compiler::finite_value::{FiniteArithmeticError, FiniteQuantity};
+use graphcal_compiler::finite_value::{ExactPowerFailure, FiniteQuantity};
+use graphcal_compiler::semantic::int_arith;
+use graphcal_compiler::semantic::int_division::{self, IntDivisionError};
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::operators::{ArithOp, IntArithOp, OrderingOp};
 
 use super::EvalSession;
-use super::runtime_failure::{IntegerFailure, RuntimeFailure};
+use super::numeric::QuantityValidationError;
+use super::runtime_failure::IntegerFailure;
 
 // ---------------------------------------------------------------------------
 // Helper functions
@@ -19,16 +23,6 @@ pub(super) fn check_finite(
     span: Span,
 ) -> Result<FiniteQuantity, SemanticError> {
     super::numeric::computed_finite_quantity(value, context)
-        .map_err(|err| ctx.runtime_error(err, span))
-}
-
-fn check_nonzero(
-    value: f64,
-    context: &str,
-    ctx: &EvalSession<'_>,
-    span: Span,
-) -> Result<FiniteQuantity, SemanticError> {
-    super::numeric::computed_nonzero_quantity(value, context)
         .map_err(|err| ctx.runtime_error(err, span))
 }
 
@@ -51,28 +45,34 @@ pub(super) fn int_arith(
     ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<i64, SemanticError> {
-    match op {
-        IntArithOp::Add => l.checked_add(r),
-        IntArithOp::Sub => l.checked_sub(r),
-        IntArithOp::Mul => l.checked_mul(r),
-        IntArithOp::Div => {
-            if r == 0 {
-                return Err(ctx.runtime_error(IntegerFailure::DivisionByZero, span));
-            }
-            l.checked_div(r)
-        }
-        IntArithOp::Mod => {
-            if r == 0 {
-                return Err(ctx.runtime_error(IntegerFailure::ModuloByZero, span));
-            }
-            // The mathematical remainder is zero for every dividend when the
-            // divisor is -1. `checked_rem` nevertheless returns `None` for
-            // `i64::MIN % -1` because the corresponding machine instruction
-            // traps, so handle this total case explicitly.
-            if r == -1 { Some(0) } else { l.checked_rem(r) }
-        }
-    }
-    .ok_or_else(|| ctx.runtime_error(IntegerFailure::Overflow, span))
+    int_arith::arith(op, l, r).map_err(|error| ctx.runtime_error(IntegerFailure::from(error), span))
+}
+
+/// Negate an integer with checked arithmetic.
+pub(super) fn int_negate(
+    value: i64,
+    ctx: &EvalSession<'_>,
+    span: Span,
+) -> Result<i64, SemanticError> {
+    int_arith::negate(value).map_err(|error| ctx.runtime_error(IntegerFailure::from(error), span))
+}
+
+/// Evaluate a `div_*` built-in: the quotient rounded in the direction it
+/// names.
+pub(super) fn int_division(
+    function: IntDivisionFn,
+    dividend: i64,
+    divisor: i64,
+    ctx: &EvalSession<'_>,
+    span: Span,
+) -> Result<i64, SemanticError> {
+    int_division::divide(function, dividend, divisor).map_err(|error| {
+        let failure = match error {
+            IntDivisionError::DivisionByZero => IntegerFailure::DivisionByZero,
+            IntDivisionError::Overflow => IntegerFailure::Overflow,
+        };
+        ctx.runtime_error(failure, span)
+    })
 }
 
 /// Raise an integer to an integer power with checked arithmetic.
@@ -82,35 +82,33 @@ pub(super) fn int_power(
     ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<i64, SemanticError> {
-    if exponent < 0 {
-        return Err(ctx.runtime_error(IntegerFailure::NegativeExponent, span));
-    }
-    let exponent = u32::try_from(exponent)
-        .map_err(|_| ctx.runtime_error(IntegerFailure::ExponentTooLarge, span))?;
-    base.checked_pow(exponent)
-        .ok_or_else(|| ctx.runtime_error(IntegerFailure::Overflow, span))
+    int_arith::power(base, exponent)
+        .map_err(|error| ctx.runtime_error(IntegerFailure::from(error), span))
 }
+
+/// Context label of every failed quantity power, whether its exponent is an
+/// exact rational or a runtime value: both are the same `^` operation.
+const POWER_CONTEXT: &str = "power operation";
 
 /// Evaluate an exact rational power without discarding the rational metadata.
 ///
-/// Integer exponents use `powi` when possible. Negative bases have a real
-/// result exactly when the reduced denominator is odd; preserving the exact
-/// denominator makes that rule deterministic instead of relying on `powf`'s
-/// treatment of a rounded exponent.
+/// Negative bases have a real result exactly when the reduced denominator is
+/// odd; preserving the exact denominator makes that rule deterministic
+/// instead of relying on `powf`'s treatment of a rounded exponent.
 pub(super) fn eval_exact_quantity_power(
     base: FiniteQuantity,
     exponent: ExactRational,
     ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<FiniteQuantity, SemanticError> {
-    let result = exponent
-        .pow_f64(base.get())
-        .map_err(|error| ctx.runtime_error(error, span))?;
-    if base.get() == 0.0 {
-        check_finite(result, "power operation", ctx, span)
-    } else {
-        check_nonzero(result, "power operation", ctx, span)
-    }
+    base.checked_exact_power(exponent)
+        .map_err(|error| match error {
+            ExactPowerFailure::NoRealValue(error) => ctx.runtime_error(error, span),
+            ExactPowerFailure::Arithmetic(error) => ctx.runtime_error(
+                QuantityValidationError::from_arithmetic(error, POWER_CONTEXT),
+                span,
+            ),
+        })
 }
 
 /// Evaluate an arithmetic operator on two finite quantities with the
@@ -122,7 +120,6 @@ pub(super) fn quantity_arith(
     ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<FiniteQuantity, SemanticError> {
-    let context = "arithmetic operation";
     match op {
         ArithOp::Add => l.checked_add(r),
         ArithOp::Sub => l.checked_sub(r),
@@ -130,22 +127,10 @@ pub(super) fn quantity_arith(
         ArithOp::Div => l.checked_div(r),
     }
     .map_err(|error| {
-        let failure = match error {
-            FiniteArithmeticError::DivisionByZero => RuntimeFailure::QuantityDivisionByZero,
-            FiniteArithmeticError::Infinite => {
-                super::numeric::QuantityValidationError::InfiniteResult {
-                    context: context.to_string(),
-                }
-                .into()
-            }
-            FiniteArithmeticError::Underflow => {
-                super::numeric::QuantityValidationError::UnderflowToZero {
-                    context: context.to_string(),
-                }
-                .into()
-            }
-        };
-        ctx.runtime_error(failure, span)
+        ctx.runtime_error(
+            QuantityValidationError::from_arithmetic(error, "arithmetic operation"),
+            span,
+        )
     })
 }
 
@@ -157,13 +142,12 @@ pub(super) fn quantity_power(
     ctx: &EvalSession<'_>,
     span: Span,
 ) -> Result<FiniteQuantity, SemanticError> {
-    let context = "arithmetic operation";
-    let result = base.get().powf(exponent.get());
-    if base.get() != 0.0 && exponent.get() != 0.0 {
-        check_nonzero(result, context, ctx, span)
-    } else {
-        check_finite(result, context, ctx, span)
-    }
+    base.checked_powf(exponent).map_err(|error| {
+        ctx.runtime_error(
+            QuantityValidationError::from_arithmetic(error, POWER_CONTEXT),
+            span,
+        )
+    })
 }
 
 #[cfg(test)]

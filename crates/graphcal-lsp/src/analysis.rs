@@ -6,8 +6,9 @@ use std::sync::Arc;
 use tower_lsp::lsp_types::{Diagnostic, Url};
 
 use crate::project_symbols::ProjectSymbols;
+use crate::symbol_identity::SymbolId;
 use crate::symbol_identity::{UnresolvedSymbol, VisibleBinding, resolve_visible_target};
-use crate::symbol_table::{SymbolKey, SymbolTable};
+use crate::symbol_table::SymbolTable;
 use crate::workspace_revision::AnalysisInputs;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
@@ -35,7 +36,7 @@ pub struct AnalysisResult {
     /// The symbol table (built from AST, enriched from TIR if available).
     pub symbol_table: SymbolTable,
     /// Definitions from imported files, keyed by symbol key.
-    pub imported_definitions: HashMap<SymbolKey, ImportedDefinition>,
+    pub imported_definitions: HashMap<SymbolId, ImportedDefinition>,
     /// Complete immutable occurrence index for the loaded project snapshot.
     pub project_symbols: ProjectSymbols,
     /// Source-visible aliases/qualifiers for imported canonical definitions.
@@ -51,8 +52,8 @@ pub struct AnalysisResult {
     /// Diagnostics to publish, grouped by the URI they belong to. The active
     /// document's URI is always present (with an empty Vec when clean) so a
     /// previously-published diagnostic can be cleared. Shared via `Arc` so
-    /// `store_and_publish` can hand a snapshot to the publish loop without
-    /// deep-cloning the map on every analysis cycle.
+    /// the server's stored document can keep a snapshot for publishing
+    /// without deep-cloning the map on every analysis cycle.
     pub diagnostics: Arc<HashMap<Url, Vec<Diagnostic>>>,
     /// Computed values from evaluation, keyed by runtime declaration identity.
     /// Each value is a formatted display string (e.g., `"9.81 [m/s^2]"`).
@@ -65,7 +66,7 @@ pub struct AnalysisResult {
     pub view: Option<graphcal_project::view_model::ViewModels>,
     /// Structured function signatures, keyed by function name.
     /// Points to a lazily-initialized static map (builtins never change).
-    pub fn_signatures: &'static HashMap<String, FnSignatureInfo>,
+    pub fn_signatures: &'static HashMap<graphcal_compiler::builtin::BuiltinFn, FnSignatureInfo>,
     /// Extern (plugin) function signatures from this file's `import plugin`
     /// blocks, keyed by the typed `alias::name` call spelling. Per-file,
     /// unlike the static builtin map.
@@ -76,13 +77,26 @@ pub struct AnalysisResult {
     /// not parse, so the symbol-dependent fields are empty placeholders and
     /// only `diagnostics` is meaningful. [`store_analysis`] keeps the
     /// previous good symbol state in that case (#834) — mid-edit buffers are
-    /// unparsable more often than not, and completion/hover/goto should keep
-    /// answering from the last successfully analyzed state.
+    /// unparsable more often than not, and completion and signature help
+    /// keep answering from the last successfully analyzed state (coordinate
+    /// features such as hover and goto wait for a buffer that parses).
     pub buffer_parsed: bool,
+    /// Whether the project loaded and passed the compiler's checks; runtime
+    /// (evaluation) diagnostics do not count.
+    pub check: ProjectCheck,
+}
+
+/// The compiler's verdict on the analysed project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectCheck {
+    /// The project loaded and checked.
+    Passed,
+    /// Loading or checking reported a compile error.
+    Failed,
 }
 
 impl AnalysisResult {
-    pub fn resolve_imported_target(&self, unresolved: &UnresolvedSymbol) -> Option<SymbolKey> {
+    pub fn resolve_imported_target(&self, unresolved: &UnresolvedSymbol) -> Option<SymbolId> {
         resolve_visible_target(&self.imported_bindings, unresolved)
     }
 }
@@ -125,6 +139,7 @@ impl std::fmt::Debug for AnalysisResult {
             )
             .field("import_links_count", &self.import_links.len())
             .field("buffer_parsed", &self.buffer_parsed)
+            .field("check", &self.check)
             .finish()
     }
 }

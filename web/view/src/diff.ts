@@ -162,9 +162,17 @@ export interface Patch {
   files: number;
 }
 
+/**
+ * Line breaks and other control characters, as runs. A heading keeps none, so
+ * it stays one comment line that `git apply` skips.
+ */
+// oxlint-disable-next-line no-control-regex -- matching control characters is the point.
+const CONTROLS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]+/g;
+
 /** The diffs of every changed file under one heading, as a patch to copy. */
 export function patchOf(changes: readonly FileChange[], heading: string): Patch {
   const diffs = changes.map(unifiedDiff).filter((d) => d !== "");
   if (diffs.length === 0) return { text: "", files: 0 };
-  return { text: `# ${heading}\n\n${diffs.join("")}`, files: diffs.length };
+  const line = heading.replace(CONTROLS, " ");
+  return { text: `# ${line}\n\n${diffs.join("")}`, files: diffs.length };
 }

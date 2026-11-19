@@ -47,19 +47,6 @@ pub enum OutputBlock<'a> {
     Table(&'a str, &'a Value),
 }
 
-/// Count how many levels of `Indexed` nesting a value has.
-///
-/// Scalar values / structs return `0`. A 1D indexed value returns `1`. A 2D
-/// indexed-of-indexed returns `2`, and so on. The table renderer switches
-/// modes at depth >= 2.
-#[must_use]
-pub fn index_depth(value: &Value) -> usize {
-    match value {
-        Value::Indexed { entries, .. } => entries.values().next().map_or(1, |v| 1 + index_depth(v)),
-        _ => 0,
-    }
-}
-
 /// Effective presentation attached to one quantity cell.
 ///
 /// The physical dimension and scale participate in equality, so two cells are
@@ -210,7 +197,7 @@ pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatE
 /// Group a sequence of `(name, Result<Value, OutputUnavailable>)` items into output
 /// blocks in source order.
 ///
-/// Each 2D-or-deeper indexed value flushes the current flat run and becomes
+/// Each value shown as a grid ([`Value::displays_as_grid`]) flushes the current flat run and becomes
 /// its own [`OutputBlock::Table`]. Everything else is flattened via
 /// [`flatten_value`] into the current flat run.
 #[must_use]
@@ -222,7 +209,7 @@ pub fn build_output_blocks<'a>(
 
     for (name, node_result) in items {
         match node_result {
-            Ok(value) if index_depth(value) >= 2 => {
+            Ok(value) if value.displays_as_grid() => {
                 if !current_flat.is_empty() {
                     blocks.push(OutputBlock::Flat(std::mem::take(&mut current_flat)));
                 }
@@ -394,7 +381,7 @@ pub fn format_indexed_table(name: &str, value: &Value, render: &RenderContext) -
         | TableUnitPolicy::PerCell => format!("{name}:"),
     };
 
-    let depth = index_depth(value);
+    let depth = value.index_depth();
     if depth == 2 {
         let grid = format_table_grid_with_policy(value, render, &policy);
         return format!("{header}\n{grid}");
@@ -499,20 +486,20 @@ mod tests {
 
     #[test]
     fn index_depth_quantity_is_zero() {
-        assert_eq!(index_depth(&quantity(1.0)), 0);
+        assert_eq!(quantity(1.0).index_depth(), 0);
     }
 
     #[test]
     fn index_depth_1d_is_one() {
         let v = indexed_1d("I", &[("A", quantity(1.0)), ("B", quantity(2.0))]);
-        assert_eq!(index_depth(&v), 1);
+        assert_eq!(v.index_depth(), 1);
     }
 
     #[test]
     fn index_depth_2d_is_two() {
         let inner = indexed_1d("Col", &[("X", quantity(1.0)), ("Y", quantity(2.0))]);
         let outer = indexed_1d("Row", &[("R1", inner.clone()), ("R2", inner)]);
-        assert_eq!(index_depth(&outer), 2);
+        assert_eq!(outer.index_depth(), 2);
     }
 
     #[test]

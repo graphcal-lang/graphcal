@@ -21,7 +21,6 @@
 //!                   ↘ formatter
 //! ```
 
-use core::convert::Infallible;
 use core::fmt::Debug;
 
 pub(crate) mod sealed {
@@ -36,14 +35,14 @@ pub trait Phase: 'static + sealed::Sealed {
     ///
     /// Carried by `DeclKind::Sugar(_)`. For [`Raw`] this is
     /// [`crate::syntax::ast::RawDeclSugar`]; for [`Desugared`] it is
-    /// [`Infallible`] so the variant cannot be constructed.
+    /// [`Infallible`](core::convert::Infallible) so the variant cannot be constructed.
     type DeclSugar: Debug + Clone;
 
     /// Phase-specific expression sugar variants.
     ///
     /// Carried by `ExprKind::Sugar(_)`. For [`Raw`] this is
     /// [`crate::syntax::ast::RawExprSugar`]; for [`Desugared`] it is
-    /// [`Infallible`].
+    /// [`Infallible`](core::convert::Infallible).
     type ExprSugar: Debug + Clone;
 }
 
@@ -65,13 +64,3 @@ impl sealed::Sealed for Raw {}
 pub enum Desugared {}
 
 impl sealed::Sealed for Desugared {}
-
-/// Helper for matching against `Sugar(Infallible)` arms.
-///
-/// In post-desugar code, `match &decl.kind { ..., Sugar(s) => never(*s) }`
-/// is the canonical way to handle the impossible case without runtime panic.
-#[inline]
-#[must_use]
-pub const fn never<T>(x: Infallible) -> T {
-    match x {}
-}

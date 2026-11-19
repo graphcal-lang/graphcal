@@ -209,6 +209,38 @@ impl GenericScope {
         }
     }
 
+    /// Insert a declaration's own generic binder, which lives in the Static
+    /// namespace of the declaring `module`: it may neither reuse a reserved
+    /// Static name (prelude dimensions, built-in types, ...) nor shadow a
+    /// Static name visible there, so a binder can never silently change what
+    /// a visible name means inside its declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HirLowerError::GenericParamShadowsStatic`] for a reserved or
+    /// visible name, and [`HirLowerError::DuplicateGenericParam`] for a
+    /// binder already in scope.
+    pub(crate) fn insert_declared_binder(
+        &mut self,
+        binding: GenericParamBinding,
+        module: crate::resolve::ModuleRef<'_>,
+    ) -> Result<(), HirLowerError> {
+        use crate::resolve::namespace::Namespace;
+
+        let atom = binding.id.name.atom();
+        let visible = module.visible_span(Namespace::Static, atom);
+        if crate::resolve::reserved_name::validate_reserved_name(Namespace::Static, atom).is_err()
+            || visible.is_some()
+        {
+            return Err(HirLowerError::GenericParamShadowsStatic {
+                name: binding.id.name.clone(),
+                original: visible,
+                duplicate: binding.span,
+            });
+        }
+        self.insert_binding(binding)
+    }
+
     /// Look up a generic parameter by its leaf name.
     #[must_use]
     pub(crate) fn get(&self, name: &GenericParamName) -> Option<&GenericParamBinding> {
@@ -336,10 +368,18 @@ fn lower_type_slot(
             lower_datetime_application(type_ann.span, type_args.as_slice())?,
         ),
         ast::TypeExprKind::ComplexApplication { generic_args } => {
-            ValueTypeKind::Complex(lower_complex_application(type_ann.span, generic_args, ctx)?)
+            ValueTypeKind::Complex(lower_complex_application(
+                type_ann.span,
+                written_generic_args(generic_args.as_ref()),
+                ctx,
+            )?)
         }
         ast::TypeExprKind::KeyApplication { generic_args } => {
-            ValueTypeKind::Key(lower_key_application(type_ann.span, generic_args, ctx)?)
+            ValueTypeKind::Key(lower_key_application(
+                type_ann.span,
+                written_generic_args(generic_args.as_ref()),
+                ctx,
+            )?)
         }
         ast::TypeExprKind::IndexLabel { index, label } => {
             return Err(HirLowerError::IndexLabelAsType {
@@ -361,6 +401,21 @@ fn lower_type_slot(
                         slot: TypePathSlot::TypeApplication,
                         span: name.span,
                     },
+                    // An index applied like a type is the same mistake as an
+                    // index written as a type, so it gets the same N021.
+                    ModuleResolveError::WrongUniverseName {
+                        actual: SurfaceNameKind::Index,
+                        ..
+                    } if let Ok(index) =
+                        ctx.resolver.resolve_index_path(ctx.owner, &name.value) =>
+                    {
+                        HirLowerError::IndexAsType {
+                            index: IndexRef::Concrete(Spanned::new(
+                                index.into_resolved(),
+                                name.span,
+                            )),
+                        }
+                    }
                     source => HirLowerError::ModuleResolve {
                         source,
                         span: name.span,
@@ -382,6 +437,12 @@ fn lower_type_slot(
     };
 
     Ok(TypeSlot::Value(ValueType::new(kind, type_ann.span)))
+}
+
+/// The generic arguments of a built-in type former; a bare former (no `<…>`)
+/// has none, which the arity check reports.
+fn written_generic_args(args: Option<&NonEmpty<ast::GenericArg>>) -> &[ast::GenericArg] {
+    args.map_or(&[], NonEmpty::as_slice)
 }
 
 fn lower_complex_application(
@@ -1103,17 +1164,13 @@ fn resolve_optional<T>(result: Result<T, ModuleResolveError>) -> LookupCandidate
 
 fn type_position_wrong_universe(source: ModuleResolveError) -> ModuleResolveError {
     match source {
-        ModuleResolveError::WrongUniverseName {
-            owner,
-            name,
-            actual,
-            ..
-        } => ModuleResolveError::WrongUniverseName {
-            owner,
-            name,
-            expected: SurfaceNameKind::Type,
-            actual,
-        },
+        ModuleResolveError::WrongUniverseName { name, actual, .. } => {
+            ModuleResolveError::WrongUniverseName {
+                name,
+                expected: SurfaceNameKind::Type,
+                actual,
+            }
+        }
         other => other,
     }
 }

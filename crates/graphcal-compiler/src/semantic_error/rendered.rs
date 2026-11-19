@@ -1,14 +1,13 @@
 //! Rendering a [`SemanticError`] with `miette`, through the source registry
 //! that issued its [`SourceId`](crate::source_id::SourceId).
 
-use std::sync::Arc;
-
-use miette::{Diagnostic, NamedSource};
+use miette::Diagnostic;
 
 use super::SemanticError;
 use crate::diagnostic::DiagnosticKind as _;
+use crate::diagnostic_render::{kind_help, kind_labels};
 use crate::internal_error::InternalError;
-use crate::source_registry::SourceRegistry;
+use crate::source_registry::{RegisteredSource, SourceRegistry};
 
 /// A [`SemanticError`] together with the source text its spans index into,
 /// ready for `miette`.
@@ -21,7 +20,7 @@ pub struct RenderedSemanticError {
     /// The rendered error; readable (and matchable) but only constructed with
     /// its source through [`Self::new`].
     pub error: SemanticError,
-    source: NamedSource<Arc<String>>,
+    source: RegisteredSource,
 }
 
 impl RenderedSemanticError {
@@ -41,9 +40,9 @@ impl RenderedSemanticError {
         &self.error
     }
 
-    /// The named source the error's labels index into.
+    /// The registered source the error's labels index into.
     #[must_use]
-    pub const fn named_source(&self) -> &NamedSource<Arc<String>> {
+    pub const fn registered_source(&self) -> &RegisteredSource {
         &self.source
     }
 }
@@ -66,10 +65,7 @@ impl Diagnostic for RenderedSemanticError {
 
     fn help<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
         match &self.error {
-            SemanticError::Located(diagnostic) => diagnostic
-                .kind
-                .help()
-                .map(|help| Box::new(help) as Box<dyn std::fmt::Display + 'a>),
+            SemanticError::Located(diagnostic) => kind_help(&diagnostic.kind),
             SemanticError::Internal(_) => Some(Box::new(InternalError::HELP)),
         }
     }
@@ -81,20 +77,12 @@ impl Diagnostic for RenderedSemanticError {
     fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
         match &self.error {
             SemanticError::Located(diagnostic) => {
-                let primary = miette::LabeledSpan::new_with_span(
-                    diagnostic.kind.primary_label(),
-                    diagnostic.primary,
-                );
-                let secondary =
-                    diagnostic.kind.secondary_labels().into_iter().map(|label| {
-                        miette::LabeledSpan::new_with_span(Some(label.text), label.span)
-                    });
-                Some(Box::new(std::iter::once(primary).chain(secondary)))
+                Some(Box::new(kind_labels(&diagnostic.kind, diagnostic.primary)))
             }
             SemanticError::Internal(internal) => Some(Box::new(
                 internal
                     .anchor()
-                    .resolve(self.source.inner().len())
+                    .resolve(self.source.text().len())
                     .map(|span| {
                         miette::LabeledSpan::new_with_span(
                             Some(InternalError::LABEL.to_owned()),
@@ -134,7 +122,7 @@ mod tests {
         assert_eq!(whole_file_labels.len(), 1);
         assert_eq!(whole_file_labels[0].offset(), 0);
         assert_eq!(whole_file_labels[0].len(), text.len());
-        assert_eq!(whole_file.named_source().name(), "test.gcl");
+        assert_eq!(whole_file.registered_source().name(), "test.gcl");
 
         let builtin = super::RenderedSemanticError::new(
             SemanticError::internal_error("builtin", source, DiagnosticAnchor::Builtin),
@@ -150,13 +138,57 @@ mod tests {
     }
 
     #[test]
+    fn located_error_renders_exactly_like_its_renderable_diagnostic() {
+        use crate::diagnostic::Diagnostic;
+        use crate::diagnostic_render::RenderableDiagnostic;
+        use crate::semantic_error::SemanticErrorKind;
+        use crate::semantic_error::attribute::AttributeError;
+        use crate::syntax::decl_name::DeclName;
+        use crate::syntax::span::Span;
+
+        let mut registry = SourceRegistry::new();
+        let text = "#[assumes(ok, ok)]\nnode x: Int = 1";
+        let source = registry.register("test.gcl", Arc::new(text.to_string()));
+        let kind = SemanticErrorKind::from(AttributeError::DuplicateAssumesArgument {
+            name: DeclName::expect_valid("ok"),
+            first: Span::new(10, 12),
+        });
+        let primary = Span::new(14, 16);
+
+        let rendered = super::RenderedSemanticError::new(
+            SemanticError::located(source, primary, kind.clone()),
+            &registry,
+        );
+        let renderable =
+            RenderableDiagnostic::new(Diagnostic::new(source, primary, kind), &registry)
+                .expect("the registry issued the source id");
+
+        let code =
+            |diagnostic: &dyn miette::Diagnostic| diagnostic.code().map(|code| code.to_string());
+        let help =
+            |diagnostic: &dyn miette::Diagnostic| diagnostic.help().map(|help| help.to_string());
+        let labels = |diagnostic: &dyn miette::Diagnostic| {
+            diagnostic
+                .labels()
+                .expect("located diagnostics expose labels")
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rendered.to_string(), renderable.to_string());
+        assert_eq!(code(&rendered), code(&renderable));
+        assert_eq!(help(&rendered), help(&renderable));
+        let rendered_labels = labels(&rendered);
+        assert_eq!(rendered_labels.len(), 2);
+        assert_eq!(rendered_labels, labels(&renderable));
+    }
+
+    #[test]
     fn foreign_source_ids_render_against_an_explicitly_unknown_source() {
         let source = SourceRegistry::new().register("other.gcl", Arc::new("x".to_string()));
         let rendered = super::RenderedSemanticError::new(
             SemanticError::internal_error("foreign", source, DiagnosticAnchor::WholeFile),
             &SourceRegistry::new(),
         );
-        assert_eq!(rendered.named_source().name(), "<unknown source>");
+        assert_eq!(rendered.registered_source().name(), "<unknown source>");
         assert_eq!(rendered.error().source(), source);
     }
 

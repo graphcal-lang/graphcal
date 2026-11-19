@@ -1,17 +1,15 @@
 //! Failures binding values to the entry DAG's parameters from outside the
 //! program (CLI `--param`, JSON parameter documents, model rows).
 
-use std::sync::Arc;
-
-use miette::{Diagnostic, NamedSource, SourceSpan};
+use graphcal_compiler::source_registry::RegisteredSource;
+use miette::{Diagnostic, SourceSpan};
 use thiserror::Error;
 
 use graphcal_compiler::declaration_category::DeclCategory;
 use graphcal_compiler::hir::closed_expr::ClosedExpressionError;
-use graphcal_compiler::semantic::checked_type::{IndexTypeRef, TypeSpelling};
+use graphcal_compiler::semantic::checked_type::TypeSpelling;
 use graphcal_compiler::semantic_error::domain::DomainViolationDetail;
 use graphcal_compiler::syntax::decl_name::DeclName;
-use graphcal_compiler::syntax::index_name::IndexVariantName;
 
 /// Why a literal value cannot be normalized onto its declared value schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -30,7 +28,6 @@ pub enum BindingValueKind {
     Quantity,
     Int,
     Bool,
-    Key,
     MapLiteral,
 }
 
@@ -40,7 +37,6 @@ impl std::fmt::Display for BindingValueKind {
             Self::Quantity => "Quantity",
             Self::Int => "Int",
             Self::Bool => "Bool",
-            Self::Key => "Key",
             Self::MapLiteral => "a map literal",
         })
     }
@@ -76,7 +72,7 @@ pub enum BindingError {
     RequiredParamNotProvided {
         name: DeclName,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("declared here without a default value")]
         span: SourceSpan,
     },
@@ -87,7 +83,7 @@ pub enum BindingError {
         name: DeclName,
         reason: BindingLiteralError,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("invalid value")]
         span: SourceSpan,
     },
@@ -101,7 +97,7 @@ pub enum BindingError {
         name: DeclName,
         reason: ClosedExpressionError,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("not a closed value")]
         span: SourceSpan,
     },
@@ -113,7 +109,7 @@ pub enum BindingError {
         actual: BindingValueKind,
         expected: TypeSpelling,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("expects `{expected}`")]
         span: SourceSpan,
     },
@@ -123,7 +119,7 @@ pub enum BindingError {
     NonFiniteQuantity {
         name: DeclName,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("bound to a non-finite quantity")]
         span: SourceSpan,
     },
@@ -133,7 +129,7 @@ pub enum BindingError {
     BoundMoreThanOnce {
         name: DeclName,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("bound more than once")]
         span: SourceSpan,
     },
@@ -145,30 +141,8 @@ pub enum BindingError {
         /// The violated bound, at the indexed entry it is found in.
         violation: DomainViolationDetail,
         #[source_code]
-        src: NamedSource<Arc<String>>,
+        src: RegisteredSource,
         #[label("value for `{name}` is out of its declared domain")]
-        span: SourceSpan,
-    },
-
-    #[error("a key binding requires a concrete named index")]
-    #[diagnostic(code(graphcal::O011))]
-    KeyIndexNotNamed {
-        name: DeclName,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("this key's index is not a named index")]
-        span: SourceSpan,
-    },
-
-    #[error("unknown category `{variant}` for index `{index}`")]
-    #[diagnostic(code(graphcal::O012))]
-    UnknownCategory {
-        name: DeclName,
-        variant: IndexVariantName,
-        index: IndexTypeRef,
-        #[source_code]
-        src: NamedSource<Arc<String>>,
-        #[label("expects a category of `{index}`")]
         span: SourceSpan,
     },
 }
@@ -176,7 +150,7 @@ pub enum BindingError {
 impl BindingError {
     /// The named source a located binding diagnostic points into.
     #[must_use]
-    pub const fn named_source(&self) -> Option<&NamedSource<Arc<String>>> {
+    pub const fn registered_source(&self) -> Option<&RegisteredSource> {
         match self {
             Self::NotAParam { .. } | Self::UnknownParam { .. } => None,
             Self::RequiredParamNotProvided { src, .. }
@@ -185,21 +159,21 @@ impl BindingError {
             | Self::KindMismatch { src, .. }
             | Self::NonFiniteQuantity { src, .. }
             | Self::BoundMoreThanOnce { src, .. }
-            | Self::DomainViolation { src, .. }
-            | Self::KeyIndexNotNamed { src, .. }
-            | Self::UnknownCategory { src, .. } => Some(src),
+            | Self::DomainViolation { src, .. } => Some(src),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     #[test]
     fn binding_failures_keep_their_codes() {
         let name = DeclName::expect_valid("mass");
-        let src = NamedSource::new("main.gcl", Arc::new("param mass: Mass;".to_owned()));
+        let src = RegisteredSource::detached("main.gcl", Arc::new("param mass: Mass;".to_owned()));
         for (error, code, located) in [
             (
                 BindingError::NotAParam {
@@ -228,7 +202,7 @@ mod tests {
                 error.code().map(|code| code.to_string()).as_deref(),
                 Some(code)
             );
-            assert_eq!(error.named_source().is_some(), located);
+            assert_eq!(error.registered_source().is_some(), located);
         }
     }
 }

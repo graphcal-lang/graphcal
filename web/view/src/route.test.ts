@@ -52,6 +52,22 @@ describe("parseRoute", () => {
     expect(parseRoute("#o/r/a%2Fb.gcl")).toBeNull();
   });
 
+  test("a control character in a ref or a path is not an address", () => {
+    // MDL-6: a decoded newline in the ref reached the copied patch's heading.
+    expect(parseRoute("#o/r@main%0Adiff%20--git%20a%2Fevil%20b%2Fevil/a.gcl")).toBeNull();
+    expect(parseRoute("#o/r@main...feat%0D/a.gcl")).toBeNull();
+    expect(parseRoute("#o/r@main%00/a.gcl")).toBeNull();
+    expect(parseRoute("#o/r@main/src/a%0Ab.gcl")).toBeNull();
+    expect(parseRoute("#o/r@main/src/a%7Fb.gcl")).toBeNull();
+    expect(parseRoute("#o/r@main/src/a%C2%85b.gcl")).toBeNull();
+    expect(parseRoute("#o/r@v%C3%A9/src/a%20b.gcl")).toEqual({
+      owner: "o",
+      repo: "r",
+      at: { kind: "ref", ref: "vé" },
+      path: "src/a b.gcl",
+    });
+  });
+
   test("a repository name may start with a dot", () => {
     expect(parseRoute("#o/.github/a.gcl")?.repo).toBe(".github");
     expect(parseRoute("#o/./a.gcl")).toBeNull();

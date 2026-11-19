@@ -230,9 +230,9 @@ fn collect_presented_leaves<'p>(
             "checked plot presentation index `{presented_index}` does not match runtime index `{index_name}`"
         ));
     }
-    outer.keys().iter().try_for_each(|key| {
+    outer.keys().try_for_each(|key| {
         let entry = entries
-            .get(key)
+            .get(key.as_ref())
             .ok_or_else(|| format!("checked plot presentation is missing indexed entry `{key}`"))?;
         collect_presented_leaves(entry, inner_axes, leaves)
     })
@@ -295,8 +295,8 @@ fn plot_field_value_from_data(values: &[PlotDatum]) -> Result<PlotFieldValue, St
         }
     }
     match (numbers.is_empty(), labels.is_empty(), datetimes.is_empty()) {
-        // An empty channel (from an empty index) carries no values; the
-        // numeric variant is an arbitrary but harmless representation.
+        // Every index axis has an entry, so a channel has at least one value
+        // and this arm holds numbers only.
         (_, true, true) => Ok(PlotFieldValue::Numbers(numbers)),
         (true, false, true) => Ok(PlotFieldValue::Labels(labels)),
         (true, true, false) => Ok(PlotFieldValue::Datetimes(datetimes)),
@@ -341,7 +341,7 @@ pub(super) fn align_encoding_channels(
                 .axes()
                 .iter()
                 .zip(positions)
-                .all(|(axis, position)| axis.keys() == row_axes[*position].keys());
+                .all(|(axis, position)| axis.same_keys(&row_axes[*position]));
             if keys_match {
                 Ok((*channel, data, positions))
             } else {
@@ -360,17 +360,18 @@ pub(super) fn align_encoding_channels(
     for (channel, data, positions) in mapped {
         let mut values = Vec::with_capacity(row_count);
         for row in 0..row_count {
-            // Decompose the row number into per-axis digits.
+            // Decompose the row number into per-axis digits. Every index axis
+            // has an entry, so neither checked operation below fails.
             let mut digits = vec![0usize; row_axes.len()];
             let mut rest = row;
             for (i, axis) in row_axes.iter().enumerate().rev() {
                 let axis_len = axis.len();
                 digits[i] = rest
                     .checked_rem(axis_len)
-                    .ok_or_else(|| "plot axis must contain at least one variant".to_string())?;
+                    .ok_or_else(|| "plot index axis has no entries".to_string())?;
                 rest = rest
                     .checked_div(axis_len)
-                    .ok_or_else(|| "plot axis must contain at least one variant".to_string())?;
+                    .ok_or_else(|| "plot index axis has no entries".to_string())?;
             }
             // Project the row onto this channel's own axes.
             let mut idx = 0usize;

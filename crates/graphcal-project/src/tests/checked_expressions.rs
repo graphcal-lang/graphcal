@@ -66,8 +66,8 @@ fn normalized_nat_axes_do_not_replay_source_arithmetic() {
     assert!(!literal_control.has_errors());
     for expression in [
         "sum(for i: Fin(N * 18446744073709551615 * 0 + 1) { 1.0 })",
-        "to_int(fin_key(Fin(N * 18446744073709551615 * 0 + 1), 0))",
-        "to_int(key(Fin(N * 18446744073709551615 * 0 + 1), 0))",
+        "to_float(to_int(fin_key(Fin(N * 18446744073709551615 * 0 + 1), 0)))",
+        "to_float(to_int(key(Fin(N * 18446744073709551615 * 0 + 1), 0)))",
     ] {
         let source = format!(
             "type NatIdentity<N: Nat> {{ NatIdentity(value: Dimensionless(min: {expression})), }} node value: NatIdentity<2> = NatIdentity<2>(value: 1.0);"
@@ -90,7 +90,8 @@ fn normalized_nat_axes_do_not_replay_source_arithmetic() {
 
 #[test]
 fn readiness_is_checked_before_evaluating_an_earlier_sibling() {
-    let source = "type T<N: Nat> { T(x: Int(min: 1 / 0 + to_int(key(Fin(N), 1)))) }".to_string();
+    let source =
+        "type T<N: Nat> { T(x: Int(min: div_trunc(1, 0) + to_int(key(Fin(N), 1)))) }".to_string();
     let tir = compile_to_tir(&source, "readiness.gcl").unwrap();
     let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
     let src = sources.register("readiness.gcl", std::sync::Arc::new(source));
@@ -145,9 +146,12 @@ node control: Dimensionless = probe::tick() + 1.0;
     let calls = std::sync::Arc::new(AtomicUsize::new(0));
     let observed = Arc::clone(&calls);
     let mut host = graphcal_eval::host_fns::HostFunctionRegistry::new();
-    host.register_for_test(
-        graphcal_compiler::syntax::plugin::PluginPath::new("graphcal:readiness-counter"),
-        graphcal_compiler::syntax::function_name::FnName::expect_valid("tick"),
+    super::register_test_host_fn(
+        &mut host,
+        "graphcal:readiness-counter",
+        "tick",
+        &[],
+        graphcal_compiler::function_signature::NamedParamKind::dimensionless(),
         move |_| {
             observed.fetch_add(1, Ordering::SeqCst);
             Ok(graphcal_eval::host_fns::HostFnValue::F64(1.0))

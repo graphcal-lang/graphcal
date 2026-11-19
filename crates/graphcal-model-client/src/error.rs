@@ -3,7 +3,9 @@
 use std::process::ExitStatus;
 
 use graphcal_model_protocol::arrow::{ResultDecodeError, SchemaMismatch};
-use graphcal_model_protocol::{KeyValue, PortName, RequestBatchError, SessionError};
+use graphcal_model_protocol::{
+    KeyValue, PortName, RequestBatchError, SessionError, UnsupportedReason,
+};
 use thiserror::Error;
 
 /// Why a client operation failed.
@@ -15,12 +17,22 @@ pub enum ClientError {
     Describe { status: ExitStatus, stderr: String },
     #[error("graphcal model describe printed an invalid document: {0}")]
     DescribeDocument(#[source] serde_json::Error),
+    #[error("graphcal model unit failed ({status}): {stderr}")]
+    Units { status: ExitStatus, stderr: String },
+    #[error("graphcal model unit printed an invalid document: {0}")]
+    UnitsDocument(#[source] serde_json::Error),
+    #[error("graphcal model unit did not answer the requested units in order")]
+    UnitsMismatch,
     #[error("the model has no parameter named `{name}`")]
     UnknownInput { name: String },
     #[error("the model has no public output named `{name}`")]
     UnknownOutput { name: String },
-    #[error("port `{name}` cannot be used: {reason}")]
-    UnsupportedPort { name: PortName, reason: String },
+    #[error("port `{name}` cannot be used: {message}")]
+    UnsupportedPort {
+        name: PortName,
+        reason: UnsupportedReason,
+        message: String,
+    },
     #[error("port `{name}` is not a {expected} port")]
     KindMismatch {
         name: PortName,
@@ -36,6 +48,13 @@ pub enum ClientError {
     ForeignKey { input: PortName, owner: PortName },
     #[error(transparent)]
     Session(#[from] SessionError),
+    #[error("cannot read the fixed parameter values in {}: {reason}", .path.display())]
+    FixedParameters {
+        path: std::path::PathBuf,
+        reason: String,
+    },
+    #[error("a session takes one JSON document of fixed parameter values")]
+    FixedParametersTwice,
     #[error("parameter `{name}` is not varied by this session")]
     NotVaried { name: PortName },
     #[error("output `{name}` is not read by this session")]

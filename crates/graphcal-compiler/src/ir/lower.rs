@@ -24,19 +24,30 @@ use super::model::{HirDag, IncludedPlotEntry, ParsedExpectedFailMetadata, Unfroz
 
 use super::static_definitions::StaticDefinitionEvaluator;
 
-/// Lower an AST into a [`HirDag`].
+/// One file's [`HirDag`] with the resolver that issued its module handle.
+///
+/// The HIR is usable only with this resolver, so [`lower`] returns them
+/// together instead of dropping the resolver it built.
+#[derive(Debug)]
+pub struct LoweredFile {
+    pub hir: HirDag,
+    pub resolver: crate::resolve::ModuleResolver,
+}
+
+/// Lower an AST into a [`HirDag`] and the resolver it was lowered with.
 ///
 /// This combines:
 /// 1. Name resolution (`resolve`) — checks duplicates, extracts deps
-/// 2. Registry construction — registers dimensions, units, indexes, structs from declarations
-/// 3. Function registration — registers user-defined functions into the registry
+/// 2. Static definitions — evaluates the dimensions, units, indexes, and
+///    nominal types the module declares
+/// 3. Declaration lowering — lowers the module's declarations into HIR
 ///
 /// # Errors
 ///
 /// Returns a [`SemanticError`] if declaration collection or registry construction fails
 /// (e.g., unknown dimension in a type annotation, duplicate names, etc.).
 /// `name` is the virtual relative path that names the module.
-pub fn lower(ast: &File, name: &str, src: SourceId) -> Result<HirDag, SemanticError> {
+pub fn lower(ast: &File, name: &str, src: SourceId) -> Result<LoweredFile, SemanticError> {
     let dag_id = crate::dag_id::DagId::from_virtual_relative_path(std::path::Path::new(name))
         .map_err(|error| {
             SemanticError::internal_error(
@@ -74,7 +85,9 @@ pub fn lower(ast: &File, name: &str, src: SourceId) -> Result<HirDag, SemanticEr
         &dag_id,
         &mut definitions,
     )?;
-    unresolved.freeze(&dag_id, &mut definitions, src)
+    let hir = unresolved.freeze(&dag_id, &mut definitions, src)?;
+    drop(definitions);
+    Ok(LoweredFile { hir, resolver })
 }
 
 /// Create a definition evaluator over `sources`, reporting a broken prelude
@@ -183,11 +196,11 @@ pub(crate) fn lower_file_with_inline_dags_for_test(
         let inline_dags = dag_bodies
             .iter()
             .map(|(owner, body)| {
-                let unresolved = lower_dag_module_with_imported_bindings(
+                let unresolved = lower_module_with_imported_bindings(
                     body,
+                    src,
                     &ImportedValueNames::default(),
                     HashMap::new(),
-                    src,
                     owner,
                     &mut definitions,
                 )?;
@@ -216,12 +229,7 @@ fn single_module_resolver(
     let mut tables = crate::resolve::builder::SymbolTables::default();
     tables
         .add_file(dag_id.clone(), &ast.declarations)
-        .and_then(|()| {
-            tables
-                .scopes(&crate::resolve::builder::NoModuleTargets)?
-                .freeze()
-                .map_err(|crate::resolve::error::ScopeError { error, .. }| error)
-        })
+        .and_then(|()| tables.freeze_without_edges())
         .map_err(|error| {
             SemanticError::internal_error(error.to_string(), src, DiagnosticAnchor::WholeFile)
         })
@@ -393,81 +401,6 @@ pub fn lower_module_with_imported_bindings_and_cancellation(
     Ok(unfrozen)
 }
 
-/// Lower a `dag { ... }` body as if it were a standalone file.
-///
-/// The dag body is a virtual [`File`] with its own lexical scope. Cross-scope
-/// values must be passed through params or explicit imports; every imported
-/// lexical name maps to its canonical [`ResolvedDeclName`] target.
-///
-/// # Errors
-///
-/// Returns a [`SemanticError`] if declaration collection or type-system construction
-/// fails for the dag body.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn lower_dag_module_with_imported_bindings(
-    dag_body: &File,
-    imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
-    src: SourceId,
-    dag_id: &crate::dag_id::DagId,
-    definitions: &mut StaticDefinitionEvaluator<'_>,
-) -> Result<UnfrozenIR, SemanticError> {
-    crate::outcome::without_cancellation(|cancellation| {
-        lower_dag_module_with_imported_bindings_and_cancellation(
-            ModuleBody {
-                ast: dag_body,
-                interface: &ModuleInterface::new(&dag_body.declarations),
-            },
-            imported_names,
-            imported_bindings,
-            src,
-            dag_id,
-            definitions,
-            cancellation,
-        )
-    })
-}
-
-/// Lower an inline DAG module with cooperative cancellation.
-///
-/// # Errors
-///
-/// Returns a [`SemanticError`] for invalid source or cancellation.
-#[expect(
-    clippy::implicit_hasher,
-    reason = "internal API always uses default hasher"
-)]
-pub fn lower_dag_module_with_imported_bindings_and_cancellation(
-    module: ModuleBody<'_>,
-    imported_names: &ImportedValueNames,
-    imported_bindings: HashMap<ScopedName, ResolvedDeclName>,
-    src: SourceId,
-    dag_id: &crate::dag_id::DagId,
-    definitions: &mut StaticDefinitionEvaluator<'_>,
-    cancellation: &crate::cancellation::CancellationToken,
-) -> Result<UnfrozenIR, Outcome<SemanticError>> {
-    cancellation.checkpoint()?;
-    let ModuleBody {
-        ast: dag_body,
-        interface,
-    } = module;
-    let resolved =
-        resolve_with_imported_values(dag_body, interface.declared_surface(), src, imported_names)?;
-
-    build_ir_from_resolved(
-        dag_body,
-        src,
-        resolved,
-        imported_bindings,
-        dag_id,
-        definitions,
-        cancellation,
-    )
-}
-
 /// One module body to lower together with the declared interface of the
 /// module it belongs to.
 ///
@@ -597,7 +530,7 @@ mod tests {
         let raw_file = Parser::new(source).parse_file().unwrap();
         let desugared = crate::desugar::desugared_ast::File::from(raw_file);
         let file = desugared;
-        lower(&file, "test.gcl", make_src(source))
+        lower(&file, "test.gcl", make_src(source)).map(|lowered| lowered.hir)
     }
 
     #[test]
@@ -669,7 +602,7 @@ mod tests {
         let hir_source = make_src(source);
         let file =
             crate::desugar::desugared_ast::File::from(Parser::new(source).parse_file().unwrap());
-        let hir = lower(&file, "test.gcl", hir_source).unwrap();
+        let hir = lower(&file, "test.gcl", hir_source).unwrap().hir;
         let identity = crate::resolved_name::ResolvedStructTypeName::for_test(
             hir.dag_id().clone(),
             crate::syntax::type_name::StructTypeName::expect_valid("Box"),

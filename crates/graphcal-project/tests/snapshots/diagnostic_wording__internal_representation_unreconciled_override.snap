@@ -1,0 +1,14 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+include overrides index `I` but does not re-bind `w`, whose default mentions `I#A`
+    Diagnostic severity: error
+Begin snippet for unreconciled_override.gcl starting at line 8, column 1
+
+snippet line 8: 
+snippet line 9: include lib(index I: Other) as l;
+    label at line 9, columns 1 to 33: include is missing a binding for `w`
+snippet line 10: node r: Dimensionless = @l::out;
+diagnostic help: add a binding for `w` to this include, or keep `I` bound to its default
+diagnostic code: graphcal::V005

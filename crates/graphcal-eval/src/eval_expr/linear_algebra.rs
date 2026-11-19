@@ -13,7 +13,6 @@
 //! axes the checker proved to agree but that differ are a violated
 //! [`Invariant`].
 
-use graphcal_compiler::builtin::LinearAlgebraFn;
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
@@ -27,10 +26,11 @@ use crate::runtime_value::{IndexAxis, RuntimeValue};
 use graphcal_compiler::outcome::Outcome;
 
 use super::EvalSession;
+use super::kernel_checkpoint::KernelCheckpoint;
 use super::linear_algebra_error::LinearAlgebraError;
 use super::linear_algebra_lu::{LinearSystem, LuFailure, SquareMatrix};
 use super::numeric::{self, QuantityValidationError};
-use super::work_budget::{KernelCheckpoint, WorkAmount, WorkAmountError};
+use super::product_sum::{Product, product_sum};
 use crate::invariant::{Failure, Invariant};
 
 /// A rank-two operand whose rows and columns enumerate the same axis.
@@ -65,7 +65,7 @@ pub(super) struct Vector {
 #[derive(Debug)]
 struct Vector3 {
     axis: IndexAxis,
-    values: [f64; 3],
+    values: [FiniteQuantity; 3],
 }
 
 /// A rank-two operand: `rows.len() * columns.len()` values, row-major.
@@ -115,11 +115,18 @@ impl Vector3 {
         let Some((axes, values)) = dense_quantities(&value) else {
             return Err(value);
         };
-        match (axes.as_slice(), <[f64; 3]>::try_from(values.as_slice())) {
-            ([only], Ok(values)) if shared.is_none_or(|shared| shared.matches(only)) => Ok(Self {
-                axis: only.clone(),
-                values,
-            }),
+        let finite = values
+            .iter()
+            .map(|value| FiniteQuantity::try_new(*value).ok())
+            .collect::<Option<Vec<_>>>()
+            .and_then(|values| <[FiniteQuantity; 3]>::try_from(values).ok());
+        match (axes.as_slice(), finite) {
+            ([only], Some(values)) if shared.is_none_or(|shared| shared.matches(only)) => {
+                Ok(Self {
+                    axis: only.clone(),
+                    values,
+                })
+            }
             _ => Err(value),
         }
     }
@@ -231,12 +238,6 @@ impl From<QuantityValidationError> for LinearAlgebraFailure {
     }
 }
 
-impl From<WorkAmountError> for LinearAlgebraFailure {
-    fn from(error: WorkAmountError) -> Self {
-        LinearAlgebraError::from(error).into()
-    }
-}
-
 impl From<DenseShapeError> for LinearAlgebraFailure {
     fn from(error: DenseShapeError) -> Self {
         Invariant::violated(format_args!(
@@ -249,19 +250,6 @@ impl From<DenseShapeError> for LinearAlgebraFailure {
 /// Re-type an LU failure as the failure of the builtin that ran it.
 fn algorithm_failure(failure: LuFailure) -> LinearAlgebraFailure {
     failure.map_failed(|failure| failure.map_error(LinearAlgebraError::Algorithm))
-}
-
-fn kernel_control<'a>(
-    function: LinearAlgebraFn,
-    factors: &[usize],
-    multiplier: u64,
-    ctx: &'a EvalSession<'_>,
-) -> Result<KernelCheckpoint<'a>, LinearAlgebraFailure> {
-    let amount = WorkAmount::checked_product(factors, multiplier)?;
-    ctx.work_budget
-        .consume(amount)
-        .map_err(|source| LinearAlgebraError::WorkBudget { function, source })?;
-    Ok(KernelCheckpoint::new(&ctx.cancellation))
 }
 
 /// Rebuild a kernel result over `axes` from row-major `values`.
@@ -356,8 +344,7 @@ fn evaluate_dot(
     rhs: Vector,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Dot;
-    let mut control = kernel_control(function, &[lhs.axis.len()], 1, ctx)?;
+    let mut control = KernelCheckpoint::new(&ctx.cancellation);
     sum_products(lhs.values, rhs.values, "dot()", &mut control).map(RuntimeValue::Quantity)
 }
 
@@ -366,9 +353,8 @@ fn evaluate_matmul(
     rhs: Matrix,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Matmul;
-    let (rows, inner, columns) = (lhs.rows.len(), lhs.columns.len(), rhs.columns.len());
-    let mut control = kernel_control(function, &[rows, inner, columns], 1, ctx)?;
+    let columns = rhs.columns.len();
+    let mut control = KernelCheckpoint::new(&ctx.cancellation);
     let rhs_rows = rhs.row_slices();
     let mut values = Vec::new();
     for lhs_row in lhs.row_slices() {
@@ -389,8 +375,7 @@ fn evaluate_transpose(
     matrix: Matrix,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Transpose;
-    let mut control = kernel_control(function, &[matrix.rows.len(), matrix.columns.len()], 1, ctx)?;
+    let mut control = KernelCheckpoint::new(&ctx.cancellation);
     let rows = matrix.row_slices();
     let values = (0..matrix.columns.len())
         .flat_map(|column| rows.iter().map(move |row| row[column]))
@@ -406,9 +391,8 @@ fn evaluate_trace(
     square: &Square,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Trace;
     let order = square.matrix.order();
-    let mut control = kernel_control(function, &[order], 1, ctx)?;
+    let mut control = KernelCheckpoint::new(&ctx.cancellation);
     (0..order)
         .try_fold(FiniteQuantity::ZERO, |sum, diagonal| {
             control.step()?;
@@ -425,8 +409,7 @@ fn evaluate_norm(
     vector: &Vector,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Norm;
-    let mut control = kernel_control(function, &[vector.axis.len()], 1, ctx)?;
+    let mut control = KernelCheckpoint::new(&ctx.cancellation);
     norm(&vector.values, &mut control).map(RuntimeValue::Quantity)
 }
 
@@ -435,16 +418,20 @@ fn evaluate_cross(
     rhs: &Vector3,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Cross;
     let (a, b) = (lhs.values, rhs.values);
-    let control = kernel_control(function, &[6], 1, ctx)?;
+    let control = KernelCheckpoint::new(&ctx.cancellation);
     control.boundary()?;
-    let component = |a_1: f64, b_1: f64, a_2: f64, b_2: f64| {
-        let positive = finite_product(a_1, b_1, "cross()")?;
-        let negative = finite_product(a_2, b_2, "cross()")?;
-        numeric::computed_finite_quantity(positive - negative, "cross()")
+    // Each component `a_1 * b_1 - a_2 * b_2` is computed exactly and rounded
+    // once, so a product that overflows before the cancellation does not
+    // reject a representable component.
+    let component = |a_1, b_1, a_2, b_2| {
+        product_sum(Product::new(a_1, b_1), Product::new(a_2, b_2).negated())
             .map(FiniteQuantity::get)
-            .map_err(LinearAlgebraFailure::from)
+            .map_err(|error| {
+                LinearAlgebraFailure::from(QuantityValidationError::from_arithmetic(
+                    error, "cross()",
+                ))
+            })
     };
     let values = vec![
         component(a[1], b[2], a[2], b[1])?,
@@ -459,8 +446,7 @@ fn evaluate_outer(
     rhs: Vector,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Outer;
-    let mut control = kernel_control(function, &[lhs.axis.len(), rhs.axis.len()], 1, ctx)?;
+    let mut control = KernelCheckpoint::new(&ctx.cancellation);
     let values = lhs
         .values
         .iter()
@@ -478,8 +464,7 @@ fn evaluate_solve(
     system: &LinearSystem,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Solve;
-    let mut control = kernel_control(function, &[rows.len(); 3], 2, ctx)?;
+    let mut control = KernelCheckpoint::new(&ctx.cancellation);
     let solution = super::linear_algebra_lu::solve_with_control(system, &mut control)
         .map_err(algorithm_failure)?;
     vector_value(rows, solution)
@@ -489,8 +474,7 @@ fn evaluate_inverse(
     square: Square,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Inverse;
-    let mut control = kernel_control(function, &[square.rows.len(); 3], 3, ctx)?;
+    let mut control = KernelCheckpoint::new(&ctx.cancellation);
     let inverse = super::linear_algebra_lu::inverse_with_control(&square.matrix, &mut control)
         .map_err(algorithm_failure)?;
     matrix_value(square.rows, square.columns, inverse.into_values())
@@ -500,8 +484,7 @@ fn evaluate_determinant(
     square: &Square,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, LinearAlgebraFailure> {
-    let function = LinearAlgebraFn::Determinant;
-    let mut control = kernel_control(function, &[square.rows.len(); 3], 1, ctx)?;
+    let mut control = KernelCheckpoint::new(&ctx.cancellation);
     super::linear_algebra_lu::determinant_with_control(&square.matrix, &mut control)
         .map_err(algorithm_failure)
         .and_then(|value| finite_runtime_quantity(value, "det()"))
@@ -576,7 +559,7 @@ mod tests {
     use crate::runtime_value::IndexedValue;
 
     fn fin(cardinality: u64) -> IndexAxis {
-        IndexAxis::finite(FiniteIndex::try_from_u64(cardinality).unwrap()).unwrap()
+        IndexAxis::finite(FiniteIndex::try_from_u64(cardinality).unwrap())
     }
 
     fn quantity(value: f64) -> RuntimeValue {

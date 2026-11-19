@@ -262,7 +262,8 @@ const SPECIALIZED_TYPE_LIBRARY: &str = "pub(bind) dim Q;\n\
 /// Bug fix: a type projected under Static bindings is specialized from the
 /// template's canonical definition, so its fields may name other template
 /// types. The template signature used to be re-read in the importer's scope,
-/// where `Inner` is unknown.
+/// where `Inner` is unknown. `Inner` mentions the bound port too, so the
+/// include selects it as well (V008).
 #[test]
 fn specialized_type_projection_keeps_template_field_types() {
     let (_dir, root) = write_project(
@@ -271,7 +272,7 @@ fn specialized_type_projection_keeps_template_field_types() {
             ("lib.gcl", SPECIALIZED_TYPE_LIBRARY),
             (
                 "main.gcl",
-                "include p.lib(dim Q: Length, q: 2.0 m)::{type Box, Box, b};\n\
+                "include p.lib(dim Q: Length, q: 2.0 m)::{type Box, type Inner, Box, b};\n\
                  node v: Length = match @b { Box(v: value, i: _) => value };\n",
             ),
         ],
@@ -300,4 +301,34 @@ fn specialized_type_projection_follows_the_projected_dimension() {
     );
     let result = eval(&root);
     assert!((si_value(&result, "speed") - 3.0).abs() < 1e-12);
+}
+
+/// RES-14: a private dimension or unit of another module, used inside a
+/// `dim` / `unit` / `index` definition, is reported as private (as it is in a
+/// node), not as unknown.
+#[test]
+fn private_names_in_static_definitions_are_reported_as_private() {
+    let lib = "dim Hidden = Length;\nunit priv: Length = 3.0 m;\n";
+    for (main, expected) in [
+        (
+            "import p.lib as l;\ndim D2 = l::Hidden / Time;\n",
+            "private dimension `Hidden`",
+        ),
+        (
+            "import p.lib as l;\npub(bind) index Axis: l::Hidden;\n",
+            "private dimension `Hidden`",
+        ),
+        (
+            "import p.lib as l;\nunit u: Length = 2.0 l::priv;\n",
+            "private unit `priv`",
+        ),
+        (
+            "import p.lib as l;\nindex Axis = linspace(0.0 l::priv, 1.0 m, points: 3);\n",
+            "private unit `priv`",
+        ),
+    ] {
+        let (_dir, root) = write_project("p", &[("lib.gcl", lib), ("main.gcl", main)], "main.gcl");
+        let error = eval_error(&root);
+        assert!(error.contains(expected), "{main:?}: {error}");
+    }
 }

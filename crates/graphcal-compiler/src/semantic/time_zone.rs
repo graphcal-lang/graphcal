@@ -38,13 +38,7 @@ pub struct UnknownIanaTimeZoneError {
     name: String,
 }
 
-impl UnknownIanaTimeZoneError {
-    /// The source spelling that failed lookup.
-    #[must_use]
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-}
+impl UnknownIanaTimeZoneError {}
 
 /// The IANA timezone registry bundled with the Graphcal toolchain.
 ///
@@ -102,12 +96,6 @@ impl TimeZoneRegistry {
     /// invariant established by [`Self::parse_iana_id`].
     pub fn get(&self, id: &IanaTimeZoneId) -> Result<TimeZone, jiff::Error> {
         self.database.get(id.as_str())
-    }
-}
-
-impl Default for TimeZoneRegistry {
-    fn default() -> Self {
-        Self::bundled()
     }
 }
 

@@ -26,20 +26,37 @@ fn family_code_catalog() -> BTreeMap<String, String> {
         else {
             panic!("family `{family}` has no `code()` method");
         };
+        // Variants of a multi-line `Self::A { .. } | Self::B { .. } => …`
+        // pattern that precede the line carrying the code.
+        let mut pending = Vec::new();
         for line in body.lines() {
-            let Some((arm, code)) = line.trim().split_once(" => \"graphcal::") else {
-                continue;
+            let line = line.trim();
+            let (pattern, code) = match line.split_once(" => \"graphcal::") {
+                Some((pattern, code)) => (pattern, Some(code)),
+                None if !line.contains("=>")
+                    && (line.starts_with("Self::") || line.starts_with("| Self::")) =>
+                {
+                    (line, None)
+                }
+                None => continue,
             };
-            let variant = arm
+            let variant = pattern
+                .trim_start_matches("| ")
                 .strip_prefix("Self::")
                 .and_then(|rest| rest.split([' ', '(', '{']).next())
                 .unwrap_or_else(|| panic!("unexpected code arm in `{family}`: {line}"));
+            pending.push(variant.to_owned());
+            let Some(code) = code else {
+                continue;
+            };
             let code = code.trim_end_matches([',', '"']);
-            let previous = catalog.insert(variant.to_owned(), code.to_owned());
-            assert!(
-                previous.is_none(),
-                "variant `{variant}` appears in more than one family"
-            );
+            for variant in std::mem::take(&mut pending) {
+                let previous = catalog.insert(variant.clone(), code.to_owned());
+                assert!(
+                    previous.is_none(),
+                    "variant `{variant}` appears in more than one family"
+                );
+            }
         }
     }
     catalog
@@ -74,6 +91,7 @@ fn diagnostic_code_reassignments_are_pinned() {
         ("AggregationCardinalityUnknown", "D027"),
         ("MaterializedShapeTooLarge", "D035"),
         ("InvalidDatetimeLiteral", "D028"),
+        ("UtcDatetimeArithmetic", "D044"),
         ("EpochTimeScaleArgumentCount", "D023"),
         ("InvalidEpochTimeScaleArgument", "D029"),
         ("UnsupportedEpochTimeScale", "D030"),
@@ -308,9 +326,10 @@ fn structure_payloads_render_their_names_as_before() {
         StructTypeName::expect_valid("Pair"),
     );
     let checked = StructTypeRef::from_resolved(resolved.clone());
+    // A diagnostic spells the type as written, never as `owner.Type`.
     assert_eq!(
-        UnknownStructTypeName::Resolved(resolved.clone()).to_string(),
-        resolved.to_string()
+        UnknownStructTypeName::Resolved(resolved).to_string(),
+        "Pair"
     );
     assert_eq!(
         UnknownStructTypeName::Checked(checked.clone()).to_string(),
@@ -321,11 +340,11 @@ fn structure_payloads_render_their_names_as_before() {
             name: FieldlessOperand::RequiredType(checked.clone()),
         }
         .to_string(),
-        "cannot access field of non-struct value `required type `Pair` has no fields`"
+        "cannot access field of a value of required type `Pair`, which has no fields"
     );
     assert_eq!(
         FieldlessOperand::Union(checked).to_string(),
-        "union type `Pair` (use `match` to access fields)"
+        "a value of union type `Pair`; use `match` to access its fields"
     );
     assert_eq!(
         UnknownLocal::Unbound(crate::syntax::names::NameAtom::parse("x").unwrap()).to_string(),
@@ -414,20 +433,11 @@ fn visibility_payloads_render_their_mentions_as_before() {
 
 #[test]
 fn domain_payloads_render_their_subjects_as_before() {
-    use super::domain::{
-        DomainSubject, NominalFieldPath, UnconstrainableType, ValuePath, ValuePathStep,
-    };
+    use super::domain::{DomainSubject, NominalFieldPath, UnconstrainableType};
     use crate::syntax::decl_name::DeclName;
-    use crate::syntax::index_name::{IndexEntryKey, IndexVariantName};
     use crate::syntax::type_name::{ConstructorName, FieldName, StructTypeName};
 
     let field = FieldName::expect_valid("mass");
-    let root = ValuePath::new(DeclName::expect_valid("sat"));
-    let nested = root
-        .child(ValuePathStep::Field(field.clone()))
-        .child(ValuePathStep::Entry(IndexEntryKey::Named(
-            IndexVariantName::expect_valid("Launch"),
-        )));
     let cases = [
         (
             DomainSubject::Declaration(DeclName::expect_valid("sat")),
@@ -456,22 +466,14 @@ fn domain_payloads_render_their_subjects_as_before() {
             ))),
             "Sat.mass",
         ),
-        (DomainSubject::Value(Box::new(root)), "sat"),
     ];
     for (subject, expected) in cases {
         assert_eq!(subject.to_string(), expected);
     }
-    assert_eq!(
-        DomainSubject::Value(Box::new(nested)).to_string(),
-        format!(
-            "sat.mass.{}",
-            IndexEntryKey::Named(IndexVariantName::expect_valid("Launch"))
-        )
-    );
     let targets = [
-        (UnconstrainableType::Bool, "Bool"),
-        (UnconstrainableType::Complex, "Complex"),
-        (UnconstrainableType::Key, "Key"),
+        (UnconstrainableType::Bool, "`Bool`"),
+        (UnconstrainableType::Complex, "`Complex`"),
+        (UnconstrainableType::Key, "`Key`"),
         (
             UnconstrainableType::Struct(StructTypeName::expect_valid("Sat")),
             "struct `Sat`",
@@ -537,6 +539,8 @@ fn dimension_mismatch_payloads_render_distinct_texts() {
         MismatchRule::DurationAddSubtract,
         MismatchRule::DurationAdd,
         MismatchRule::DatetimeFromQuantity,
+        MismatchRule::UnixTimeOfUtcOnly,
+        MismatchRule::FromUnixInt,
         MismatchRule::AdditionSameDimension,
         MismatchRule::ModuloInt,
         MismatchRule::NonNegativeExponent,
@@ -547,6 +551,7 @@ fn dimension_mismatch_payloads_render_distinct_texts() {
         MismatchRule::IfConditionBool,
         MismatchRule::IfBranchesSameDimension,
         MismatchRule::MatchArmsSameType,
+        MismatchRule::MapEntriesSameType,
         MismatchRule::ToleranceSameDimension,
         MismatchRule::AbsoluteToleranceDimension,
     ];
@@ -563,7 +568,6 @@ fn dimension_mismatch_payloads_render_distinct_texts() {
         OperandExpectation::RankIndexedQuantity { rank: 2 },
         OperandExpectation::IndexedCollection,
         OperandExpectation::IndexedQuantityCollection,
-        OperandExpectation::DimensionlessOrInt,
         OperandExpectation::ComplexQuantity,
         OperandExpectation::RealOrComplexQuantity,
         OperandExpectation::Angle,
@@ -858,21 +862,30 @@ fn plugin_payloads_render_their_text_as_before() {
 }
 
 #[test]
-fn inexact_int_domain_bound_has_its_own_domain_code() {
-    use super::domain::DomainError;
+fn int_bound_on_dimensionless_domain_suggests_the_dimensionless_spelling() {
+    use super::domain::{DomainError, DomainSubject};
     use crate::diagnostic::DiagnosticKind;
+    use crate::syntax::ast::DomainBoundKind;
 
-    let error = DomainError::InexactIntDomainBound { value: i64::MAX };
-    assert_eq!(error.code(), "graphcal::C008");
+    let error = |literal| DomainError::IntBoundOnDimensionlessDomain {
+        name: DomainSubject::Declaration(crate::syntax::decl_name::DeclName::expect_valid("ratio")),
+        bound_name: DomainBoundKind::Min,
+        literal,
+    };
+    assert_eq!(error(Some(-3)).code(), "graphcal::C011");
     assert_eq!(
-        error.to_string(),
-        format!(
-            "domain bound integer {} is too large for exact quantity comparison",
-            i64::MAX
-        )
+        error(Some(-3)).to_string(),
+        "domain bound type mismatch on Dimensionless `ratio`: min bound is an Int"
     );
-    assert_eq!(error.primary_label().as_deref(), Some("error here"));
-    assert_eq!(error.help(), None);
+    assert_eq!(
+        error(Some(-3)).help().as_deref(),
+        Some("write `-3.0` instead of `-3`")
+    );
+    assert!(
+        error(None)
+            .help()
+            .is_some_and(|help| help.contains("to_float(...)") && help.contains("`0.0`"))
+    );
 }
 
 #[test]

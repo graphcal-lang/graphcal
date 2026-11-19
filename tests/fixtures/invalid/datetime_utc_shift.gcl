@@ -1,0 +1,4 @@
+// Error: shifting a UTC datetime by a duration is rejected; shift in TAI and
+// convert back.
+node start: Datetime = datetime("2016-12-31T23:00:00Z");
+node end: Datetime = @start + 2.0 h;

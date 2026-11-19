@@ -1,6 +1,6 @@
-use crate::semantic_error::index::IndexError;
 use crate::syntax::non_empty::NonEmpty;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use indexmap::IndexMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -28,17 +28,6 @@ use super::resolved_nominal::{
     ConstrainedField, NominalMember, ResolvedDomainBound, ResolvedNominal,
 };
 use super::resolved_type::ResolvedDeclType;
-
-/// Convert a [`NatOverflowError`](crate::nat::NatOverflowError)
-/// into a spanned [`SemanticError`].
-#[must_use]
-pub fn nat_overflow_error(
-    err: crate::nat::NatOverflowError,
-    src: SourceId,
-    span: Span,
-) -> SemanticError {
-    SemanticError::located(src, span, IndexError::NatOverflow { error: err })
-}
 
 /// Authoritative project type-system definitions keyed by
 /// [`ResolvedName`](crate::resolved_name::ResolvedName) identities.
@@ -280,7 +269,7 @@ impl ProjectTypeStore {
             let identity = definition.identity().clone();
             let handle = Arc::clone(
                 self.struct_types
-                    .entry(identity.clone())
+                    .entry(identity)
                     .or_insert_with(|| Arc::clone(definition)),
             );
             for constructor in crate::hir::nominal::ResolvedConstructor::members_of(&handle) {
@@ -514,10 +503,16 @@ pub struct ResolvedDagDependencies {
     /// For each const declaration, the canonical const declarations it reads.
     pub const_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
     /// For each assertion, the canonical declarations its operands read via
-    /// `@`. Assertions are not scheduled through this map; it serves tools
-    /// that trace what an assertion checks.
+    /// `@` and through the scales of the runtime units their literals use.
+    /// Assertions are not scheduled through this map; it serves tools that
+    /// trace what an assertion checks.
     pub assert_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
-    /// For each param, node, and assertion making inline DAG calls, those
+    /// For each plot, figure, and layer, the canonical declarations its
+    /// expressions read via `@` and through the scales of the runtime units
+    /// their literals use. Like `assert_deps`, these serve tools that trace
+    /// what a presentation shows; they are not scheduled.
+    pub presentation_deps: HashMap<ResolvedDeclName, BTreeSet<ResolvedDeclName>>,
+    /// For each param, node, assertion, and presentation making inline DAG calls, those
     /// calls in pre-order of its defining expressions. A call's arguments'
     /// `@` reads are already in `runtime_deps`/`assert_deps`; this records
     /// what the call itself reads. Callers are keyed in this body's frame;
@@ -526,26 +521,52 @@ pub struct ResolvedDagDependencies {
 }
 
 /// Canonical type definitions referenced by module-aware TIR.
+///
+/// The table is shared copy-on-write: every semantic instance carries the
+/// same project-wide table, so materializing an instance costs O(1) here
+/// rather than a copy of every DAG's definitions.
 #[derive(Debug, Clone, Default)]
 pub struct ResolvedTypeDefs {
     /// Each nominal type with its fields' semantics, keyed by its own
-    /// identity.
-    nominals: HashMap<ResolvedStructTypeName, ResolvedNominal>,
+    /// identity. Ordered by identity so that every walk over the table (and
+    /// so the first diagnostic it reports) is the same on every run, however
+    /// the tables were unioned.
+    nominals: std::sync::Arc<BTreeMap<ResolvedStructTypeName, ResolvedNominal>>,
 }
 
 impl ResolvedTypeDefs {
-    pub(crate) fn extend_from(&mut self, other: &Self) {
-        self.nominals.extend(
-            other
-                .nominals
-                .iter()
-                .map(|(name, nominal)| (name.clone(), nominal.clone())),
-        );
+    /// Every definition of `tables`, in one table.
+    pub(crate) fn union<'a>(tables: impl IntoIterator<Item = &'a Self>) -> Self {
+        let mut union = Self::default();
+        for table in tables {
+            if union.nominals.is_empty() {
+                // Share the first non-empty table until another one adds to it.
+                union.nominals = std::sync::Arc::clone(&table.nominals);
+                continue;
+            }
+            if std::sync::Arc::ptr_eq(&union.nominals, &table.nominals) {
+                continue;
+            }
+            std::sync::Arc::make_mut(&mut union.nominals).extend(
+                table
+                    .nominals
+                    .iter()
+                    .map(|(name, nominal)| (name.clone(), nominal.clone())),
+            );
+        }
+        union
+    }
+
+    /// Whether `self` and `other` share one table.
+    #[cfg(any(test, feature = "test-identities"))]
+    #[must_use]
+    pub fn shares_table_with(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.nominals, &other.nominals)
     }
 
     /// Record one nominal type under its own identity.
     pub(crate) fn insert(&mut self, nominal: ResolvedNominal) {
-        self.nominals.insert(nominal.identity().clone(), nominal);
+        std::sync::Arc::make_mut(&mut self.nominals).insert(nominal.identity().clone(), nominal);
     }
 
     /// Whether the nominal type `identity` is recorded.
@@ -752,13 +773,16 @@ impl DeclarationIdentityLookup {
 /// This structure stores only facts derived or indexed from those bodies.
 #[derive(Debug, Clone, Default)]
 pub struct DagSemanticBody {
-    /// Domain bounds per declaration, lowered to HIR, in source order.
-    pub domain_bounds: HashMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>,
-    /// Source-qualified dynamic unit definitions keyed by canonical unit identity.
+    /// Domain bounds per declaration, lowered to HIR, in declaration-table
+    /// order (constants, then parameters, then nodes, each in source order).
+    /// The order is deterministic, so the first bound diagnostic is too.
+    pub domain_bounds: IndexMap<ResolvedDeclName, NonEmpty<ResolvedDomainBound>>,
+    /// Source-qualified dynamic unit definitions keyed by canonical unit
+    /// identity, in source order.
     ///
     /// Each entry carries the validated declared/base dimensions and strictly
     /// lowered HIR scalar expression as one semantic record.
-    pub dynamic_unit_scales: HashMap<ResolvedUnitName, crate::ir::model::DynamicUnitScaleEntry>,
+    pub dynamic_unit_scales: IndexMap<ResolvedUnitName, crate::ir::model::DynamicUnitScaleEntry>,
     /// Canonical dependency maps for this DAG.
     pub dependencies: ResolvedDagDependencies,
     /// Include override obligations keyed by the canonical param whose default
@@ -777,15 +801,6 @@ pub struct DagSemanticBody {
 // ---------------------------------------------------------------------------
 // TIR struct
 // ---------------------------------------------------------------------------
-
-/// A project TIR already carried a different signature for one canonical
-/// plugin function.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("TIR already contains a different definition for plugin `{plugin}` function `{name}`")]
-pub struct CompetingExternFunctionDefinition {
-    pub plugin: crate::plugin_identity::PluginIdentity,
-    pub name: crate::syntax::function_name::FnName,
-}
 
 /// Resolved extern function signatures keyed by plugin and function identity.
 pub type ExternFunctions =
@@ -1104,15 +1119,6 @@ impl DagTIR {
         })
     }
 
-    /// Identities of every value declaration, including required parameters
-    /// that have no default expression, in source order.
-    pub fn value_declaration_identities(&self) -> impl Iterator<Item = &ResolvedDeclName> {
-        self.decls
-            .order()
-            .iter()
-            .filter(|identity| self.value_decl_annotation(identity).is_some())
-    }
-
     /// Look up the single authoritative HIR expression owned by a const.
     #[must_use]
     pub fn const_expr(&self, key: &ResolvedDeclName) -> Option<&crate::hir::expr::Expr> {
@@ -1132,13 +1138,16 @@ impl DagTIR {
         }
     }
 
-    /// Whether `key` is an unfinished node: its formula contains a
-    /// `todo<T> { … }` hole.
+    /// Whether `key` is an unfinished constant or node: its formula contains
+    /// a `todo<T> { … }` hole.
     #[must_use]
     pub fn is_unfinished(&self, key: &ResolvedDeclName) -> bool {
         match self.decls.get(key) {
             Some(crate::ir::entry::Decl::Node(entry)) => {
                 crate::hir::expr::contains_todo_hole(&entry.definition)
+            }
+            Some(crate::ir::entry::Decl::Const(entry)) => {
+                crate::hir::expr::contains_todo_hole(&entry.expr)
             }
             _ => false,
         }
@@ -1269,36 +1278,11 @@ impl DagTIR {
             .map(|metadata| &metadata.expected)
     }
 
-    /// Iterate over expected-fail configurations without exposing diagnostic provenance.
-    pub fn expected_fail_entries(
-        &self,
-    ) -> impl Iterator<Item = (&ResolvedDeclName, &ExpectedFail)> {
-        self.expected_fail
-            .iter()
-            .map(|(name, metadata)| (name, &metadata.expected))
-    }
-
     #[must_use]
     pub const fn imported_bindings(
         &self,
     ) -> &HashMap<ScopedName, crate::ir::imported_binding::ImportedBinding> {
         &self.imported_bindings
-    }
-
-    /// Every imported binding with the declaration this DAG's bodies read it
-    /// as: the imported declaration, re-owned by this DAG's frame when an
-    /// enclosing template owns it.
-    pub fn imported_binding_destinations(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            &crate::ir::imported_binding::ImportedBinding,
-            ResolvedDeclName,
-        ),
-    > {
-        self.imported_bindings
-            .values()
-            .map(|binding| (binding, self.frame.rebase(binding.target())))
     }
 
     /// The runtime destination of an imported value: its target re-keyed

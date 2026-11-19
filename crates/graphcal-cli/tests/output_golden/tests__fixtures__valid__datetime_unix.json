@@ -1,0 +1,40 @@
+{
+  "check": "ok",
+  "eval": {
+    "exit_code": 0,
+    "stdout": {
+      "assert": {
+        "tt_unix_value": {
+          "status": "pass"
+        },
+        "unix_roundtrip": {
+          "status": "pass"
+        },
+        "unix_value": {
+          "status": "pass"
+        }
+      },
+      "const": {},
+      "incomplete": false,
+      "node": {
+        "t_from_unix": {
+          "datetime": "2024-11-05T12:00:00 UTC",
+          "time_scale": "UTC"
+        },
+        "tt_unix": {
+          "si_value": 1730808000.0
+        },
+        "unix_ts": {
+          "si_value": 1730808000.0
+        }
+      },
+      "param": {
+        "t": {
+          "datetime": "2024-11-05T12:00:00 UTC",
+          "time_scale": "UTC"
+        }
+      },
+      "unfinished_calls": []
+    }
+  }
+}

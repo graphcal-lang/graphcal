@@ -6,6 +6,11 @@ path = ["static_incompleteness"]
 role = "interpreter"
 
 [[module]]
+package = "eval"
+path = ["unfinished_reach"]
+role = "contracts"
+
+[[module]]
 package = "compiler"
 path = ["node_unavailable"]
 role = "contracts"
@@ -668,11 +673,6 @@ role = "checking"
 
 [[module]]
 package = "compiler"
-path = ["ir", "static_external_surface_formal_conformance"]
-role = "checking"
-
-[[module]]
-package = "compiler"
 path = ["generic_param"]
 role = "contracts"
 
@@ -749,6 +749,26 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["semantic", "scalar_function", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic", "int_arith"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic", "int_arith", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic", "int_division"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["semantic", "int_division", "tests"]
 role = "contracts"
 
 [[module]]
@@ -1073,6 +1093,11 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["syntax", "ast", "value", "mul_div_op_tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["syntax", "ast", "value", "nat_expr_display_tests"]
 role = "contracts"
 
@@ -1159,11 +1184,6 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["syntax", "lexer"]
-role = "contracts"
-
-[[module]]
-package = "compiler"
-path = ["syntax", "lexer", "peek_cache"]
 role = "contracts"
 
 [[module]]
@@ -1444,6 +1464,16 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["syntax", "parser", "expr", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "generic_lookahead"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["syntax", "parser", "generic_lookahead", "tests"]
 role = "contracts"
 
 [[module]]
@@ -1773,6 +1803,11 @@ role = "checking"
 
 [[module]]
 package = "compiler"
+path = ["tir", "operator_typing"]
+role = "checking"
+
+[[module]]
+package = "compiler"
 path = ["tir", "dim_check", "infer", "rules"]
 role = "checking"
 
@@ -1901,6 +1936,11 @@ role = "contracts"
 [[module]]
 package = "compiler"
 path = ["tir", "typed", "scoped_node"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["tir", "typed", "unfinished_reach"]
 role = "contracts"
 
 [[module]]
@@ -2065,6 +2105,11 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["prepare", "prepared", "structured_source"]
+role = "facade"
+
+[[module]]
+package = "project"
 path = ["prepare", "prepared", "model_port"]
 role = "facade"
 
@@ -2130,7 +2175,7 @@ role = "facade"
 
 [[module]]
 package = "project"
-path = ["tests", "prop"]
+path = ["tests", "evaluation", "prop"]
 role = "facade"
 
 [[module]]
@@ -2185,16 +2230,6 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "conversions"]
-role = "interpreter"
-
-[[module]]
-package = "eval"
-path = ["eval_expr", "conversions", "tests"]
-role = "interpreter"
-
-[[module]]
-package = "eval"
 path = ["eval_expr", "datetime"]
 role = "interpreter"
 
@@ -2202,6 +2237,16 @@ role = "interpreter"
 package = "eval"
 path = ["eval_expr", "datetime", "tests"]
 role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["time_scale_conversion"]
+role = "contracts"
+
+[[module]]
+package = "eval"
+path = ["time_scale_conversion", "tests"]
+role = "contracts"
 
 [[module]]
 package = "eval"
@@ -2255,22 +2300,67 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "numeric", "mean_tests"]
-role = "interpreter"
-
-[[module]]
-package = "eval"
 path = ["eval_expr", "unit_scale"]
 role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "work_budget"]
+path = ["eval_expr", "binary_scale"]
 role = "interpreter"
 
 [[module]]
 package = "eval"
-path = ["eval_expr", "work_budget", "tests"]
+path = ["eval_expr", "binary_scale", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "coordinate_search"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "coordinate_search", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "exact_binary_sum"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "exact_binary_sum", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "product_sum"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "product_sum", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "range_safe_product"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "range_safe_product", "tests"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "kernel_checkpoint"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "kernel_checkpoint", "tests"]
 role = "interpreter"
 
 [[module]]
@@ -2522,6 +2612,11 @@ role = "interpreter"
 
 [[module]]
 package = "eval"
+path = ["host_fns", "demo_signatures"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
 path = ["host_fns", "tests"]
 role = "interpreter"
 
@@ -2574,6 +2669,16 @@ role = "loading"
 package = "project"
 path = ["loader", "source_snapshot"]
 role = "loading"
+
+[[module]]
+package = "project"
+path = ["loader", "same_file_reference"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "same_file_reference", "tests"]
+role = "contracts"
 
 [[module]]
 package = "project"
@@ -2705,6 +2810,21 @@ role = "checking"
 [[module]]
 package = "project"
 path = ["project_compiler", "generic_leakage", "tests"]
+role = "checking"
+
+[[module]]
+package = "project"
+path = ["project_compiler", "rebound_type_selection"]
+role = "checking"
+
+[[module]]
+package = "project"
+path = ["project_compiler", "selected_include_items"]
+role = "checking"
+
+[[module]]
+package = "project"
+path = ["project_compiler", "selected_include_items", "tests"]
 role = "checking"
 
 [[module]]
@@ -2894,6 +3014,11 @@ path = ["interpreter_tests", "execution_frames"]
 role = "facade"
 
 [[module]]
+package = "eval"
+path = ["interpreter_tests", "numeric_kernels"]
+role = "facade"
+
+[[module]]
 package = "project"
 path = []
 role = "facade"
@@ -2930,6 +3055,101 @@ role = "facade"
 
 [[module]]
 package = "project"
+path = ["tests", "dag_calls"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "declaration_rules"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "definition_site_scope"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "derived_dimensions"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "domain_constraints"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "evaluation"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "generics"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "include_bindings"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "index_injection"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "inline_dags"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "instances"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "instantiated_imports"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "model_sessions"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "overrides"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "plans"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "prepared_bindings"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "same_leaf_owners"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "type_store"]
+role = "facade"
+
+[[module]]
+package = "project"
+path = ["tests", "work_bounds"]
+role = "facade"
+
+[[module]]
+package = "project"
 path = ["loader", "budget"]
 role = "loading"
 
@@ -2951,6 +3171,16 @@ role = "checking"
 [[module]]
 package = "project"
 path = ["loader", "budget_violation"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "module_file"]
+role = "contracts"
+
+[[module]]
+package = "project"
+path = ["loader", "module_file", "tests"]
 role = "contracts"
 
 [[module]]

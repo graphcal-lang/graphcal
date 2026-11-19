@@ -1,7 +1,3 @@
-ci:
-  autoupdate_schedule: monthly
-  autofix_prs: false
-
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # frozen: v6.0.0
@@ -11,11 +7,11 @@ repos:
       - id: end-of-file-fixer
       - id: check-toml
       - id: check-yaml
-        exclude: '^web/(playground|view)/pnpm-lock\.yaml$'
+        exclude: '^web/(playground|view|view-deploy)/pnpm-lock\.yaml$'
       # pnpm 12 emits a multi-document YAML lockfile; validate every document.
       - id: check-yaml
         name: check pnpm lockfile YAML
-        files: '^web/(playground|view)/pnpm-lock\.yaml$'
+        files: '^web/(playground|view|view-deploy)/pnpm-lock\.yaml$'
         args: [--allow-multiple-documents]
       - id: check-json
       - id: check-added-large-files
@@ -28,6 +24,8 @@ repos:
       - id: check-symlinks
       - id: mixed-line-ending
         args: [--fix=lf]
+        # Fuzz seeds keep CRLF / lone-CR line endings on purpose (see .gitattributes).
+        exclude: ^fuzz/corpus/
       # Rust crate attributes such as `#![no_main]` are not Unix shebangs.
       - id: check-shebang-scripts-are-executable
         exclude: ^(fuzz/fuzz_targets/.*|crates/.*/tests/.*)\.rs$
@@ -38,17 +36,17 @@ repos:
       - id: no-commit-to-branch
 
   - repo: https://github.com/rvben/rumdl-pre-commit
-    rev: 83cecb6b523a053d7d3dfdc4798d705b505a88f9  # frozen: v0.2.78
+    rev: b0cff962ee693b9e612c097d22e71e0cba127447  # frozen: v0.3.2
     hooks:
       - id: rumdl
 
   - repo: https://github.com/crate-ci/typos
-    rev: dd369349b73c245acd4dd4154a4bdf771d052150  # frozen: typos-dict-v0.14.2
+    rev: 4c8b7f51ca60df14e3c5ca82770dfbbe6c3dae85  # frozen: v1.52.0
     hooks:
       - id: typos
 
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: fa412071e4f5d44d44f9e365f4676f9df92456a2  # frozen: v1.30.1
+    rev: 06a39750ec31860bb44f2acf67182c40016cd1e7  # frozen: v1.32.0
     hooks:
       - id: zizmor
 

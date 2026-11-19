@@ -1,3 +1,4 @@
+use crate::ir::entry::ValueOrigin;
 use crate::outcome::Outcome;
 use crate::resolved_name::ResolvedDeclName;
 use crate::semantic_error::attribute::AttributeError;
@@ -109,25 +110,17 @@ fn validate_declared_shape(
 /// annotation.
 fn check_decl_expr_type(
     ctx: &DimCheckContext<'_>,
-    name: &DeclName,
+    origin: ValueOrigin,
     identity: &ResolvedDeclName,
     annotation: &crate::tir::typed::CheckedTypeAnnotation,
     hir_expr: &crate::hir::expr::Expr,
 ) -> Result<(), Outcome<SemanticError>> {
     let type_ann_span = &annotation.span;
     let declared = annotation.checked().declared();
-    if ctx
-        .env
-        .dag
-        .semantic_instances()
-        .iter()
-        .flat_map(|instance| &instance.output_projections)
-        .any(|projection| {
-            crate::ir::instance::InstanceProjection::exposure(projection).selected() == Some(name)
-        })
-    {
-        // Projection bodies are generated from the already checked instance
-        // interface. Retain that proof rather than treating them as unchecked.
+    if origin == ValueOrigin::IncludeAlias {
+        // Include-alias bodies are generated from the already checked
+        // instance interface. Retain that proof rather than treating them as
+        // unchecked.
         return ctx
             .observations
             .record(
@@ -155,7 +148,8 @@ fn check_decl_expr_type(
     Ok(())
 }
 
-/// Require every runtime unit factor to be one scalar Dimensionless quantity.
+/// Require every runtime unit factor to be an `Int` or one scalar
+/// Dimensionless quantity, as a static unit scale must be.
 fn check_dynamic_unit_scale_types(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<SemanticError>> {
     ctx.env
         .dag
@@ -171,14 +165,16 @@ fn check_dynamic_unit_scale_type(
 ) -> Result<(), Outcome<SemanticError>> {
     ctx.checkpoint()?;
     let inferred = ctx.infer_hir(&entry.expr, None)?;
-    if !matches!(
-        &inferred,
-        CheckedType::Quantity(dimension) if dimension.is_dimensionless()
-    ) {
+    if !matches!(&inferred, CheckedType::Int)
+        && !matches!(
+            &inferred,
+            CheckedType::Quantity(dimension) if dimension.is_dimensionless()
+        )
+    {
         return Err(SemanticError::located(
             ctx.env.src,
             entry.expr.span,
-            DimensionError::DynamicUnitScaleTypeMismatch {
+            DimensionError::UnitScaleTypeMismatch {
                 name: entry.spelling.clone(),
                 found: inferred.spelling(&ctx.env.registry.dimensions),
             },
@@ -308,7 +304,6 @@ fn check_ineffective_conversions_inner(
         | ExprKind::EpochLiteral(_)
         | ExprKind::ZonedDateTimeLiteral(_)
         | ExprKind::IanaTimeZoneLiteral(_)
-        | ExprKind::TypeSystemRef(_)
         | ExprKind::GraphRef(_)
         | ExprKind::ConstRef(_)
         | ExprKind::LocalRef(_)
@@ -490,18 +485,13 @@ fn broadcast_operand_element<'a>(
 }
 
 /// Structurally fold a tolerance expression to its written literal value
-/// when the sign is statically known: a numeric literal (`0.1`, `5`,
-/// `0.1 m` — unit scales are always positive, so the written value carries
+/// when the sign is statically known: a numeric literal (`0.1`, `0.1 m` —
+/// unit scales are always positive, so the written value carries
 /// the sign), optionally under unary negation. Returns `None` for anything
 /// computed at runtime; those are sign-checked by the evaluator instead.
 fn statically_known_tolerance(expr: &crate::hir::expr::Expr) -> Option<f64> {
     match expr.kind() {
         crate::hir::expr::ExprKind::Number(n) => Some(*n),
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "tolerance literals are small integers"
-        )]
-        crate::hir::expr::ExprKind::Integer(i) => Some(*i as f64),
         crate::hir::expr::ExprKind::QuantityLiteral { value, .. } => Some(*value),
         crate::hir::expr::ExprKind::UnaryOp {
             op: crate::syntax::ast::UnaryOp::Neg,
@@ -648,7 +638,7 @@ impl crate::tir::typed::InstantiatedTir {
             instances: graph,
         } = self;
         cancellation.checkpoint()?;
-        let schedules = schedules::Schedules::build(&tir, &graph, src)?;
+        let schedules = schedules::Schedules::build(&tir, &graph, src, cancellation)?;
         detect_cross_dag_cycles(&tir, src)?;
 
         // Canonical bodies are checked once. Instance trees are specialized
@@ -686,17 +676,21 @@ impl crate::tir::typed::InstantiatedTir {
         check_field_domain_constraint_targets(&tir)?;
         check_field_domain_constraint_dimensions(&tir, cancellation, &sinks)?;
         drop(sinks);
-        let canonical = inferred.try_map(|inferred| inferred.publish(&tir, src))?;
+        // Every canonical and instance body shares one set of concrete axes.
+        let axes = crate::tir::texpr::AxisCache::default();
+        let canonical = inferred.try_map(|inferred| inferred.publish(&tir, &axes, src))?;
 
         let checked = instance_bodies::instance_bodies(
             &tir,
             &graph,
             &canonical,
             &instances,
+            &axes,
             src,
             cancellation,
         )?;
         let bodies = graph.join(
+            &tir.dags,
             canonical.map_ref(|canonical| canonical.bodies.clone()),
             checked.map_ref(|checked| checked.bodies.clone()),
         );
@@ -745,6 +739,7 @@ impl InferredCanonical<'_> {
     fn publish(
         self,
         tir: &crate::tir::typed::UncheckedTir,
+        axes: &crate::tir::texpr::AxisCache,
         src: SourceId,
     ) -> Result<instance_bodies::CanonicalChecked, SemanticError> {
         let Self {
@@ -757,6 +752,7 @@ impl InferredCanonical<'_> {
             .publish(
                 &dag.owned_expression_roots().collect::<Vec<_>>(),
                 &|index| expression_axes::concrete_index_kind(tir, index),
+                axes,
             )
             .map_err(|error| {
                 SemanticError::internal_error(
@@ -898,9 +894,11 @@ fn check_callless_value_expr_type<'t>(
     if expected.to_symbolic() == inferred {
         observations
             .finish()
-            .publish(&[expr], &|index| {
-                expression_axes::concrete_index_kind(tir, index)
-            })
+            .publish(
+                &[expr],
+                &|index| expression_axes::concrete_index_kind(tir, index),
+                &crate::tir::texpr::AxisCache::default(),
+            )
             .map_err(|error| error.to_string())
             .and_then(|bodies| {
                 bodies
@@ -933,7 +931,7 @@ fn check_param_defaults(ctx: &DimCheckContext<'_>) -> Result<(), Outcome<Semanti
         };
         check_decl_expr_type(
             ctx,
-            entry.name(),
+            ValueOrigin::Source,
             &entry.identity(),
             &entry.type_ann,
             default,
@@ -971,7 +969,7 @@ fn check_dimensions_dag(
         validate_declared_shape(&ctx, &entry.type_ann)?;
         check_decl_expr_type(
             &ctx,
-            entry.name(),
+            entry.origin,
             &entry.identity(),
             &entry.type_ann,
             &entry.expr,
@@ -982,7 +980,7 @@ fn check_dimensions_dag(
         validate_declared_shape(&ctx, &entry.type_ann)?;
         check_decl_expr_type(
             &ctx,
-            entry.name(),
+            entry.origin,
             &entry.identity(),
             &entry.type_ann,
             &entry.definition,
@@ -1039,8 +1037,9 @@ fn check_dimensions_dag(
 /// For each param/node with `(min: ..., max: ...)` constraints whose target type
 /// is a quantity, `Int`, or `Datetime<S>`, infers the type of each bound
 /// expression using the regular type checker and verifies it matches:
-/// - `Quantity(d)` target: bound must be `Quantity(d)` (or `Int` if `d` is dimensionless).
-/// - `Dimensionless` target: bound must be `Quantity(dimensionless)` or `Int`.
+/// - `Quantity(d)` target, including `Dimensionless`: bound must be
+///   `Quantity(d)`; an `Int` bound on a `Dimensionless` target gets its own
+///   diagnostic that suggests the `Dimensionless` spelling.
 /// - `Int` target: bound must be exactly `Int`.
 /// - `Datetime<S>` target: bound must be exactly `Datetime<S>`.
 ///
@@ -1104,7 +1103,8 @@ fn check_one_bound(
 
 /// Reject domain constraints on base types that don't accept them.
 ///
-/// Bool, Label, and algebraic types cannot carry `(min: …, max: …)` bounds.
+/// Bool, Complex, Key, and algebraic types cannot carry `(min: …, max: …)`
+/// bounds.
 /// The check is a pure function of the resolved declaration type—independent
 /// of any bound expression's value—so it belongs in compile-time validation
 /// rather than runtime resolution.

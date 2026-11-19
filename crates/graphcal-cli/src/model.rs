@@ -7,10 +7,10 @@ use std::sync::Arc;
 use graphcal_model_protocol::{
     DescribeDocument, InterfaceFingerprint, LabelError, PortName, SessionSpec, UnitSpelling,
 };
+
+use crate::overrides::ParsedOverrides;
 use graphcal_project::compile_error::CompileError;
-use graphcal_project::loader::{build_rooted_filesystem, load_project};
-use graphcal_project::prepare::{ModelInterfaceError, ModelSessionError, PreparedProject};
-use graphcal_project::project_compiler::ProjectCompiler;
+use graphcal_project::prepare::{ModelInterfaceError, ModelSessionError, ModelUnitError};
 use thiserror::Error;
 
 /// How `serve` guards against serving a different interface than the client
@@ -31,35 +31,103 @@ pub struct UnitChoiceArgument {
 
 /// Parse a `--unit NAME=UNIT` argument; the unit itself is resolved against
 /// the model later.
+///
+/// Neither side is trimmed: a unit spelling is compared exactly, so one with
+/// surrounding whitespace is rejected rather than silently normalized.
 pub fn parse_unit_choice(argument: &str) -> Result<UnitChoiceArgument, String> {
     let (port, unit) = argument
         .split_once('=')
         .ok_or_else(|| format!("expected NAME=UNIT, got `{argument}`"))?;
     Ok(UnitChoiceArgument {
-        port: PortName::new(port.trim()).map_err(|error| error.to_string())?,
-        unit: UnitSpelling::new(unit.trim()).map_err(|error| error.to_string())?,
+        port: PortName::new(port).map_err(|error| error.to_string())?,
+        unit: UnitSpelling::new(unit).map_err(|error| error.to_string())?,
     })
+}
+
+/// Parse a `--request-timeout SECONDS` argument: a positive, finite number
+/// of seconds.
+pub fn parse_request_timeout(argument: &str) -> Result<std::time::Duration, String> {
+    let seconds = argument
+        .trim()
+        .parse::<f64>()
+        .map_err(|error| format!("expected a number of seconds, got `{argument}`: {error}"))?;
+    if seconds.is_nan() || seconds <= 0.0 {
+        return Err(format!(
+            "the request timeout must be positive, got `{argument}`"
+        ));
+    }
+    std::time::Duration::try_from_secs_f64(seconds)
+        .map_err(|error| format!("invalid request timeout `{argument}`: {error}"))
+}
+
+/// Parse a `model unit` argument; the unit itself is resolved against the
+/// model later.
+pub fn parse_unit_spelling(argument: &str) -> Result<UnitSpelling, String> {
+    UnitSpelling::new(argument).map_err(|error| error.to_string())
+}
+
+/// Print the dimension and scale of each of `units`, resolved in the scope
+/// of `file`, as a JSON array on stdout.
+pub fn resolve_units(
+    file: &Path,
+    units: &[UnitSpelling],
+    root: Option<&Path>,
+) -> Result<(), ModelServeError> {
+    let prepared = crate::prepare_rooted_project(file, root)?;
+    let resolved = units
+        .iter()
+        .map(|unit| {
+            prepared
+                .resolve_model_unit(unit)
+                .map_err(|source| ModelServeError::Unit {
+                    unit: unit.clone(),
+                    source,
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let json = serde_json::to_string_pretty(&resolved).map_err(ModelServeError::Json)?;
+    outln!("{json}");
+    Ok(())
 }
 
 /// Print the model's describe document as JSON on stdout.
 pub fn describe(file: &Path, root: Option<&Path>) -> Result<(), ModelServeError> {
-    let prepared = prepare(file, root)?;
+    let prepared = crate::prepare_rooted_project(file, root)?;
     let document = DescribeDocument::new(env!("CARGO_PKG_VERSION"), prepared.model_interface()?);
     let json = serde_json::to_string_pretty(&document).map_err(ModelServeError::Json)?;
-    println!("{json}");
+    outln!("{json}");
     Ok(())
 }
 
-/// Prepare and serve one session of the model over stdin and stdout.
+/// The ports a `serve` session selects, and the values it fixes for
+/// parameters it does not vary.
+pub struct SessionSelection<'a> {
+    pub inputs: &'a [String],
+    pub outputs: &'a [String],
+    pub units: &'a [UnitChoiceArgument],
+    pub fixed: &'a ParsedOverrides,
+}
+
+/// What `serve` does with a configured session.
+#[derive(Debug, Clone, Copy)]
+pub enum ServeMode {
+    /// Serve request batches until stdin closes, bounding each request by
+    /// the deadline.
+    Serve(graphcal_model_server::RequestDeadline),
+    /// Print the session's request-stream schema and exit.
+    PrintRequestSchema,
+}
+
+/// Prepare one session of the model and serve it over stdin and stdout, or
+/// print its request-stream schema (see [`ServeMode`]).
 ///
 /// Setup errors occur before any stdout bytes. A [`ModelServeError::Serve`]
 /// may occur after the result-stream schema has been written.
 pub fn serve(
     file: &Path,
-    inputs: &[String],
-    outputs: &[String],
-    units: &[UnitChoiceArgument],
+    selection: &SessionSelection<'_>,
     fingerprint: &FingerprintCheck,
+    mode: ServeMode,
     root: Option<&Path>,
 ) -> Result<(), ModelServeError> {
     let names = |names: &[String]| {
@@ -68,11 +136,21 @@ pub fn serve(
             .map(|name| PortName::new(name.as_str()))
             .collect::<Result<Vec<_>, _>>()
     };
-    let spec = units.iter().fold(
-        SessionSpec::new(names(inputs)?, names(outputs)?),
+    let mut fixed_names = selection
+        .fixed
+        .values
+        .keys()
+        .map(|name| PortName::new(name.as_str()))
+        .collect::<Result<Vec<_>, _>>()?;
+    fixed_names.sort();
+    let spec = selection.units.iter().fold(
+        fixed_names.into_iter().fold(
+            SessionSpec::new(names(selection.inputs)?, names(selection.outputs)?),
+            SessionSpec::with_fixed,
+        ),
         |spec, choice| spec.with_unit(choice.port.clone(), choice.unit.clone()),
     );
-    let prepared = prepare(file, root)?;
+    let prepared = crate::prepare_rooted_project(file, root)?;
     let interface = prepared.model_interface()?;
     if let FingerprintCheck::Expect(expected) = fingerprint {
         let actual = InterfaceFingerprint::of(&interface);
@@ -84,22 +162,20 @@ pub fn serve(
         }
     }
     let schema = prepared.session_schema(&spec)?;
-    let session = prepared.model_session(Arc::new(schema))?;
-    graphcal_model_server::serve_stdio(&prepared, &session).map_err(ModelServeError::Serve)
-}
-
-fn prepare(file: &Path, root: Option<&Path>) -> Result<PreparedProject, ModelServeError> {
-    let fs = build_rooted_filesystem(file, root)?;
-    let project = load_project(file, root, &fs)?;
-    let mut host_fns = graphcal_eval::host_fns::demo_registry();
-    graphcal_plugin_host::register_project_plugins(
-        &graphcal_plugin_host::PluginHost::new(),
-        &project,
-        &mut host_fns,
-    );
-    Ok(ProjectCompiler::new(&project)
-        .host_fns(&host_fns)
-        .prepare()?)
+    let mut fixed = prepared.binding_builder();
+    for (name, value) in &selection.fixed.values {
+        value.bind(name, &mut fixed)?;
+    }
+    let session = prepared.model_session_with(Arc::new(schema), fixed.into_fixed())?;
+    match mode {
+        ServeMode::Serve(deadline) => {
+            graphcal_model_server::serve_stdio(&prepared, &session, deadline)
+        }
+        ServeMode::PrintRequestSchema => {
+            graphcal_model_server::write_request_schema_stdio(&session)
+        }
+    }
+    .map_err(ModelServeError::Serve)
 }
 
 /// Model setup or process-lifetime failure.
@@ -120,7 +196,12 @@ pub enum ModelServeError {
     },
     #[error(transparent)]
     ModelSession(#[from] ModelSessionError),
-    #[error("cannot encode the describe document: {0}")]
+    #[error("unit `{unit}`: {source}")]
+    Unit {
+        unit: UnitSpelling,
+        source: ModelUnitError,
+    },
+    #[error("cannot encode the JSON document: {0}")]
     Json(serde_json::Error),
     #[error("model server failed: {0}")]
     Serve(graphcal_model_server::ServeError),
@@ -138,6 +219,7 @@ impl ModelServeError {
             | Self::Interface(_)
             | Self::FingerprintMismatch { .. }
             | Self::ModelSession(_)
+            | Self::Unit { .. }
             | Self::Json(_) => 2,
         }
     }

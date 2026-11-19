@@ -15,16 +15,15 @@ mod prepared;
 
 pub use model_schema::{
     ModelAlgebraicTypeSchema, ModelConstructorSchema, ModelFieldSchema, ModelIndexKind,
-    ModelIndexSchema, ModelQuantitySchema, ModelSchemaGraph, ModelTypeId, ModelUnitSchema,
-    ModelValueSchema,
+    ModelIndexSchema, ModelQuantitySchema, ModelSchemaGraph, ModelTypeId, ModelValueSchema,
 };
 pub use prepared::{
-    ExternalValue, InclusiveBounds, InclusiveBoundsError, ModelDefinitionError,
-    ModelExecutionError, ModelInterfaceError, ModelOutputPort, ModelRowFailure, ModelRowOutcome,
-    ModelSession, ModelSessionError, ModelUnitError, ParameterBindingBuilder, ParameterBindingRow,
-    ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedModel,
-    PreparedProject, StructuredBindingError, StructuredBindingErrorKind,
-    StructuredBindingPathSegment, StructuredValueExpr,
+    ExternalValue, FixedParameters, InclusiveBounds, InclusiveBoundsError, ModelExecutionError,
+    ModelInterfaceError, ModelOutputPort, ModelRowFailure, ModelRowOutcome, ModelSession,
+    ModelSessionError, ModelUnitError, ParameterBindingBuilder, ParameterBindingRow,
+    ParameterDomain, ParameterPort, ParameterPosition, ParameterValue, PreparedProject,
+    StructuredBindingError, StructuredBindingErrorKind, StructuredBindingPathSegment,
+    StructuredLiteral, StructuredLiteralError, StructuredValueExpr,
 };
 
 /// Prepare a loaded project once for repeated typed evaluation.

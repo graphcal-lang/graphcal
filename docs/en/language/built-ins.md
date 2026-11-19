@@ -29,7 +29,7 @@ The set of bare-callable functions is closed: user code cannot add to it. Extern
 | `cbrt(x)` | `D -> D^(1/3)` | Cube root (dimension divided by 3) |
 | `abs(x)` | `D -> D` or `Complex<D> -> D` | Absolute value or complex magnitude |
 | `sign(x)` | `D -> Dimensionless` | Sign of value (-1.0, 0.0, or 1.0) |
-| `round(x)` | `Dimensionless -> Dimensionless` | Round to nearest integer |
+| `round(x)` | `Dimensionless -> Dimensionless` | Round to nearest integer; a tie rounds away from zero (`round(2.5)` is `3.0`, `round(-2.5)` is `-3.0`) |
 | `trunc(x)` | `Dimensionless -> Dimensionless` | Truncate toward zero |
 | `floor(x)` | `Dimensionless -> Dimensionless` | Round toward negative infinity |
 | `ceil(x)` | `Dimensionless -> Dimensionless` | Round toward positive infinity |
@@ -126,7 +126,7 @@ These selectors always take exactly two values. To reduce an indexed value, use
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `to_float(x)` | `Int -> Dimensionless` | Convert an integer to a binary64 `Dimensionless` quantity |
+| `to_float(x)` | `Int -> Dimensionless` | Convert an integer to a binary64 `Dimensionless` quantity exactly; reject integers binary64 cannot represent, which exist only beyond `2 ^ 53` in magnitude |
 | `to_int(x)` | `Dimensionless -> Int` | Convert an integer-valued `Dimensionless` quantity exactly; reject fractional, non-finite, or out-of-range values |
 | `to_int(k)` | `Key<Fin(N)> -> Int` | Extract the integer position of a `Fin` index key; named and coordinate keys are rejected |
 
@@ -141,6 +141,42 @@ node nearest: Int = to_int(round(3.7));
 
 Integrality is checked on the represented binary64 value. A conversion cannot
 detect precision that was already lost while computing that value.
+
+### Integer Division Functions
+
+`/` is not defined for two `Int` operands: an integer quotient must be rounded,
+and Graphcal does not choose the direction for you. Each of these functions
+names one.
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `div_trunc(a, b)` | `(Int, Int) -> Int` | Quotient rounded toward zero |
+| `div_floor(a, b)` | `(Int, Int) -> Int` | Quotient rounded toward negative infinity |
+| `div_ceil(a, b)` | `(Int, Int) -> Int` | Quotient rounded toward positive infinity |
+
+The quotient is computed without rounding error. A zero divisor is an
+evaluation error, and so is the one quotient that does not fit in `Int`:
+`-9223372036854775808` divided by `-1`. The functions differ only when the
+division is inexact:
+`div_trunc(-7, 2)` is `-3`, `div_floor(-7, 2)` is `-4`, and `div_ceil(7, 2)` is
+`4`.
+
+```graphcal
+param items: Int = 10;
+param per_rack: Int = 4;
+
+// 3: a partly filled rack still needs a rack.
+node racks: Int = div_ceil(@items, @per_rack);
+// 2: only the completely filled racks.
+node full_racks: Int = div_floor(@items, @per_rack);
+// 2.5: the real quotient.
+node exact_racks: Dimensionless = to_float(@items) / @per_rack;
+```
+
+To round the quotient to the nearest integer, take the real quotient and round
+it explicitly: `to_int(round(to_float(a) / b))`. The result is guaranteed
+to be exact only while `a` is below `2 ^ 52` in magnitude; for larger values,
+binary64 rounding can make it approximate.
 
 ### Index Key Functions
 
@@ -186,9 +222,7 @@ node selected: Pressure = @readings[@channel];
 | `datetime("...")` | `OffsetDateTimeLiteral -> Datetime` | Parse RFC 3339 with an explicit `Z` or numeric offset |
 | `datetime("...", "tz")` | `(CivilDateTimeLiteral, TimezoneLiteral) -> Datetime` | Interpret local civil time in an IANA timezone |
 | `epoch<S>("...")` | `CivilDateTimeLiteral -> Datetime<S>` | Interpret scale-free calendar coordinates in static time scale `S` |
-| `from_jd(x)` | `Dimensionless -> Datetime` | Construct from Julian Date (UTC) |
-| `from_mjd(x)` | `Dimensionless -> Datetime` | Construct from Modified Julian Date (UTC) |
-| `from_unix(x)` | `Dimensionless -> Datetime` | Construct from Unix timestamp in seconds |
+| `from_unix(x)` | `Dimensionless -> Datetime` | Construct a UTC datetime from a Unix timestamp in seconds |
 
 Each constructor has exactly one interpretation source:
 
@@ -196,11 +230,12 @@ Each constructor has exactly one interpretation source:
   `YYYY-MM-DDTHH:MM:SS[.fraction](Z|±HH:MM)` (RFC 3339 also permits lowercase
   `t` and `z`); numeric offset hours and minutes must be within `00..=23` and
   `00..=59`, respectively;
-- timezone-based `datetime` requires local civil coordinates with no embedded
-  offset, timezone, or time-scale suffix;
-- `epoch<S>` requires local calendar coordinates with no embedded offset,
-  timezone, or time-scale suffix, and `S` must be one supported bare time
-  scale.
+- timezone-based `datetime` requires local civil coordinates in exactly the form
+  `YYYY-MM-DDTHH:MM:SS[.fraction]` (the one-argument form without its offset),
+  with no embedded offset, timezone, or time-scale suffix;
+- `epoch<S>` requires local calendar coordinates in the same
+  `YYYY-MM-DDTHH:MM:SS[.fraction]` form, with no embedded offset, timezone, or
+  time-scale suffix, and `S` must be one supported bare time scale.
 
 Datetime literals are parsed during checking. Invalid calendar dates and
 missing or contradictory interpretation sources are compile errors, not
@@ -208,6 +243,11 @@ runtime failures. Local civil times are also resolved against Graphcal's
 bundled tzdb during checking: nonexistent times in DST gaps and repeated times
 in DST folds are rejected rather than shifted or selected silently. To choose a
 specific instant, use one-argument `datetime` with an explicit numeric offset.
+
+Leap seconds cannot be represented: a seconds field of `60` is rejected in
+every constructor and time scale. Write the instant of a UTC leap second in
+TAI instead, for example `epoch<TAI>("2017-01-01T00:00:36")` for
+`2016-12-31T23:59:60Z`.
 
 #### Time Scale Conversions
 
@@ -227,9 +267,14 @@ specific instant, use one-argument `datetime` with an explicit numeric offset.
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
-| `to_jd(x)` | `Datetime -> Dimensionless` | Convert to Julian Date (UTC days) |
-| `to_mjd(x)` | `Datetime -> Dimensionless` | Convert to Modified Julian Date (UTC days) |
-| `to_unix(x)` | `Datetime -> Dimensionless` | Convert to Unix timestamp (seconds since 1970-01-01) |
+| `to_unix(x)` | `Datetime -> Dimensionless` | Convert a UTC datetime to a Unix timestamp (seconds since 1970-01-01) |
+
+`to_unix` and `from_unix` accept and return only `Datetime<UTC>`; convert
+another scale explicitly, as in `to_unix(to_utc(@t))`. A Unix timestamp
+encodes the UTC label and skips leap seconds, so the difference of two
+timestamps is not the elapsed time; use `to_tai(@b) - to_tai(@a)` for that.
+`from_unix` takes a `Dimensionless` count; convert an `Int` with
+`from_unix(to_float(@n))`.
 
 #### Extraction Functions
 
@@ -295,10 +340,17 @@ These functions operate on rank-one `for` comprehensions or indexed values.
 | `rss(values)` | `D[I] -> D` | Root sum square, computed with scaled accumulation |
 | `count(values)` | `T[I] -> Int` | Exact number of elements |
 
-`mean` accumulates its binary64 input values exactly and rounds only the final
-quotient. Thus a large intermediate sum does not overflow a representable mean,
-and cancellation does not erase a much smaller remaining term. Input literals
-still have ordinary binary64 precision; this is not decimal arithmetic.
+`sum` and `mean` accumulate their binary64 input values exactly and round only
+the final total or quotient. Thus the result does not depend on the order of
+the index labels, a large intermediate sum does not overflow a representable
+result, and cancellation does not erase a much smaller remaining term. Input
+literals still have ordinary binary64 precision; this is not decimal
+arithmetic.
+
+`product` checks only its final result for overflow and underflow, so whether
+it succeeds does not depend on the order of the index labels. Its last bits
+can still depend on that order, by about one unit in the last place per
+element.
 
 `argmax` and `argmin` return the extremum's *location* as an
 [index key](indexes.md#index-keys) rather than its value, so the result can
@@ -346,8 +398,8 @@ node budget_mean: Mass = sum(@means);   // 150 kg
 node budget_sigma: Mass = rss(@sigmas); // 5 kg
 ```
 
-Convert a count explicitly when quantity arithmetic needs a dimensionless
-scalar: `sum(@values) / to_float(count(@values))`. Direct multi-axis aggregation
+A count scales a quantity directly: `sum(@values) / count(@values)`. Direct
+multi-axis aggregation
 is rejected; reduce one selected axis at a time with an explicit `for`, such as
 `product(for row: Row { product(for column: Column { @a[row, column] }) })`.
 
@@ -432,11 +484,6 @@ products cannot lose a representable result. LU factorization itself remains
 floating-point and is not an exact determinant algorithm. A nonsingular
 factorization whose determinant overflows or underflows entirely to zero
 reports an evaluation error; representable subnormal determinants are retained.
-
-Dense kernels share a checked budget of 10,000,000 estimated arithmetic
-operations per declaration evaluation. Work such as an oversized matrix
-multiplication or cubic factorization fails explicitly before the expensive
-kernel runs.
 
 ## Prelude Base Dimensions
 

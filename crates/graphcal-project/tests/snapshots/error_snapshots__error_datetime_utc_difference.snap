@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/error_snapshots.rs
+expression: rendered
+---
+the difference of two `Datetime<UTC>` values is not defined
+    Diagnostic severity: error
+Begin snippet for datetime_utc_difference.gcl starting at line 4, column 1
+
+snippet line 4: node end: Datetime = datetime("2017-01-01T00:00:00Z");
+snippet line 5: node gap: Time = @end - @start;
+    label at line 5, columns 18 to 30: UTC readings skip leap seconds
+diagnostic help: a UTC difference across a leap second is one second short of the elapsed time; subtract in TAI instead, for example `to_tai(@end) - to_tai(@start)`
+diagnostic code: graphcal::D044

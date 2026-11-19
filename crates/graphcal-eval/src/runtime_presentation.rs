@@ -744,8 +744,7 @@ mod tests {
         let key = KeyValue::at(
             IndexAxis::finite(
                 graphcal_compiler::semantic::index_def::FiniteIndex::try_from_u64(2).unwrap(),
-            )
-            .unwrap(),
+            ),
             0,
         )
         .unwrap();

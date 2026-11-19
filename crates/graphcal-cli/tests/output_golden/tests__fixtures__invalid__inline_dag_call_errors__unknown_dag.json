@@ -9,7 +9,7 @@
           "line": 4,
           "source": "<root>/tests/fixtures/invalid/inline_dag_call_errors/unknown_dag.gcl"
         },
-        "offset": 171,
+        "offset": 189,
         "primary": false
       }
     ],

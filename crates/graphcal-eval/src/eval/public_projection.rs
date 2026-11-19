@@ -23,7 +23,6 @@ use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::semantic::checked_type::CheckedType;
 use graphcal_compiler::semantic::index_def::CoordinateIndexData;
 use graphcal_compiler::syntax::index_name::IndexEntryKey;
-use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::type_name::FieldName;
 
 use super::types::{DisplayUnit, Value, validate_display_projection};
@@ -35,14 +34,6 @@ use crate::presentation_evidence::{
 use crate::runtime_presentation::{PresentedRef, PresentedView};
 use crate::runtime_value::{IndexedValue, RuntimeValue, StructValue};
 
-/// Project `value`, of `declared_type`, to the public value model, displayed
-/// as presented, with the display failure of each leaf that keeps its SI
-/// value.
-///
-/// # Errors
-///
-/// Returns an [`Invariant`] when a runtime variant differs from its checked
-/// type.
 /// The value of a declaration checked as `Bool`.
 ///
 /// # Errors
@@ -122,9 +113,7 @@ pub fn project_indexed_entries(runtime: &RuntimeValue) -> Result<&[RuntimeValue]
 /// # Errors
 ///
 /// Returns an [`Invariant`] when the value is not a struct value.
-pub fn project_struct_value(
-    runtime: &RuntimeValue,
-) -> Result<&StructValue<RuntimeValue>, Invariant> {
+fn project_struct_value(runtime: &RuntimeValue) -> Result<&StructValue<RuntimeValue>, Invariant> {
     match runtime {
         RuntimeValue::Struct(value) => Ok(value),
         other => Err(mismatch_kind(other.describe(), "a struct value")),
@@ -163,7 +152,9 @@ pub fn project_key_position(runtime: &RuntimeValue) -> Result<usize, Invariant> 
     }
 }
 
-/// Project `value`, checked as `declared_type`, to its public value.
+/// Project `value`, checked as `declared_type`, to the public value model,
+/// displayed as presented, with the display failure of each leaf that keeps
+/// its SI value.
 ///
 /// # Errors
 ///
@@ -379,14 +370,14 @@ fn project_indexed<V>(
     };
     // The entry keys are the axis's own keys by construction.
     let axis = entries.axis();
-    let entry_display_names = axis
-        .coordinate_data()
-        .map(|data| coordinate_entry_display_names(data, axis.keys()));
+    let entry_display_names = axis.coordinate_data().map(|data| {
+        coordinate_entry_display_names(data, axis.keys().map(std::borrow::Cow::into_owned))
+    });
     let projected = entries
         .iter()
         .map(|(key, entry)| {
-            project_entry(entry, element, &Path::Index(path, key))
-                .map(|projected| (key.clone(), projected))
+            project_entry(entry, element, &Path::Index(path, &key))
+                .map(|projected| (key.into_owned(), projected))
         })
         .collect::<Result<IndexMap<_, _>, _>>()?;
     Ok(Value::Indexed {
@@ -424,12 +415,12 @@ fn mismatch_kind(runtime: impl std::fmt::Display, declared: &str) -> Invariant {
 #[must_use]
 pub fn coordinate_entry_display_names(
     data: &CoordinateIndexData,
-    keys: &NonEmpty<IndexEntryKey>,
+    keys: impl IntoIterator<Item = IndexEntryKey>,
 ) -> IndexMap<IndexEntryKey, String> {
     let labels = keys
-        .iter()
+        .into_iter()
         .enumerate()
-        .map(|(position, key)| (key.clone(), position, format_coordinate(data, position)))
+        .map(|(position, key)| (key, position, format_coordinate(data, position)))
         .collect::<Vec<_>>();
     let mut seen = HashSet::new();
     let duplicates = labels
@@ -648,7 +639,7 @@ mod tests {
             plain(&runtime, &declared).unwrap(),
             Value::Indexed { entries, entry_display_names: None, .. } if entries.len() == 2
         ));
-        let key = KeyValue::at(IndexAxis::finite(finite).unwrap(), 1).unwrap();
+        let key = KeyValue::at(IndexAxis::finite(finite), 1).unwrap();
         assert_eq!(
             plain(&RuntimeValue::Key(key.clone()), &CheckedType::Key(index)).unwrap(),
             Value::Key(key)

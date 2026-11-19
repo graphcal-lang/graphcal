@@ -7,7 +7,6 @@
 use thiserror::Error;
 
 use crate::diagnostic::{DiagnosticKind, SecondaryLabel};
-use crate::hir::expr::LocalId;
 use crate::nat::NatOverflowError;
 use crate::resolved_name::ResolvedIndexVariant;
 use crate::semantic::checked_type::{IndexDisplayName, TypeSpelling};
@@ -32,7 +31,12 @@ pub enum MapEntryCoordinate {
 impl std::fmt::Display for MapEntryCoordinate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Declared(variant) => variant.fmt(f),
+            Self::Declared(variant) => write!(
+                f,
+                "{}#{}",
+                variant.index().to_unowned_def_name(),
+                variant.variant()
+            ),
             Self::Position { axis, position } => write!(f, "{axis}.#{position}"),
         }
     }
@@ -190,11 +194,8 @@ pub enum IndexError {
         "quantity local cannot index into coordinate index `{index}`; use that coordinate index's loop variable"
     )]
     QuantityLocalIndexesCoordinateIndex { index: IndexDisplayName },
-    #[error(
-        "`#{}` is not a valid index variable",
-        local.index()
-    )]
-    InvalidIndexVariable { local: LocalId },
+    #[error("a local of type {found} is not a valid index variable")]
+    InvalidIndexVariable { found: TypeSpelling },
     #[error("integer expression cannot index into non-finite-index index `{index}`")]
     IntegerIndexIntoNonFiniteIndex { index: IndexDisplayName },
     #[error(
@@ -259,6 +260,22 @@ pub enum IndexError {
     UnresolvedFiniteIndexObligation { index: IndexDisplayName },
     #[error("map literal entry has no keys")]
     EmptyMapEntry,
+}
+
+impl IndexError {
+    /// The overflow of a closed `Fin(...)` cardinality, wherever it is
+    /// written: a declaration or an include binding.
+    #[must_use]
+    pub const fn fin_cardinality_overflow(op: crate::syntax::nat_eval::NatArithmetic) -> Self {
+        match op {
+            crate::syntax::nat_eval::NatArithmetic::Addition => {
+                Self::FinCardinalityAdditionOverflow
+            }
+            crate::syntax::nat_eval::NatArithmetic::Multiplication => {
+                Self::FinCardinalityMultiplicationOverflow
+            }
+        }
+    }
 }
 
 impl DiagnosticKind for IndexError {

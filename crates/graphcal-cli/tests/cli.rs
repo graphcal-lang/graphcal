@@ -370,21 +370,18 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     assert!(stdout.contains("wrote"), "stdout: {stdout}");
 
     let lock = std::fs::read_to_string(project.join("graphcal.lock")).unwrap();
-    assert!(lock.contains("lock_version = 1"), "lock:\n{lock}");
+    assert!(lock.contains("lock_version = 2"), "lock:\n{lock}");
     assert!(lock.contains("root = \"pkg-mission\""), "lock:\n{lock}");
     assert!(
         lock.contains("units_v1 = \"pkg-units-"),
         "dependency edge missing:\n{lock}"
     );
-    assert!(
-        lock.contains(&format!("requested_rev = \"{dep_rev}\"")),
-        "requested_rev missing:\n{lock}"
-    );
+    assert!(!lock.contains("requested_rev"), "lock:\n{lock}");
     assert!(
         lock.contains(&format!("commit = \"{dep_rev}\"")),
         "commit missing:\n{lock}"
     );
-    assert!(lock.contains("tree_hashes = { sha256 = \""));
+    assert!(lock.contains("tree_hashes = { algorithm = \"graphcal-source-tree-v1\", sha256 = \""));
     assert!(
         !lock.contains(cache.to_str().unwrap()),
         "lock must not serialize cache paths:\n{lock}"
@@ -431,14 +428,9 @@ fn deps_lock_writes_deterministic_git_lockfile() {
         .iter()
         .find_map(|package| match &package.source {
             graphcal_package::PackageSource::Git {
-                url,
-                commit,
+                source,
                 tree_hashes,
-                ..
-            } => Some((
-                graphcal_package::GitSourceId::new(url.clone(), commit.clone()),
-                tree_hashes.sha256,
-            )),
+            } => Some((source.clone(), tree_hashes.sha256)),
             graphcal_package::PackageSource::Root => None,
         })
         .unwrap();
@@ -460,6 +452,457 @@ fn deps_lock_writes_deterministic_git_lockfile() {
     );
     let stdout = String::from_utf8(second.stdout).unwrap();
     assert!(stdout.contains("up to date"), "stdout: {stdout}");
+}
+
+#[cfg(unix)]
+#[test]
+fn deps_lock_fetches_only_the_pinned_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    let first_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let pinned_rev = update_git_package_module(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\npub const node two: Dimensionless = 2.0;\n",
+        "second",
+    );
+    let project = dir.path().join("mission");
+    write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\n\
+             units = {{ git = \"{}\", rev = \"{pinned_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ two };\nnode three: Dimensionless = @two + 1.0;\n",
+    );
+    let cache = dir.path().join("cache");
+
+    let output = run_deps_lock(&project, &cache);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lock = std::fs::read_to_string(project.join("graphcal.lock")).unwrap();
+    let parsed_lock = graphcal_package::parse_lockfile_str(&lock).unwrap();
+    let cache_root = graphcal_project::package_cache::PackageCacheRoot::from_path(&cache).unwrap();
+    let (source, digest) = parsed_lock
+        .packages
+        .iter()
+        .find_map(|package| match &package.source {
+            graphcal_package::PackageSource::Git {
+                source,
+                tree_hashes,
+            } => Some((source.clone(), tree_hashes.sha256)),
+            graphcal_package::PackageSource::Root => None,
+        })
+        .unwrap();
+    let checkout = gix::open(cache_root.git_checkout(&source, &digest)).unwrap();
+    assert!(checkout.is_shallow().unwrap());
+    let pinned = gix::hash::ObjectId::from_hex(pinned_rev.as_bytes()).unwrap();
+    let parent = gix::hash::ObjectId::from_hex(first_rev.as_bytes()).unwrap();
+    assert!(checkout.find_commit(pinned).is_ok());
+    assert!(
+        checkout.try_find_object(parent).unwrap().is_none(),
+        "the parent commit must not be fetched"
+    );
+}
+
+#[cfg(unix)]
+fn run_deps_lock(project: &Path, cache: &Path) -> std::process::Output {
+    graphcal_bin()
+        .args(["deps", "lock", "--root"])
+        .arg(project)
+        .env("GRAPHCAL_CACHE_DIR", cache)
+        .output()
+        .expect("failed to run graphcal")
+}
+
+#[cfg(unix)]
+fn locked_units_project(dir: &Path) -> (PathBuf, PathBuf) {
+    let dep_repo = dir.join("units-repo");
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.join("mission");
+    write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\nunits = {{ git = \"{}\", rev = \"{dep_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ one };\nnode two: Dimensionless = @one + 1.0;\n",
+    );
+    let cache = dir.join("cache");
+    let output = run_deps_lock(&project, &cache);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    (project, cache)
+}
+
+/// CLI-3: a lock written by another Graphcal version still pins its sources,
+/// so an upgrade followed by `deps lock` cannot silently accept new contents.
+#[cfg(unix)]
+#[test]
+fn deps_lock_enforces_pins_from_a_lock_written_by_another_graphcal() {
+    let dir = tempfile::tempdir().unwrap();
+    let (project, cache) = locked_units_project(dir.path());
+    let lock_path = project.join("graphcal.lock");
+    let lock = std::fs::read_to_string(&lock_path).unwrap();
+    let parsed = graphcal_package::parse_lockfile_str(&lock).unwrap();
+    let digest = parsed
+        .packages
+        .iter()
+        .find_map(|package| match &package.source {
+            graphcal_package::PackageSource::Git { tree_hashes, .. } => {
+                Some(tree_hashes.sha256.to_string())
+            }
+            graphcal_package::PackageSource::Root => None,
+        })
+        .unwrap();
+    let pinned = "0".repeat(64);
+    let tampered = lock
+        .replace(&digest, &pinned)
+        .replace(
+            &format!("graphcal_version = \"{}\"", env!("CARGO_PKG_VERSION")),
+            "graphcal_version = \"0.0.1-alpha.1\"",
+        )
+        .replace(
+            &format!("stdlib_version = \"{}\"", graphcal_package::STDLIB_VERSION),
+            "stdlib_version = \"0.0.1-alpha.1\"",
+        );
+    assert_ne!(tampered, lock);
+    std::fs::write(&lock_path, &tampered).unwrap();
+
+    let output = run_deps_lock(&project, &cache);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains(&format!("existing graphcal.lock pins `{pinned}`")),
+        "stderr: {stderr}"
+    );
+    assert!(stderr.contains(&format!("`{digest}`")), "stderr: {stderr}");
+    assert_eq!(std::fs::read_to_string(&lock_path).unwrap(), tampered);
+}
+
+/// CLI-3: an unreadable previous lock is an error, not an absence of pins.
+#[cfg(unix)]
+#[test]
+fn deps_lock_rejects_a_corrupt_previous_lock_instead_of_dropping_its_pins() {
+    let dir = tempfile::tempdir().unwrap();
+    let (project, cache) = locked_units_project(dir.path());
+    let lock_path = project.join("graphcal.lock");
+    for corrupt in [
+        "this is not a lockfile".to_string(),
+        std::fs::read_to_string(&lock_path)
+            .unwrap()
+            .replace("lock_version = 2", "lock_version = 99"),
+    ] {
+        std::fs::write(&lock_path, &corrupt).unwrap();
+        let output = run_deps_lock(&project, &cache);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "stderr: {stderr}");
+        assert!(
+            stderr.contains("graphcal.lock` is invalid, so its source-tree pins cannot be checked"),
+            "stderr: {stderr}"
+        );
+        assert_eq!(std::fs::read_to_string(&lock_path).unwrap(), corrupt);
+    }
+}
+
+/// CLI-6: a commit whose paths differ only in case cannot be checked out
+/// faithfully on case-insensitive filesystems, so `deps lock` rejects it on
+/// every host instead of locking whichever spelling survived. The colliding
+/// tree is built directly from objects, so the test also runs on macOS.
+#[cfg(unix)]
+#[test]
+fn deps_lock_rejects_commits_with_case_fold_colliding_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("units-repo");
+    create_git_package(
+        &dep_repo,
+        "units",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let repo = gix::open(&dep_repo).unwrap();
+    let base_tree = write_tree_object(&repo, &dep_repo);
+    let mut tree: gix::objs::Tree = repo.find_tree(base_tree).unwrap().decode().unwrap().into();
+    tree.entries.push(gix::objs::tree::Entry {
+        mode: gix::objs::tree::EntryKind::Blob.into(),
+        filename: "GRAPHCAL.toml".into(),
+        oid: repo
+            .write_blob(b"[package]\nname = \"shadow\"\n")
+            .unwrap()
+            .detach(),
+    });
+    tree.entries.sort();
+    let tree_id = repo.write_object(tree).unwrap().detach();
+    let parent = repo.head_id().unwrap().detach();
+    let signature =
+        gix::actor::SignatureRef::from_bytes(b"Graphcal Test <graphcal@example.invalid> 0 +0000")
+            .unwrap();
+    let rev = repo
+        .commit_as(
+            signature,
+            signature,
+            "HEAD",
+            "case collision",
+            tree_id,
+            [parent],
+        )
+        .unwrap()
+        .detach()
+        .to_hex()
+        .to_string();
+    let project = dir.path().join("mission");
+    write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\nunits = {{ git = \"{}\", rev = \"{rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ one };\nnode two: Dimensionless = @one;\n",
+    );
+
+    let output = run_deps_lock(&project, &dir.path().join("cache"));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains("differ only in letter case")
+            && stderr.contains("`GRAPHCAL.toml` and `graphcal.toml`"),
+        "stderr: {stderr}"
+    );
+    assert!(!project.join("graphcal.lock").exists());
+}
+
+/// A minimal LSP client driving `graphcal lsp` over stdio.
+#[cfg(unix)]
+struct LspSession {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    messages: std::sync::mpsc::Receiver<serde_json::Value>,
+}
+
+#[cfg(unix)]
+impl LspSession {
+    /// Start `graphcal lsp` with `env` and complete the initialize handshake.
+    fn start(env: &[(&str, &Path)]) -> Self {
+        use std::io::{BufRead as _, Read as _};
+
+        let mut command = graphcal_bin();
+        command
+            .arg("lsp")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        for (key, value) in env {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().expect("failed to start graphcal lsp");
+        let stdin = child.stdin.take().unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let (sender, messages) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            loop {
+                let mut length = None;
+                loop {
+                    let mut line = String::new();
+                    if stdout.read_line(&mut line).unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let line = line.trim_end();
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some(value) = line.strip_prefix("Content-Length: ") {
+                        length = Some(value.parse::<usize>().unwrap());
+                    }
+                }
+                let mut body = vec![0; length.expect("Content-Length header")];
+                if stdout.read_exact(&mut body).is_err()
+                    || sender.send(serde_json::from_slice(&body).unwrap()).is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let mut session = Self {
+            child,
+            stdin,
+            messages,
+        };
+        session.send(&serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": { "processId": null, "capabilities": {}, "workspaceFolders": null },
+        }));
+        session.next_message(|message| message["id"] == 1);
+        session.notify("initialized", &serde_json::json!({}));
+        session
+    }
+
+    fn send(&mut self, message: &serde_json::Value) {
+        let body = message.to_string();
+        write!(self.stdin, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    fn notify(&mut self, method: &str, params: &serde_json::Value) {
+        self.send(&serde_json::json!({ "jsonrpc": "2.0", "method": method, "params": params }));
+    }
+
+    fn open(&mut self, path: &Path) {
+        let uri = file_uri(path);
+        let text = std::fs::read_to_string(path).unwrap();
+        self.notify(
+            "textDocument/didOpen",
+            &serde_json::json!({
+                "textDocument": { "uri": uri, "languageId": "graphcal", "version": 1, "text": text },
+            }),
+        );
+    }
+
+    /// The next message `matches` accepts, skipping the others.
+    fn next_message(&self, matches: impl Fn(&serde_json::Value) -> bool) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let message = self
+                .messages
+                .recv_timeout(remaining)
+                .expect("timed out waiting for a language-server message");
+            if matches(&message) {
+                return message;
+            }
+        }
+    }
+
+    /// The URIs and codes of every diagnostic list published until one
+    /// non-empty list arrives.
+    fn diagnostics_until_an_error(&self) -> Vec<(String, Vec<String>)> {
+        let mut published = Vec::new();
+        loop {
+            let message =
+                self.next_message(|message| message["method"] == "textDocument/publishDiagnostics");
+            let params = &message["params"];
+            let codes = params["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|diagnostic| {
+                    diagnostic["code"]
+                        .as_str()
+                        .expect("diagnostic code")
+                        .to_owned()
+                })
+                .collect::<Vec<_>>();
+            let done = !codes.is_empty();
+            published.push((params["uri"].as_str().unwrap().to_owned(), codes));
+            if done {
+                return published;
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for LspSession {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The `file:` URI of an absolute path, as an editor spells it.
+#[cfg(unix)]
+fn file_uri(path: &Path) -> String {
+    format!("file://{}", path.display())
+}
+
+/// In package mode (a manifest with `[dependencies]`) a source is displayed
+/// as `<package instance>:<path>`. The language server must publish compile
+/// errors under the URI of the file the editor opened, and an error in a
+/// dependency whose package name has an `_` (no valid URL scheme) under that
+/// dependency's file, never in the root buffer.
+#[cfg(unix)]
+#[test]
+fn lsp_publishes_package_mode_compile_errors_to_their_own_documents() {
+    let dir = tempfile::tempdir().unwrap();
+    let dep_repo = dir.path().join("unit-lib-repo");
+    std::fs::create_dir_all(dep_repo.join("src/unit_lib")).unwrap();
+    std::fs::write(
+        dep_repo.join("src/unit_lib/broken.gcl"),
+        "pub const node length: Length = 1.0 kg;\n",
+    )
+    .unwrap();
+    let dep_rev = create_git_package(
+        &dep_repo,
+        "unit_lib",
+        "pub const node one: Dimensionless = 1.0;\n",
+    );
+    let project = dir.path().join("mission");
+    let bad = write_package_project(
+        &project,
+        &format!(
+            "\n[dependencies]\n\
+             units = {{ package = \"unit_lib\", git = \"{}\", rev = \"{dep_rev}\" }}\n",
+            test_remote_git_url(&dep_repo)
+        ),
+        "import units.lib::{ one };\nnode two: Length = @one + 1.0;\n",
+    );
+    let uses_broken = project.join("src/mission/uses_broken.gcl");
+    std::fs::write(
+        &uses_broken,
+        "import units.broken::{ length };\nnode copy: Length = @length;\n",
+    )
+    .unwrap();
+    let cache = dir.path().join("cache");
+    let lock = graphcal_bin()
+        .args(["deps", "lock", "--root", project.to_str().unwrap()])
+        .env("GRAPHCAL_CACHE_DIR", &cache)
+        .output()
+        .unwrap();
+    assert!(
+        lock.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
+
+    let mut session = LspSession::start(&[("GRAPHCAL_CACHE_DIR", &cache)]);
+    session.open(&bad);
+    let published = session.diagnostics_until_an_error();
+    assert_eq!(
+        published.last().unwrap(),
+        &(file_uri(&bad), vec!["graphcal::D002".to_owned()]),
+        "{published:?}"
+    );
+
+    session.open(&uses_broken);
+    let published = session.diagnostics_until_an_error();
+    let (uri, codes) = published.last().unwrap();
+    assert_eq!(codes, &["graphcal::D002"], "{published:?}");
+    assert!(
+        uri.starts_with("file:///") && uri.ends_with("/src/unit_lib/broken.gcl"),
+        "{published:?}"
+    );
+    assert!(
+        published
+            .iter()
+            .all(|(uri, codes)| uri != &file_uri(&uses_broken) || codes.is_empty()),
+        "{published:?}"
+    );
 }
 
 #[cfg(unix)]
@@ -1321,6 +1764,35 @@ fn eval_heterogeneous_table_units_are_never_misrepresented_by_one_caption() {
 }
 
 #[test]
+fn eval_lists_every_field_of_multi_axis_struct_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = write_temp_file(
+        dir.path(),
+        "grid-struct.gcl",
+        "pub type Pt { Pt(x: Length, y: Length) }\n\
+         node grid: Pt[Fin(2), Fin(2)] = for i: Fin(2) { for j: Fin(2) { Pt(x: 3.0 m, y: 4.0 m) } };\n",
+    );
+
+    let output = graphcal_bin()
+        .args(["eval", source.to_str().unwrap()])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("grid[#1][#0].x = 3 m"), "{stdout}");
+    assert!(stdout.contains("grid[#1][#0].y = 4 m"), "{stdout}");
+    assert!(
+        !stdout.contains("Pt"),
+        "a cell must not stand for a whole struct: {stdout}"
+    );
+}
+
+#[test]
 fn eval_indexed_json_output() {
     let output = graphcal_bin()
         .args(["eval", &fixture("valid/indexed.gcl"), "--format", "json"])
@@ -1506,8 +1978,10 @@ fn same_leaf_imported_dimensions_resolve_qualified_in_declarations() {
         "unbound_qualifier",
         &format!("{modules}dim D = zzz::Length * Time;\n"),
     );
+    // The qualifier names no module alias: the resolver's error, as in a
+    // node annotation, not an unknown dimension (RES-14).
     assert!(
-        !ok && stderr.contains("D004") && stderr.contains("zzz::Length"),
+        !ok && stderr.contains("graphcal::M006") && stderr.contains("unknown module `zzz`"),
         "stderr: {stderr}"
     );
 
@@ -2841,7 +3315,249 @@ fn check_rejects_type_only_import_for_constructor() {
     );
 }
 
+/// Output of a child process run under [`output_with_watchdog`].
+struct WatchedOutput {
+    status: std::process::ExitStatus,
+    stdout: String,
+    stderr: String,
+}
+
+/// Run `command` with stdout/stderr captured to files and kill it if it is
+/// still running after `limit`.
+///
+/// The limit is a generous liveness bound for slow CI machines, not a
+/// performance assertion: it only has to separate "finishes" from "hangs or
+/// does super-linear work".
+fn output_with_watchdog(command: &mut Command, limit: std::time::Duration) -> WatchedOutput {
+    let directory = tempfile::tempdir().unwrap();
+    let stdout_path = directory.path().join("stdout");
+    let stderr_path = directory.path().join("stderr");
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(std::fs::File::create(&stdout_path).unwrap())
+        .stderr(std::fs::File::create(&stderr_path).unwrap())
+        .spawn()
+        .expect("failed to run graphcal");
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!(
+                "graphcal exceeded the {limit:?} watchdog; stderr: {}",
+                std::fs::read_to_string(&stderr_path)
+                    .unwrap_or_else(|error| format!("<unreadable: {error}>"))
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    WatchedOutput {
+        status,
+        stdout: std::fs::read_to_string(&stdout_path).unwrap(),
+        stderr: std::fs::read_to_string(&stderr_path).unwrap(),
+    }
+}
+
+/// A reader that closes stdout early (`graphcal eval … | head -1`) ends the
+/// command quietly with the conventional `SIGPIPE` status instead of a panic.
+#[cfg(unix)]
+#[test]
+fn closed_stdout_pipe_exits_quietly() {
+    let rocket = fixture("valid/rocket.gcl");
+    for arguments in [
+        vec!["eval", rocket.as_str()],
+        vec!["check", rocket.as_str()],
+        vec!["graph", rocket.as_str()],
+        vec!["dump", "source", rocket.as_str()],
+        vec!["model", "describe", rocket.as_str()],
+        // clap writes these itself, before any command runs.
+        vec!["--help"],
+        vec!["--version"],
+        vec!["eval", "--help"],
+    ] {
+        // The child's stdout is a pipe whose only read end is closed before
+        // the child starts, so its first write fails deterministically.
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let mut command = graphcal_bin();
+        command
+            .args(&arguments)
+            .stdin(Stdio::null())
+            .stdout(writer)
+            .stderr(Stdio::piped());
+        let child = command.spawn().expect("failed to run graphcal");
+        // Drop the parent's copy of the write end with the command.
+        drop(command);
+        let output = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+
+        assert_eq!(
+            output.status.code(),
+            Some(141),
+            "{arguments:?}\nstderr: {stderr}"
+        );
+        assert!(
+            !stderr.contains("panicked") && !stderr.contains("Broken pipe"),
+            "{arguments:?}\nstderr: {stderr}"
+        );
+    }
+}
+
 // --- JSON parameter source tests ---
+
+#[test]
+fn deeply_nested_params_json_is_rejected_in_linear_time() {
+    // A just-under-1 MiB array nest used to cost quadratic time and memory
+    // (13 GB at 64 KiB); it must now be rejected after one linear scan.
+    let directory = tempfile::tempdir().unwrap();
+    let model = directory.path().join("m.gcl");
+    std::fs::write(
+        &model,
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;\n",
+    )
+    .unwrap();
+    let depth = 500_000;
+    let params = directory.path().join("deep.json");
+    std::fs::write(
+        &params,
+        format!("{{\"x\": {}{}}}", "[".repeat(depth), "]".repeat(depth)),
+    )
+    .unwrap();
+
+    let output = output_with_watchdog(
+        graphcal_bin()
+            .arg("eval")
+            .arg(&model)
+            .arg("--params-json-file")
+            .arg(&params),
+        std::time::Duration::from_secs(60),
+    );
+
+    assert_eq!(output.status.code(), Some(2), "stderr: {}", output.stderr);
+    assert!(output.stdout.is_empty(), "stdout: {}", output.stdout);
+    assert!(
+        output
+            .stderr
+            .contains("unsupported JSON type `array` for `x`"),
+        "stderr: {}",
+        output.stderr
+    );
+}
+
+#[test]
+fn deeply_nested_params_json_objects_are_rejected_in_bounded_time() {
+    // Nested objects used to be re-parsed once per level as well; the
+    // 64-level object guard must reject them after bounded work, both just
+    // past the limit and at a depth that was quadratic before.
+    let directory = tempfile::tempdir().unwrap();
+    let model = directory.path().join("m.gcl");
+    std::fs::write(
+        &model,
+        "param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;\n",
+    )
+    .unwrap();
+    for depth in [65, 100_000] {
+        let params = directory.path().join(format!("deep-{depth}.json"));
+        std::fs::write(
+            &params,
+            format!(
+                "{{\"x\": {}1{}}}",
+                "{\"a\": ".repeat(depth),
+                "}".repeat(depth)
+            ),
+        )
+        .unwrap();
+
+        let output = output_with_watchdog(
+            graphcal_bin()
+                .arg("eval")
+                .arg(&model)
+                .arg("--params-json-file")
+                .arg(&params),
+            std::time::Duration::from_secs(60),
+        );
+
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "depth {depth}\nstderr: {}",
+            output.stderr
+        );
+        assert!(output.stdout.is_empty(), "stdout: {}", output.stdout);
+        assert!(
+            output
+                .stderr
+                .contains("is nested deeper than the limit of 64 levels"),
+            "depth {depth}\nstderr: {}",
+            output.stderr
+        );
+    }
+}
+
+/// `check`, `format --check` and `--params-json-file` reject FIFOs instead
+/// of blocking on them.
+#[cfg(unix)]
+#[test]
+fn special_file_inputs_are_rejected_without_blocking() {
+    use std::ffi::OsStr;
+
+    let directory = tempfile::tempdir().unwrap();
+    let model = directory.path().join("m.gcl");
+    std::fs::write(&model, "param x: Dimensionless = 1.0;\n").unwrap();
+    let fifo_source = directory.path().join("f.gcl");
+    let fifo_params = directory.path().join("p.json");
+    for fifo in [&fifo_source, &fifo_params] {
+        assert!(Command::new("mkfifo").arg(fifo).status().unwrap().success());
+    }
+
+    let limit = std::time::Duration::from_secs(60);
+    for (arguments, expected_code) in [
+        (vec![OsStr::new("check"), fifo_source.as_os_str()], 1),
+        (
+            vec![
+                OsStr::new("format"),
+                OsStr::new("--check"),
+                fifo_source.as_os_str(),
+            ],
+            1,
+        ),
+        (
+            vec![
+                OsStr::new("eval"),
+                model.as_os_str(),
+                OsStr::new("--params-json-file"),
+                fifo_params.as_os_str(),
+            ],
+            2,
+        ),
+    ] {
+        let mut command = graphcal_bin();
+        command.args(&arguments);
+        let output = output_with_watchdog(&mut command, limit);
+        assert_eq!(
+            output.status.code(),
+            Some(expected_code),
+            "{command:?}\nstdout: {}\nstderr: {}",
+            output.stdout,
+            output.stderr
+        );
+        // miette wraps long messages behind a `│` gutter, possibly right
+        // after a hyphen, so compare without whitespace.
+        let flat = output
+            .stderr
+            .split_whitespace()
+            .filter(|word| *word != "│")
+            .collect::<String>();
+        assert!(
+            flat.contains("cannotreadnon-regularfile"),
+            "{command:?}\nstderr: {}",
+            output.stderr
+        );
+    }
+}
 
 #[test]
 fn eval_with_params_json_file() {
@@ -4393,6 +5109,49 @@ fn long_nat_chains_survive_formatting_lowering_and_drop() {
 }
 
 #[test]
+fn long_constant_chains_survive_lowering_evaluation_and_drop() {
+    // Unit scales and coordinate bounds are lowered and evaluated by the
+    // constant sublanguage; a long left-nested chain used to overflow the
+    // stack there (and in the derived drop glue). Run it in a subprocess so
+    // a regression aborts only the child.
+    const TERM_COUNT: usize = 30_000;
+
+    let dir = tempfile::tempdir().unwrap();
+    let int_sum = vec!["1"; TERM_COUNT].join(" + ");
+    let real_sum = vec!["1.0"; TERM_COUNT].join(" + ");
+    let unit_scale = write_temp_file(
+        dir.path(),
+        "unit_scale.gcl",
+        &format!("unit u: Length = ({int_sum}) m;\nnode x: Length = 1.0 u;\n"),
+    );
+    let real_scale = write_temp_file(
+        dir.path(),
+        "real_scale.gcl",
+        &format!("unit u: Length = ({real_sum}) m;\nnode x: Length = 1.0 u;\n"),
+    );
+    let coordinate = write_temp_file(
+        dir.path(),
+        "coordinate.gcl",
+        &format!(
+            "index T = linspace(0.0 s, ({real_sum}) * 1.0 s, points: 3);\nnode x: Dimensionless = 1.0;\n"
+        ),
+    );
+
+    for path in [&unit_scale, &real_scale, &coordinate] {
+        let output = graphcal_bin()
+            .args(["check", path.to_str().unwrap()])
+            .output()
+            .expect("failed to run graphcal check");
+        assert!(
+            output.status.success(),
+            "{} must check without aborting: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
 fn format_check_recursive_directory() {
     // --check on a directory should recursively find .gcl files
     let output = graphcal_bin()
@@ -4476,6 +5235,42 @@ fn certification_commands_fail_when_directory_discovery_is_incomplete() {
         assert!(
             stderr.contains("source discovery was incomplete"),
             "{stderr}"
+        );
+    }
+}
+
+/// CLI-4: a directory named on the command line is walked even when its name
+/// is one that discovery skips below the walk root (`target`, `.git`, ...).
+#[test]
+fn check_and_format_walk_an_explicitly_named_skip_dir() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("target");
+    let src = dir.path().join("src");
+    std::fs::create_dir_all(&target).unwrap();
+    std::fs::create_dir_all(&src).unwrap();
+    std::fs::write(target.join("a.gcl"), "param x: Dimensionless = 1.0 m;\n").unwrap();
+    std::fs::write(src.join("b.gcl"), "param y: Dimensionless = 1.0;\n").unwrap();
+    std::fs::write(target.join("c.gcl"), "param   z:Dimensionless=1.0;\n").unwrap();
+
+    for arguments in [
+        vec!["check", target.to_str().unwrap(), src.to_str().unwrap()],
+        vec![
+            "format",
+            "--check",
+            target.to_str().unwrap(),
+            src.to_str().unwrap(),
+        ],
+    ] {
+        let output = graphcal_bin()
+            .args(&arguments)
+            .output()
+            .expect("failed to run graphcal");
+        assert_ne!(
+            output.status.code(),
+            Some(0),
+            "{arguments:?} must examine `target`\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }
@@ -4819,9 +5614,9 @@ fn eval_datetime_extract_non_datetime_error() {
 }
 
 #[test]
-fn eval_datetime_jd_unix() {
+fn eval_datetime_unix() {
     let output = graphcal_bin()
-        .args(["eval", &fixture("valid/datetime_jd_unix.gcl")])
+        .args(["eval", &fixture("valid/datetime_unix.gcl")])
         .output()
         .expect("failed to run graphcal");
 
@@ -5002,6 +5797,41 @@ fn eval_plot_json_suppresses_normal_eval_output_even_with_json_format() {
     assert!(
         json.get("param").is_none() && json.get("node").is_none(),
         "--plot json should print only the plot array, not eval JSON: {stdout}"
+    );
+}
+
+/// CLI-5: `--plot json` reserves stdout for the figure array, but failing
+/// nodes and assertions must still explain the non-zero exit on stderr.
+#[test]
+fn eval_plot_json_reports_failures_on_stderr() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("failing.gcl");
+    std::fs::write(
+        &file,
+        "pub index Step = { A, B };\n\
+         node y: Dimensionless[Step] = { Step#A: 1.0, Step#B: 2.0 };\n\
+         plot curve = { mark: bar, encode: { x: for s: Step { s }, y: for s: Step { @y[s] } } };\n\
+         assert never = 1.0 > 2.0;\n\
+         node bad: Dimensionless = 1.0 / 0.0;\n",
+    )
+    .unwrap();
+
+    let output = graphcal_bin()
+        .args(["eval", file.to_str().unwrap(), "--plot", "json"])
+        .output()
+        .expect("failed to run graphcal");
+
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let _json = parse_plot_json_stdout(&stdout);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("bad = ERROR: division by zero"),
+        "expected the failing node on stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("never  FAIL"),
+        "expected the failing assertion on stderr: {stderr}"
     );
 }
 
@@ -5311,8 +6141,8 @@ fn eval_plot_mismatched_channel_axes_is_an_error() {
     assert!(
         stderr.contains("graphcal::D034")
             && stderr.contains("incompatible index axes")
-            && stderr.contains("mismatch.Step")
-            && stderr.contains("mismatch.Pair"),
+            && stderr.contains("`x` ranges over `Step`")
+            && stderr.contains("`y` ranges over `Pair`"),
         "expected a static axes mismatch report: {stderr}"
     );
     assert!(
@@ -6609,8 +7439,8 @@ fn graph_grouped_view_distinguishes_repeated_include_instances() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
-    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_1\\ntemplate rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate rocket.lib\\npackage rocket"));
     assert_eq!(stdout.matches("style=\"rounded,filled\"").count(), 2);
     let total = dot_statement_id_for_label(&stdout, "total_dv\\n");
     let instance_outputs = stdout
@@ -6666,9 +7496,9 @@ fn graph_max_depth_expands_only_requested_composition_levels() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("template src.graph.left\\npackage graph"));
-    assert!(stdout.contains("template src.graph.right\\npackage graph"));
-    assert!(stdout.contains("template src.graph.shared\\npackage graph"));
+    assert!(stdout.contains("template graph.left\\npackage graph"));
+    assert!(stdout.contains("template graph.right\\npackage graph"));
+    assert!(stdout.contains("template graph.shared\\npackage graph"));
     assert!(stdout.contains("1 value hidden"));
     assert!(stdout.contains("doubled\\nDimensionless"));
 }
@@ -6720,8 +7550,8 @@ fn graph_module_view_collapses_declaration_wiring() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("include stage_1\\ntemplate src.rocket.lib\\npackage rocket"));
-    assert!(stdout.contains("include stage_2\\ntemplate src.rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_1\\ntemplate rocket.lib\\npackage rocket"));
+    assert!(stdout.contains("include stage_2\\ntemplate rocket.lib\\npackage rocket"));
     assert!(stdout.contains("label=\"instantiates\""));
     assert!(!stdout.contains("mass_ratio\\nDimensionless"));
     assert!(!stdout.contains("total_dv\\nVelocity"));
@@ -6751,11 +7581,11 @@ fn graph_imported_values_render_as_external_nodes() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    let external = dot_statement_id_for_label(&stdout, "src.lib.constants.g0\"");
+    let external = dot_statement_id_for_label(&stdout, "lib.constants.g0\"");
     let dependent = dot_statement_id_for_label(&stdout, "v_exhaust\\n");
     assert!(
         stdout.contains(&format!(
-            "\"{external}\" [label=\"src.lib.constants.g0\", shape=box, style=dashed];"
+            "\"{external}\" [label=\"lib.constants.g0\", shape=box, style=dashed];"
         )),
         "imported value should render as a dashed external node:\n{stdout}"
     );
@@ -7166,7 +7996,7 @@ fn offline_dependency_reports_preserve_transitive_plugins_and_versions() {
 #[cfg(unix)]
 #[test]
 fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() {
-    use graphcal_package::{GitSourceId, PackageSource};
+    use graphcal_package::PackageSource;
     let binary = scale_plugin_wasm;
     let dir = tempfile::tempdir().unwrap();
     let repository = dir.path().join("kernels");
@@ -7210,14 +8040,9 @@ fn dependency_plugin_versions_are_scoped_and_binary_changes_are_authenticated() 
         .iter()
         .filter_map(|package| match &package.source {
             PackageSource::Git {
-                url,
-                commit,
+                source,
                 tree_hashes,
-                ..
-            } => Some((
-                GitSourceId::new(url.clone(), commit.clone()),
-                tree_hashes.sha256,
-            )),
+            } => Some((source.clone(), tree_hashes.sha256)),
             PackageSource::Root => None,
         })
         .collect();
@@ -7351,6 +8176,31 @@ fn describe_batch_model(model: &std::path::Path) -> graphcal_model_protocol::Des
     serde_json::from_slice(&output.stdout).expect("describe prints a describe document")
 }
 
+/// CLI-14: `model describe` and `model unit` render compile errors with
+/// their file, line and snippet, as `check` does.
+#[test]
+fn model_describe_and_unit_render_compile_errors_with_location() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(
+        dir.path(),
+        "broken.gcl",
+        "param load: Length = 1.0 m;\nnode y: Length = @missing;\n",
+    );
+    for arguments in [vec!["describe"], vec!["unit", "m"]] {
+        let mut command = graphcal_bin();
+        command.arg("model").arg(arguments[0]).arg(&model);
+        command.args(&arguments[1..]);
+        let output = command.output().expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("broken.gcl:2:") && stderr.contains("@missing"),
+            "`model {}` must render the error location and snippet: {stderr}",
+            arguments[0]
+        );
+    }
+}
+
 #[test]
 fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
     let dir = tempfile::tempdir().unwrap();
@@ -7362,7 +8212,10 @@ fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
         .expect("failed to run graphcal");
     assert!(output.status.success());
     let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(json["protocol_version"], 2);
+    assert_eq!(
+        json["protocol_version"],
+        graphcal_model_protocol::PROTOCOL_VERSION
+    );
     assert!(
         json["interface_fingerprint"]
             .as_str()
@@ -7378,10 +8231,25 @@ fn model_describe_lists_ports_with_units_domains_and_fingerprint() {
 }
 
 #[test]
+fn model_unit_rejects_spellings_with_surrounding_whitespace() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let output = graphcal_bin()
+        .args(["model", "unit"])
+        .arg(&model)
+        .args(["--", " km "])
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty(), "a rejected unit prints nothing");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("leading or trailing whitespace"));
+}
+
+#[test]
 fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
     let dir = tempfile::tempdir().unwrap();
     let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
-    let cases: [(&[&str], &str); 5] = [
+    let cases: [(&[&str], &str); 6] = [
         (
             &[
                 "--input",
@@ -7395,6 +8263,20 @@ fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
                 "--skip-fingerprint-check",
             ],
             "cannot carry port `load`",
+        ),
+        (
+            &[
+                "--input",
+                "load",
+                "--input",
+                "mode",
+                "--output",
+                "failure",
+                "--unit",
+                "load= kN",
+                "--skip-fingerprint-check",
+            ],
+            "leading or trailing whitespace",
         ),
         (
             &[
@@ -7461,6 +8343,62 @@ fn model_serve_rejects_invalid_sessions_before_writing_stdout() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(expected), "{arguments:?}: {stderr}");
     }
+}
+
+#[test]
+fn model_serve_rejects_a_non_positive_request_timeout() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    for timeout in ["0", "-1", "nan", "soon"] {
+        let output = graphcal_bin()
+            .args(["model", "serve"])
+            .arg(&model)
+            .args([
+                "--input",
+                "load",
+                "--output",
+                "failure",
+                "--skip-fingerprint-check",
+            ])
+            .arg(format!("--request-timeout={timeout}"))
+            .output()
+            .expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2), "{timeout}");
+        assert!(
+            output.stdout.is_empty(),
+            "setup failures must not contaminate Arrow stdout"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("--request-timeout"),
+            "{timeout}"
+        );
+    }
+}
+
+#[test]
+fn model_serve_cannot_read_fixed_parameter_values_from_stdin() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let output = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args([
+            "--input",
+            "load",
+            "--output",
+            "failure",
+            "--params-json-file",
+            "-",
+            "--skip-fingerprint-check",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        output.stdout.is_empty(),
+        "setup failures must not contaminate Arrow stdout"
+    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("reads requests from stdin"));
 }
 
 #[test]
@@ -7534,6 +8472,50 @@ fn variant_position(
     let variant = graphcal_model_protocol::VariantName::new(name).unwrap();
     key.position(graphcal_model_protocol::KeyRef::Variant(&variant))
         .unwrap()
+}
+
+#[test]
+fn model_serve_prints_the_exact_request_schema() {
+    use arrow_ipc::reader::StreamReader;
+    use graphcal_model_protocol::arrow::request_schema;
+    use graphcal_model_protocol::{PortName, SessionSpec};
+
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "model.gcl", BATCH_MODEL);
+    let document = describe_batch_model(&model);
+    let output = graphcal_bin()
+        .args(["model", "serve"])
+        .arg(&model)
+        .args([
+            "--input",
+            "mode",
+            "--input",
+            "load",
+            "--output",
+            "failure",
+            "--print-request-schema",
+        ])
+        .arg("--expect-fingerprint")
+        .arg(document.interface_fingerprint().to_string())
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reader = StreamReader::try_new(std::io::Cursor::new(output.stdout), None).unwrap();
+    let printed = reader.schema();
+    assert_eq!(reader.count(), 0, "the stream holds only the schema");
+    let name = |name: &str| PortName::new(name).unwrap();
+    let session = document
+        .interface()
+        .configure(
+            &SessionSpec::new(vec![name("load"), name("mode")], vec![name("failure")]),
+            graphcal_model_protocol::CanonicalUnitsOnly,
+        )
+        .unwrap();
+    assert_eq!(printed.as_ref(), request_schema(&session).as_ref());
 }
 
 #[test]
@@ -7659,12 +8641,12 @@ node v_exhaust: Velocity = @isp * @g0;
 node delta_v: Velocity = @v_exhaust * ln((@dry_mass + @fuel_mass) / @dry_mass) -> km/s;
 assert delta_v_positive = @delta_v > 0.0 m/s;
 pub index Steps = { S1, S2 };
-node per_step: Velocity[Steps] = for s: Steps { @delta_v / 2.0 };
+node per_step: Velocity[Steps] = for step: Steps { @delta_v / 2.0 };
 plot dv_plot = {
     mark: line,
     encode: {
-        x: for s: Steps { 1.0 },
-        y: for s: Steps { @per_step[s] -> km/s },
+        x: for step: Steps { 1.0 },
+        y: for step: Steps { @per_step[step] -> km/s },
     },
 };
 ";
@@ -7957,6 +8939,116 @@ fn report_build_static_accepts_inline_json_and_records_repro_source() {
     );
 }
 
+/// The reproduce command of a static report, HTML-unescaped.
+fn report_repro_command(html: &str) -> String {
+    const OPEN: &str = "<code class=\"repro\">";
+    let start = html.find(OPEN).expect("repro command") + OPEN.len();
+    let end = start + html[start..].find("</code>").expect("closed repro command");
+    html_unescape(&html[start..end])
+}
+
+/// Decode the named and numeric character references of HTML text.
+fn html_unescape(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        rest = &rest[amp..];
+        let Some(semi) = rest.find(';') else { break };
+        let entity = &rest[1..semi];
+        let decoded = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => entity
+                .strip_prefix("#x")
+                .or_else(|| entity.strip_prefix("#X"))
+                .map(|hex| u32::from_str_radix(hex, 16))
+                .or_else(|| entity.strip_prefix('#').map(str::parse::<u32>))
+                .and_then(Result::ok)
+                .and_then(char::from_u32),
+        };
+        if let Some(ch) = decoded {
+            out.push(ch);
+            rest = &rest[semi + 1..];
+        } else {
+            out.push('&');
+            rest = &rest[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[test]
+fn html_unescape_decodes_named_and_numeric_references() {
+    assert_eq!(
+        html_unescape("&#x27;a&#39;&quot;&lt;&amp;lt;&gt;&#X41; & b&unknown;"),
+        "'a'\"<&lt;>A & b&unknown;"
+    );
+}
+
+#[test]
+fn report_build_static_records_every_json_parameter_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = write_temp_file(dir.path(), "deltav.gcl", REPORT_MODEL);
+    let json = r#"{"isp":"450.0 s"}"#;
+    let json_file = write_temp_file(dir.path(), "scenario.json", json);
+    let json_file_arg = json_file.to_str().unwrap();
+    for (arguments, stdin, expected) in [
+        (
+            vec!["--params-json", json],
+            None,
+            format!("--params-json '{json}'"),
+        ),
+        (
+            vec!["--params-json-file", json_file_arg],
+            None,
+            format!("--params-json-file '{json_file_arg}'"),
+        ),
+        (
+            vec!["--params-json-file", "-"],
+            Some(json),
+            "--params-json-file -".to_string(),
+        ),
+    ] {
+        let html_path = dir.path().join("out.html");
+        let mut command = graphcal_bin();
+        command
+            .args(["report", "build", "--static"])
+            .arg(&model)
+            .args(&arguments)
+            .arg("--output")
+            .arg(&html_path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().expect("failed to run graphcal");
+        {
+            use std::io::Write as _;
+            let mut input = child.stdin.take().expect("piped stdin");
+            if let Some(stdin) = stdin {
+                input.write_all(stdin.as_bytes()).unwrap();
+            }
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{arguments:?} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let html = std::fs::read_to_string(&html_path).unwrap();
+        assert!(
+            html.contains("450 s"),
+            "{arguments:?}: JSON baseline must display"
+        );
+        let repro = report_repro_command(&html);
+        assert!(repro.ends_with(&expected), "{arguments:?}: {repro}");
+    }
+}
+
 #[test]
 fn report_build_with_failing_assertion_still_writes_page_and_exits_1() {
     let dir = tempfile::tempdir().unwrap();
@@ -8113,6 +9205,72 @@ fn report_build_engine_dir_with_partial_bundle_reports_engine_missing() {
     assert!(stderr.contains("was not found at"), "stderr: {stderr}");
 }
 
+/// CLI-10 (CodeRabbit): capture, loading and hydration share one project
+/// root. A symlinked manifest would give the frozen bytes a second identity
+/// (and, with an absolute `--root`, move the root the loader sees), so an
+/// interactive build rejects it loudly; a static build is unaffected.
+#[cfg(unix)]
+#[test]
+fn report_build_hydrated_rejects_symlinked_manifest() {
+    let dir = tempfile::tempdir().unwrap();
+    let project = std::path::absolute(dir.path().join("p")).unwrap();
+    std::fs::create_dir_all(project.join("sub")).unwrap();
+    std::fs::create_dir_all(project.join("src/demo")).unwrap();
+    std::fs::write(
+        project.join("sub/config.toml"),
+        "[package]\nname = \"demo\"\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("sub/config.toml", project.join("graphcal.toml")).unwrap();
+    let main = project.join("src/demo/main.gcl");
+    std::fs::write(
+        &main,
+        "param x: Length = 1.0 m;\npub node y: Length = 2.0 * @x;\n",
+    )
+    .unwrap();
+    let engine_dir = write_fake_engine(dir.path());
+    let html_path = dir.path().join("out.html");
+
+    for root in [Some(project.as_path()), None] {
+        let mut command = graphcal_bin();
+        command.args(["report", "build"]).arg(&main);
+        if let Some(root) = root {
+            command.arg("--root").arg(root);
+        }
+        let output = command
+            .arg("--engine-dir")
+            .arg(&engine_dir)
+            .arg("--output")
+            .arg(&html_path)
+            .output()
+            .expect("failed to run graphcal");
+        assert_eq!(output.status.code(), Some(2), "root: {root:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(
+                "could not capture graphcal.toml: it must be a regular file in the project root, not a symlink"
+            ) && stderr.contains("--static"),
+            "root: {root:?}: {stderr}"
+        );
+        assert!(!html_path.exists());
+    }
+
+    let output = graphcal_bin()
+        .args(["report", "build", "--static"])
+        .arg(&main)
+        .arg("--root")
+        .arg(&project)
+        .arg("--output")
+        .arg(&html_path)
+        .output()
+        .expect("failed to run graphcal");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn report_build_hydrated_ships_dependency_free_manifest() {
     // A manifest without [dependencies] is not a reason to refuse hydration:
@@ -8199,6 +9357,24 @@ fn report_build_hydrated_embeds_package_dependencies() {
         .0;
     let bundle = graphcal_project::project_bundle::ProjectBundle::from_json(payload).unwrap();
     assert_eq!(bundle.dependencies.len(), 1);
+    // CLI-10: the captured metadata ships under its typed kind.
+    let metadata: Vec<_> = bundle
+        .files
+        .iter()
+        .filter_map(|artifact| match &artifact.content {
+            graphcal_project::project_bundle::ArtifactContent::Manifest(_) => {
+                Some((artifact.path.as_str(), "manifest"))
+            }
+            graphcal_project::project_bundle::ArtifactContent::Lockfile(_) => {
+                Some((artifact.path.as_str(), "lockfile"))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        metadata,
+        [("graphcal.lock", "lockfile"), ("graphcal.toml", "manifest")]
+    );
 
     // The same project builds statically: the baseline is computed natively.
     let html_path = dir.path().join("out.html");

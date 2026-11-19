@@ -67,6 +67,24 @@ fn error_duplicate_name() {
 }
 
 #[test]
+fn error_float_literal_underflow() {
+    for (name, source) in [
+        ("dimensionless", "node tiny: Dimensionless = 1e-400;\n"),
+        ("with_unit", "node tiny: Length = 2.5e-330 m;\n"),
+    ] {
+        let rendered = render_error(source, "underflow.gcl");
+        insta::assert_snapshot!(format!("error_float_literal_underflow_{name}"), rendered);
+    }
+}
+
+#[test]
+fn error_unit_name_is_local() {
+    let source = include_str!("../../../tests/fixtures/invalid/unit_name_is_local.gcl");
+    let rendered = render_error(source, "unit_name_is_local.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_cross_universe_name_collision() {
     let source = include_str!("../../../tests/fixtures/invalid/cross_universe_name_collision.gcl");
     let rendered = render_error(source, "cross_universe_name_collision.gcl");
@@ -494,6 +512,29 @@ fn error_base_unit_derived_dimension() {
 }
 
 #[test]
+fn error_base_unit_required_dimension_port() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/base_unit_required_dimension_port.gcl");
+    let rendered = render_error(source, "base_unit_required_dimension_port.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_unit_over_required_dimension_port() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/unit_over_required_dimension_port.gcl");
+    let rendered = render_error(source, "unit_over_required_dimension_port.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_base_unit_with_body() {
+    let source = include_str!("../../../tests/fixtures/invalid/base_unit_with_body.gcl");
+    let rendered = render_error(source, "base_unit_with_body.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_base_unit_affine_temperature() {
     let source = include_str!("../../../tests/fixtures/invalid/base_unit_affine_temperature.gcl");
     let rendered = render_error(source, "base_unit_affine_temperature.gcl");
@@ -678,6 +719,37 @@ fn error_prelude_dimension_as_value() {
     insta::assert_snapshot!(rendered);
 }
 
+/// A `type` binding is parsed as a type expression, so an applied generic
+/// type reaches the targeted type-binding diagnostic instead of a parse error.
+#[test]
+fn error_type_binding_to_applied_type() {
+    let source = "type Eci { Eci }\n\
+        type Vec3<D: Dim, F: Type> { Vec3(x: D, y: D, z: D) }\n\
+        dag holder {\n    pub(bind) type Element;\n    param value: Element;\n    pub node out: Element = @value;\n}\n\
+        include holder(type Element: Vec3<Length, Eci>, value: Vec3<Length, Eci>(x: 1.0 m, y: 2.0 m, z: 3.0 m)) as h;\n";
+    let rendered = render_error(source, "type_binding_to_applied_type.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+/// A `dim` binding is parsed as a dimension expression, so a derived
+/// dimension gets dimension-binding help rather than index-binding help.
+#[test]
+fn error_dim_binding_to_dimension_product() {
+    let source = "dag holder {\n    pub(bind) dim D;\n    param value: D;\n    pub node out: D = @value;\n}\n\
+        include holder(dim D: Length / Time, value: 1.0 m/s) as h;\n";
+    let rendered = render_error(source, "dim_binding_to_dimension_product.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+/// A static name in value position is an unknown Term name: there is no
+/// separate type-system-as-value diagnostic.
+#[test]
+fn error_index_name_as_value() {
+    let source = "index I = { a, b };\nnode x: Length = 2.0 * I;\n";
+    let rendered = render_error(source, "index_name_as_value.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
 #[test]
 fn error_index_label_as_type() {
     let source = include_str!("../../../tests/fixtures/invalid/index_label_as_type.gcl");
@@ -741,6 +813,27 @@ fn error_to_int_non_integer_runtime() {
 fn error_division_by_zero() {
     let source = include_str!("../../../tests/fixtures/runtime_error/division_by_zero.gcl");
     let rendered = render_node_error(source, "division_by_zero.gcl", "y");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_int_division_operator() {
+    let source = include_str!("../../../tests/fixtures/invalid/int_division_operator.gcl");
+    let rendered = render_error(source, "int_division_operator.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_int_division_by_zero_const() {
+    let source = include_str!("../../../tests/fixtures/invalid/int_division_by_zero_const.gcl");
+    let rendered = render_error(source, "int_division_by_zero_const.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_int_division_by_zero_runtime() {
+    let source = include_str!("../../../tests/fixtures/runtime_error/int_div_zero.gcl");
+    let rendered = render_node_error(source, "int_div_zero.gcl", "z");
     insta::assert_snapshot!(rendered);
 }
 
@@ -1076,6 +1169,69 @@ fn error_datetime_invalid_date() {
 }
 
 #[test]
+fn error_datetime_leap_second() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_leap_second.gcl");
+    let rendered = render_error(source, "datetime_leap_second.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_epoch_leap_second() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_epoch_leap_second.gcl");
+    let rendered = render_error(source, "datetime_epoch_leap_second.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_civil_lax_syntax() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_civil_lax_syntax.gcl");
+    let rendered = render_error(source, "datetime_civil_lax_syntax.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_epoch_lax_syntax() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_epoch_lax_syntax.gcl");
+    let rendered = render_error(source, "datetime_epoch_lax_syntax.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_utc_difference() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_utc_difference.gcl");
+    let rendered = render_error(source, "datetime_utc_difference.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_utc_shift() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_utc_shift.gcl");
+    let rendered = render_error(source, "datetime_utc_shift.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_removed_julian_date() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_removed_julian_date.gcl");
+    let rendered = render_error(source, "datetime_removed_julian_date.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_unix_non_utc() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_unix_non_utc.gcl");
+    let rendered = render_error(source, "datetime_unix_non_utc.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_datetime_from_unix_int() {
+    let source = include_str!("../../../tests/fixtures/invalid/datetime_from_unix_int.gcl");
+    let rendered = render_error(source, "datetime_from_unix_int.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
 fn error_datetime_positional_epoch_scale() {
     let source =
         include_str!("../../../tests/fixtures/invalid/datetime_positional_epoch_scale.gcl");
@@ -1089,6 +1245,16 @@ fn error_datetime_positional_epoch_scale() {
 fn error_domain_violation() {
     let source = include_str!("../../../tests/fixtures/runtime_error/domain_violation.gcl");
     let rendered = render_node_error(source, "domain_violation.gcl", "mass");
+    insta::assert_snapshot!(rendered);
+}
+
+/// EV-14 (#2265): a recurrence-group member's domain violation names the
+/// step it occurs at, as the same violation of an ordinary indexed node does.
+#[test]
+fn error_recurrence_group_domain_violation() {
+    let source =
+        include_str!("../../../tests/fixtures/runtime_error/recurrence_group_domain_violation.gcl");
+    let rendered = render_node_error(source, "recurrence_group_domain_violation.gcl", "action");
     insta::assert_snapshot!(rendered);
 }
 
@@ -1155,6 +1321,14 @@ fn error_datetime_domain_violation() {
 fn error_int_domain_bound_type_mismatch() {
     let source = include_str!("../../../tests/fixtures/invalid/int_domain_bound_type_mismatch.gcl");
     let rendered = render_error(source, "int_domain_bound_type_mismatch.gcl");
+    insta::assert_snapshot!(rendered);
+}
+
+#[test]
+fn error_int_bound_on_dimensionless_domain() {
+    let source =
+        include_str!("../../../tests/fixtures/invalid/int_bound_on_dimensionless_domain.gcl");
+    let rendered = render_error(source, "int_bound_on_dimensionless_domain.gcl");
     insta::assert_snapshot!(rendered);
 }
 

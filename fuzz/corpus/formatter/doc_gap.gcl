@@ -1,0 +1,10 @@
+param a: Dimensionless = 1.0;
+
+/// Section note.
+
+/// Doubled input.
+param b: Dimensionless = 2.0;
+
+/// detached
+
+param c: Dimensionless = 3.0;

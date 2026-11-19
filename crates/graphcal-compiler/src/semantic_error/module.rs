@@ -52,7 +52,8 @@ pub enum ModuleError {
     #[error("cannot project `{name}` from a configured DAG instance")]
     IncludeItemNotProjectable { name: NameAtom },
     #[error(
-        "cannot project constructor `{constructor}` because its owning type `{owner_type}` is rebound"
+        "cannot project constructor `{constructor}` because its owning type `{}` is rebound",
+        owner_type.to_unowned_def_name()
     )]
     IncludeConstructorOwnerRebound {
         constructor: ConstructorName,
@@ -74,8 +75,6 @@ pub enum ModuleError {
         file_path: DagReference,
         mismatch: ImportItemCategoryMismatch,
     },
-    #[error("duplicate module name `{name}`")]
-    DuplicateModuleName { name: ModuleAliasName, first: Span },
     #[error("unknown module `{name}`")]
     UnknownModule { name: ModuleAliasName },
     #[error("unknown param `{name}` in import binding for `{file_path}`")]
@@ -94,7 +93,10 @@ pub enum ModuleError {
         expected: &'static str,
     },
     #[error("invalid type-level binding value for `{name}`")]
-    InvalidTypeLevelBindingValue { name: NameAtom },
+    InvalidTypeLevelBindingValue {
+        kind: crate::static_interface::StaticInputKind,
+        name: NameAtom,
+    },
     #[error("index binding `{dep_index}: {value}`: `{value}` is not a known index")]
     IndexBindingNotAnIndex {
         dep_index: IndexName,
@@ -135,7 +137,6 @@ impl DiagnosticKind for ModuleError {
             Self::DuplicateIncludeSelection { .. } => "graphcal::M027",
             Self::ImportNameNotFound { .. } => "graphcal::M003",
             Self::ImportCategoryMismatch { .. } => "graphcal::M022",
-            Self::DuplicateModuleName { .. } => "graphcal::M005",
             Self::UnknownModule { .. } => "graphcal::M006",
             Self::UnknownParamBinding { .. } => "graphcal::M009",
             Self::BindingNotAParam { .. } => "graphcal::M010",
@@ -178,7 +179,6 @@ impl DiagnosticKind for ModuleError {
             }
             Self::ImportNameNotFound { .. } => Some("not found in imported file".to_owned()),
             Self::ImportCategoryMismatch { .. } => Some("wrong import category".to_owned()),
-            Self::DuplicateModuleName { .. } => Some("duplicate module import".to_owned()),
             Self::UnknownModule { .. } => Some("unknown module".to_owned()),
             Self::UnknownParamBinding { .. } => Some("not a param in the imported file".to_owned()),
             Self::BindingNotAParam { actual_kind, .. } => {
@@ -212,14 +212,17 @@ impl DiagnosticKind for ModuleError {
             Self::DuplicateIncludeSelection { .. } => Some("select each producer at most once in an include list".to_owned()),
             Self::ImportNameNotFound { .. } => Some("check that the name is declared in the imported file".to_owned()),
             Self::ImportCategoryMismatch { .. }
-            | Self::DuplicateModuleName { .. }
             | Self::ModuleResolution { .. }
             | Self::AmbiguousModulePath { .. } => None,
             Self::UnknownModule { .. } => Some("module-qualified references start with a local name introduced by `import`; call an aliased module through that alias, for example `import pkg.module as m; @m(...)::out`".to_owned()),
             Self::UnknownParamBinding { .. } => Some("param bindings must reference `param` declarations in the imported file".to_owned()),
             Self::BindingNotAParam { .. } => Some("only `param` declarations can be overridden in import bindings".to_owned()),
             Self::DagInputCategoryMismatch { .. } => Some("the binding marker selects exactly one input category; correct the marker or target name".to_owned()),
-            Self::InvalidTypeLevelBindingValue { name, .. } => Some(format!("index bindings accept a compatible index name or structural axis such as `index {name}: Fin(3)`; type and dimension bindings use the explicit `type` and `dim` markers")),
+            Self::InvalidTypeLevelBindingValue { kind, name } => Some(match kind {
+                crate::static_interface::StaticInputKind::Index => format!("index bindings accept a compatible index name or structural axis such as `index {name}: Fin(3)`"),
+                crate::static_interface::StaticInputKind::Type => format!("type bindings accept the name of a declared type, such as `type {name}: Item`; an applied generic type cannot be bound"),
+                crate::static_interface::StaticInputKind::Dimension => format!("dimension bindings accept the name of a declared dimension, such as `dim {name}: Length`; declare a derived dimension under a name (`dim Speed = Length / Time;`) to bind it"),
+            }),
             Self::IndexBindingNotAnIndex { .. } => Some("the right-hand side must name a compatible index visible in the including DAG or use a structural Fin(N) axis".to_owned()),
             Self::IndexKindMismatch { .. } => Some("unconstrained required indexes accept named or Fin(N) axes; concrete named indexes remain named-only, and coordinate indexes remain coordinate-only".to_owned()),
             Self::ImportRuntimeItem { .. } => Some("`import` only allows compile-time items (const, dimension, unit, type, index, dag); use `include` for runtime nodes and params".to_owned()),
@@ -252,22 +255,23 @@ impl DiagnosticKind for ModuleError {
                 span: *first,
                 text: "first selected here".to_owned(),
             }],
-            Self::DuplicateModuleName { first, .. } => vec![SecondaryLabel {
-                span: *first,
-                text: "first imported here".to_owned(),
-            }],
         }
     }
 }
 
 impl ModuleError {
     /// The diagnostic of a module-resolution failure that no more specific
-    /// family variant describes; an ambiguous module path keeps its own code.
+    /// family variant describes. Failures that have their own module
+    /// diagnostic keep its code wherever they surface: an ambiguous module
+    /// path (M034) and a qualifier naming no module alias (M006).
     #[must_use]
     pub fn resolution(error: ModuleResolveError) -> Self {
         match error {
             ModuleResolveError::AmbiguousModulePath { first, second } => {
                 Self::AmbiguousModulePath { first, second }
+            }
+            ModuleResolveError::UnknownModuleAlias { alias, .. } => {
+                Self::UnknownModule { name: alias }
             }
             error => Self::ModuleResolution {
                 error: Box::new(error),

@@ -1,0 +1,2 @@
+// Const integer division errors during checking because the operands are known.
+const node per_rack: Int = div_ceil(10, 0);

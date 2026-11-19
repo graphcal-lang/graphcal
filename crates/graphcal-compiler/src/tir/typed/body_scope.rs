@@ -129,15 +129,6 @@ impl<'t, T: ?Sized> Scoped<'t, T> {
     pub fn map<U: ?Sized>(self, project: impl for<'p> FnOnce(&'p T) -> &'p U) -> Scoped<'t, U> {
         Scoped::new(self.scope, project(self.part))
     }
-
-    /// A sub-part of this part that may be absent, in the same scope.
-    #[must_use]
-    pub fn filter_map<U: ?Sized>(
-        self,
-        project: impl for<'p> FnOnce(&'p T) -> Option<&'p U>,
-    ) -> Option<Scoped<'t, U>> {
-        project(self.part).map(|part| Scoped::new(self.scope, part))
-    }
 }
 
 impl<'t, T> Scoped<'t, [T]> {
@@ -145,18 +136,6 @@ impl<'t, T> Scoped<'t, [T]> {
     pub fn iter(self) -> impl ExactSizeIterator<Item = Scoped<'t, T>> + use<'t, T> {
         let scope = self.scope;
         self.part.iter().map(move |part| Scoped::new(scope, part))
-    }
-
-    /// The number of elements of this part.
-    #[must_use]
-    pub const fn len(self) -> usize {
-        self.part.len()
-    }
-
-    /// Whether this part has no elements.
-    #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.part.is_empty()
     }
 
     /// The element at `index`, in the same scope.

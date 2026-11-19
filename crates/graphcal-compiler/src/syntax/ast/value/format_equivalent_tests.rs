@@ -174,13 +174,36 @@ fn missing_declaration_is_not_equivalent() {
     assert!(!parse(a).format_equivalent(&parse(b)));
 }
 
-/// The parser-attached `///` doc block is skipped: the formatter keeps
-/// comments through source metadata, not through the AST.
+/// A `///` block attached to a declaration is part of what the program shows
+/// (hover, reports, view), so adding one, moving it onto another declaration,
+/// or merging a detached block into it is not a formatting change.
 #[test]
-fn doc_comment_differences_are_equivalent() {
-    let bare = "node x: Dimensionless = 1.0;\n";
-    let documented = "/// The x.\nnode x: Dimensionless = 1.0;\n";
-    assert!(parse(bare).format_equivalent(&parse(documented)));
+fn doc_attachment_differences_are_not_equivalent() {
+    let pairs = [
+        (
+            "node x: Dimensionless = 1.0;\n",
+            "/// The x.\nnode x: Dimensionless = 1.0;\n",
+        ),
+        (
+            "/// note\n\nnode x: Dimensionless = 1.0;\n",
+            "/// note\nnode x: Dimensionless = 1.0;\n",
+        ),
+        (
+            "/// note\n\n/// doc\nnode x: Dimensionless = 1.0;\n",
+            "/// note\n/// doc\nnode x: Dimensionless = 1.0;\n",
+        ),
+    ];
+    for (a, b) in pairs {
+        assert!(!parse(a).format_equivalent(&parse(b)), "{a:?} vs {b:?}");
+    }
+}
+
+/// Only the doc text matters, not its span or the layout around it.
+#[test]
+fn doc_layout_differences_are_equivalent() {
+    let dense = "/// doc\nnode x: Dimensionless = 1.0;\n";
+    let spaced = "\n\n    /// doc\n    node x: Dimensionless = 1.0;\n";
+    assert!(parse(dense).format_equivalent(&parse(spaced)));
 }
 
 /// Derived impls compare every non-span field; each pair differs in exactly

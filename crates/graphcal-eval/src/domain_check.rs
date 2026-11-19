@@ -27,8 +27,9 @@ pub fn check_domain_constraint(
 ) -> Result<(), Failure<DomainViolation>> {
     match (value, constraint.as_ref()) {
         (RuntimeValue::Indexed(entries), _) => entries.iter().try_for_each(|(entry, value)| {
-            check_domain_constraint(value, constraint)
-                .map_err(|failure| failure.map_error(|violation| violation.at_entry(entry.clone())))
+            check_domain_constraint(value, constraint).map_err(|failure| {
+                failure.map_error(|violation| violation.at_entry(entry.into_owned()))
+            })
         }),
         (RuntimeValue::Quantity(value), ResolvedDomainConstraintRef::Quantity(bounds)) => {
             check_bounds(value, bounds).map_err(Failure::Error)
@@ -124,7 +125,7 @@ mod tests {
             panic!("11 is above the maximum");
         };
         assert_eq!(violation.to_string(), "above maximum (10)");
-        let axis = IndexAxis::finite(FiniteIndex::try_from_u64(2).unwrap()).unwrap();
+        let axis = IndexAxis::finite(FiniteIndex::try_from_u64(2).unwrap());
         let indexed = RuntimeValue::Indexed(IndexedValue::for_test(
             axis,
             vec![RuntimeValue::Int(1), RuntimeValue::Int(-1)],

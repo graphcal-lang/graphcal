@@ -1,0 +1,2 @@
+// Dimensionless domain bounds must be Dimensionless: an Int bound is rejected.
+param efficiency: Dimensionless(min: 0, max: 1.0) = 0.9;

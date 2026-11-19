@@ -3,11 +3,12 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::Serialize;
 use thiserror::Error;
 
+use crate::content_id::ContentId;
 use crate::domain::{Bounds, Domain};
 use crate::fingerprint::InterfaceFingerprint;
-use crate::finite::FiniteF64;
 use crate::interface::ModelInterface;
 use crate::label::{PortName, UnitSpelling};
 use crate::unit_scale::SiScale;
@@ -40,11 +41,17 @@ impl UnitChoice {
 /// Order is irrelevant: a configured session lists both in the interface's
 /// declaration order. A quantity port without a unit choice travels in its
 /// canonical SI unit.
+///
+/// A parameter the session does not vary keeps its default, unless the
+/// session fixes it: the model server then binds it to a value it was given
+/// when it started, for every row. Fixed parameters do not travel in
+/// requests, so they are not part of the [`SessionSchema`].
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SessionSpec {
     inputs: Vec<PortName>,
     outputs: Vec<PortName>,
     units: Vec<UnitChoice>,
+    fixed: Vec<PortName>,
 }
 
 impl SessionSpec {
@@ -56,7 +63,16 @@ impl SessionSpec {
             inputs,
             outputs,
             units: Vec::new(),
+            fixed: Vec::new(),
         }
+    }
+
+    /// Fix the unvaried parameter `port` to a value the model server is
+    /// given outside requests, instead of its default.
+    #[must_use]
+    pub fn with_fixed(mut self, port: PortName) -> Self {
+        self.fixed.push(port);
+        self
     }
 
     /// Carry the values of the selected quantity port `port` in `unit`.
@@ -82,6 +98,12 @@ impl SessionSpec {
     #[must_use]
     pub fn units(&self) -> &[UnitChoice] {
         &self.units
+    }
+
+    /// The parameters fixed to values given to the model server.
+    #[must_use]
+    pub fn fixed(&self) -> &[PortName] {
+        &self.fixed
     }
 }
 
@@ -136,8 +158,14 @@ pub enum SessionError {
     UnsupportedInput { name: PortName, reason: String },
     #[error("output `{name}` cannot be read: {reason}")]
     UnsupportedOutput { name: PortName, reason: String },
-    #[error("parameter `{name}` has no default, so the session must vary it")]
+    #[error("parameter `{name}` has no default, so the session must vary or fix it")]
     MissingDefault { name: PortName },
+    #[error("parameter `{name}` is fixed more than once")]
+    DuplicateFixed { name: PortName },
+    #[error("the model has no parameter named `{name}` to fix")]
+    UnknownFixed { name: PortName },
+    #[error("parameter `{name}` is both varied and fixed")]
+    VariedAndFixed { name: PortName },
     #[error("a unit is chosen more than once for port `{name}`")]
     DuplicateUnit { name: PortName },
     #[error("a unit is chosen for port `{name}`, which the session does not select")]
@@ -155,26 +183,38 @@ pub enum SessionError {
 }
 
 /// The position of a varied parameter within a [`SessionSchema`].
+///
+/// A slot carries the identity of its schema, so it selects nothing in a
+/// batch of another schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct InputSlot(usize);
+pub struct InputSlot {
+    schema: ContentId,
+    index: usize,
+}
 
 impl InputSlot {
     /// The zero-based position among the session's inputs.
     #[must_use]
     pub const fn get(self) -> usize {
-        self.0
+        self.index
     }
 }
 
 /// The position of a read output within a [`SessionSchema`].
+///
+/// A slot carries the identity of its schema, so it selects nothing in a
+/// batch of another schema.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct OutputSlot(usize);
+pub struct OutputSlot {
+    schema: ContentId,
+    index: usize,
+}
 
 impl OutputSlot {
     /// The zero-based position among the session's outputs.
     #[must_use]
     pub const fn get(self) -> usize {
-        self.0
+        self.index
     }
 }
 
@@ -284,9 +324,24 @@ impl SessionOutput {
 /// recorded interface fingerprint without the interface to check it against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionSchema {
+    /// Derived from the other fields, the identity of the slots.
+    id: ContentId,
     interface_fingerprint: InterfaceFingerprint,
     inputs: Vec<SessionInput>,
     outputs: Vec<SessionOutput>,
+}
+
+/// The content of a [`SessionSchema`] its identity is derived from.
+#[derive(Serialize)]
+struct SchemaContent<'a> {
+    interface_fingerprint: InterfaceFingerprint,
+    inputs: Vec<(
+        &'a PortName,
+        &'a WireType,
+        Option<&'a Domain>,
+        Option<SiScale>,
+    )>,
+    outputs: Vec<(&'a PortName, &'a WireType, Option<SiScale>)>,
 }
 
 impl SessionSchema {
@@ -320,11 +375,38 @@ impl SessionSchema {
                 name: output.name.clone(),
             });
         }
-        Ok(Self {
+        Ok(Self::from_parts(interface_fingerprint, inputs, outputs))
+    }
+
+    fn from_parts(
+        interface_fingerprint: InterfaceFingerprint,
+        inputs: Vec<SessionInput>,
+        outputs: Vec<SessionOutput>,
+    ) -> Self {
+        let id = ContentId::of(&SchemaContent {
+            interface_fingerprint,
+            inputs: inputs
+                .iter()
+                .map(|input| {
+                    (
+                        &input.name,
+                        &input.wire,
+                        input.domain.as_ref(),
+                        input.si_scale,
+                    )
+                })
+                .collect(),
+            outputs: outputs
+                .iter()
+                .map(|output| (&output.name, &output.wire, output.si_scale))
+                .collect(),
+        });
+        Self {
+            id,
             interface_fingerprint,
             inputs,
             outputs,
-        })
+        }
     }
 
     /// The fingerprint of the interface the session was configured over.
@@ -345,13 +427,22 @@ impl SessionSchema {
         &self.outputs
     }
 
+    /// The slot of every varied parameter, in session order.
+    pub fn input_slots(&self) -> impl ExactSizeIterator<Item = InputSlot> + use<> {
+        let schema = self.id;
+        (0..self.inputs.len()).map(move |index| InputSlot { schema, index })
+    }
+
     /// The slot of the varied parameter named `name`.
     #[must_use]
     pub fn input_slot(&self, name: &str) -> Option<InputSlot> {
         self.inputs
             .iter()
             .position(|input| input.name.as_str() == name)
-            .map(InputSlot)
+            .map(|index| InputSlot {
+                schema: self.id,
+                index,
+            })
     }
 
     /// The slot of the read output named `name`.
@@ -360,22 +451,30 @@ impl SessionSchema {
         self.outputs
             .iter()
             .position(|output| output.name.as_str() == name)
-            .map(OutputSlot)
+            .map(|index| OutputSlot {
+                schema: self.id,
+                index,
+            })
     }
 
-    /// The varied parameter at `slot`.
+    /// The varied parameter at `slot`; `None` for a slot of another schema.
     #[must_use]
     pub fn input(&self, slot: InputSlot) -> Option<&SessionInput> {
-        self.inputs.get(slot.0)
+        (slot.schema == self.id)
+            .then(|| self.inputs.get(slot.index))
+            .flatten()
     }
 
-    /// The read output at `slot`.
+    /// The read output at `slot`; `None` for a slot of another schema.
     #[must_use]
     pub fn output(&self, slot: OutputSlot) -> Option<&SessionOutput> {
-        self.outputs.get(slot.0)
+        (slot.schema == self.id)
+            .then(|| self.outputs.get(slot.index))
+            .flatten()
     }
 
-    /// The selection this schema was configured from.
+    /// The selection this schema was configured from, without the
+    /// parameters the session fixed, which the schema does not record.
     #[must_use]
     pub fn spec(&self) -> SessionSpec {
         let chosen = |name: &PortName, wire: &WireType, scale: Option<SiScale>| {
@@ -402,6 +501,7 @@ impl SessionSchema {
                         .filter_map(|output| chosen(&output.name, &output.wire, output.si_scale)),
                 )
                 .collect(),
+            fixed: Vec::new(),
         }
     }
 }
@@ -417,16 +517,16 @@ fn chosen_wire(
     let Some(unit) = choice else {
         return Ok((wire.clone(), None));
     };
-    let Some(chosen) = wire.with_unit(unit) else {
-        return Err(SessionError::UnitForNonQuantity { name: name.clone() });
-    };
-    let unresolved = |reason: String| SessionError::UnresolvedUnit {
-        name: name.clone(),
-        unit: unit.clone(),
-        reason,
-    };
-    let scale = resolver.si_scale(name, unit).map_err(unresolved)?;
-    let chosen = chosen.map_err(|error| unresolved(error.to_string()))?;
+    let chosen = wire
+        .with_unit(unit)
+        .map_err(|_| SessionError::UnitForNonQuantity { name: name.clone() })?;
+    let scale = resolver
+        .si_scale(name, unit)
+        .map_err(|reason| SessionError::UnresolvedUnit {
+            name: name.clone(),
+            unit: unit.clone(),
+            reason,
+        })?;
     Ok((chosen, Some(scale)))
 }
 
@@ -453,18 +553,56 @@ fn unit_choices<'s>(
     Ok(choices)
 }
 
-/// `domain` (in the canonical unit) in the unit of `scale`.
-fn converted_domain(domain: Domain, scale: Option<SiScale>) -> Option<Domain> {
+/// The domain of parameter `name`, `domain` in the canonical unit, in the
+/// unit of `scale`, rounded inward so that every value within the converted
+/// bounds converts back into the SI bounds the model checks.
+fn converted_domain(
+    name: &PortName,
+    domain: Domain,
+    scale: Option<SiScale>,
+) -> Result<Domain, SessionError> {
     let (Domain::Quantity(bounds), Some(scale)) = (domain, scale) else {
-        return Some(domain);
+        return Ok(domain);
     };
-    let convert =
-        |bound: Option<&FiniteF64>| bound.map(|bound| scale.from_si(*bound)).transpose().ok();
-    let (min, max) = (convert(bounds.min())?, convert(bounds.max())?);
-    Bounds::new(min, max).ok().map(Domain::Quantity)
+    let unrepresentable = || SessionError::UnrepresentableDomain { name: name.clone() };
+    let min = bounds
+        .min()
+        .map(|min| scale.lower_bound_from_si(*min))
+        .transpose()
+        .map_err(|_| unrepresentable())?;
+    let max = bounds
+        .max()
+        .map(|max| scale.upper_bound_from_si(*max))
+        .transpose()
+        .map_err(|_| unrepresentable())?;
+    Bounds::new(min, max)
+        .map(Domain::Quantity)
+        .map_err(|_| unrepresentable())
 }
 
 impl ModelInterface {
+    /// The parameters `spec` fixes, rejecting repeated, unknown, and varied
+    /// ones.
+    fn fixed_parameters<'s>(
+        &self,
+        spec: &'s SessionSpec,
+        varied: &HashSet<&PortName>,
+    ) -> Result<HashSet<&'s PortName>, SessionError> {
+        let mut fixed = HashSet::with_capacity(spec.fixed.len());
+        for name in &spec.fixed {
+            if !fixed.insert(name) {
+                return Err(SessionError::DuplicateFixed { name: name.clone() });
+            }
+            if self.parameter(name.as_str()).is_none() {
+                return Err(SessionError::UnknownFixed { name: name.clone() });
+            }
+            if varied.contains(name) {
+                return Err(SessionError::VariedAndFixed { name: name.clone() });
+            }
+        }
+        Ok(fixed)
+    }
+
     /// Configure a session that varies and reads the ports `spec` selects,
     /// resolving its unit choices with `units`.
     ///
@@ -472,7 +610,8 @@ impl ModelInterface {
     ///
     /// Returns [`SessionError`] when the selection is empty, repeats or
     /// names an unknown port, selects a port the protocol cannot carry, or
-    /// leaves a parameter without a default unvaried; or when a unit choice
+    /// leaves a parameter without a default neither varied nor fixed; when a
+    /// fixed parameter repeats, is unknown, or is also varied; or when a unit choice
     /// repeats, names an unselected or non-quantity port, does not resolve,
     /// or cannot express the parameter's domain.
     pub fn configure(
@@ -505,11 +644,12 @@ impl ModelInterface {
             }
         }
         let choices = unit_choices(spec, &varied, &read)?;
+        let fixed = self.fixed_parameters(spec, &varied)?;
 
         let mut inputs = Vec::with_capacity(spec.inputs.len());
         for parameter in self.parameters() {
             if !varied.contains(parameter.name()) {
-                if !parameter.has_default() {
+                if !parameter.has_default() && !fixed.contains(parameter.name()) {
                     return Err(SessionError::MissingDefault {
                         name: parameter.name().clone(),
                     });
@@ -522,13 +662,7 @@ impl ModelInterface {
                     let (wire, si_scale) = chosen_wire(parameter.name(), wire, choice, &mut units)?;
                     let domain = parameter
                         .domain()
-                        .map(|domain| {
-                            converted_domain(*domain, si_scale).ok_or_else(|| {
-                                SessionError::UnrepresentableDomain {
-                                    name: parameter.name().clone(),
-                                }
-                            })
-                        })
+                        .map(|domain| converted_domain(parameter.name(), *domain, si_scale))
                         .transpose()?;
                     inputs.push(SessionInput {
                         name: parameter.name().clone(),
@@ -537,10 +671,10 @@ impl ModelInterface {
                         si_scale,
                     });
                 }
-                PortWire::Unsupported { reason } => {
+                PortWire::Unsupported { message, .. } => {
                     return Err(SessionError::UnsupportedInput {
                         name: parameter.name().clone(),
-                        reason: reason.clone(),
+                        reason: message.clone(),
                     });
                 }
             }
@@ -560,19 +694,19 @@ impl ModelInterface {
                         si_scale,
                     });
                 }
-                PortWire::Unsupported { reason } => {
+                PortWire::Unsupported { message, .. } => {
                     return Err(SessionError::UnsupportedOutput {
                         name: output.name().clone(),
-                        reason: reason.clone(),
+                        reason: message.clone(),
                     });
                 }
             }
         }
-        Ok(SessionSchema {
-            interface_fingerprint: InterfaceFingerprint::of(self),
+        Ok(SessionSchema::from_parts(
+            InterfaceFingerprint::of(self),
             inputs,
             outputs,
-        })
+        ))
     }
 }
 
@@ -618,6 +752,45 @@ pub mod tests {
             session.interface_fingerprint(),
             InterfaceFingerprint::of(&sample_interface())
         );
+    }
+
+    #[test]
+    fn a_fixed_parameter_needs_no_default_and_is_not_in_the_schema() {
+        let interface = sample_interface();
+        let fixed = spec(&["load"], &["failure"]).with_fixed(name("mode"));
+        let session = interface.configure(&fixed, CanonicalUnitsOnly).unwrap();
+        assert_eq!(
+            session
+                .inputs()
+                .iter()
+                .map(|input| input.name().as_str())
+                .collect::<Vec<_>>(),
+            ["load"]
+        );
+        assert_eq!(session.spec().fixed(), []);
+
+        let cases = [
+            (
+                spec(&["load"], &["failure"])
+                    .with_fixed(name("mode"))
+                    .with_fixed(name("mode")),
+                SessionError::DuplicateFixed { name: name("mode") },
+            ),
+            (
+                spec(&["load", "mode"], &["failure"]).with_fixed(name("nope")),
+                SessionError::UnknownFixed { name: name("nope") },
+            ),
+            (
+                spec(&["load", "mode"], &["failure"]).with_fixed(name("load")),
+                SessionError::VariedAndFixed { name: name("load") },
+            ),
+        ];
+        for (spec, expected) in cases {
+            assert_eq!(
+                interface.configure(&spec, CanonicalUnitsOnly),
+                Err(expected)
+            );
+        }
     }
 
     #[test]
@@ -700,6 +873,44 @@ pub mod tests {
             sample_interface().configure(&session.spec(), kilometres),
             Ok(session)
         );
+    }
+
+    #[test]
+    fn published_domains_accept_their_own_bounds() {
+        let finite = |value| crate::finite::FiniteF64::new(value).unwrap();
+        let interface = ModelInterface::new(
+            vec![
+                crate::interface::ParameterDescription::new(
+                    name("x"),
+                    "Length",
+                    PortWire::Supported(crate::interface::tests::length()),
+                    Some(Domain::Quantity(
+                        Bounds::new(Some(finite(0.07)), Some(finite(0.35))).unwrap(),
+                    )),
+                    false,
+                )
+                .unwrap(),
+            ],
+            vec![crate::interface::OutputDescription::new(
+                name("y"),
+                "Length",
+                PortWire::Supported(crate::interface::tests::length()),
+            )],
+        )
+        .unwrap();
+        let centi = SiScale::new(0.01).unwrap();
+        let session = interface
+            .configure(
+                &spec(&["x"], &["y"]).with_unit(name("x"), unit("cm")),
+                |_: &PortName, _: &UnitSpelling| Ok(centi),
+            )
+            .unwrap();
+        let Some(Domain::Quantity(bounds)) = session.inputs()[0].domain() else {
+            panic!("x has a quantity domain");
+        };
+        let (min, max) = (*bounds.min().unwrap(), *bounds.max().unwrap());
+        assert!(centi.to_si(max).unwrap().get() <= 0.35);
+        assert!(centi.to_si(min).unwrap().get() >= 0.07);
     }
 
     #[test]

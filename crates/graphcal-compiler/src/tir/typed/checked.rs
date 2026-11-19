@@ -157,9 +157,10 @@ impl CheckedDagRegistry {
         self.dags.get(dag_id)
     }
 
-    /// Iterate over the identities and bodies this file owns.
-    pub(crate) fn local_iter(&self) -> impl Iterator<Item = (&DagId, &CheckedDag)> {
-        self.dags.local_iter()
+    /// Iterate over the identities and bodies this file owns (see
+    /// [`DagSlots::root_owned_locals`]).
+    pub(crate) fn root_owned_locals(&self) -> impl Iterator<Item = (&DagId, &CheckedDag)> {
+        self.dags.root_owned_locals()
     }
 
     /// Iterate over canonical identities and DAG bodies.
@@ -187,14 +188,6 @@ impl CheckedDagRegistry {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         false
-    }
-}
-
-impl std::ops::Index<&DagId> for CheckedDagRegistry {
-    type Output = CheckedDag;
-
-    fn index(&self, index: &DagId) -> &Self::Output {
-        &self.dags[index]
     }
 }
 
@@ -281,10 +274,7 @@ impl CheckedTir {
     /// nested descendants. Inline `dag` syntax and file modules use the same
     /// canonical representation and traversal.
     pub fn local_dags(&self) -> impl Iterator<Item = (&DagId, &CheckedDag)> {
-        let root = self.root_dag_id();
-        self.dags
-            .local_iter()
-            .filter(move |(dag_id, _)| *dag_id == root || dag_id.is_descendant_of(root))
+        self.dags.root_owned_locals()
     }
 
     /// Find the checked DAG that owns a declaration record.
@@ -390,12 +380,6 @@ impl CheckedTir {
             .map(CheckedDag::dag_id)
     }
 
-    /// Whether `dag_id` is one of [`Self::default_runnable_dags`].
-    #[must_use]
-    pub fn runs_on_defaults(&self, dag_id: &DagId) -> bool {
-        self.default_runnable_dags().any(|id| id == dag_id)
-    }
-
     /// Whether `dag` declares a required param or a required index, so that
     /// it runs only with bindings for them.
     fn requires_inputs(&self, dag: &CheckedDag) -> bool {
@@ -432,13 +416,21 @@ impl TirRead for CheckedTir {
 impl crate::semantic::index_axis::IndexAxis {
     /// Resolve `index` to its concrete definition in `tir`.
     ///
-    /// Returns `None` when the index is unknown, still required (not bound
-    /// to a concrete definition), or a coordinate index with a non-finite
-    /// coordinate.
-    #[must_use]
-    pub fn resolve(tir: &CheckedTir, index: &IndexTypeRef) -> Option<Self> {
-        let definition = tir.index_def(index)?;
-        let kind = definition.concrete()?.clone();
-        Self::from_concrete(index.clone(), kind)
+    /// # Errors
+    ///
+    /// Returns a [`ResolveAxisError`](crate::semantic::index_axis::ResolveAxisError)
+    /// when the index is unknown, still required (not bound to a concrete
+    /// definition), or a coordinate index with a non-finite coordinate.
+    pub fn resolve(
+        tir: &CheckedTir,
+        index: &IndexTypeRef,
+    ) -> Result<Self, crate::semantic::index_axis::ResolveAxisError> {
+        use crate::semantic::index_axis::ResolveAxisError;
+        let definition = tir.index_def(index).ok_or(ResolveAxisError::Unknown)?;
+        let kind = definition
+            .concrete()
+            .ok_or(ResolveAxisError::Required)?
+            .clone();
+        Self::from_concrete(index.clone(), kind).map_err(ResolveAxisError::Axis)
     }
 }

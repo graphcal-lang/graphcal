@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use graphcal_compiler::dag_id::{DagId, DagPackageId};
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
+use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::source_registry::SourceRegistry;
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::plugin::PluginPath;
@@ -102,6 +103,15 @@ pub struct LoadedProject {
     pub(super) project_root: Option<PathBuf>,
 }
 
+/// Why loaded files do not form a project.
+#[derive(Debug)]
+pub(super) enum LoadedFilesError {
+    /// A module path names an inline DAG its file does not declare.
+    Unplaced(UnplacedTarget),
+    /// Two loaded modules have one identity; the loader rules this out.
+    DuplicateModule { dag_id: DagId, source: SourceId },
+}
+
 /// Loaded source files in topological load order (dependencies before
 /// dependents, ending with the root file), indexed by semantic identity.
 #[derive(Debug)]
@@ -118,34 +128,37 @@ impl LoadedFiles {
     ///
     /// # Errors
     ///
-    /// Returns the first path, in dependency order and then source order,
+    /// Returns [`LoadedFilesError::DuplicateModule`] when two loaded modules
+    /// share one identity (never replacing one with the other), and
+    /// otherwise the first path, in dependency order and then source order,
     /// that names an inline DAG its file does not declare.
     pub(super) fn new(
         ordered: DependencyOrdered<LoadedFile<ModuleTarget>>,
-    ) -> Result<Self, UnplacedTarget> {
-        let modules = ordered
-            .iter()
-            .enumerate()
-            .flat_map(|(file, loaded)| {
-                std::iter::once((loaded.dag_id.clone(), LoadedModuleId { file, inline: None }))
-                    .chain(
-                        loaded
-                            .inline_dags
-                            .iter()
-                            .enumerate()
-                            .map(move |(inline, dag)| {
-                                (
-                                    dag.dag_id.clone(),
-                                    LoadedModuleId {
-                                        file,
-                                        inline: Some(inline),
-                                    },
-                                )
-                            }),
-                    )
-            })
-            .collect::<HashMap<_, _>>();
-        let ordered = ordered.try_map(|file| file.place(&|target| modules.get(target).copied()))?;
+    ) -> Result<Self, LoadedFilesError> {
+        let mut modules = HashMap::new();
+        for (file, loaded) in ordered.iter().enumerate() {
+            let identities = std::iter::once((&loaded.dag_id, None)).chain(
+                loaded
+                    .inline_dags
+                    .iter()
+                    .enumerate()
+                    .map(|(inline, dag)| (&dag.dag_id, Some(inline))),
+            );
+            for (dag_id, inline) in identities {
+                if modules
+                    .insert(dag_id.clone(), LoadedModuleId { file, inline })
+                    .is_some()
+                {
+                    return Err(LoadedFilesError::DuplicateModule {
+                        dag_id: dag_id.clone(),
+                        source: loaded.source_id,
+                    });
+                }
+            }
+        }
+        let ordered = ordered
+            .try_map(|file| file.place(&|target| modules.get(target).copied()))
+            .map_err(LoadedFilesError::Unplaced)?;
         Ok(Self { ordered, modules })
     }
 
@@ -349,15 +362,24 @@ impl LoadedProject {
         plugins: HashMap<PluginIdentity, PluginFileEntry>,
         plugin_call_policy: PluginCallPolicy,
     ) -> Result<Self, CompileError> {
-        let files = LoadedFiles::new(files).map_err(|unplaced| {
+        let files = LoadedFiles::new(files).map_err(|error| {
             CompileError::semantic(
-                SemanticError::located(
-                    unplaced.source,
-                    unplaced.span,
-                    GraphError::InlineDagTargetNotFound {
-                        target: unplaced.target,
-                    },
-                ),
+                match error {
+                    LoadedFilesError::Unplaced(unplaced) => SemanticError::located(
+                        unplaced.source,
+                        unplaced.span,
+                        GraphError::InlineDagTargetNotFound {
+                            target: unplaced.target,
+                        },
+                    ),
+                    LoadedFilesError::DuplicateModule { dag_id, source } => {
+                        SemanticError::internal_error(
+                            format!("two loaded modules share the identity `{dag_id}`"),
+                            source,
+                            graphcal_compiler::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+                        )
+                    }
+                },
                 &sources,
             )
         })?;

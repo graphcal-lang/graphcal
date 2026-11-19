@@ -1,0 +1,13 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, &format!(\"{name}.gcl\"))"
+---
+cannot access field of a value of union type `M`; use `match` to access its fields
+    Diagnostic severity: error
+Begin snippet for field_of_union.gcl starting at line 5, column 1
+
+snippet line 5: node m: M = B;
+snippet line 6: node y: Length = @m.x;
+    label at line 6, columns 18 to 19: not a struct
+diagnostic help: field access `.field` is only valid on struct values
+diagnostic code: graphcal::S007

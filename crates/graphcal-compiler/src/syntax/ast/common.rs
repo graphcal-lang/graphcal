@@ -157,24 +157,6 @@ impl ModulePath {
         self.segments.as_slice()
     }
 
-    /// Number of path segments. Always at least 1.
-    #[must_use]
-    pub const fn len(&self) -> usize {
-        self.segments.len()
-    }
-
-    /// Returns `false`; provided for API compatibility with sequence-like code.
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        false
-    }
-
-    /// Returns whether this is a one-segment module path.
-    #[must_use]
-    pub const fn is_bare(&self) -> bool {
-        self.segments.len() == 1
-    }
-
     /// Human-readable path string for diagnostics: `"nasa.rocket.dynamics"`.
     #[must_use]
     pub fn display_path(&self) -> String {

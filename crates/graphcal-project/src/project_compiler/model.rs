@@ -9,16 +9,41 @@ use graphcal_compiler::desugar::desugared_ast::Expr;
 use graphcal_compiler::ir::resolve::collected::ImportedValueNames;
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::source_id::SourceId;
+use graphcal_compiler::syntax::ast::{ImportItemNamespace, Visibility};
 use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::dimension::UnitName;
 use graphcal_compiler::syntax::module_name::{ModuleAliasName, ScopeSegment, ScopedName};
+use graphcal_compiler::syntax::names::NameAtom;
 use graphcal_compiler::syntax::span::Span;
+use graphcal_compiler::syntax::type_name::StructTypeName;
 
-/// A selective import/include alias with explicit source and local roles.
+/// A graph value a selective include selects, by its name in the template
+/// and in the importer.
+///
+/// Only a value item is one: a `type` item or a constructor of the same
+/// spelling never aliases a value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ImportAlias {
     pub(super) original: DeclName,
     pub(super) local: DeclName,
+    /// `pub` when the importer re-exports the value.
+    pub(super) visibility: Visibility,
+}
+
+/// A type a selective include selects with a `type` item, by its name in the
+/// template and in the importer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SelectedTypeAlias {
+    pub(super) original: StructTypeName,
+    pub(super) local: StructTypeName,
+}
+
+/// One template item a selective include re-exports with `{ pub ... }`, in
+/// the namespace it is selected from.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) struct ReexportedItem {
+    pub(super) namespace: ImportItemNamespace,
+    pub(super) name: NameAtom,
 }
 
 /// One fully resolved physical file before static checking.
@@ -120,31 +145,33 @@ pub(super) struct IncludeInstanceRequest<'a> {
     pub(super) debug_scope: ModuleAliasName,
     pub(super) bindings: HashMap<DeclName, Expr>,
     pub(super) static_bindings: IncludeStaticBindings,
+    /// The graph values a selective include selects; `None` for a
+    /// module-form include, which exposes its outputs under its alias.
     pub(super) selective_names: Option<Vec<ImportAlias>>,
     pub(super) unit_projection_aliases: Vec<UnitProjectionAlias>,
     pub(super) runtime_unit_names: HashSet<UnitName>,
-    pub(super) assertion_aliases: HashMap<DeclName, DeclName>,
+    /// Selected assertions (template name to local alias), in the order the
+    /// include's selection list names them, which is the order they report in.
+    pub(super) assertion_aliases: indexmap::IndexMap<DeclName, DeclName>,
     pub(super) surface_outputs: Vec<ScopedName>,
-    pub(super) requested_plots: HashMap<DeclName, graphcal_compiler::ir::model::RequestedPlot>,
+    /// Selected plots by template name, in the order the include's selection
+    /// list names them, which is the order they present in.
+    pub(super) requested_plots:
+        indexmap::IndexMap<DeclName, graphcal_compiler::ir::model::RequestedPlot>,
     pub(super) include_span: Span,
     pub(super) import_item_attributes:
         HashMap<DeclName, Vec<graphcal_compiler::desugar::desugared_ast::Attribute>>,
-    /// Namespace-agnostic surface atoms selected with `{ pub name }`.
-    pub(super) pub_reexport_items: HashSet<graphcal_compiler::syntax::names::NameAtom>,
+    /// Template items selected with `{ pub name }`.
+    pub(super) pub_reexport_items: HashSet<ReexportedItem>,
+    /// Template types selected with `type` items.
+    pub(super) selected_types: Vec<SelectedTypeAlias>,
 }
 
 /// Canonical routing metadata for one module alias.
 #[derive(Debug, Clone)]
 pub(super) struct ProjectModuleBinding {
     pub(super) target: graphcal_compiler::dag_id::DagId,
-    pub(super) span: Span,
     pub(super) role: graphcal_compiler::resolve::scope::ModuleAliasRole,
-}
-
-impl ProjectModuleBinding {
-    pub(super) const fn span(&self) -> Span {
-        self.span
-    }
 }
 
 /// The canonical constant each imported lexical name binds, with the span
@@ -169,4 +196,31 @@ pub(super) struct ImportContext<'a> {
     pub(super) imported_source_order: Vec<(ScopedName, DeclCategory)>,
     pub(super) module_map: HashMap<ModuleAliasName, ProjectModuleBinding>,
     pub(super) include_instances: Vec<IncludeInstanceRequest<'a>>,
+}
+
+impl ImportContext<'_> {
+    /// The state of a body before any of its imports is processed.
+    pub(super) fn empty() -> Self {
+        Self {
+            imported_names: ImportedValueNames::default(),
+            imported_bindings: HashMap::new(),
+            imported_source_order: Vec::new(),
+            module_map: HashMap::new(),
+            include_instances: Vec::new(),
+        }
+    }
+
+    /// Record the module alias one import or module-form include introduces.
+    ///
+    /// The resolver's scope construction (`declare_aliases`) has already
+    /// rejected a repeated alias in this body with N001 before any import is
+    /// processed, so a second binding of one alias is an internal invariant
+    /// violation, not a user error.
+    pub(super) fn bind_module(&mut self, alias: ModuleAliasName, binding: ProjectModuleBinding) {
+        let previous = self.module_map.insert(alias, binding);
+        assert!(
+            previous.is_none(),
+            "module alias bound twice in one body; the resolver must reject duplicate aliases first"
+        );
+    }
 }

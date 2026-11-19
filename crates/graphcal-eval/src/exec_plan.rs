@@ -9,7 +9,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::tir::schedule::ScheduleUnit;
-use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, NodeBody};
+use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, FormulaBody};
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
@@ -130,10 +130,10 @@ fn prepare_declarations<'p>(
         for unit in tir.declaration_bodies(position) {
             let key = unit.identity();
             let body = match unit.kind() {
-                BodyKind::Node(NodeBody::Unfinished(_)) => {
+                BodyKind::Node(FormulaBody::Unfinished(_)) => {
                     PlannedBody::Computed(ComputedBody::Todo)
                 }
-                BodyKind::Node(NodeBody::Formula(root))
+                BodyKind::Node(FormulaBody::Formula(root))
                 | BodyKind::Param {
                     default: Some(root),
                 } => PlannedBody::Computed(ComputedBody::Expression {
@@ -533,6 +533,63 @@ mod tests {
         assert!(matches!(
             index(root, vec![a.clone(), a]),
             Err(crate::execution_plan::StepIndexError::Duplicate(_))
+        ));
+    }
+
+    /// EV-15 (#2265): a recurrence group whose members step along different
+    /// axes is rejected even when the axes have the same length (R4), so a
+    /// disagreement between the checker and the evaluator fails loudly.
+    #[test]
+    fn recurrence_groups_reject_members_on_another_axis_of_the_same_length() {
+        let (tir, src, sources) = tir_from_source(
+            "index S = range(0.0 s, 2.0 s, step: 1.0 s);\n\
+             index T = range(10.0 s, 12.0 s, step: 1.0 s);\n\
+             node action_s: Dimensionless[S] = for s: S { -0.5 * @state_s[s] };\n\
+             node state_s: Dimensionless[S] = unfold(S, 1.0, |x, prev, s| x + @action_s[prev]);\n\
+             node action_t: Dimensionless[T] = for t: T { -0.5 * @state_t[t] };\n\
+             node state_t: Dimensionless[T] = unfold(T, 1.0, |x, prev, t| x + @action_t[prev]);",
+        );
+        let prepared = compile(&tir, src, &sources).unwrap();
+        let plan = prepared.plan();
+        let root = plan.root();
+        let group_s = tir
+            .root()
+            .runtime_schedule()
+            .units()
+            .iter()
+            .find_map(|unit| match unit {
+                graphcal_compiler::tir::schedule::ScheduleUnit::Recurrence(group)
+                    if group
+                        .members()
+                        .iter()
+                        .any(|member| member.declaration().as_str() == "state_s") =>
+                {
+                    Some(group)
+                }
+                _ => None,
+            })
+            .unwrap();
+        let regroup = |members: &[&str]| {
+            CallablePlan::new(
+                root.scope(),
+                root.execution_dags().to_vec(),
+                root.semantic_instances().to_vec(),
+                root.closure_instances().to_vec(),
+                Vec::new(),
+                vec![crate::execution_plan::PlannedUnit::Recurrence {
+                    plan: group_s,
+                    members: members
+                        .iter()
+                        .map(|name| plan.declaration(&resolved_key(name)).unwrap().clone())
+                        .collect(),
+                }],
+            )
+        };
+        assert!(regroup(&["action_s", "state_s"]).is_ok());
+        assert!(matches!(
+            regroup(&["action_s", "state_t"]),
+            Err(crate::execution_plan::StepIndexError::AxisMismatch(member))
+                if member.as_str() == "state_t"
         ));
     }
 

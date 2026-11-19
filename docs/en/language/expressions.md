@@ -34,10 +34,31 @@ left.
 | `a + b` | Addition | Addition | Dimensions must match |
 | `a - b` | Subtraction | Subtraction | Dimensions must match |
 | `a * b` | Multiplication | Multiplication | Dimensions multiply |
-| `a / b` | Division | Integer division | Dimensions divide |
+| `a / b` | Division | Not defined | Dimensions divide |
 | `a % b` | Not supported | Remainder | `Int` operands only |
 | `a ^ n` | Exponentiation | Integer exponentiation (non-negative exponent) | Dimension raised to power |
 | `-a` | Negation | Negation | Dimension preserved |
+
+`/` is not defined for two `Int` operands, because an integer quotient must be
+rounded and languages disagree on the direction. Name the rounding with
+`div_trunc`, `div_floor`, or `div_ceil` (see
+[Integer Division Functions](built-ins.md#integer-division-functions)), or
+convert the dividend for the real quotient: `to_float(a) / b`.
+
+An `Int` can scale a quantity. `n * q`, `q * n`, `q / n`, and `n / q` are
+quantity arithmetic in which the `Int` `n` is an exact `Dimensionless` value,
+so `n * q` keeps the dimension of `q`. `+`, `-`, and comparisons never mix an
+`Int` with a quantity. An `Int` that binary64 cannot represent, which exists
+only beyond `2 ^ 53` in magnitude, is an evaluation error.
+
+```graphcal
+param p_unit: Power = 2.8 W;
+param qty: Int = 4;
+param r: Length = 0.5 m;
+
+node p_total: Power = @p_unit * @qty; // 11.2 W
+node circumference: Length = 2 * PI * @r;
+```
 
 `%` is defined only for `Int % Int`; Graphcal does not implicitly apply an
 IEEE floating-point remainder to real quantities. The result follows truncating
@@ -54,9 +75,9 @@ implicitly for addition or subtraction; write `to_complex(x)` explicitly.
 | `z1 + z2`, `z1 - z2` | `Complex<D>` | Both operands are `Complex<D>` |
 | `z1 * z2` | `Complex<D1 * D2>` | Complex operands may have different dimensions |
 | `z1 / z2` | `Complex<D1 / D2>` | The divisor must be nonzero |
-| `q * z`, `z * q` | `Complex<Dq * Dz>` | `q` is a real quantity |
-| `z / q` | `Complex<Dz / Dq>` | `q` is a nonzero real quantity |
-| `q / z` | `Complex<Dq / Dz>` | `z` is nonzero |
+| `q * z`, `z * q` | `Complex<Dq * Dz>` | `q` is a real quantity or an `Int` |
+| `z / q` | `Complex<Dz / Dq>` | `q` is a nonzero real quantity or `Int` |
+| `q / z` | `Complex<Dq / Dz>` | `q` is a real quantity or an `Int`; `z` is nonzero |
 | `-z` | `Complex<D>` | |
 
 For example:
@@ -76,8 +97,10 @@ for component and polar operations.
 ### Power exponents
 
 Every quantity exponent must be dimensionless. If the base is
-`Dimensionless`, the exponent may be any runtime `Dimensionless` quantity:
-`@ratio ^ @runtime_exponent` is valid.
+`Dimensionless`, the exponent may be any runtime `Dimensionless` quantity or
+`Int`: `@ratio ^ @runtime_exponent` and `@ratio ^ @n` are valid. An `Int`
+exponent is read as an exact `Dimensionless` value, the same way an `Int`
+operand of `*` or `/` is.
 
 If the base has a physical dimension, its exponent must instead use exact
 static syntax: an integer (`2`, `-2`, or `0`) or a parenthesized rational
@@ -126,7 +149,8 @@ are both part of their identity).
 Datetime arithmetic follows point-vs-duration rules: `Datetime + Time`,
 `Time + Datetime`, and `Datetime - Time` produce `Datetime`, while
 `Datetime - Datetime` produces a `Time` duration. `Time - Datetime` and
-`Datetime + Datetime` are errors.
+`Datetime + Datetime` are errors, and so is arithmetic on `Datetime<UTC>`,
+whose labels skip leap seconds; compute in TAI with `to_tai` instead.
 
 Comparison operators do not broadcast: every operand must be unindexed.
 Passing an indexed value to `==`, `!=`, `<`, `>`, `<=`, or `>=` is a compile

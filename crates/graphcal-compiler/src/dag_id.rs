@@ -57,18 +57,6 @@ impl From<&str> for DagPackageId {
     }
 }
 
-impl From<String> for DagPackageId {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<Arc<str>> for DagPackageId {
-    fn from(value: Arc<str>) -> Self {
-        Self::new(value)
-    }
-}
-
 impl fmt::Display for DagPackageId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
@@ -299,12 +287,6 @@ pub enum DagIdPathError {
     EmptyFileStem,
 }
 
-impl From<NonEmpty<String>> for NonEmpty<Arc<str>> {
-    fn from(value: NonEmpty<String>) -> Self {
-        value.map(Arc::<str>::from)
-    }
-}
-
 impl<'a> From<NonEmpty<&'a str>> for NonEmpty<Arc<str>> {
     fn from(value: NonEmpty<&'a str>) -> Self {
         value.map(Arc::<str>::from)
@@ -367,6 +349,13 @@ impl DagId {
     #[must_use]
     pub fn instance_child(&self, scope: ScopeSegment) -> Self {
         self.with_child(DagSegment::Instance(scope))
+    }
+
+    /// Whether `self` is a concrete include instance allocated directly in
+    /// `parent` (`parent.instance_child(scope)` for some scope).
+    #[must_use]
+    pub fn is_instance_child_of(&self, parent: &Self) -> bool {
+        self.leaf().is_instance() && self.parent().as_ref() == Some(parent)
     }
 
     /// Return the module this one is nested in, or `None` for a file root.
@@ -819,6 +808,22 @@ mod tests {
         assert!(module < named);
         assert!(root < module);
         assert!(DagId::root_in_package("a", "z") < DagId::root_in_package("b", "a"));
+    }
+
+    #[test]
+    fn instance_child_of_is_only_a_direct_instance() {
+        let root = DagId::root_in_package("test", "main");
+        let instance = root.instance_child(named("inst"));
+        let module = root.inline_dag_child(dag("inst"));
+
+        assert!(instance.is_instance_child_of(&root));
+        assert!(!module.is_instance_child_of(&root));
+        assert!(!root.is_instance_child_of(&root));
+        assert!(
+            !instance
+                .instance_child(named("nested"))
+                .is_instance_child_of(&root)
+        );
     }
 
     #[test]

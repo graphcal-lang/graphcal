@@ -20,8 +20,8 @@ use graphcal_project::compile_error::CompileError;
 use graphcal_project::loader::LoadedProject;
 use graphcal_project::project_compiler::{CheckedProject, ProjectCompiler};
 
-use crate::analysis::{AnalysisResult, ResolvedImportLink};
-use crate::file_identity::file_identity;
+use crate::analysis::{AnalysisResult, ProjectCheck, ResolvedImportLink};
+use crate::file_identity::{DocumentUris, file_identity};
 use crate::fn_signatures::{build_extern_fn_signatures, build_fn_signatures};
 use crate::imported_definitions::{collect_import_surfaces, collect_imported_definitions};
 use crate::value_format::format_eval_values;
@@ -72,6 +72,25 @@ pub enum ViewModelDemand {
     Project,
 }
 
+/// Whether an analysis evaluates a checked, runnable document.
+///
+/// Editor analyses evaluate to show values and runtime diagnostics. A check of
+/// a candidate edit only needs the compiler's verdict and the symbol index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EvaluationDemand {
+    /// Evaluate a runnable document after it checks.
+    Evaluate,
+    /// Stop after checking.
+    Skip,
+}
+
+/// What one analysis pass produces beyond the checked symbol index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnalysisDemand {
+    pub view: ViewModelDemand,
+    pub evaluation: EvaluationDemand,
+}
+
 /// Transient output of one analysis pass.
 pub struct AnalysisRun {
     pub analysis: AnalysisResult,
@@ -81,20 +100,31 @@ pub struct AnalysisRun {
 /// Snapshot of another open editor buffer, overlaid onto the filesystem
 /// during analysis so cross-file diagnostics, goto-definition targets, and
 /// hover reflect what the user actually sees instead of stale disk content.
+#[derive(Clone)]
 pub struct OpenBuffer {
-    pub path: std::path::PathBuf,
-    pub text: Arc<String>,
+    /// The URI the editor opened the buffer under.
+    uri: Url,
+    /// The file path of `uri`.
+    path: std::path::PathBuf,
+    text: Arc<String>,
 }
 
-/// Build a `LoadedProject` from a URI and in-memory text.
-///
-/// For file-backed URIs, loads the project from disk with the in-memory text
-/// overlaid on the root file — and every other open document's latest text
-/// overlaid on its path — via [`graphcal_io::OverlayFileSystem`]. The base
-/// reader is sandboxed to the discovered project root (when a `graphcal.toml`
-/// is reachable from the buffer's directory) — keeping the LSP's filesystem
-/// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
-/// single-file project from the in-memory text alone.
+impl OpenBuffer {
+    /// The buffer the editor opened under the file URI `uri`; `None` for a
+    /// URI that names no file, which no project can import.
+    pub fn new(uri: Url, text: Arc<String>) -> Option<Self> {
+        let path = uri.to_file_path().ok()?;
+        Some(Self { uri, path, text })
+    }
+
+    /// The URI the editor opened the buffer under.
+    pub const fn uri(&self) -> &Url {
+        &self.uri
+    }
+}
+
+/// A loaded project, or why it failed to load, with the filesystem inputs
+/// the load read.
 pub struct ProjectBuild {
     pub project: std::result::Result<LoadedProject, Outcome<Box<CompileError>>>,
     pub filesystem_inputs: HashSet<DocumentIdentity>,
@@ -109,16 +139,42 @@ impl ProjectBuild {
     }
 }
 
+/// The source name a buffer analysed on its own is registered under.
+///
+/// A standalone source's name also names its module, which must end in
+/// `.gcl`; an untitled buffer the client marked as Graphcal by its language
+/// identifier (`untitled:Untitled-1`) has no such suffix, so it gets one.
+fn standalone_source_name(uri: &Url) -> std::borrow::Cow<'_, str> {
+    // The module path is case-sensitive: `.GCL` does not name a module.
+    if std::path::Path::new(uri.as_str())
+        .extension()
+        .is_some_and(|extension| extension == "gcl")
+    {
+        std::borrow::Cow::Borrowed(uri.as_str())
+    } else {
+        std::borrow::Cow::Owned(format!("{uri}.gcl"))
+    }
+}
+
+/// Build a `LoadedProject` from a URI and in-memory text.
+///
+/// For file-backed URIs, loads the project from disk with the in-memory text
+/// overlaid on the root file — and every other open document's latest text
+/// overlaid on its path — via [`graphcal_io::OverlayFileSystem`]. The base
+/// reader is sandboxed to the discovered project root (when a `graphcal.toml`
+/// is reachable from the buffer's directory) — keeping the LSP's filesystem
+/// access in lockstep with the CLI's. For untitled/non-file URIs, builds a
+/// single-file project from the in-memory text alone.
 pub fn build_project(
     uri: &Url,
     text: &str,
     open_buffers: &[OpenBuffer],
     cancellation: &CancellationToken,
 ) -> ProjectBuild {
-    let name = uri.as_str();
     let Ok(path) = uri.to_file_path() else {
+        let name = standalone_source_name(uri);
         return ProjectBuild {
-            project: LoadedProject::from_source_with_cancellation(text, name, cancellation)
+            project: LoadedProject::from_source_with_cancellation(text, &name, cancellation)
                 .map_err(|outcome| outcome.map_failed(Box::new)),
             filesystem_inputs: HashSet::new(),
         };
@@ -216,6 +272,35 @@ pub(crate) fn test_plugin_host() -> &'static graphcal_plugin_host::PluginHost {
     HOST.get_or_init(graphcal_plugin_host::PluginHost::new)
 }
 
+/// Use an `untitled:` URI so `build_project` falls through to the in-memory
+/// `LoadedProject::from_source` branch (disk-less analysis).
+#[cfg(test)]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "test-only helper shared with other modules' tests; cargo-hawk rejects `pub` for test-only items"
+)]
+pub(crate) fn untitled_uri() -> tower_lsp::lsp_types::Url {
+    tower_lsp::lsp_types::Url::parse("untitled:test.gcl").unwrap()
+}
+
+/// A temporary directory holding `files` at their relative paths.
+#[cfg(test)]
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "test-only helper shared with other modules' tests; cargo-hawk rejects `pub` for test-only items"
+)]
+pub(crate) fn write_project(files: &[(&str, &str)]) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    for (name, content) in files {
+        let path = dir.path().join(name);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, content).unwrap();
+    }
+    dir
+}
+
 /// Run the analysis pipeline, producing an `AnalysisResult`.
 ///
 /// The pipeline has two stages:
@@ -257,7 +342,10 @@ pub(crate) fn run_analysis_run(
         open_buffers,
         plugin_host,
         &input_snapshot,
-        ViewModelDemand::Project,
+        AnalysisDemand {
+            view: ViewModelDemand::Project,
+            evaluation: EvaluationDemand::Evaluate,
+        },
         &graphcal_compiler::cancellation::CancellationToken::unbounded(),
     )
     .expect("an unbounded analysis cannot be cancelled")
@@ -287,22 +375,24 @@ pub fn run_analysis_with_cancellation(
     open_buffers: &[OpenBuffer],
     plugin_host: &graphcal_plugin_host::PluginHost,
     input_snapshot: &AnalysisInputSnapshot,
-    view: ViewModelDemand,
+    demand: AnalysisDemand,
     cancellation: &CancellationToken,
 ) -> std::result::Result<AnalysisRun, Cancelled> {
+    let AnalysisDemand { view, evaluation } = demand;
     cancellation.checkpoint()?;
     // Stage 1: Build project (parse + load imports).
     // If this fails, no AST is available for the multi-file pipeline. Fall
     // back to parsing just the active buffer so hover/goto-def on the active
     // file's own symbols still answer — the imported-file error remains
     // visible, but local LSP features degrade gracefully.
+    let documents = DocumentUris::new(uri, open_buffers.iter().map(|buffer| &buffer.uri));
     let project_build = build_project(uri, text, open_buffers, cancellation);
     let mut filesystem_inputs = project_build.filesystem_inputs;
     let project = match project_build.project {
         Ok(project) => project,
         Err(Outcome::Cancelled) => return Err(Cancelled),
         Err(Outcome::Failed(error)) => {
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, &documents);
             diagnostics.entry(uri.clone()).or_default();
             // `Some` when the failure was in an *import* (the buffer itself
             // parses): the buffer's own symbols are still fully usable.
@@ -310,8 +400,11 @@ pub fn run_analysis_with_cancellation(
             // diagnostics-only fallback and `store_analysis` retains the
             // previous symbol state (#834).
             let (symbol_table, buffer_parsed, degradations) =
-                match LoadedProject::from_source_with_cancellation(text, uri.as_str(), cancellation)
-                {
+                match LoadedProject::from_source_with_cancellation(
+                    text,
+                    &standalone_source_name(uri),
+                    cancellation,
+                ) {
                     Ok(single) => (
                         symbol_table::build_for_buffer(single.root_file().ast(), text),
                         true,
@@ -343,6 +436,7 @@ pub fn run_analysis_with_cancellation(
                     extern_fn_signatures: HashMap::new(),
                     import_links: Vec::new(),
                     buffer_parsed,
+                    check: ProjectCheck::Failed,
                 },
                 degradations,
             });
@@ -354,7 +448,6 @@ pub fn run_analysis_with_cancellation(
     let analysis_inputs = input_snapshot.finish_loaded_project(filesystem_inputs);
     let root_ast = project.root_file().ast();
     let import_links = collect_import_links(&project, cancellation)?;
-    cancellation.checkpoint()?;
     // Extern (plugin) registry for this pass: the built-in demo plugin plus
     // the project's vendored wasm plugins. The plugin host outlives passes,
     // so unchanged modules come from its content-hash cache.
@@ -396,7 +489,7 @@ pub fn run_analysis_with_cancellation(
             // `RequiredStaticInputNotBound` / `RequiredParamNotProvided` diagnostics when the
             // user opens such a file for editing.
             let todos =
-                crate::diagnostics::unfinished_node_diagnostics(&root_ast.declarations, text);
+                crate::diagnostics::unfinished_formula_diagnostics(&root_ast.declarations, text);
             let (mut view, degradations) = match view {
                 ViewModelDemand::Skip => (None, Vec::new()),
                 ViewModelDemand::Project => {
@@ -412,25 +505,26 @@ pub fn run_analysis_with_cancellation(
                 }
             };
             cancellation.checkpoint()?;
-            let (mut diagnostics, eval_values) =
-                if checked.is_library() && tir.default_runnable_dags().next().is_none() {
-                    (HashMap::new(), HashMap::new())
-                } else {
-                    let evaluated = run_eval_from_checked(
-                        checked,
-                        uri,
-                        text,
-                        &symbol_table,
-                        &host_fns,
-                        cancellation,
-                    )?;
-                    if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
-                        // A value its display unit cannot show is shown in SI, and
-                        // its node says why.
-                        projection.attach_evaluation(result);
-                    }
-                    (evaluated.diagnostics, evaluated.values)
-                };
+            let (mut diagnostics, eval_values) = if evaluation == EvaluationDemand::Skip
+                || (checked.is_library() && tir.default_runnable_dags().next().is_none())
+            {
+                (HashMap::new(), HashMap::new())
+            } else {
+                let evaluated = run_eval_from_checked(
+                    checked,
+                    &documents,
+                    text,
+                    &symbol_table,
+                    &host_fns,
+                    cancellation,
+                )?;
+                if let (Some(projection), Some(result)) = (view.as_mut(), &evaluated.result) {
+                    // A value its display unit cannot show is shown in SI, and
+                    // its node says why.
+                    projection.attach_evaluation(result);
+                }
+                (evaluated.diagnostics, evaluated.values)
+            };
             cancellation.checkpoint()?;
             diagnostics.entry(uri.clone()).or_default().extend(todos);
             let view = view.map(graphcal_project::view_model::ViewProjections::into_models);
@@ -451,6 +545,7 @@ pub fn run_analysis_with_cancellation(
                     extern_fn_signatures,
                     import_links,
                     buffer_parsed: true,
+                    check: ProjectCheck::Passed,
                 },
                 degradations,
             })
@@ -460,9 +555,11 @@ pub fn run_analysis_with_cancellation(
             cancellation.checkpoint()?;
             // A failed session has no checked resolver continuation. Rebuild a
             // best-effort resolver only for partial editor information.
-            let (module_resolver, degradations) = match project.build_module_resolver() {
+            let (module_resolver, degradations) = match project.build_module_resolver(cancellation)
+            {
                 Ok(module_resolver) => (module_resolver, Vec::new()),
-                Err(resolver_error) => (
+                Err(Outcome::Cancelled) => return Err(Cancelled),
+                Err(Outcome::Failed(resolver_error)) => (
                     symbol_table::file_local_resolver(root_ast, project.root_id()),
                     vec![AnalysisDegradation::FileLocalModuleResolver {
                         reason: resolver_error.to_string(),
@@ -474,7 +571,7 @@ pub fn run_analysis_with_cancellation(
             cancellation.checkpoint()?;
             let imported_symbols =
                 collect_imported_definitions(uri, &project, None, &module_resolver, cancellation)?;
-            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, uri);
+            let mut diagnostics = compile_error_to_diagnostics_grouped(&error, &documents);
             diagnostics.entry(uri.clone()).or_default();
 
             Ok(AnalysisRun {
@@ -497,6 +594,7 @@ pub fn run_analysis_with_cancellation(
                     extern_fn_signatures: HashMap::new(),
                     import_links,
                     buffer_parsed: true,
+                    check: ProjectCheck::Failed,
                 },
                 degradations,
             })
@@ -521,28 +619,25 @@ pub struct EvalAnalysisOutput {
 /// same declarations in a standalone file would.
 pub fn run_eval_from_checked(
     checked: CheckedProject,
-    uri: &Url,
+    documents: &DocumentUris,
     text: &str,
     symbol_table: &SymbolTable,
     host_fns: &graphcal_eval::host_fns::HostFunctionRegistry,
     cancellation: &CancellationToken,
 ) -> std::result::Result<EvalAnalysisOutput, Cancelled> {
+    let uri = documents.root();
     let is_library = checked.is_library();
-    let mut output = EvalAnalysisOutput {
-        diagnostics: HashMap::from([(uri.clone(), Vec::new())]),
-        values: HashMap::new(),
-        result: None,
-    };
+    let mut output = EvalAnalysisCollector::new(uri, text, symbol_table);
     let prepared = match checked.prepare_with_host_fns_and_cancellation(host_fns, cancellation) {
         Ok(prepared) => prepared,
         Err(Outcome::Cancelled) => return Err(Cancelled),
         // A library cannot run standalone, so its own preparation failure
         // (an unbound required index) is not reported; its DAGs show no
         // values then.
-        Err(Outcome::Failed(_)) if is_library => return Ok(output),
+        Err(Outcome::Failed(_)) if is_library => return Ok(output.finish()),
         Err(Outcome::Failed(error)) => {
-            output.add_failure(&error, uri);
-            return Ok(output);
+            output.add_failure(&error, documents);
+            return Ok(output.finish());
         }
     };
     if !is_library {
@@ -553,76 +648,97 @@ pub fn run_eval_from_checked(
         match evaluated {
             Ok(result) => {
                 cancellation.checkpoint()?;
-                output.add_result(
-                    &result,
-                    prepared.tir(),
-                    uri,
-                    text,
-                    symbol_table,
-                    cancellation,
-                )?;
-                output.result = Some(result);
+                output.add_result(&result, prepared.tir(), cancellation)?;
+                output.keep_result(result);
             }
             Err(Outcome::Cancelled) => return Err(Cancelled),
             Err(Outcome::Failed(error)) => {
-                output.add_failure(&error, uri);
-                return Ok(output);
+                output.add_failure(&error, documents);
+                return Ok(output.finish());
             }
         }
     }
     match prepared.evaluate_dag_defaults_with_cancellation(cancellation) {
         Ok(results) => {
             for result in &results {
-                output.add_result(
-                    result,
-                    prepared.tir(),
-                    uri,
-                    text,
-                    symbol_table,
-                    cancellation,
-                )?;
+                output.add_result(result, prepared.tir(), cancellation)?;
             }
         }
         Err(Outcome::Cancelled) => return Err(Cancelled),
-        Err(Outcome::Failed(error)) => output.add_failure(&error, uri),
+        Err(Outcome::Failed(error)) => output.add_failure(&error, documents),
     }
-    Ok(output)
+    Ok(output.finish())
 }
 
-impl EvalAnalysisOutput {
+/// Accumulates [`EvalAnalysisOutput`] over the evaluations of one analysis.
+///
+/// The declarations that inlay hints display are computed once here, not per
+/// evaluation result.
+struct EvalAnalysisCollector<'a> {
+    output: EvalAnalysisOutput,
+    uri: &'a Url,
+    text: &'a str,
+    symbol_table: &'a SymbolTable,
+    shown: HashSet<&'a ResolvedDeclName>,
+}
+
+impl<'a> EvalAnalysisCollector<'a> {
+    fn new(uri: &'a Url, text: &'a str, symbol_table: &'a SymbolTable) -> Self {
+        Self {
+            output: EvalAnalysisOutput {
+                diagnostics: HashMap::from([(uri.clone(), Vec::new())]),
+                values: HashMap::new(),
+                result: None,
+            },
+            uri,
+            text,
+            symbol_table,
+            shown: symbol_table.inlay_hint_declarations(),
+        }
+    }
+
     /// Add the values and runtime-failure diagnostics of one evaluation.
     fn add_result(
         &mut self,
         result: &EvalResult,
         tir: &graphcal_compiler::tir::typed::CheckedTir,
-        uri: &Url,
-        text: &str,
-        symbol_table: &SymbolTable,
         cancellation: &CancellationToken,
     ) -> std::result::Result<(), Cancelled> {
-        self.diagnostics
-            .entry(uri.clone())
+        self.output
+            .diagnostics
+            .entry(self.uri.clone())
             .or_default()
             .extend(eval_result_to_diagnostics(
                 result,
                 tir,
-                uri,
-                text,
-                symbol_table,
+                self.uri,
+                self.text,
+                self.symbol_table,
             ));
-        self.values
-            .extend(format_eval_values(result, cancellation)?);
+        self.output
+            .values
+            .extend(format_eval_values(result, &self.shown, cancellation)?);
         Ok(())
     }
 
     /// Add the diagnostics of an evaluation that could not run.
-    fn add_failure(&mut self, error: &CompileError, uri: &Url) {
-        for (target, diagnostics) in compile_error_to_diagnostics_grouped(error, uri) {
-            self.diagnostics
+    fn add_failure(&mut self, error: &CompileError, documents: &DocumentUris) {
+        for (target, diagnostics) in compile_error_to_diagnostics_grouped(error, documents) {
+            self.output
+                .diagnostics
                 .entry(target)
                 .or_default()
                 .extend(diagnostics);
         }
+    }
+
+    /// Keep the root evaluation itself for the view projection.
+    fn keep_result(&mut self, result: EvalResult) {
+        self.output.result = Some(result);
+    }
+
+    fn finish(self) -> EvalAnalysisOutput {
+        self.output
     }
 }
 
@@ -742,7 +858,10 @@ mod view_tests {
             &[],
             test_plugin_host(),
             &input_snapshot,
-            ViewModelDemand::Skip,
+            AnalysisDemand {
+                view: ViewModelDemand::Skip,
+                evaluation: EvaluationDemand::Evaluate,
+            },
             &CancellationToken::unbounded(),
         )
         .unwrap();
@@ -751,3 +870,6 @@ mod view_tests {
         assert!(run.analysis.has_no_diagnostics());
     }
 }
+
+#[cfg(test)]
+mod tests;

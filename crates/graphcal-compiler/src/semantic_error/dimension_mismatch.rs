@@ -3,7 +3,7 @@
 //!
 //! [`DimensionError::DimensionMismatch`]: super::dimension::DimensionError::DimensionMismatch
 
-use crate::builtin::{BuiltinFn, ComplexFn, LinearAlgebraFn};
+use crate::builtin::{BuiltinFn, ComplexFn, IntDivisionFn, LinearAlgebraFn};
 use crate::function_signature::IndexBinder;
 use crate::hir::expr::ExternFnRef;
 use crate::semantic::checked_type::{IndexTypeRef, Symbolic, TypeSpelling};
@@ -83,7 +83,6 @@ pub enum OperandExpectation {
     },
     IndexedCollection,
     IndexedQuantityCollection,
-    DimensionlessOrInt,
     ComplexQuantity,
     RealOrComplexQuantity,
     Angle,
@@ -130,7 +129,6 @@ impl std::fmt::Display for OperandExpectation {
             Self::RankIndexedQuantity { rank } => write!(f, "rank-{rank} indexed quantity"),
             Self::IndexedCollection => f.write_str("indexed collection"),
             Self::IndexedQuantityCollection => f.write_str("indexed quantity collection"),
-            Self::DimensionlessOrInt => f.write_str("Dimensionless or Int"),
             Self::ComplexQuantity => f.write_str("Complex<D>"),
             Self::RealOrComplexQuantity => f.write_str("a real or complex quantity"),
             Self::Angle => f.write_str("Angle"),
@@ -261,7 +259,10 @@ pub enum MismatchRule {
     ToIntDimensionless,
     CoordExtractsCoordinate,
     CoordCoordinateKeysOnly,
+    IntDivisionOperands(IntDivisionFn),
     DatetimeArgument(BuiltinFn),
+    UnixTimeOfUtcOnly,
+    FromUnixInt,
     DatetimeStringLiteral,
     DatetimeTimezoneLiteral,
     EpochCivilLiteral,
@@ -318,6 +319,7 @@ pub enum MismatchRule {
     IfConditionBool,
     IfBranchesSameDimension,
     MatchArmsSameType,
+    MapEntriesSameType,
     ToleranceSameDimension,
     AbsoluteToleranceDimension,
 }
@@ -394,9 +396,20 @@ impl std::fmt::Display for MismatchRule {
             Self::CoordCoordinateKeysOnly => f.write_str(
                 "coord() applies to coordinate-axis keys only; named keys are opaque and Fin keys expose to_int()",
             ),
+            Self::IntDivisionOperands(function) => write!(
+                f,
+                "{}() divides two Int values; divide quantities with `/`",
+                function.as_str()
+            ),
             Self::DatetimeArgument(builtin) => {
                 write!(f, "{}() requires a Datetime argument", builtin.as_str())
             }
+            Self::UnixTimeOfUtcOnly => f.write_str(
+                "to_unix() reads the label of a UTC datetime and does not convert scales implicitly; convert first, for example `to_unix(to_utc(@t))`",
+            ),
+            Self::FromUnixInt => f.write_str(
+                "from_unix() takes a Dimensionless count of seconds; convert an Int explicitly, for example `from_unix(to_float(@n))`",
+            ),
             Self::DatetimeStringLiteral => {
                 f.write_str("datetime() requires a contextual datetime string literal")
             }
@@ -502,6 +515,9 @@ impl std::fmt::Display for MismatchRule {
                 f.write_str("both branches of if/else must have the same dimension")
             }
             Self::MatchArmsSameType => f.write_str("all match arms must return the same type"),
+            Self::MapEntriesSameType => {
+                f.write_str("every entry of a map literal must have the same type as the first")
+            }
             Self::ToleranceSameDimension => f.write_str(
                 "actual and expected in tolerance assertion must have the same dimension",
             ),

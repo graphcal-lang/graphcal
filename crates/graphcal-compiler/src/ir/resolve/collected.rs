@@ -111,16 +111,17 @@ impl ExternalDeclSurface {
         );
     }
 
+    /// Record `role` for one slot; the first recorded role wins.
+    ///
+    /// The surface is computed from declarations that have not been checked
+    /// for duplicates yet, so two declarations may claim one slot with
+    /// different roles (`param x` and `pub node x`). Such a module is always
+    /// rejected by name resolution (N001), so keeping the first role only has
+    /// to stay well-defined until that error is reported.
     fn insert(&mut self, namespace: Namespace, name: NameAtom, role: ExternalDeclRole) {
-        let slot = ExternalDeclSlot { namespace, name };
-        match self.roles.entry(slot) {
-            std::collections::hash_map::Entry::Vacant(entry) => {
-                entry.insert(role);
-            }
-            std::collections::hash_map::Entry::Occupied(entry) => {
-                debug_assert_eq!(*entry.get(), role, "one external slot has one role");
-            }
-        }
+        self.roles
+            .entry(ExternalDeclSlot { namespace, name })
+            .or_insert(role);
     }
 
     fn role(&self, namespace: Namespace, name: &NameAtom) -> Option<ExternalDeclRole> {

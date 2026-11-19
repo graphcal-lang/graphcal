@@ -2,6 +2,7 @@ use thiserror::Error;
 
 use crate::desugar::desugared_ast::{MulDivOp, UnitExpr};
 use crate::dimension::{Dimension, Rational};
+use crate::finite_value::{FiniteArithmeticError, FiniteQuantity};
 use crate::ratio::RatioError;
 use crate::syntax::ast::UnitConstness;
 use crate::syntax::dimension::UnitRef;
@@ -92,22 +93,34 @@ impl PositiveFiniteScale {
         Self::new(self.0 / rhs.0)
     }
 
+    /// The SI value of `value` written in a unit of this scale.
+    ///
+    /// This is the checked product `value * scale`: a nonzero value whose SI
+    /// value rounds to zero is an underflow, never a silent zero. Runtime
+    /// literals and compile-time constants share it, so both agree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FiniteArithmeticError::Infinite`] on overflow and
+    /// [`FiniteArithmeticError::Underflow`] on complete underflow.
+    pub fn to_si(self, value: FiniteQuantity) -> Result<FiniteQuantity, FiniteArithmeticError> {
+        // A positive finite scale is always a finite quantity.
+        let scale = FiniteQuantity::try_new(self.0).map_err(|_| FiniteArithmeticError::Infinite)?;
+        value.checked_mul(scale)
+    }
+
     /// Raise the scale to a rational power.
     ///
-    /// Integer powers use `powi` for exactness; fractional powers use `powf`,
-    /// which is well-defined because the base is positive.
+    /// Every exponent uses `powf`, which is well-defined because the base is
+    /// positive; integer exponents deliberately avoid `powi`, which is not
+    /// correctly rounded and can underflow falsely.
     ///
     /// # Errors
     ///
     /// Returns an error when the power overflows to infinity or underflows to
     /// zero.
     pub fn checked_pow(self, exp: Rational) -> Result<Self, PositiveFiniteScaleError> {
-        let powered = if exp.is_integer() {
-            self.0.powi(exp.num())
-        } else {
-            self.0.powf(f64::from(exp.num()) / f64::from(exp.den()))
-        };
-        Self::new(powered)
+        Self::new(self.0.powf(f64::from(exp.num()) / f64::from(exp.den())))
     }
 }
 
@@ -427,6 +440,32 @@ mod tests {
             scale(1000.0).checked_pow(Rational::from(-400)),
             Err(PositiveFiniteScaleError::NonPositive { value: 0.0 })
         );
+    }
+
+    #[test]
+    fn to_si_reports_a_nonzero_value_lost_to_zero() {
+        let q = |value| FiniteQuantity::try_new(value).unwrap();
+        assert_eq!(scale(1.0e-3).to_si(q(2.0)), Ok(q(2.0e-3)));
+        assert_eq!(scale(1.0e-300).to_si(q(0.0)), Ok(q(0.0)));
+        assert_eq!(
+            scale(1.0e-300).to_si(q(1.0e-30)),
+            Err(FiniteArithmeticError::Underflow)
+        );
+        assert_eq!(
+            scale(1.0e300).to_si(q(1.0e30)),
+            Err(FiniteArithmeticError::Infinite)
+        );
+    }
+
+    #[test]
+    fn integer_scale_powers_match_powf_bit_for_bit() {
+        let base = 0.701_546_366_168_601_9;
+        for exponent in [-5, -1, 2, 3, 9] {
+            assert_eq!(
+                scale(base).checked_pow(Rational::from(exponent)),
+                Ok(scale(base.powf(f64::from(exponent))))
+            );
+        }
     }
 
     #[test]

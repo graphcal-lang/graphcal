@@ -40,22 +40,6 @@ impl<I> ExpectedFailKeyPart<I> {
 }
 
 impl ExpectedFailKeyPart<IndexTypeRef> {
-    /// A named key part whose index is named directly, for tests.
-    #[cfg(any(test, feature = "test-identities"))]
-    #[must_use]
-    pub fn with_owner(
-        owner: crate::dag_id::DagId,
-        index: crate::syntax::index_name::IndexName,
-        variant: IndexVariantName,
-        span: Span,
-    ) -> Self {
-        Self::Named {
-            index: IndexTypeRef::with_owner(owner, index),
-            variant,
-            span,
-        }
-    }
-
     #[must_use]
     pub(crate) fn resolved(resolved: ResolvedIndexVariant, span: Span) -> Self {
         let (index, variant) = resolved.into_parts();

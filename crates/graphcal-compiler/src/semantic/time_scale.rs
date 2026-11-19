@@ -52,9 +52,9 @@ macro_rules! define_time_scales {
                 Self::ALL_NAMES.join(", ")
             }
 
-            /// Returns the string name of this time scale.
+            /// The source spelling of this time scale.
             #[must_use]
-            const fn name(self) -> &'static str {
+            pub const fn as_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $name),+
                 }
@@ -63,7 +63,7 @@ macro_rules! define_time_scales {
 
         impl fmt::Display for TimeScale {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(self.name())
+                f.write_str(self.as_str())
             }
         }
 
@@ -119,29 +119,6 @@ impl TimeScale {
             Self::QZSST => hifitime::TimeScale::QZSST,
         }
     }
-
-    /// Convert from `hifitime::TimeScale`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `ts` is a `hifitime` time scale that Graphcal does
-    /// not support.
-    const fn from_hifitime(
-        ts: hifitime::TimeScale,
-    ) -> Result<Self, UnsupportedHifitimeTimeScaleError> {
-        match ts {
-            hifitime::TimeScale::UTC => Ok(Self::UTC),
-            hifitime::TimeScale::TAI => Ok(Self::TAI),
-            hifitime::TimeScale::TT => Ok(Self::TT),
-            hifitime::TimeScale::TDB => Ok(Self::TDB),
-            hifitime::TimeScale::ET => Ok(Self::ET),
-            hifitime::TimeScale::GPST => Ok(Self::GPST),
-            hifitime::TimeScale::GST => Ok(Self::GST),
-            hifitime::TimeScale::BDT => Ok(Self::BDT),
-            hifitime::TimeScale::QZSST => Ok(Self::QZSST),
-            _ => Err(UnsupportedHifitimeTimeScaleError(ts)),
-        }
-    }
 }
 
 /// Error returned when parsing an unknown Graphcal time scale name from text.
@@ -153,22 +130,6 @@ impl TimeScale {
 pub struct ParseTimeScaleError {
     /// The unrecognized input string.
     input: String,
-}
-
-/// Error returned when converting an unsupported `hifitime` time scale.
-///
-/// This is an external-library boundary error: `hifitime` recognized the value
-/// as a valid time scale, but Graphcal does not support that time scale.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("unsupported hifitime time scale `{0:?}`")]
-pub struct UnsupportedHifitimeTimeScaleError(hifitime::TimeScale);
-
-impl TryFrom<hifitime::TimeScale> for TimeScale {
-    type Error = UnsupportedHifitimeTimeScaleError;
-
-    fn try_from(ts: hifitime::TimeScale) -> Result<Self, Self::Error> {
-        Self::from_hifitime(ts)
-    }
 }
 
 #[cfg(test)]
@@ -193,21 +154,6 @@ mod tests {
         let err = "INVALID".parse::<TimeScale>().unwrap_err();
         assert_eq!(err.input, "INVALID");
         assert!(err.to_string().contains("unknown time scale"));
-    }
-
-    #[test]
-    fn hifitime_roundtrip() {
-        for scale in TimeScale::ALL {
-            let hifitime = scale.to_hifitime();
-            let back = TimeScale::from_hifitime(hifitime).unwrap();
-            assert_eq!(scale, back);
-        }
-    }
-
-    #[test]
-    fn unsupported_hifitime_scale_is_error() {
-        let err = TimeScale::from_hifitime(hifitime::TimeScale::TCG).unwrap_err();
-        assert_eq!(err.0, hifitime::TimeScale::TCG);
     }
 
     #[test]

@@ -6,7 +6,6 @@ use std::collections::HashMap;
 
 use graphcal_project::loader::LoadedProject;
 use graphcal_project::prepare::compile_and_eval_from_project;
-use graphcal_report::plot_page::VegaScriptSource;
 use graphcal_report::report_html::render_report_html;
 use graphcal_report::report_ir::{
     Provenance, ReportDocument, ReportInputs, SourceDigest, build_report, collect_doc_captions,
@@ -30,13 +29,13 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio) -> km/s;
 assert delta_v_positive = @delta_v > 0.0 m/s;
 
 pub index Steps = { S1, S2 };
-node per_step: Velocity[Steps] = for s: Steps { @delta_v / 2.0 };
+node per_step: Velocity[Steps] = for step: Steps { @delta_v / 2.0 };
 
 plot dv_plot = {
     mark: line,
     encode: {
-        x: for s: Steps { 1.0 },
-        y: for s: Steps { @per_step[s] -> km/s },
+        x: for step: Steps { 1.0 },
+        y: for step: Steps { @per_step[step] -> km/s },
     },
     title: \"Delta-v per step\",
 };
@@ -48,7 +47,7 @@ fn unfinished_reports_are_explicitly_incomplete_not_errors() {
         "node missing: Length = todo<Length> {}; node blocked: Length = @missing; node known: Length = 1.0 m; assert pending = @missing > 0.0 m;",
     );
     for rendered in [
-        render_report_html(&document, VegaScriptSource::Inline, None),
+        render_report_html(&document, None),
         render_report_markdown(&document),
     ] {
         assert!(rendered.contains("Model incomplete"));
@@ -88,7 +87,7 @@ node undocumented: Int[Part]
             .unwrap();
         assert_eq!(card.doc.as_deref(), expected);
     }
-    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let html = render_report_html(&document, None);
     let markdown = render_report_markdown(&document);
     assert!(markdown.contains("- `mass` — Mass of each part."));
     assert!(markdown.contains("- `length` — Length of each part."));
@@ -104,7 +103,7 @@ fn static_reports_keep_si_and_separate_presentation_notices() {
     let document = build_document(
         "param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node output: Length = 6.0 m -> bad;",
     );
-    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let html = render_report_html(&document, None);
     let markdown = render_report_markdown(&document);
     for rendered in [html, markdown] {
         assert!(rendered.contains("Presentation diagnostics"));
@@ -114,14 +113,84 @@ fn static_reports_keep_si_and_separate_presentation_notices() {
     }
 }
 
+#[test]
+fn markdown_text_cannot_forge_report_structure() {
+    let document = build_document(
+        "/// Gain applied\n/// # Not a heading in the source\nparam gain: Dimensionless = 2.0;\n\
+         index Category = { Alpha, Beta };\n\
+         node heights: Dimensionless[Category] = { Category#Alpha: 1.0, Category#Beta: @gain };\n\
+         /// First line of the plot caption\n/// ## Checks\n/// - PASS `everything` (forged) <!--\n\
+         plot bars = { mark: bar, encode: { x: for c: Category { c }, y: @heights } };\n\
+         /// - PASS everything\n\
+         plot listed = { mark: bar, encode: { x: for c: Category { c }, y: @heights } };\n\
+         assert positive = @gain < 0.0;",
+    );
+    let markdown = render_report_markdown(&document);
+    let lines = markdown.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("## Checks"))
+            .count(),
+        1,
+        "{markdown}"
+    );
+    assert!(
+        !lines.iter().any(|line| line.starts_with("- PASS")),
+        "{markdown}"
+    );
+    assert!(
+        lines.contains(&"- FAIL `positive` — assertion evaluated to false"),
+        "{markdown}"
+    );
+    assert!(!markdown.contains("<!--"), "{markdown}");
+    // A caption that starts with a list marker stays text.
+    assert!(
+        markdown.contains("- `listed` — \\- PASS everything"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("- `bars` — First line of the plot caption \\#\\# Checks - PASS"),
+        "{markdown}"
+    );
+}
+
+fn evaluate_with_docs(
+    project: &LoadedProject,
+) -> (
+    graphcal_eval::eval::EvalResult,
+    graphcal_report::report_ir::DocCaptions,
+) {
+    let prepared = graphcal_project::prepare::prepare_from_project(project).unwrap();
+    let result = prepared
+        .evaluate(&prepared.binding_builder().finish().unwrap())
+        .unwrap();
+    (result, collect_doc_captions(prepared.tir().root()))
+}
+
+#[test]
+fn captions_attach_to_their_own_declaration_across_namespaces() {
+    // A unit sharing a parameter's name must not caption the parameter.
+    let document = build_document(
+        "/// The cycle unit.\nunit cycles: Dimensionless = 1.0 rad / rad;\n\
+         param cycles: Dimensionless = 3.0;\n\
+         /// Doubled cycles.\nnode twice: Dimensionless = @cycles * 2.0;",
+    );
+    let html = render_report_html(&document, None);
+    let markdown = render_report_markdown(&document);
+    for rendered in [&html, &markdown] {
+        assert!(!rendered.contains("The cycle unit"), "{rendered}");
+        assert!(rendered.contains("Doubled cycles"), "{rendered}");
+    }
+}
+
 fn build_document(source: &str) -> ReportDocument {
     let project = LoadedProject::from_source(source, "deltav.gcl").unwrap();
     build_project_document(&project)
 }
 
 fn build_project_document(project: &LoadedProject) -> ReportDocument {
-    let result = compile_and_eval_from_project(project, &HashMap::new()).unwrap();
-    let docs = collect_doc_captions(project.root_file().ast());
+    let (result, docs) = evaluate_with_docs(project);
     build_report(ReportInputs {
         title: "deltav",
         result: &result,
@@ -231,8 +300,8 @@ fn document_derives_sections_from_the_model_alone() {
 #[test]
 fn html_report_is_self_contained_and_deterministic() {
     let document = build_document(DELTA_V);
-    let html = render_report_html(&document, VegaScriptSource::Inline, None);
-    let again = render_report_html(&build_document(DELTA_V), VegaScriptSource::Inline, None);
+    let html = render_report_html(&document, None);
+    let again = render_report_html(&build_document(DELTA_V), None);
     assert_eq!(html, again, "report output must be byte-deterministic");
 
     assert!(html.contains("Specific impulse of the qualified engine."));
@@ -252,7 +321,7 @@ fn initially_failed_plots_keep_targets_and_renderer_assets() {
     let document = build_document(
         "param divisor: Dimensionless = 0.0; plot curve = { mark: point, encode: { y: 1.0 / @divisor } };",
     );
-    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let html = render_report_html(&document, None);
     assert!(html.contains("data-figure=\"curve\""));
     assert!(html.contains("Plot unavailable:"));
     assert!(html.contains("division by zero"));
@@ -262,7 +331,7 @@ fn initially_failed_plots_keep_targets_and_renderer_assets() {
 #[test]
 fn vega_scripts_are_omitted_without_figures() {
     let document = build_document("param x: Dimensionless = 1.0;\nnode y: Dimensionless = @x;");
-    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let html = render_report_html(&document, None);
     assert!(!html.contains("vegaEmbed"));
     assert!(!html.contains(CHART_THEME_MARKER));
     assert!(html.contains("data-decl=\"y\""));
@@ -273,22 +342,20 @@ const CHART_THEME_MARKER: &str = "// Report chart theme.";
 
 #[test]
 fn chart_theme_loads_between_the_vega_stack_and_the_figures() {
-    for scripts in [VegaScriptSource::Inline, VegaScriptSource::Cdn] {
-        let html = render_report_html(&build_document(DELTA_V), scripts, None);
-        let stack = html
-            .find("vega-embed")
-            .expect("charted reports load the Vega stack");
-        let theme = html
-            .find(CHART_THEME_MARKER)
-            .expect("charted reports load the chart theme");
-        let figure = html
-            .find("vegaEmbed('#graphcal-figure-0'")
-            .expect("the figure renders through vegaEmbed");
-        assert!(
-            stack < theme && theme < figure,
-            "the theme must wrap vegaEmbed before the first figure renders"
-        );
-    }
+    let html = render_report_html(&build_document(DELTA_V), None);
+    let stack = html
+        .find("vega-embed")
+        .expect("charted reports load the Vega stack");
+    let theme = html
+        .find(CHART_THEME_MARKER)
+        .expect("charted reports load the chart theme");
+    let figure = html
+        .find("vegaEmbed('#graphcal-figure-0'")
+        .expect("the figure renders through vegaEmbed");
+    assert!(
+        stack < theme && theme < figure,
+        "the theme must wrap vegaEmbed before the first figure renders"
+    );
 }
 
 #[test]
@@ -311,7 +378,7 @@ fn section_navigation_links_only_to_rendered_focusable_sections() {
         "param rate: Dimensionless = 0.0; unit bad: Length = (@rate) m; node output: Length = 6.0 m -> bad;",
         "param divisor: Dimensionless = 0.0; plot p = { mark: point, encode: { y: 1.0 / @divisor } };",
     ] {
-        let html = render_report_html(&build_document(source), VegaScriptSource::Inline, None);
+        let html = render_report_html(&build_document(source), None);
         assert!(html.contains("<nav class=\"report-nav\" aria-label=\"Report sections\">"));
         for id in [
             "inputs",
@@ -333,7 +400,7 @@ fn section_navigation_links_only_to_rendered_focusable_sections() {
 #[test]
 fn structured_values_have_one_named_keyboard_scroll_region_without_losing_leaves() {
     let document = build_document(include_str!("fixtures/report-layout.gcl"));
-    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let html = render_report_html(&document, None);
     for name in [
         "first",
         "comparison_sample",
@@ -365,10 +432,7 @@ fn structured_values_have_one_named_keyboard_scroll_region_without_losing_leaves
         .unwrap();
     assert_eq!(samples.matches("<tr>").count(), 64);
     assert!(html.contains("deliberately_long_parent_field.deliberately_long_measurement_label"));
-    assert_eq!(
-        html,
-        render_report_html(&document, VegaScriptSource::Inline, None)
-    );
+    assert_eq!(html, render_report_html(&document, None));
 }
 
 #[test]
@@ -439,7 +503,7 @@ plot local_points = {
     let project =
         load_project(&root.join(bundle.entry.as_str()), None, &mounted.filesystem).unwrap();
     let document = build_project_document(&project);
-    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let html = render_report_html(&document, None);
     let markdown = render_report_markdown(&document);
     for name in ["points", "renamed", "nested"] {
         assert!(html.contains(&format!("<span class=\"figure-name\">{name}</span> — Caption written in the library.\nWith &lt;unsafe&gt; &amp; text.")), "missing caption for {name}: {markdown}");
@@ -482,7 +546,7 @@ param x: Dimensionless = 1.0;
 node y: Dimensionless = @x;
 ";
     let document = build_document(source);
-    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let html = render_report_html(&document, None);
     assert!(!html.contains("<script>alert(1)</script>"));
     assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
 }
@@ -496,8 +560,7 @@ node good: Dimensionless = 2.0;
 assert bad_is_finite = @bad < 10.0;
 ";
     let project = LoadedProject::from_source(source, "bad.gcl").unwrap();
-    let result = compile_and_eval_from_project(&project, &HashMap::new()).unwrap();
-    let docs = collect_doc_captions(project.root_file().ast());
+    let (result, docs) = evaluate_with_docs(&project);
     let document = build_report(ReportInputs {
         title: "bad",
         result: &result,
@@ -510,7 +573,7 @@ assert bad_is_finite = @bad < 10.0;
         },
     })
     .unwrap();
-    let html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let html = render_report_html(&document, None);
     assert!(html.contains("error-chip"));
     assert!(
         html.contains("data-decl=\"good\""),
@@ -540,7 +603,7 @@ fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
         vec![("isp".to_string(), "450.0 s".to_string())],
     )
     .unwrap();
-    let html = render_report_html(&document, VegaScriptSource::Inline, Some(&hydration));
+    let html = render_report_html(&document, Some(&hydration));
 
     // Payload blocks and the runtime are embedded once each.
     for marker in [
@@ -563,7 +626,7 @@ fn hydrated_page_embeds_payload_and_keeps_static_baseline() {
     // The figure carries the pan/zoom binding.
     assert!(html.contains("graphcal_pan_zoom"));
     // Hydration only appends: the static prefix is byte-identical.
-    let static_html = render_report_html(&document, VegaScriptSource::Inline, None);
+    let static_html = render_report_html(&document, None);
     let static_main = static_html.split("</main>").next().unwrap();
     let hydrated_main = html.split("</main>").next().unwrap();
     assert_eq!(static_main, hydrated_main);

@@ -6,7 +6,7 @@
 //! another shape is a violated invariant, reported at one place
 //! ([`read_shape`], through [`Operands`]), and never an evaluation error.
 
-use graphcal_compiler::builtin::{DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn};
+use graphcal_compiler::builtin::DatetimeField;
 use graphcal_compiler::complex_value::ComplexValue;
 use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::outcome::Outcome;
@@ -14,7 +14,7 @@ use graphcal_compiler::semantic::key_value::FinKeyShift;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::operators::{
-    BExpr, CExpr, DExpr, EqualityOp, IExpr, OrderedOperands, QExpr, ShiftOp,
+    BExpr, CExpr, DExpr, EqualityOp, IExpr, IntConversion, OrderedOperands, QExpr, ShiftOp,
 };
 use graphcal_compiler::tir::texpr::{DatetimeLiteral, LabelDispatch};
 use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
@@ -25,7 +25,7 @@ use crate::runtime_value::{IndexedValue, KeyElement, KeyValue, RuntimeValue};
 
 use super::EvalSession;
 use super::arithmetic::apply_ordering;
-use super::runtime_failure::{IntegerFailure, RuntimeFailure};
+use super::runtime_failure::RuntimeFailure;
 
 /// A value whose shape a violated-invariant diagnostic describes.
 pub(super) trait Shape {
@@ -257,7 +257,6 @@ impl<'t> super::linear_algebra::LinearOperands<ScopedNode<'t>> for Operands<'_, 
     }
 }
 
-/// Evaluate an operation whose result is a real quantity.
 /// Plugin-call arguments are operands read at the kind their checked node
 /// carries.
 impl<'t> ArgumentReader<ScopedNode<'t>> for Operands<'_, 't> {
@@ -293,6 +292,7 @@ impl<'t> ArgumentReader<ScopedNode<'t>> for Operands<'_, 't> {
     }
 }
 
+/// Evaluate an operation whose result is a real quantity.
 pub(super) fn quantity<'t>(
     operation: &QExpr<ScopedNode<'t>>,
     span: Span,
@@ -352,25 +352,26 @@ pub(super) fn quantity<'t>(
             .map_err(|error| ctx.runtime_error(error, span).into()),
         QExpr::Exp(arg) => super::complex::real_exp(operands.quantity(arg)?)
             .map_err(|error| ctx.runtime_error(error, span).into()),
-        QExpr::FromInt(arg) => {
+        QExpr::FromInt { conversion, arg } => {
             let value = operands.int(arg)?;
-            #[expect(
-                clippy::cast_precision_loss,
-                reason = "explicit Int to float conversion"
-            )]
-            super::numeric::finite_quantity(value as f64, "to_float()")
+            let value = super::numeric::exact_i64_to_f64(value).map_err(|error| {
+                let failure = match conversion {
+                    IntConversion::ToFloat => RuntimeFailure::ToFloat(error),
+                    IntConversion::Scaling => RuntimeFailure::IntScalar(error),
+                    IntConversion::Exponent => RuntimeFailure::IntExponent(error),
+                };
+                ctx.runtime_error(failure, arg.span())
+            })?;
+            // An exactly converted `i64` is always finite.
+            super::numeric::finite_quantity(value, "Int conversion")
                 .map_err(|error| ctx.runtime_error(error, arg.span()))
                 .map_err(Outcome::Failed)
         }
         QExpr::Coordinate(arg) => operands.coordinate(arg),
-        QExpr::FromDatetime { function, arg } => {
-            let epoch = operands.datetime(arg)?;
-            let result = match function {
-                DatetimeToNumericFn::Jd => epoch.to_jde_utc_days(),
-                DatetimeToNumericFn::Mjd => epoch.to_mjd_utc_days(),
-                DatetimeToNumericFn::Unix => epoch.to_unix_seconds(),
-            };
-            super::numeric::finite_quantity(result, "datetime conversion")
+        QExpr::UnixTime(arg) => {
+            let result = super::datetime::unix_seconds(operands.datetime(arg)?)
+                .map_err(|error| ctx.runtime_error(error, arg.span()))?;
+            super::numeric::finite_quantity(result, "to_unix()")
                 .map_err(|error| ctx.runtime_error(error, arg.span()))
                 .map_err(Outcome::Failed)
         }
@@ -391,6 +392,16 @@ pub(super) fn int<'t>(
             let rhs = operands.int(rhs)?;
             super::arithmetic::int_arith(op, lhs, rhs, ctx, span).map_err(Outcome::Failed)
         }
+        IExpr::Division {
+            function,
+            dividend,
+            divisor,
+        } => {
+            let dividend = operands.int(dividend)?;
+            let divisor = operands.int(divisor)?;
+            super::arithmetic::int_division(function, dividend, divisor, ctx, span)
+                .map_err(Outcome::Failed)
+        }
         IExpr::ExactPower { base, exponent, .. } => {
             let base = operands.int(base)?;
             super::arithmetic::int_power(base, exponent, ctx, span).map_err(Outcome::Failed)
@@ -400,14 +411,11 @@ pub(super) fn int<'t>(
             let exponent = operands.int(exponent)?;
             super::arithmetic::int_power(base, exponent, ctx, span).map_err(Outcome::Failed)
         }
-        IExpr::Neg(operand) => operands
-            .int(operand)?
-            .checked_neg()
-            .ok_or_else(|| ctx.runtime_error(IntegerFailure::NegationOverflow, span))
+        IExpr::Neg(operand) => super::arithmetic::int_negate(operands.int(operand)?, ctx, span)
             .map_err(Outcome::Failed),
         IExpr::FromQuantity(arg) => {
             let value = operands.quantity(arg)?.get();
-            super::conversions::exact_f64_to_i64(value)
+            graphcal_compiler::finite_value::exact_f64_to_i64(value)
                 .map_err(|error| ctx.runtime_error(RuntimeFailure::ToInt(error), span))
                 .map_err(Outcome::Failed)
         }
@@ -573,24 +581,15 @@ pub(super) fn datetime<'t>(
             let datetime = operands.datetime(datetime)?;
             super::datetime::checked_epoch_add_seconds(datetime, seconds)
         }
-        DExpr::FromQuantity { function, arg } => {
+        DExpr::FromUnixTime(arg) => {
             let value = operands.quantity(arg)?.get();
-            return from_numeric(function, value, arg.span(), operands.ctx);
-        }
-        DExpr::FromInt { function, arg } => {
-            let value = operands.int(arg)?;
-            let value = super::numeric::exact_i64_to_f64(value).map_err(|_| {
-                operands.ctx.runtime_error(
-                    RuntimeFailure::DatetimeIntegerTooLarge(function, value),
-                    arg.span(),
-                )
-            })?;
-            return from_numeric(function, value, arg.span(), operands.ctx);
+            return from_unix_seconds(value, arg.span(), operands.ctx);
         }
         DExpr::ToScale { conversion, arg } => {
-            return Ok(operands
-                .datetime(arg)?
-                .to_time_scale(conversion.target().to_hifitime()));
+            return Ok(crate::time_scale_conversion::to_time_scale(
+                operands.datetime(arg)?,
+                conversion.target(),
+            ));
         }
     };
     result
@@ -598,19 +597,13 @@ pub(super) fn datetime<'t>(
         .map_err(Outcome::Failed)
 }
 
-/// The UTC datetime a numeric epoch count denotes.
-fn from_numeric(
-    function: DatetimeFromNumericFn,
+/// The UTC datetime a Unix time names.
+fn from_unix_seconds(
     value: f64,
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<hifitime::Epoch, Outcome<SemanticError>> {
-    let kind = match function {
-        DatetimeFromNumericFn::Jd => super::datetime::NumericEpochKind::JulianDate,
-        DatetimeFromNumericFn::Mjd => super::datetime::NumericEpochKind::ModifiedJulianDate,
-        DatetimeFromNumericFn::Unix => super::datetime::NumericEpochKind::UnixSeconds,
-    };
-    super::datetime::checked_epoch_from_numeric(value, kind)
+    super::datetime::checked_epoch_from_unix_seconds(value)
         .map_err(|error| ctx.runtime_error(error, span))
         .map_err(Outcome::Failed)
 }

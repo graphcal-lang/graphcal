@@ -1,5 +1,6 @@
 //! Shared package-cache root and typed checkout path derivation.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use graphcal_package::{GitSourceId, Sha256Digest};
@@ -39,9 +40,7 @@ impl PackageCacheRoot {
     /// Returns [`PackageCacheRootError`] when no platform cache directory can
     /// be derived or the current directory is unavailable.
     pub fn from_environment() -> Result<Self, PackageCacheRootError> {
-        let configured = std::env::var_os(CACHE_ENV)
-            .map(PathBuf::from)
-            .or_else(platform_cache_directory)
+        let configured = configured_cache_directory(|name| std::env::var_os(name))
             .ok_or(PackageCacheRootError::Unavailable)?;
         Self::from_path(configured)
     }
@@ -81,29 +80,50 @@ impl PackageCacheRoot {
     }
 }
 
+/// Cache directory selected by the environment, read through `var`.
+///
+/// An empty variable counts as unset: an empty `GRAPHCAL_CACHE_DIR` or
+/// `XDG_CACHE_HOME` would otherwise resolve to the current directory and put
+/// full clones inside the project, where they are easily committed. A
+/// non-empty relative [`CACHE_ENV`] is an explicit user choice and is resolved
+/// against the current directory by [`PackageCacheRoot::from_path`].
+fn configured_cache_directory(var: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let set = |name: &str| var(name).filter(|value| !value.is_empty());
+    set(CACHE_ENV)
+        .map(PathBuf::from)
+        .or_else(|| platform_cache_directory(set))
+}
+
 /// Per-platform default cache directory, used when [`CACHE_ENV`] is unset.
 ///
-/// Unix follows the XDG base directory specification. Windows has no XDG
-/// convention and sets neither `XDG_CACHE_HOME` nor `HOME`, so probing only
-/// those leaves every Windows user unable to resolve a cache root at all; it
-/// uses the conventional per-user local application data directory instead.
+/// Unix follows the XDG base directory specification, which says a relative
+/// `XDG_CACHE_HOME` is invalid and must be ignored; a relative `HOME` is
+/// ignored for the same reason. Windows has no XDG convention and sets neither
+/// `XDG_CACHE_HOME` nor `HOME`, so probing only those leaves every Windows user
+/// unable to resolve a cache root at all; it uses the conventional per-user
+/// local application data directory instead.
 #[cfg(not(windows))]
-fn platform_cache_directory() -> Option<PathBuf> {
-    std::env::var_os("XDG_CACHE_HOME")
-        .map(|base| PathBuf::from(base).join("graphcal"))
-        .or_else(|| {
-            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache").join("graphcal"))
-        })
+fn platform_cache_directory(set: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let absolute = |name: &str| {
+        set(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    absolute("XDG_CACHE_HOME")
+        .map(|base| base.join("graphcal"))
+        .or_else(|| absolute("HOME").map(|home| home.join(".cache").join("graphcal")))
 }
 
 #[cfg(windows)]
-fn platform_cache_directory() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA")
-        .map(|base| PathBuf::from(base).join("graphcal").join("cache"))
-        .or_else(|| {
-            std::env::var_os("USERPROFILE")
-                .map(|home| PathBuf::from(home).join(".cache").join("graphcal"))
-        })
+fn platform_cache_directory(set: impl Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
+    let absolute = |name: &str| {
+        set(name)
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute())
+    };
+    absolute("LOCALAPPDATA")
+        .map(|base| base.join("graphcal").join("cache"))
+        .or_else(|| absolute("USERPROFILE").map(|home| home.join(".cache").join("graphcal")))
 }
 
 /// Failure to derive a package cache root.
@@ -127,5 +147,66 @@ mod tests {
 
         assert!(root.as_path().is_absolute());
         assert!(root.as_path().ends_with("relative-graphcal-cache"));
+    }
+
+    fn resolve(vars: &[(&str, &str)]) -> Option<PathBuf> {
+        configured_cache_directory(|name| {
+            vars.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| OsString::from(value))
+        })
+    }
+
+    fn absolute(name: &str) -> String {
+        std::path::absolute(std::env::temp_dir())
+            .unwrap()
+            .join(name)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn explicit_cache_override_wins_and_may_be_relative() {
+        assert_eq!(
+            resolve(&[(CACHE_ENV, "relative-cache")]),
+            Some(PathBuf::from("relative-cache"))
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn empty_or_relative_cache_variables_never_select_the_current_directory() {
+        let home = absolute("home");
+        let expected = Some(PathBuf::from(&home).join(".cache").join("graphcal"));
+        assert_eq!(
+            resolve(&[(CACHE_ENV, ""), ("XDG_CACHE_HOME", ""), ("HOME", &home)]),
+            expected
+        );
+        assert_eq!(
+            resolve(&[("XDG_CACHE_HOME", "relative"), ("HOME", &home)]),
+            expected
+        );
+        let xdg = absolute("xdg");
+        assert_eq!(
+            resolve(&[("XDG_CACHE_HOME", &xdg), ("HOME", &home)]),
+            Some(PathBuf::from(&xdg).join("graphcal"))
+        );
+        assert_eq!(resolve(&[(CACHE_ENV, ""), ("HOME", "")]), None);
+        assert_eq!(resolve(&[("HOME", "relative-home")]), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn empty_or_relative_cache_variables_never_select_the_current_directory() {
+        let local = absolute("local");
+        assert_eq!(
+            resolve(&[(CACHE_ENV, ""), ("LOCALAPPDATA", &local)]),
+            Some(PathBuf::from(&local).join("graphcal").join("cache"))
+        );
+        assert_eq!(
+            resolve(&[("LOCALAPPDATA", ""), ("USERPROFILE", "relative")]),
+            None
+        );
     }
 }

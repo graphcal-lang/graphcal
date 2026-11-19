@@ -61,8 +61,8 @@ pub(super) fn run_entry_loop(
         frame.bind_argument(key, binding.clone(), src, Span::new(0, 0))?;
     }
     frame.run(cancellation, |entry, frame| {
-        // Root declarations keep their existing work allowance; nested calls
-        // share this context's budget through immutable scope reselection.
+        // Each root declaration gets a fresh session; nested calls share it
+        // through immutable scope reselection.
         let root = EvalSession::checked(plan, src, sources, host_fns, cancellation.clone())
             .with_unavailable(frame.errors())
             .with_unfinished_calls(&unfinished_calls);

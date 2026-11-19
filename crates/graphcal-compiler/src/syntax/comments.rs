@@ -1,3 +1,4 @@
+use crate::syntax::format_equivalent::FormatEquivalent;
 use crate::syntax::span::{Span, Spanned};
 
 /// The delimiter that starts a comment.
@@ -103,6 +104,14 @@ impl DocComment {
     }
 }
 
+/// A doc block is equivalent to another when its text is: the span is
+/// formatting, but the text is what hover, reports, and the view model show.
+impl FormatEquivalent for DocComment {
+    fn format_equivalent(&self, other: &Self) -> bool {
+        self.text == other.text
+    }
+}
+
 /// A blank line represented by the span from the previous line ending through
 /// the line ending that completes the blank line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -146,7 +155,25 @@ impl SourceMetadata {
         self.comments.push(comment);
     }
 
+    /// Whether a blank line starts within `range` (byte offsets). Blank lines
+    /// are kept in source order, so this is a binary search.
+    #[must_use]
+    pub fn has_blank_line_starting_in(&self, range: std::ops::Range<usize>) -> bool {
+        let first_at_or_after_start = self
+            .blank_lines
+            .partition_point(|blank_line| blank_line.span().offset() < range.start);
+        self.blank_lines
+            .get(first_at_or_after_start)
+            .is_some_and(|blank_line| blank_line.span().offset() < range.end)
+    }
+
     pub(crate) fn push_blank_line(&mut self, blank_line: BlankLine) {
+        debug_assert!(
+            self.blank_lines
+                .last()
+                .is_none_or(|last| last.span().offset() < blank_line.span().offset()),
+            "blank lines must be recorded in source order"
+        );
         self.blank_lines.push(blank_line);
     }
 }

@@ -1,4 +1,5 @@
 use crate::runtime_value::RuntimeValue;
+use graphcal_compiler::finite_value::FiniteQuantity;
 use graphcal_compiler::hir::expr::ResolvedUnitExpr;
 use graphcal_compiler::hir::expr::{ResolvedUnitExprItem, ResolvedUnitRef};
 use graphcal_compiler::outcome::Outcome;
@@ -40,16 +41,26 @@ fn unit_scale_error(
     session.runtime_error(RuntimeFailure::UnitScale { context, error }, span)
 }
 
-/// Apply a unit scale to a literal value and validate that the SI value is finite.
+/// Apply a unit scale to a literal value: the SI value must be finite, and a
+/// nonzero literal must not underflow to zero.
 pub(super) fn checked_unit_scaled_value(
     value: f64,
     scale: PositiveFiniteScale,
     span: Span,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, SemanticError> {
-    numeric::finite_quantity(value * scale.get(), "quantity literal value")
+    let context = "quantity literal value";
+    let value =
+        numeric::finite_quantity(value, context).map_err(|err| ctx.runtime_error(err, span))?;
+    scale
+        .to_si(value)
         .map(RuntimeValue::Quantity)
-        .map_err(|err| ctx.runtime_error(err, span))
+        .map_err(|error| {
+            ctx.runtime_error(
+                numeric::QuantityValidationError::from_arithmetic(error, context),
+                span,
+            )
+        })
 }
 
 /// Evaluate the scale expression of a dynamic unit in the scope of the DAG
@@ -71,20 +82,28 @@ fn resolve_dynamic_unit_scale(
     })?;
     let scale_session = session.with_src(scale.source());
     let expression = scale.expression();
-    let scale_f64 = super::operations::read_shape(
+    let scale_value = super::operations::read_shape(
         evaluate(
             &scale_session.executable(expression)?,
             values,
             &scale_session,
         )?,
-        "a dynamic unit scale quantity",
+        "a dynamic unit scale",
         expression.get().span,
         &scale_session,
         |value| match value {
-            RuntimeValue::Quantity(scale) => Ok(scale),
+            RuntimeValue::Quantity(scale) => Ok(Ok(scale)),
+            RuntimeValue::Int(scale) => Ok(Err(scale)),
             other => Err(other),
         },
     )?;
+    // An `Int` scale is converted exactly, like an `Int` that scales a
+    // quantity.
+    let scale_f64 = scale_value.or_else(|scale| {
+        FiniteQuantity::from_exact_int(scale).map_err(|error| {
+            scale_session.runtime_error(RuntimeFailure::IntUnitScale(error), expression.get().span)
+        })
+    })?;
     let dynamic_scale = PositiveFiniteScale::new(scale_f64.get()).map_err(|error| {
         unit_scale_error(
             UnitScaleContext::DynamicUnit,

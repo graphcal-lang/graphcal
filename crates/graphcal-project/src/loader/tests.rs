@@ -5,6 +5,7 @@ use std::fs;
 use std::io;
 
 use graphcal_compiler::cancellation::CancellationToken;
+use graphcal_compiler::syntax::decl_name::DeclName;
 use graphcal_compiler::syntax::function_name::FnName;
 use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::plugin::PluginPath;
@@ -357,8 +358,8 @@ fn load_simple_import() {
     assert_eq!(project.files.len(), 2);
     assert_eq!(project.files.len(), 2);
     // helper.lib should be loaded before main (topological order)
-    let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
-    let main_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "main"]));
+    let lib_dag_id = DagId::new("helper", NonEmpty::new("helper", vec!["lib"]));
+    let main_dag_id = DagId::new("helper", NonEmpty::new("helper", vec!["main"]));
     assert_eq!(project.files.ordered().get(0).unwrap().dag_id, lib_dag_id);
     assert_eq!(project.files.ordered().get(1).unwrap().dag_id, main_dag_id);
     assert_eq!(project.root_id().package(), &DagPackageId::new("helper"));
@@ -372,8 +373,11 @@ fn loaded_project_builds_module_resolver_for_qualified_index_variant() {
         ("src/helper/main.gcl", "import helper.lib as lib;"),
     ]);
     let project = load_project(&dir.path().join("src/helper/main.gcl"), None, &fs()).unwrap();
-    let resolver = project.build_module_resolver().unwrap();
-    let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
+    let resolver = graphcal_compiler::outcome::without_cancellation(|cancellation| {
+        project.build_module_resolver(cancellation)
+    })
+    .unwrap();
+    let lib_dag_id = DagId::new("helper", NonEmpty::new("helper", vec!["lib"]));
 
     let resolved_variant = resolver
         .resolve_index_variant_parts(
@@ -429,15 +433,19 @@ fn every_module_path_names_its_loaded_module_and_resolver_module() {
         ("graphcal.toml", "[package]\nname = \"pkg\"\n"),
         (
             "src/pkg/lib.gcl",
-            "pub dim Mass;\npub dag present { pub dim Length; }",
+            "pub dim Heft;\npub dag present { pub dim Extent; }",
         ),
         (
             "src/pkg/main.gcl",
-            "import pkg.lib::{dim Mass};\nimport pkg.lib.present::{dim Length};\ndag local { import pkg.lib::{dim Mass}; }",
+            "import pkg.lib::{dim Heft};\nimport pkg.lib.present::{dim Extent};\ndag local { import pkg.lib::{dim Heft}; }",
         ),
     ]);
     let project = load_project(&dir.path().join("src/pkg/main.gcl"), None, &fs()).unwrap();
-    let modules = loaded_module_resolver::LoadedModuleResolver::build(&project).unwrap();
+    let modules = loaded_module_resolver::LoadedModuleResolver::build(
+        &project,
+        &graphcal_compiler::cancellation::CancellationToken::unbounded(),
+    )
+    .unwrap();
     let root = project.root_file();
     let targets = root
         .imports_with_targets()
@@ -532,7 +540,7 @@ fn from_source_keeps_absolute_diagnostic_label_out_of_semantic_identity() {
     assert_eq!(
         project
             .sources()
-            .named_source(root_file.source_id())
+            .source(root_file.source_id())
             .unwrap()
             .name(),
         "/virtual/project/main.gcl"
@@ -621,7 +629,7 @@ fn load_with_overlay_uses_disk_for_imports() {
     assert_eq!(root_file.source.as_str(), overlay_source);
 
     // Helper.lib file should use disk content
-    let lib_dag_id = DagId::new("helper", NonEmpty::new("src", vec!["helper", "lib"]));
+    let lib_dag_id = DagId::new("helper", NonEmpty::new("helper", vec!["lib"]));
     let lib_file = project.file(&lib_dag_id).unwrap();
     assert_eq!(lib_file.source.as_str(), "param y: Dimensionless = 2.0;");
 }
@@ -672,7 +680,7 @@ fn load_diamond_import_deduplication() {
     let project = load_project(&dir.path().join("src/graph/a.gcl"), None, &fs()).unwrap();
     assert_eq!(project.files.len(), 4);
     // d should appear first in load order
-    let d_dag_id = DagId::new("graph", NonEmpty::new("src", vec!["graph", "d"]));
+    let d_dag_id = DagId::new("graph", NonEmpty::new("graph", vec!["d"]));
     assert_eq!(project.files.ordered().get(0).unwrap().dag_id, d_dag_id);
 }
 
@@ -851,7 +859,7 @@ struct LockedPackageFixture {
 
 fn install_dependency_cache_generation(
     cache_root: &Path,
-    source: &GitSourceId,
+    source: &graphcal_package::GitSourceId,
     dependency_source: &str,
 ) -> (PathBuf, PackageManifest, Sha256Digest) {
     let staging = cache_root.join("dependency-staging");
@@ -861,7 +869,7 @@ fn install_dependency_cache_generation(
     std::fs::write(staging.join("src/units/lib.gcl"), dependency_source).unwrap();
     let manifest = parse_manifest_str(manifest_text).unwrap();
     let reader = RealFileSystem::rooted(&staging).unwrap();
-    let tree_hash = Sha256Digest::new(
+    let tree_hash = Sha256Digest::from_bytes(
         hash_source_tree(
             &reader,
             &staging,
@@ -871,8 +879,7 @@ fn install_dependency_cache_generation(
         )
         .unwrap()
         .sha256(),
-    )
-    .unwrap();
+    );
     drop(reader);
     let dependency_root = crate::package_cache::PackageCacheRoot::from_path(cache_root)
         .unwrap()
@@ -883,7 +890,9 @@ fn install_dependency_cache_generation(
 }
 
 fn locked_package_fixture(root_source: &str, dependency_source: &str) -> LockedPackageFixture {
-    use graphcal_package::{LOCK_VERSION, Lockfile, PackageInstanceId, SourceTreeHashes};
+    use graphcal_package::{
+        Lockfile, PackageInstanceId, SourceTreeHashAlgorithm, SourceTreeHashes,
+    };
 
     let directory = tempfile::tempdir().unwrap();
     let project_root = directory.path().join("project");
@@ -902,9 +911,7 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
         .dependencies
         .first_key_value()
         .expect("fixture dependency");
-    let revision = dependency_spec.git.rev.clone();
-    let url = dependency_spec.git.url.clone();
-    let source = GitSourceId::new(url.clone(), revision.clone());
+    let source = dependency_spec.git.clone();
     let (dependency_root, dependency_manifest, tree_hash) =
         install_dependency_cache_generation(&cache_root, &source, dependency_source);
     std::fs::write(project_root.join("graphcal.toml"), root_manifest).unwrap();
@@ -921,7 +928,6 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
     let root_id = PackageInstanceId::new("pkg-mission").unwrap();
     let dependency_id = PackageInstanceId::new("pkg-units-v1").unwrap();
     let lockfile = Lockfile {
-        lock_version: LOCK_VERSION,
         created_by: "graphcal-test".to_string(),
         graphcal_version: env!("CARGO_PKG_VERSION").to_string(),
         stdlib_version: STDLIB_VERSION.to_string(),
@@ -940,10 +946,11 @@ units_v1 = { package = "units", git = "https://example.com/units.git", rev = "11
                 name: dependency_manifest.name,
                 source_dir: dependency_manifest.source_dir,
                 source: PackageSource::Git {
-                    url,
-                    requested_rev: revision.clone(),
-                    commit: revision,
-                    tree_hashes: SourceTreeHashes { sha256: tree_hash },
+                    source,
+                    tree_hashes: SourceTreeHashes {
+                        algorithm: SourceTreeHashAlgorithm::GraphcalSourceTreeV1,
+                        sha256: tree_hash,
+                    },
                 },
                 dependencies: BTreeMap::new(),
             },
@@ -981,6 +988,32 @@ fn dependency_enabled_loader_uses_overlay_for_root_file() {
 
     let project = load_project(&fixture.root_file, None, &overlay).unwrap();
     assert_eq!(project.root_file().source.as_str(), overlay_source);
+}
+
+#[test]
+fn dependency_enabled_loader_registers_every_file_by_its_path() {
+    use graphcal_compiler::source_registry::SourceOrigin;
+
+    let fixture = locked_package_fixture(
+        "import units_v1.lib::{ one };\nnode two: Dimensionless = @one;",
+        "pub const node one: Dimensionless = 1.0;",
+    );
+    let project = load_project(&fixture.root_file, None, &RealFileSystem::default()).unwrap();
+    let dependency_file = fixture.dependency_root.join("src/units/lib.gcl");
+    let mut paths = Vec::new();
+    for file in project.files().iter() {
+        let source = project.sources().source(file.source_id()).unwrap();
+        // The display name carries the package instance; the origin is the
+        // file itself.
+        assert!(source.name().starts_with("pkg-"), "{}", source.name());
+        assert_eq!(
+            source.origin(),
+            &SourceOrigin::File(file.path().to_path_buf())
+        );
+        paths.push(file.path().to_path_buf());
+    }
+    assert!(paths.contains(&fixture.root_file.canonicalize().unwrap()));
+    assert!(paths.contains(&dependency_file.canonicalize().unwrap()));
 }
 
 #[test]
@@ -1207,13 +1240,87 @@ fn single_package_import_symlinked_outside_root_is_rejected() {
         )
         .unwrap();
 
-        let error = load_project(
-            &directory.path().join("project/src/mission/main.gcl"),
-            None,
-            &RealFileSystem::default(),
+        let project = directory.path().join("project");
+        for reader in [RealFileSystem::rooted(&project).unwrap(), fs()] {
+            let error = load_project(&project.join("src/mission/main.gcl"), None, &reader)
+                .expect_err("a module outside the project root must be rejected");
+            assert_outside_root(&error, "mission.escape");
+        }
+    }
+}
+
+/// PRJ-9: an escaping symlink at the longest prefix is reported, not skipped
+/// in favour of an inline DAG of a shorter prefix (or "file not found").
+#[cfg(unix)]
+#[test]
+fn escaping_module_symlink_does_not_fall_back_to_a_shorter_prefix() {
+    use std::os::unix::fs::symlink;
+
+    for shorter_prefix in [
+        Some("dag b {\n    pub const node k: Dimensionless = 1.0;\n}"),
+        None,
+    ] {
+        let mut files = vec![
+            ("project/graphcal.toml", "[package]\nname = \"mission\"\n"),
+            (
+                "project/src/mission/main.gcl",
+                "import mission.a.b::{ k };\nnode x: Dimensionless = @k;",
+            ),
+            ("project/src/mission/a/.keep", ""),
+            ("outside.gcl", "pub const node k: Dimensionless = 2.0;"),
+        ];
+        if let Some(inline) = shorter_prefix {
+            files.push(("project/src/mission/a.gcl", inline));
+        }
+        let directory = setup_temp_dir(&files);
+        let project = directory.path().join("project");
+        symlink(
+            directory.path().join("outside.gcl"),
+            project.join("src/mission/a/b.gcl"),
         )
-        .expect_err("a module outside the project root must be rejected");
-        assert_outside_root(&error, "mission.escape");
+        .unwrap();
+
+        for reader in [RealFileSystem::rooted(&project).unwrap(), fs()] {
+            let error = load_project(&project.join("src/mission/main.gcl"), None, &reader)
+                .expect_err("the escaping module must be rejected");
+            assert_outside_root(&error, "mission.a.b");
+        }
+    }
+}
+
+/// PRJ-9: a module symlink loop is an unreadable source, not a missing one.
+#[cfg(unix)]
+#[test]
+fn module_symlink_loop_is_reported_as_unreadable() {
+    use std::os::unix::fs::symlink;
+
+    let directory = setup_temp_dir(&[
+        ("project/graphcal.toml", "[package]\nname = \"mission\"\n"),
+        (
+            "project/src/mission/main.gcl",
+            "import mission.loop1::{ k };\nnode x: Dimensionless = @k;",
+        ),
+        (
+            "project/src/mission.gcl",
+            "dag loop1 {\n    pub const node k: Dimensionless = 1.0;\n}",
+        ),
+    ]);
+    let project = directory.path().join("project");
+    let package = project.join("src/mission");
+    symlink(package.join("loop2.gcl"), package.join("loop1.gcl")).unwrap();
+    symlink(package.join("loop1.gcl"), package.join("loop2.gcl")).unwrap();
+
+    for reader in [RealFileSystem::rooted(&project).unwrap(), fs()] {
+        let error = load_project(&package.join("main.gcl"), None, &reader)
+            .expect_err("a symlink loop must not resolve");
+        assert!(
+            matches!(
+                &error,
+                CompileError::Load(LoadError::SourceReadFailed { path, .. })
+                    if path.ends_with("loop1.gcl")
+            ),
+            "{error:?}"
+        );
     }
 }
 
@@ -1237,9 +1344,12 @@ fn locked_package_import_symlinked_outside_root_is_rejected() {
         )
         .unwrap();
 
-        let error = load_project(&fixture.root_file, None, &RealFileSystem::default())
-            .expect_err("a module outside the package root must be rejected");
-        assert_outside_root(&error, "mission.escape");
+        let project = fixture.directory.path().join("project");
+        for reader in [RealFileSystem::rooted(&project).unwrap(), fs()] {
+            let error = load_project(&fixture.root_file, None, &reader)
+                .expect_err("a module outside the package root must be rejected");
+            assert_outside_root(&error, "mission.escape");
+        }
     }
 }
 
@@ -1565,7 +1675,10 @@ fn project_module_resolution_is_typed_and_span_free() {
             &sources.authority(),
             import.path(),
             &scripted_path("main"),
+            &mut source_authority::DirectoryEntries::default(),
+            &CancellationToken::unbounded(),
         )
+        .unwrap()
     };
 
     assert_eq!(
@@ -1618,7 +1731,10 @@ fn project_module_resolution_is_typed_and_span_free() {
             },
             import.path(),
             &scripted_path("main"),
-        ),
+            &mut source_authority::DirectoryEntries::default(),
+            &CancellationToken::unbounded(),
+        )
+        .unwrap(),
         ModuleResolution::Failed(ResolveFailure::CrossFileImportInVirtualPackage)
     );
 }
@@ -1668,4 +1784,156 @@ fn cancellation_during_any_package_read_is_never_reported_as_a_diagnostic() {
             result.err()
         );
     }
+}
+
+/// PRJ-6: a loose script under a manifest is not covered by the package's
+/// `graphcal.lock` pins, so any wasm plugin import is a loud load error
+/// raised before the plugin bytes are read.
+#[test]
+fn wasm_plugin_in_loose_script_under_manifest_is_rejected() {
+    for script in ["loose.gcl", "scripts/loose.gcl", "src/loose.gcl"] {
+        assert_loose_script_plugin_rejected(script);
+    }
+}
+
+fn assert_loose_script_plugin_rejected(script: &str) {
+    let source = "import plugin \"plugins/p.wasm\" as p {\nfn value() -> Dimensionless;\n}\nnode x: Dimensionless = p::value();";
+    let directory = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+        ("src/mission/main.gcl", "node y: Dimensionless = 1.0;"),
+        (script, source),
+        ("plugins/p.wasm", "not wasm"),
+    ]);
+    let error = load_project(&directory.path().join(script), None, &fs())
+        .expect_err("a loose script under a manifest cannot import wasm plugins");
+    match error {
+        CompileError::Load(LoadError::WasmPluginOutsidePackageNamespace {
+            ref plugin,
+            span,
+            ..
+        }) => {
+            assert_eq!(plugin.as_str(), "plugins/p.wasm");
+            let literal = "\"plugins/p.wasm\"";
+            assert_eq!(span.offset(), source.find(literal).unwrap());
+            assert_eq!(span.len(), literal.len());
+        }
+        other => panic!("expected M038, got {other:?}"),
+    }
+}
+
+/// PRJ-6: ad-hoc files with no manifest above keep loading plugins unpinned,
+/// and package members are still subject to the lockfile pins.
+#[test]
+fn wasm_plugin_trust_regimes_for_ad_hoc_and_package_files() {
+    let source = "import plugin \"p.wasm\" as p {\nfn value() -> Dimensionless;\n}";
+    let ad_hoc = setup_temp_dir(&[("main.gcl", source), ("p.wasm", "bytes")]);
+    let project = load_project(&ad_hoc.path().join("main.gcl"), None, &fs()).unwrap();
+    assert!(
+        project.plugins().values().all(Result::is_ok),
+        "ad-hoc files load plugins unpinned: {:?}",
+        project.plugins()
+    );
+
+    let package = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+        ("src/mission/main.gcl", source),
+        ("p.wasm", "bytes"),
+    ]);
+    let project = load_project(&package.path().join("src/mission/main.gcl"), None, &fs()).unwrap();
+    assert!(
+        project
+            .plugins()
+            .values()
+            .all(|entry| matches!(entry, Err(PluginFileError::NotPinned))),
+        "package files need lockfile pins: {:?}",
+        project.plugins()
+    );
+}
+
+#[cfg(unix)]
+const ESCAPING_PLUGIN_SOURCE: &str = "import plugin \"plugins/p.wasm\" as p {\nfn value() -> Dimensionless;\n}\npub node x: Dimensionless = p::value();";
+
+/// The M038 diagnostic of a load whose plugin import lives in `loose.gcl`.
+#[cfg(unix)]
+fn assert_m038_in_loose_file(error: &CompileError) {
+    match error {
+        CompileError::Load(LoadError::WasmPluginOutsidePackageNamespace {
+            plugin, src, ..
+        }) => {
+            assert_eq!(plugin.as_str(), "plugins/p.wasm");
+            assert!(
+                Path::new(src.name()).ends_with("src/loose.gcl"),
+                "{}",
+                src.name()
+            );
+        }
+        other => panic!("expected M038, got {other:?}"),
+    }
+}
+
+/// PRJ-6: a package module reached through an in-root symlink that leaves
+/// `<source_dir>/<package>/` is judged by where it really lives, so its wasm
+/// plugin import is M038 like a loose script's, before any bytes are read.
+#[cfg(unix)]
+#[test]
+fn wasm_plugin_in_a_symlinked_module_outside_the_namespace_is_rejected() {
+    let directory = setup_temp_dir(&[
+        ("graphcal.toml", "[package]\nname = \"mission\"\n"),
+        (
+            "src/mission/main.gcl",
+            "include mission.escape()::{ x as y };\ninclude mission.inside()::{ z };",
+        ),
+        (
+            "src/mission/inside.gcl",
+            "import plugin \"plugins/p.wasm\" as p {\nfn value() -> Dimensionless;\n}\npub node z: Dimensionless = p::value();",
+        ),
+        ("src/loose.gcl", ESCAPING_PLUGIN_SOURCE),
+        ("plugins/p.wasm", "not wasm"),
+    ]);
+    std::os::unix::fs::symlink(
+        "../loose.gcl",
+        directory.path().join("src/mission/escape.gcl"),
+    )
+    .unwrap();
+    let error = load_project(&directory.path().join("src/mission/main.gcl"), None, &fs())
+        .expect_err("a symlinked module outside the namespace cannot import plugins");
+    assert_m038_in_loose_file(&error);
+
+    // Positive control: an in-namespace module may still import the plugin
+    // (subject to the lockfile pins).
+    std::fs::remove_file(directory.path().join("src/mission/escape.gcl")).unwrap();
+    std::fs::write(
+        directory.path().join("src/mission/main.gcl"),
+        "include mission.inside()::{ z };",
+    )
+    .unwrap();
+    let project =
+        load_project(&directory.path().join("src/mission/main.gcl"), None, &fs()).unwrap();
+    assert!(
+        project
+            .plugins()
+            .values()
+            .all(|entry| matches!(entry, Err(PluginFileError::NotPinned))),
+        "{:?}",
+        project.plugins()
+    );
+}
+
+/// PRJ-6: the same rule holds on the dependency-enabled loading path.
+#[cfg(unix)]
+#[test]
+fn locked_loader_rejects_wasm_plugin_in_a_symlinked_module_outside_the_namespace() {
+    let fixture = locked_package_fixture(
+        "include mission.escape()::{ x as y };",
+        "pub const node one: Dimensionless = 1.0;",
+    );
+    let project_root = fixture.directory.path().join("project");
+    std::fs::write(project_root.join("src/loose.gcl"), ESCAPING_PLUGIN_SOURCE).unwrap();
+    std::fs::create_dir_all(project_root.join("plugins")).unwrap();
+    std::fs::write(project_root.join("plugins/p.wasm"), "not wasm").unwrap();
+    std::os::unix::fs::symlink("../loose.gcl", project_root.join("src/mission/escape.gcl"))
+        .unwrap();
+    let error = load_project(&fixture.root_file, None, &fs())
+        .expect_err("a symlinked module outside the namespace cannot import plugins");
+    assert_m038_in_loose_file(&error);
 }

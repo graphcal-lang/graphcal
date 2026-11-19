@@ -22,6 +22,9 @@ pub(crate) enum Event {
     CallOutputEvidenceNodes,
     #[cfg(any(test, feature = "test-internals"))]
     PresentationEvidenceCopyNode,
+    /// A static TODO-reachability answer computed rather than reused.
+    #[cfg(any(test, feature = "test-internals"))]
+    UnfinishedReachAnalysis,
 }
 
 #[cfg(not(any(test, feature = "test-internals")))]
@@ -65,6 +68,7 @@ mod observer {
         pub call_frame_value_nodes: u64,
         pub call_output_evidence_nodes: u64,
         pub presentation_evidence_copy_nodes: u64,
+        pub unfinished_reach_analyses: u64,
     }
 
     thread_local! { static COUNTS: Cell<Counts> = Cell::new(Counts::default()); }
@@ -88,6 +92,7 @@ mod observer {
                 Event::CallFrameValueNodes => &mut counts.call_frame_value_nodes,
                 Event::CallOutputEvidenceNodes => &mut counts.call_output_evidence_nodes,
                 Event::PresentationEvidenceCopyNode => &mut counts.presentation_evidence_copy_nodes,
+                Event::UnfinishedReachAnalysis => &mut counts.unfinished_reach_analyses,
             };
             *count = count.saturating_add(amount);
             cell.set(counts);
@@ -134,6 +139,9 @@ mod observer {
                 presentation_evidence_copy_nodes: after
                     .presentation_evidence_copy_nodes
                     .saturating_sub(before.presentation_evidence_copy_nodes),
+                unfinished_reach_analyses: after
+                    .unfinished_reach_analyses
+                    .saturating_sub(before.unfinished_reach_analyses),
             },
         )
     }

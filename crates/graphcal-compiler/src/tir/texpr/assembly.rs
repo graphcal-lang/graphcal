@@ -34,10 +34,12 @@ use super::model::{
 };
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use super::operators::{
-    ArithOp, BExpr, CExpr, ComplexPart, DExpr, EqualityOp, IExpr, IntArithOp, LinearAlgebraCall,
-    OrderedOperands, OrderingOp, QExpr, ScaleOp, ShiftOp,
+    ArithOp, BExpr, CExpr, ComplexPart, DExpr, EqualityOp, IExpr, IntArithOp, IntConversion,
+    LinearAlgebraCall, OrderedOperands, OrderingOp, QExpr, ScaleOp, ShiftOp,
 };
-use crate::builtin::{BuiltinFn, ComplexFn, ConversionFn, DatetimeConstructorFn, DatetimeFn};
+use crate::builtin::{
+    BuiltinFn, ComplexFn, ConversionFn, DatetimeConstructorFn, DatetimeFn, UnixTimeFn,
+};
 use crate::hir::expr::FunctionRef;
 
 /// Why a checked node could not be assembled into a typed tree.
@@ -231,8 +233,7 @@ impl PendingNodes {
             | ExprKind::CivilDateTimeLiteral(_)
             | ExprKind::EpochLiteral(_)
             | ExprKind::ZonedDateTimeLiteral(_)
-            | ExprKind::IanaTimeZoneLiteral(_)
-            | ExprKind::TypeSystemRef(_) => return Err(AssemblyError::ContextualValue(id())),
+            | ExprKind::IanaTimeZoneLiteral(_) => return Err(AssemblyError::ContextualValue(id())),
             ExprKind::QuantityLiteral { value, unit } => TExprKind::QuantityLiteral {
                 value: *value,
                 unit: unit.clone(),
@@ -547,14 +548,13 @@ impl BinaryOperation {
             }
             (BinOp::Add, T::Key(_), T::Int) => Self::KeyShift,
             (BinOp::Mod, T::Int, T::Int) => Self::Int(IntArithOp::Mod),
-            (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, T::Int, T::Int) => {
-                Self::Int(match arith? {
-                    ArithOp::Add => IntArithOp::Add,
-                    ArithOp::Sub => IntArithOp::Sub,
-                    ArithOp::Mul => IntArithOp::Mul,
-                    ArithOp::Div => IntArithOp::Div,
-                })
-            }
+            (BinOp::Add | BinOp::Sub | BinOp::Mul, T::Int, T::Int) => Self::Int(match arith? {
+                ArithOp::Add => IntArithOp::Add,
+                ArithOp::Sub => IntArithOp::Sub,
+                ArithOp::Mul => IntArithOp::Mul,
+                // Checking rejects `/` on two `Int` operands.
+                ArithOp::Div => return None,
+            }),
             (BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div, T::Quantity(_), T::Quantity(_)) => {
                 Self::Quantity(arith?)
             }
@@ -584,12 +584,58 @@ impl BinaryOperation {
     }
 }
 
+/// `lhs op rhs` with an `Int` operand that meets a quantity converted.
+///
+/// Checking lets an `Int` scale a real or complex quantity in `*` and `/`,
+/// and be the runtime exponent of a `Dimensionless` base in `^`, as an exact
+/// `Dimensionless` value. The conversion becomes an explicit
+/// [`QExpr::FromInt`] node over the `Int` operand, so the operation selected
+/// afterwards is ordinary quantity arithmetic and evaluation fails on an
+/// `Int` binary64 cannot represent. Every other operand pair is unchanged.
+fn convert_int_operand(
+    op: BinOp,
+    lhs: Box<TExpr<Symbolic>>,
+    rhs: Box<TExpr<Symbolic>>,
+) -> (Box<TExpr<Symbolic>>, Box<TExpr<Symbolic>>) {
+    let scaled = |ty: &CheckedType<Symbolic>| {
+        matches!(ty, CheckedType::Quantity(_) | CheckedType::Complex(_))
+    };
+    match (op, lhs.ty(), rhs.ty()) {
+        (BinOp::Mul | BinOp::Div, CheckedType::Int, other) if scaled(other) => {
+            (int_to_quantity(IntConversion::Scaling, lhs), rhs)
+        }
+        (BinOp::Mul | BinOp::Div, other, CheckedType::Int) if scaled(other) => {
+            (lhs, int_to_quantity(IntConversion::Scaling, rhs))
+        }
+        (BinOp::Pow(PowerExponent::Runtime), CheckedType::Quantity(_), CheckedType::Int) => {
+            (lhs, int_to_quantity(IntConversion::Exponent, rhs))
+        }
+        _ => (lhs, rhs),
+    }
+}
+
+/// The exact `Dimensionless` value of an `Int` operand that meets a
+/// quantity. The conversion checks the same occurrence as its operand, so it
+/// shares the operand's identity and span.
+fn int_to_quantity(conversion: IntConversion, int: Box<TExpr<Symbolic>>) -> Box<TExpr<Symbolic>> {
+    Box::new(TExpr::new(
+        int.id().clone(),
+        int.span(),
+        CheckedType::Quantity(crate::dimension::Dimension::dimensionless()),
+        TExprKind::Quantity(QExpr::FromInt {
+            conversion,
+            arg: int,
+        }),
+    ))
+}
+
 /// The typed form of `lhs op rhs`, if checking admits its operand types.
 fn binary(
     op: BinOp,
     lhs: Box<TExpr<Symbolic>>,
     rhs: Box<TExpr<Symbolic>>,
 ) -> Option<TExprKind<Symbolic>> {
+    let (lhs, rhs) = convert_int_operand(op, lhs, rhs);
     Some(match BinaryOperation::select(op, lhs.ty(), rhs.ty())? {
         BinaryOperation::And => TExprKind::Bool(BExpr::And { lhs, rhs }),
         BinaryOperation::Or => TExprKind::Bool(BExpr::Or { lhs, rhs }),
@@ -811,7 +857,10 @@ fn builtin_call(
         BuiltinFn::Conversion(conversion) => {
             let arg = single(args)?;
             match (conversion, category(&arg)) {
-                (ConversionFn::ToFloat, Category::Int) => TExprKind::Quantity(QExpr::FromInt(arg)),
+                (ConversionFn::ToFloat, Category::Int) => TExprKind::Quantity(QExpr::FromInt {
+                    conversion: IntConversion::ToFloat,
+                    arg,
+                }),
                 (ConversionFn::ToInt, Category::Key) => TExprKind::Int(IExpr::FinPosition(arg)),
                 (ConversionFn::ToInt, Category::Quantity) => {
                     TExprKind::Int(IExpr::FromQuantity(arg))
@@ -819,6 +868,17 @@ fn builtin_call(
                 (ConversionFn::Coord, Category::Key) => TExprKind::Quantity(QExpr::Coordinate(arg)),
                 _ => return None,
             }
+        }
+        BuiltinFn::IntDivision(function) => {
+            let [dividend, divisor] = pair(args)?;
+            if category(&dividend) != Category::Int || category(&divisor) != Category::Int {
+                return None;
+            }
+            TExprKind::Int(IExpr::Division {
+                function,
+                dividend,
+                divisor,
+            })
         }
         BuiltinFn::Datetime(function) => {
             let arg = single(args)?;
@@ -829,14 +889,11 @@ fn builtin_call(
                 (DatetimeFn::Field(field), Category::Datetime) => {
                     TExprKind::Int(IExpr::DatetimeField { field, arg })
                 }
-                (DatetimeFn::FromNumeric(function), Category::Quantity) => {
-                    TExprKind::Datetime(DExpr::FromQuantity { function, arg })
+                (DatetimeFn::Unix(UnixTimeFn::FromUnix), Category::Quantity) => {
+                    TExprKind::Datetime(DExpr::FromUnixTime(arg))
                 }
-                (DatetimeFn::FromNumeric(function), Category::Int) => {
-                    TExprKind::Datetime(DExpr::FromInt { function, arg })
-                }
-                (DatetimeFn::ToNumeric(function), Category::Datetime) => {
-                    TExprKind::Quantity(QExpr::FromDatetime { function, arg })
+                (DatetimeFn::Unix(UnixTimeFn::ToUnix), Category::Datetime) => {
+                    TExprKind::Quantity(QExpr::UnixTime(arg))
                 }
                 _ => return None,
             }
@@ -976,7 +1033,6 @@ mod tests {
             (BinOp::Add, T::Int, T::Int, "Int(Add)"),
             (BinOp::Sub, T::Int, T::Int, "Int(Sub)"),
             (BinOp::Mul, T::Int, T::Int, "Int(Mul)"),
-            (BinOp::Div, T::Int, T::Int, "Int(Div)"),
             (BinOp::Mod, T::Int, T::Int, "Int(Mod)"),
             (BinOp::Add, quantity(), quantity(), "Quantity(Add)"),
             (BinOp::Sub, quantity(), quantity(), "Quantity(Sub)"),
@@ -1049,6 +1105,7 @@ mod tests {
             (BinOp::Ne, T::Int, indexed),
             (BinOp::Lt, complex(), complex()),
             (BinOp::Lt, T::Int, quantity()),
+            (BinOp::Div, T::Int, T::Int),
             (BinOp::Mod, quantity(), quantity()),
             (BinOp::Mul, key(), T::Int),
             (BinOp::Add, complex(), quantity()),
@@ -1064,6 +1121,92 @@ mod tests {
         for (op, lhs, rhs) in cases {
             assert_eq!(select(op, &lhs, &rhs), None, "{op:?} {lhs:?} {rhs:?}");
         }
+    }
+
+    #[test]
+    fn int_scaling_operand_becomes_an_explicit_conversion() {
+        use CheckedType as T;
+        let converted = |operand: &TExpr<Symbolic>| {
+            matches!(
+                operand.kind(),
+                TExprKind::Quantity(QExpr::FromInt {
+                    conversion: IntConversion::Scaling,
+                    arg,
+                }) if *arg.ty() == T::Int
+            ) && *operand.ty() == quantity()
+        };
+        for op in [BinOp::Mul, BinOp::Div] {
+            match binary(op, arg(quantity()), arg(T::Int)) {
+                Some(TExprKind::Quantity(QExpr::Arith { lhs, rhs, .. })) => {
+                    assert_eq!(*lhs.ty(), quantity());
+                    assert!(converted(&rhs), "{op:?}: {rhs:?}");
+                }
+                other => panic!("{op:?}: {other:?}"),
+            }
+            match binary(op, arg(T::Int), arg(quantity())) {
+                Some(TExprKind::Quantity(QExpr::Arith { lhs, rhs, .. })) => {
+                    assert!(converted(&lhs), "{op:?}: {lhs:?}");
+                    assert_eq!(*rhs.ty(), quantity());
+                }
+                other => panic!("{op:?}: {other:?}"),
+            }
+            match binary(op, arg(complex()), arg(T::Int)) {
+                Some(TExprKind::Complex(CExpr::ScaleRight { scalar, .. })) => {
+                    assert!(converted(&scalar), "{op:?}: {scalar:?}");
+                }
+                other => panic!("{op:?}: {other:?}"),
+            }
+            match binary(op, arg(T::Int), arg(complex())) {
+                Some(TExprKind::Complex(CExpr::ScaleLeft { scalar, .. })) => {
+                    assert!(converted(&scalar), "{op:?}: {scalar:?}");
+                }
+                other => panic!("{op:?}: {other:?}"),
+            }
+        }
+        // `+`, `-`, comparisons, and two Ints convert nothing.
+        assert!(binary(BinOp::Add, arg(quantity()), arg(T::Int)).is_none());
+        assert!(binary(BinOp::Sub, arg(T::Int), arg(complex())).is_none());
+        assert!(binary(BinOp::Lt, arg(T::Int), arg(quantity())).is_none());
+        assert!(binary(BinOp::Div, arg(T::Int), arg(T::Int)).is_none());
+        assert!(matches!(
+            binary(BinOp::Mul, arg(T::Int), arg(T::Int)),
+            Some(TExprKind::Int(IExpr::Arith {
+                op: IntArithOp::Mul,
+                ..
+            }))
+        ));
+    }
+
+    /// The `Int` exponent of a quantity power becomes an explicit
+    /// [`IntConversion::Exponent`] node; an `Int` base converts nothing.
+    #[test]
+    fn int_exponent_becomes_an_explicit_conversion() {
+        use CheckedType as T;
+        match binary(
+            BinOp::Pow(PowerExponent::Runtime),
+            arg(quantity()),
+            arg(T::Int),
+        ) {
+            Some(TExprKind::Quantity(QExpr::Power { base, exponent })) => {
+                assert_eq!(*base.ty(), quantity());
+                assert!(
+                    matches!(
+                        exponent.kind(),
+                        TExprKind::Quantity(QExpr::FromInt {
+                            conversion: IntConversion::Exponent,
+                            arg,
+                        }) if *arg.ty() == T::Int
+                    ) && *exponent.ty() == quantity(),
+                    "{exponent:?}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+        // An Int base keeps integer powers; nothing is converted.
+        assert!(matches!(
+            binary(BinOp::Pow(PowerExponent::Runtime), arg(T::Int), arg(T::Int)),
+            Some(TExprKind::Int(IExpr::Power { .. }))
+        ));
     }
 
     #[test]
@@ -1127,8 +1270,8 @@ mod tests {
     )]
     fn built_in_calls_select_their_typed_operation() {
         use crate::builtin::{
-            AggregationFn, DatetimeField, DatetimeFromNumericFn, DatetimeToNumericFn,
-            LinearAlgebraFn, ScalarFn, TimeScaleConversionFn, ValueAggregation,
+            AggregationFn, DatetimeField, IntDivisionFn, LinearAlgebraFn, ScalarFn,
+            TimeScaleConversionFn, ValueAggregation,
         };
         let indexed = CheckedType::Indexed {
             element: Box::new(quantity()),
@@ -1217,24 +1360,24 @@ mod tests {
                 "Quantity::Coordinate",
             ),
             (
+                BuiltinFn::IntDivision(IntDivisionFn::Floor),
+                vec![CheckedType::Int, CheckedType::Int],
+                "Int::Division",
+            ),
+            (
                 BuiltinFn::Datetime(DatetimeFn::Field(DatetimeField::Year)),
                 vec![datetime()],
                 "Int::DatetimeField",
             ),
             (
-                BuiltinFn::Datetime(DatetimeFn::FromNumeric(DatetimeFromNumericFn::Jd)),
+                BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::FromUnix)),
                 vec![quantity()],
-                "Datetime::FromQuantity",
+                "Datetime::FromUnixTime",
             ),
             (
-                BuiltinFn::Datetime(DatetimeFn::FromNumeric(DatetimeFromNumericFn::Unix)),
-                vec![CheckedType::Int],
-                "Datetime::FromInt",
-            ),
-            (
-                BuiltinFn::Datetime(DatetimeFn::ToNumeric(DatetimeToNumericFn::Mjd)),
+                BuiltinFn::Datetime(DatetimeFn::Unix(UnixTimeFn::ToUnix)),
                 vec![datetime()],
-                "Quantity::FromDatetime",
+                "Quantity::UnixTime",
             ),
             (
                 BuiltinFn::Datetime(DatetimeFn::ScaleConversion(TimeScaleConversionFn::ALL[0])),
@@ -1253,7 +1396,7 @@ mod tests {
 
     #[test]
     fn built_in_calls_reject_unchecked_argument_types() {
-        use crate::builtin::{AggregationFn, ScalarFn, ValueAggregation};
+        use crate::builtin::{AggregationFn, IntDivisionFn, ScalarFn, ValueAggregation};
         let cases: Vec<(BuiltinFn, Vec<CheckedType<Symbolic>>)> = vec![
             (BuiltinFn::Scalar(ScalarFn::Sqrt), vec![CheckedType::Int]),
             (BuiltinFn::Complex(ComplexFn::Rectangular), vec![quantity()]),
@@ -1276,6 +1419,14 @@ mod tests {
             (
                 BuiltinFn::Conversion(ConversionFn::ToInt),
                 vec![quantity(), quantity()],
+            ),
+            (
+                BuiltinFn::IntDivision(IntDivisionFn::Trunc),
+                vec![quantity(), CheckedType::Int],
+            ),
+            (
+                BuiltinFn::IntDivision(IntDivisionFn::Ceil),
+                vec![CheckedType::Int],
             ),
             (
                 BuiltinFn::Datetime(DatetimeFn::Constructor(DatetimeConstructorFn::Epoch)),

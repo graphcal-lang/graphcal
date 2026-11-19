@@ -152,10 +152,13 @@ struct ExternGenerics {
 
 impl ExternGenerics {
     /// Bind `function`'s binders; binder names share one lexical namespace
-    /// regardless of constraint (`<D: Dim, D: Index>` is a duplicate).
+    /// regardless of constraint (`<D: Dim, D: Index>` is a duplicate), and,
+    /// like a type declaration's generics, may not reuse a reserved or
+    /// visible Static name of the declaring `module` (N027).
     fn new(
         key: &crate::plugin_identity::ExternFnKey,
         function: &crate::desugar::desugared_ast::ExternFnDecl,
+        module: crate::resolve::ModuleRef<'_>,
         src: SourceId,
     ) -> Result<Self, SemanticError> {
         use crate::hir::lower::GenericParamBinding;
@@ -183,15 +186,21 @@ impl ExternGenerics {
             let id = GenericParamId::new(owner.clone(), GenericParamName::classify(atom.clone()));
             generics
                 .scope
-                .insert_binding(GenericParamBinding::new(id.clone(), constraint, span))
-                .map_err(|_| {
-                    SemanticError::located(
-                        src,
-                        binder.span(),
-                        PluginError::InvalidExternSignature {
-                            error: ExternSignatureError::DuplicateGenericBinder(atom.clone()),
-                        },
-                    )
+                .insert_declared_binder(
+                    GenericParamBinding::new(id.clone(), constraint, span),
+                    module,
+                )
+                .map_err(|error| match error {
+                    crate::hir::lower::HirLowerError::DuplicateGenericParam { .. } => {
+                        SemanticError::located(
+                            src,
+                            binder.span(),
+                            PluginError::InvalidExternSignature {
+                                error: ExternSignatureError::DuplicateGenericBinder(atom.clone()),
+                            },
+                        )
+                    }
+                    other => crate::hir::diagnostics::hir_lower_error_to_graphcal(&other, src),
                 })?;
             match binder {
                 ExternGenericBinder::Dim(var) => {
@@ -224,7 +233,7 @@ pub(super) fn resolve_plugin_imports(
     for decl in decls {
         for function in &decl.functions {
             let entry = resolve_extern_function(decl, function, scope, src)?;
-            merge_extern_function(&mut map, entry, src)?;
+            merge_extern_function(&mut map, entry)?;
         }
     }
     Ok(map)
@@ -290,7 +299,18 @@ fn resolve_extern_function(
         ),
         name: function.name.value.clone(),
     };
-    let generics = ExternGenerics::new(&key, function, src)?;
+    let resolver = scope.resolver();
+    let module = resolver
+        .module_handle(scope.owner)
+        .map(|handle| resolver.module(handle))
+        .ok_or_else(|| {
+            SemanticError::internal_error(
+                format!("DAG `{}` is not a module of its resolver", scope.owner),
+                src,
+                crate::diagnostic_anchor::DiagnosticAnchor::WholeFile,
+            )
+        })?;
+    let generics = ExternGenerics::new(&key, function, module, src)?;
     let params = function
         .params
         .iter()
@@ -340,6 +360,7 @@ fn resolve_extern_function(
         alias: decl.alias.value.clone(),
         name: key.name,
         signature,
+        source: src,
         name_span: function.name.span,
         decl_span: function.span,
         path_span: decl.path.span,

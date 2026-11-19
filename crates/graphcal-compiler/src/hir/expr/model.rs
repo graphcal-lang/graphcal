@@ -2,8 +2,8 @@
 //! binder payloads.
 
 use crate::resolved_name::{
-    ResolvedConstructorName, ResolvedDeclName, ResolvedDimName, ResolvedIndexName,
-    ResolvedIndexVariant, ResolvedStructTypeName, ResolvedUnitName,
+    ResolvedConstructorName, ResolvedDeclName, ResolvedIndexName, ResolvedIndexVariant,
+    ResolvedUnitName,
 };
 use crate::syntax::dimension::UnitRef as SyntaxUnitRef;
 
@@ -145,14 +145,6 @@ impl Completeness for Strict {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct LocalId(pub(in crate::hir) u32);
 
-impl LocalId {
-    /// Numeric index unique within one lowered expression tree.
-    #[must_use]
-    pub(crate) const fn index(self) -> u32 {
-        self.0
-    }
-}
-
 /// A lexical local binding introduced by an expression form.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalDef {
@@ -207,12 +199,6 @@ impl<C: Completeness> Expr<C> {
     #[must_use]
     pub const fn kind(&self) -> &ExprKind<C> {
         &self.kind
-    }
-
-    /// Consume the node for reconstruction. The identity, if any, is dropped.
-    #[must_use]
-    pub fn into_kind(self) -> ExprKind<C> {
-        *self.kind
     }
 }
 
@@ -361,7 +347,6 @@ pub enum ExprKind<C: Completeness = Strict> {
     EpochLiteral(EpochLiteral),
     /// An IANA timezone literal validated and canonicalized during HIR lowering.
     IanaTimeZoneLiteral(IanaTimeZoneId),
-    TypeSystemRef(Spanned<TypeSystemRef>),
     GraphRef(Spanned<C::DeclRef>),
     ConstRef(Spanned<ConstRef<C::DeclRef>>),
     LocalRef(Spanned<LocalId>),
@@ -480,31 +465,6 @@ pub struct UnfoldRecurrence {
     pub current_index: LocalDef,
 }
 
-/// Type-system identifier used as a value expression, usually in include bindings.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TypeSystemRef {
-    Type(ResolvedStructTypeName),
-    Dimension(ResolvedDimName),
-    Index(ResolvedIndexName),
-    IndexVariant(ResolvedIndexVariant),
-}
-
-impl TypeSystemRef {
-    #[must_use]
-    pub(crate) fn surface_description(&self) -> String {
-        match self {
-            Self::Type(name) => format!("type `{}`", name.as_str()),
-            Self::Dimension(name) => format!("dimension `{}`", name.as_str()),
-            Self::Index(name) => format!("index `{}`", name.as_str()),
-            Self::IndexVariant(variant) => format!(
-                "index label `{}#{}`",
-                variant.index().as_str(),
-                variant.variant()
-            ),
-        }
-    }
-}
-
 /// Resolved constant-like expression target.
 ///
 /// `D` is how a declaration reference names its target, per
@@ -557,17 +517,6 @@ impl FunctionRef {
             Self::Builtin(builtin) => Some(builtin.function()),
             Self::Epoch { .. } => Some(BuiltinFn::EPOCH),
             Self::External(_) => None,
-        }
-    }
-}
-
-impl std::fmt::Display for FunctionRef {
-    /// Render source-like function spelling at diagnostic and display boundaries.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Builtin(name) => std::fmt::Display::fmt(name, f),
-            Self::Epoch { scale } => write!(f, "epoch<{}>", scale.value),
-            Self::External(extern_ref) => std::fmt::Display::fmt(extern_ref, f),
         }
     }
 }

@@ -41,13 +41,7 @@ impl<'s> BatchBuilder<'s> {
         input: &InputHandle<K>,
         values: impl IntoIterator<Item = K::Input>,
     ) -> Result<Self, ClientError> {
-        input.port().ensure_model(self.model)?;
-        let slot = self
-            .schema
-            .input_slot(input.name().as_str())
-            .ok_or_else(|| ClientError::NotVaried {
-                name: input.name().clone(),
-            })?;
+        let slot = input.slot_in(self.model, self.schema)?;
         let column = &mut self.columns[slot.get()];
         if column.is_some() {
             return Err(ClientError::DuplicateColumn {

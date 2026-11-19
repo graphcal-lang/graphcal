@@ -27,13 +27,13 @@ impl Infer<'_> {
         output_name: &crate::syntax::decl_name::DeclName,
         output: &crate::syntax::span::Spanned<ResolvedDeclName>,
     ) -> Result<CheckedType<Symbolic>, Outcome<SemanticError>> {
+        // Resolution reports an inline call of an undeclared dag (G008), so
+        // a checked call names a dag of the program.
         let dag_tir = self.env.tir.dag(&target.value).ok_or_else(|| {
-            SemanticError::located(
+            SemanticError::internal_error(
+                format!("inline call target `{}` has no checked dag", target.value),
                 self.env.src,
-                target.span,
-                GraphError::UnknownDag {
-                    name: target.value.clone(),
-                },
+                crate::diagnostic_anchor::DiagnosticAnchor::Source(target.span),
             )
         })?;
 
@@ -70,7 +70,12 @@ impl Infer<'_> {
                 )
             })?;
             let found = self.infer_hir_type(&binding.value)?;
-            let expected = specialize_type(expected, &substitution, self.env.src)?;
+            let expected = specialize_type(expected, &substitution).map_err(
+                crate::tir::typed::specialization::specialization_overflow(
+                    self.env.src,
+                    binding.target.span,
+                ),
+            )?;
             // A parameter type that still mentions a generic parameter has no
             // checked type and therefore matches no argument.
             if !expected
@@ -135,7 +140,9 @@ impl Infer<'_> {
             )
             .into());
         }
-        let output_decl = specialize_type(output_decl, &substitution, self.env.src)?;
+        let output_decl = specialize_type(output_decl, &substitution).map_err(
+            crate::tir::typed::specialization::specialization_overflow(self.env.src, output.span),
+        )?;
         output_decl
             .to_checked_type(self.env.src)
             .map(|ty| ty.to_symbolic())

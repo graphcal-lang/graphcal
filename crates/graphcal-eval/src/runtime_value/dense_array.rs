@@ -201,7 +201,7 @@ mod tests {
     }
 
     fn columns() -> IndexAxis {
-        IndexAxis::finite(FiniteIndex::try_from_u64(3).unwrap()).unwrap()
+        IndexAxis::finite(FiniteIndex::try_from_u64(3).unwrap())
     }
 
     fn int(value: i64) -> RuntimeValue {
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn rejects_ragged_and_mixed_entries() {
         let other_columns = RuntimeValue::Indexed(IndexedValue::for_test(
-            IndexAxis::finite(FiniteIndex::try_from_u64(1).unwrap()).unwrap(),
+            IndexAxis::finite(FiniteIndex::try_from_u64(1).unwrap()),
             vec![int(7)],
         ));
         let ragged = IndexedValue::for_test(rows(), vec![row([1, 2, 3]), other_columns]);

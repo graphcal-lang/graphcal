@@ -1,0 +1,372 @@
+//! Transport-independent model ports and per-row model evaluation.
+
+use graphcal_compiler::outcome::Outcome;
+use graphcal_eval::eval::runtime::{FailureOrigin, RootFailure, RootOutcome};
+
+use super::binding_compile::ParameterBindingRow;
+use super::{ParameterPosition, PreparedProject};
+use crate::compile_error::CompileError;
+use crate::prepare::model_schema::ModelValueSchema;
+use graphcal_compiler::resolved_name::ResolvedDeclName;
+use graphcal_compiler::semantic::checked_type::CheckedType;
+use graphcal_compiler::semantic::time_scale::TimeScale;
+use graphcal_compiler::syntax::decl_name::DeclName;
+use graphcal_compiler::syntax::span::Span;
+use graphcal_eval::eval::types::Value;
+use thiserror::Error;
+
+/// Inclusive lower and upper bounds for one external input family.
+///
+/// Every declared bound is ordered (comparable with itself, so never NaN),
+/// and a lower bound never exceeds an upper bound.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InclusiveBounds<T> {
+    lower: Option<T>,
+    upper: Option<T>,
+}
+
+/// Why bounds do not form an inclusive interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum InclusiveBoundsError {
+    #[error("a domain bound is unordered")]
+    Unordered,
+    #[error("the lower domain bound exceeds the upper bound")]
+    Inverted,
+}
+
+impl<T: PartialOrd> InclusiveBounds<T> {
+    /// Bounds from `lower` to `upper`, each inclusive when declared.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InclusiveBoundsError`] when a bound is unordered or the
+    /// lower bound exceeds the upper bound.
+    pub fn try_new(lower: Option<T>, upper: Option<T>) -> Result<Self, InclusiveBoundsError> {
+        let ordered = |bound: &Option<T>| {
+            bound
+                .as_ref()
+                .is_none_or(|bound| bound.partial_cmp(bound).is_some())
+        };
+        if !(ordered(&lower) && ordered(&upper)) {
+            return Err(InclusiveBoundsError::Unordered);
+        }
+        if let (Some(lower), Some(upper)) = (&lower, &upper)
+            && lower > upper
+        {
+            return Err(InclusiveBoundsError::Inverted);
+        }
+        Ok(Self { lower, upper })
+    }
+}
+
+impl<T> InclusiveBounds<T> {
+    /// Inclusive lower bound, when declared.
+    #[must_use]
+    pub const fn lower(&self) -> Option<&T> {
+        self.lower.as_ref()
+    }
+
+    /// Inclusive upper bound, when declared.
+    #[must_use]
+    pub const fn upper(&self) -> Option<&T> {
+        self.upper.as_ref()
+    }
+}
+
+/// Resolved sampling-domain information on a Graphcal parameter.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParameterDomain {
+    /// Real quantity bounds in Graphcal's SI runtime representation.
+    Quantity(InclusiveBounds<f64>),
+    /// Exact signed-integer bounds.
+    Integer(InclusiveBounds<i64>),
+    /// Exact physical-instant bounds for one declared time scale.
+    Datetime {
+        /// Declared Graphcal time scale.
+        scale: TimeScale,
+        /// Bounds canonicalized to TAI durations for ordering.
+        bounds: InclusiveBounds<hifitime::Duration>,
+    },
+}
+
+/// One entry-DAG parameter port in declaration order.
+#[derive(Debug, Clone)]
+pub struct ParameterPort {
+    pub(super) name: DeclName,
+    pub(super) position: ParameterPosition,
+    pub(super) declared_type: CheckedType,
+    pub(super) value_schema: ModelValueSchema,
+    pub(super) domain: Option<ParameterDomain>,
+    pub(super) has_default: bool,
+    pub(super) runtime_key: ResolvedDeclName,
+    pub(super) span: Span,
+}
+
+impl ParameterPort {
+    /// Source-level entry parameter name.
+    #[must_use]
+    pub const fn name(&self) -> &DeclName {
+        &self.name
+    }
+
+    /// Plan-scoped position.
+    #[must_use]
+    pub const fn position(&self) -> ParameterPosition {
+        self.position
+    }
+
+    /// Recursive concrete value schema.
+    #[must_use]
+    pub const fn value_schema(&self) -> &ModelValueSchema {
+        &self.value_schema
+    }
+
+    /// Resolved domain constraint, when one is declared.
+    #[must_use]
+    pub const fn domain(&self) -> Option<&ParameterDomain> {
+        self.domain.as_ref()
+    }
+
+    /// Whether evaluation can use a compiled default when this slot is absent.
+    #[must_use]
+    pub const fn has_default(&self) -> bool {
+        self.has_default
+    }
+}
+
+/// One directly declared root node available to model-output selection.
+#[derive(Debug, Clone)]
+pub struct ModelOutputPort {
+    pub(super) name: DeclName,
+    pub(super) declared_type: CheckedType,
+    pub(super) value_schema: ModelValueSchema,
+    pub(super) is_public: bool,
+    pub(super) runtime_key: ResolvedDeclName,
+}
+
+impl ModelOutputPort {
+    /// Source-level node name.
+    #[must_use]
+    pub const fn name(&self) -> &DeclName {
+        &self.name
+    }
+
+    /// Recursive concrete value schema.
+    #[must_use]
+    pub const fn value_schema(&self) -> &ModelValueSchema {
+        &self.value_schema
+    }
+
+    /// Whether the source node is explicitly public.
+    #[must_use]
+    pub const fn is_public(&self) -> bool {
+        self.is_public
+    }
+}
+
+impl PreparedProject {
+    /// Evaluate one row, projecting the value of each of `outputs` with
+    /// `project`, which receives the output's position in `outputs` and the
+    /// row's `cancellation`. Cancellation requested before every output is
+    /// projected cancels the row.
+    pub(super) fn evaluate_row<T>(
+        &self,
+        row: &ParameterBindingRow,
+        outputs: &[ModelOutputPort],
+        project: impl Fn(
+            &graphcal_eval::eval_expr::RuntimeValue,
+            usize,
+            &graphcal_compiler::cancellation::CancellationToken,
+        ) -> Result<T, Outcome<OutputProjectionError>>,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
+    ) -> Result<ModelRowOutcome<T>, Outcome<ModelExecutionError>> {
+        self.validate_row_identity(row)
+            .map_err(|error| Outcome::Failed(ModelExecutionError::from(error)))?;
+
+        let outcome = RootOutcome::evaluate(
+            self.plan(),
+            &row.bindings,
+            self.source,
+            &self.sources,
+            &self.host_fns,
+            &self.output_assembly.display_names,
+            cancellation,
+        )
+        .map_err(|outcome| outcome.map_failed(|error| self.render(error).into()))?;
+        if let Some(failure) =
+            outcome.first_failure(self.plan(), &self.output_assembly.display_names)
+        {
+            return Ok(ModelRowOutcome::Failure(self.row_failure(failure)));
+        }
+        let values = outcome.values();
+        let mut projected = Vec::with_capacity(outputs.len());
+        for (position, output) in outputs.iter().enumerate() {
+            let runtime = values.get(&output.runtime_key).ok_or_else(|| {
+                Outcome::Failed(ModelExecutionError::MissingOutputValue {
+                    name: output.name.clone(),
+                })
+            })?;
+            match project(runtime, position, cancellation) {
+                Ok(value) => projected.push(value),
+                Err(Outcome::Cancelled) => return Err(Outcome::Cancelled),
+                Err(Outcome::Failed(OutputProjectionError::Overflow)) => {
+                    return Ok(ModelRowOutcome::Failure(ModelRowFailure::OutputOverflow {
+                        name: output.name.clone(),
+                    }));
+                }
+                Err(Outcome::Failed(OutputProjectionError::Invariant(invariant))) => {
+                    return Err(Outcome::Failed(ModelExecutionError::Compile(
+                        self.render(invariant.into_internal_error(self.source)),
+                    )));
+                }
+                Err(Outcome::Failed(OutputProjectionError::Unrepresentable)) => {
+                    return Err(Outcome::Failed(
+                        ModelExecutionError::UnrepresentableOutput {
+                            name: output.name.clone(),
+                        },
+                    ));
+                }
+            }
+        }
+        // A deadline that passed during the last projection still cancels
+        // the row rather than reporting it as a success.
+        cancellation.checkpoint()?;
+        Ok(ModelRowOutcome::Success(projected))
+    }
+
+    /// The diagnostic a model row reports for the first failure of its
+    /// evaluation, naming private include scopes as the project displays them.
+    fn row_failure(&self, failure: RootFailure<'_>) -> ModelRowFailure {
+        let display = |name: &graphcal_compiler::syntax::module_name::ScopedName| {
+            graphcal_compiler::display::include_scope_names::name_include_scopes(
+                name,
+                self.output_assembly.display_names.include_scopes(),
+            )
+        };
+        match failure {
+            RootFailure::Declaration {
+                name,
+                reason,
+                origins,
+            } => ModelRowFailure::Declaration {
+                name: display(&name),
+                reason,
+                origins,
+            },
+            RootFailure::Assertion { name, message } => ModelRowFailure::Assertion {
+                name: display(name),
+                message,
+            },
+            RootFailure::UnfinishedCalls(calls) => ModelRowFailure::UnfinishedCalls(calls),
+        }
+    }
+}
+
+/// Why an output value cannot be projected for a model row.
+pub(super) enum OutputProjectionError {
+    /// The value contradicts its checked type.
+    Invariant(graphcal_eval::invariant::Invariant),
+    /// The value has no representation in the requested wire type.
+    Unrepresentable,
+    /// A finite SI value has no finite value in the unit the session chose
+    /// for the output: the row's failure, like an input that overflows.
+    Overflow,
+}
+
+impl From<graphcal_eval::invariant::Invariant> for OutputProjectionError {
+    fn from(invariant: graphcal_eval::invariant::Invariant) -> Self {
+        Self::Invariant(invariant)
+    }
+}
+
+impl From<OutputProjectionError> for Outcome<OutputProjectionError> {
+    fn from(error: OutputProjectionError) -> Self {
+        Self::Failed(error)
+    }
+}
+
+/// Ordinary recursive typed per-row model outcome: the selected outputs,
+/// each projected as a `T`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelRowOutcome<T = Value> {
+    Success(Vec<T>),
+    Failure(ModelRowFailure),
+}
+
+/// The first ordinary Graphcal failure of a model row, naming declarations
+/// as the project displays them; its rendering is the row's stable human
+/// diagnostic.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ModelRowFailure {
+    /// A declaration failed, or is unavailable. A failure that only
+    /// propagates failed dependencies also names the declarations it
+    /// originates from, so that the row's diagnostic shows the cause.
+    #[error("{name}: {reason}{}", failure_origins(.origins))]
+    Declaration {
+        name: graphcal_compiler::syntax::module_name::ScopedName,
+        reason: graphcal_eval::eval::OutputUnavailable,
+        origins: Vec<FailureOrigin>,
+    },
+    /// An assertion did not pass.
+    #[error("assertion `{name}`: {message}")]
+    Assertion {
+        name: graphcal_compiler::syntax::module_name::ScopedName,
+        message: String,
+    },
+    /// A selected output's finite value overflows in the unit the session
+    /// chose for it.
+    #[error("output `{name}` has no finite value in its chosen unit")]
+    OutputOverflow { name: DeclName },
+    /// A call reached unfinished formulas of the DAG it invoked.
+    #[error("unfinished formulas in invoked DAGs: {}", unfinished_calls(.0))]
+    UnfinishedCalls(Vec<graphcal_eval::eval::OutputDeclName>),
+}
+
+fn failure_origins(origins: &[FailureOrigin]) -> String {
+    if origins.is_empty() {
+        return String::new();
+    }
+    let label = if origins.len() == 1 {
+        "originating failure"
+    } else {
+        "originating failures"
+    };
+    let origins = origins
+        .iter()
+        .map(|origin| format!("{} ({})", origin.name, origin.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("; {label}: {origins}")
+}
+
+fn unfinished_calls(calls: &[graphcal_eval::eval::OutputDeclName]) -> String {
+    calls
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// Process-scoped failure while evaluating a prepared model.
+#[derive(Debug, Error)]
+pub enum ModelExecutionError {
+    #[error(transparent)]
+    Compile(#[from] CompileError),
+    #[error("model projection belongs to another prepared project")]
+    PlanMismatch,
+    /// A selected output was planned but evaluation left no value for it.
+    #[error(
+        "internal model projection invariant failed: selected output `{name}` has no runtime value"
+    )]
+    MissingOutputValue { name: DeclName },
+    /// A selected output's value has no representation in its wire type.
+    #[error(
+        "internal model projection invariant failed: selected output `{name}` has no wire representation"
+    )]
+    UnrepresentableOutput { name: DeclName },
+    #[error("the request batch belongs to another model session")]
+    SessionMismatch,
+    /// An evaluated row does not fit the session's result batch.
+    #[error("internal model session invariant failed: {0}")]
+    ResultBatch(#[from] graphcal_model_protocol::OutputValuesError),
+}

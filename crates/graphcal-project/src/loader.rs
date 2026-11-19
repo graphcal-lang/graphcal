@@ -12,9 +12,8 @@ use graphcal_compiler::diagnostic_anchor::DiagnosticAnchor;
 use graphcal_compiler::outcome::Outcome;
 use graphcal_compiler::plugin_identity::{ExternFnKey, PluginIdentity};
 use graphcal_compiler::semantic_error::SemanticError;
-use graphcal_compiler::source_registry::SourceRegistry;
+use graphcal_compiler::source_registry::{SourceOrigin, SourceRegistry};
 use graphcal_compiler::syntax::ast::ModulePath;
-use graphcal_compiler::syntax::decl_name::DeclName;
 #[cfg(test)]
 use graphcal_io::hash_source_tree;
 use graphcal_io::{FileSystemEntryKind, FileSystemReader, RealFileSystem};
@@ -25,7 +24,9 @@ mod inline_dags;
 pub(crate) mod loaded_file;
 pub(crate) mod loaded_module_resolver;
 pub(crate) mod loaded_project;
+mod module_file;
 pub(crate) mod module_path;
+mod same_file_reference;
 mod source_authority;
 mod source_snapshot;
 
@@ -37,7 +38,7 @@ use budget::{
 };
 pub use budget::{LoaderArtifactByteLimits, LoaderBudget};
 pub use budget_violation::{LoaderBudgetExceeded, LoaderResource};
-use build::{build_loaded_files, reject_file_root_stem_imports};
+use build::{build_loaded_files, same_file_root_targets};
 use inline_dags::lift_inline_dags;
 pub use loaded_file::{LoadedDag, LoadedFile};
 pub use loaded_project::{
@@ -46,15 +47,17 @@ pub use loaded_project::{
 };
 use module_path::PackageSelector;
 pub use module_path::ResolvedModuleTarget;
+use same_file_reference::SameFileScope;
 use source_authority::{
     ModuleSourceAuthority, ProjectSources, SelectedPackage, SourceTree, fetch_source_snapshot,
+    verify_root_module_file,
 };
-use source_snapshot::{ModuleRoot, PackageFileKey, ParsedFile, ResolveFailure, file_stem};
+use source_snapshot::{ModuleRoot, PackageFileKey, ParsedFile, ResolveFailure};
 
 use graphcal_package::{
-    GitSourceId, LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError,
-    PackageSource, STDLIB_VERSION, Sha256Digest, ValidatedPackageGraph,
-    parse_lockfile_str_with_limits, parse_manifest_str,
+    LockedPackage, PackageInstanceId, PackageManifest, PackageResolveError, PackageSource,
+    STDLIB_VERSION, Sha256Digest, ValidatedPackageGraph, parse_lockfile_str_with_limits,
+    parse_manifest_str,
 };
 
 #[cfg(test)]
@@ -75,6 +78,39 @@ fn wasm_plugin_paths(
         .into_iter()
         .map(|plugin| &plugin.path.value)
         .filter(|path| path.source_kind() == PluginSourceKind::WasmModule)
+}
+
+/// Reject every wasm plugin import declared by a loaded file that
+/// `in_namespace` places outside its package namespace.
+///
+/// Plugin trust rests on `graphcal.lock`, which covers the package's own
+/// namespace. A file under a manifest whose canonical path lies outside the
+/// namespace (a loose script, or a module file reached through an in-root
+/// symlink that leaves `<source_dir>/<package>/`) cannot load plugin
+/// binaries at all. The check runs before any plugin bytes are read.
+fn reject_wasm_plugins_outside_package_namespace<'a>(
+    files: impl IntoIterator<Item = &'a LoadedFile<module_path::ModuleTarget>>,
+    sources: &SourceRegistry,
+    mut in_namespace: impl FnMut(&LoadedFile<module_path::ModuleTarget>) -> bool,
+) -> Result<(), CompileError> {
+    use graphcal_compiler::syntax::plugin::PluginSourceKind;
+
+    files
+        .into_iter()
+        .filter(|file| wasm_plugin_paths(&file.ast).next().is_some())
+        .filter(|file| !in_namespace(file))
+        .find_map(|file| {
+            file.ast
+                .plugin_imports()
+                .into_iter()
+                .find(|plugin| plugin.path.value.source_kind() == PluginSourceKind::WasmModule)
+                .map(|plugin| LoadError::WasmPluginOutsidePackageNamespace {
+                    plugin: plugin.path.value.clone(),
+                    src: sources.renderable(file.source_id),
+                    span: plugin.path.span.into(),
+                })
+        })
+        .map_or(Ok(()), |error| Err(error.into()))
 }
 
 fn validate_plugin_call_policy(
@@ -289,14 +325,17 @@ impl LoadedProject {
         let mut sources = SourceRegistry::new();
         let parsed = ParsedFile::parse(
             &mut sources,
+            SourceOrigin::Detached,
             name,
             Arc::new(source.to_string()),
             cancellation,
         )?;
         cancellation.checkpoint()?;
         let path = PathBuf::from(name);
-        let stem = file_stem(&path);
-        reject_file_root_stem_imports(&parsed.ast.declarations, stem, &parsed.named_source)?;
+        let same_file = SameFileScope::new(
+            &parsed.ast.declarations,
+            ModuleRoot::Standalone.stem_reference(&path),
+        );
         // `name` is also a diagnostic label and may be an absolute virtual URI
         // path. A standalone in-memory file has no filesystem hierarchy, so a
         // rooted label contributes only its leaf to semantic DAG identity.
@@ -326,12 +365,18 @@ impl LoadedProject {
             )
         })?;
         // No project root or manifest in single-file mode — only same-file
-        // DAGs and the file-stem self-reference (Concept 7) resolve here. Like
-        // the file-root imports of this mode, a cross-file body path has no
-        // target: an editor buffer analyzed without its project stays usable.
-        let Ok(inline_dags) = lift_inline_dags(&parsed.ast, &dag_id, stem, |_| {
-            Ok::<_, std::convert::Infallible>(None)
-        });
+        // DAGs and the file-stem self-reference (Concept 7) resolve here. A
+        // cross-file path, at file root or in a body, has no target: an
+        // editor buffer analyzed without its project stays usable.
+        let resolved_imports =
+            same_file_root_targets(&parsed.ast, &same_file, &dag_id, &parsed.registered_source)?;
+        let inline_dags = lift_inline_dags(
+            &parsed.ast,
+            &dag_id,
+            &same_file,
+            &parsed.registered_source,
+            |_| Ok(None),
+        )?;
         cancellation.checkpoint()?;
         // No filesystem to read wasm plugin files from; the entries carry
         // the reason so evaluation can report it at the import site.
@@ -355,7 +400,7 @@ impl LoadedProject {
             source,
             source_id,
             ast,
-            HashMap::new(),
+            resolved_imports,
             inline_dags,
         );
         Self::from_parts(
@@ -379,28 +424,23 @@ impl LoadedProject {
     ///
     /// Returns [`ModuleResolveError`](graphcal_compiler::resolve::error::ModuleResolveError)
     /// for duplicate or ambiguous modules, duplicate symbols, recursive
-    /// include expansion, or invalid resolved import surfaces.
+    /// include expansion, or invalid resolved import surfaces, or
+    /// [`Outcome::Cancelled`](graphcal_compiler::outcome::Outcome::Cancelled)
+    /// once `cancellation` is cancelled.
     pub fn build_module_resolver(
         &self,
+        cancellation: &graphcal_compiler::cancellation::CancellationToken,
     ) -> Result<
         graphcal_compiler::resolve::ModuleResolver,
-        graphcal_compiler::resolve::error::ModuleResolveError,
+        graphcal_compiler::outcome::Outcome<graphcal_compiler::resolve::error::ModuleResolveError>,
     > {
-        loaded_module_resolver::LoadedModuleResolver::build(self)
+        loaded_module_resolver::LoadedModuleResolver::build(self, cancellation)
             .map(loaded_module_resolver::LoadedModuleResolver::into_resolver)
-            .map_err(|loaded_module_resolver::ModuleResolverBuildError { error, .. }| error)
-    }
-
-    /// The top-level `dag` of the file root `owner` that a single-segment
-    /// module path names. File-root includes of their own DAGs are same-file
-    /// references, which never drive loading.
-    fn file_root_local_dag(&self, owner: &DagId, path: &ModulePath) -> Option<DagId> {
-        self.file(owner)?;
-        let [segment] = path.segments() else {
-            return None;
-        };
-        let dag_id = owner.inline_dag_child(DeclName::classify(segment.name.atom().clone()));
-        self.inline_dag(&dag_id).map(|_| dag_id)
+            .map_err(|outcome| {
+                outcome.map_failed(
+                    |loaded_module_resolver::ModuleResolverBuildError { error, .. }| error,
+                )
+            })
     }
 }
 
@@ -411,7 +451,6 @@ impl graphcal_compiler::resolve::builder::ModuleTargets for LoadedProject {
 
     fn include_target(&self, owner: &DagId, path: &ModulePath) -> Option<DagId> {
         resolved_module_target_from(owner, path, self)
-            .or_else(|| self.file_root_local_dag(owner, path))
     }
 }
 
@@ -557,12 +596,20 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
 ) -> Result<LoadedProject, Outcome<CompileError>> {
     cancellation.checkpoint()?;
-    let root_canonical = fs
-        .canonicalize(root_path)
-        .map_err(|_| io_not_found(root_path))?;
-
-    let root_dir = root_canonical.parent().unwrap_or(&root_canonical);
-    let project_root = resolve_project_root(root_dir, project_root_override, fs)?;
+    // A source file is a `.gcl` file under the name it is loaded by, not
+    // only after symlink resolution: `notes.txt -> main.gcl` is not one.
+    if root_path
+        .extension()
+        .is_none_or(|extension| extension != "gcl")
+    {
+        return Err(CompileError::Load(LoadError::InvalidSourcePath {
+            path: root_path.to_path_buf(),
+            reason: "source path must end with `.gcl`".to_string(),
+        })
+        .into());
+    }
+    let (root_canonical, project_root) =
+        resolve_entry_and_project_root(root_path, project_root_override, fs)?;
 
     // Determine the package mode for the root file: real package iff a manifest
     // exists at `project_root` AND the root file lives inside the package's
@@ -571,8 +618,10 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     // outside the namespace is treated as a virtual package — cross-file
     // imports from it will be rejected. This collapses the two modes into a
     // single rule: to import across files, you must live in a real package.
-    let manifest =
+    let root_package =
         load_manifest_for_root(&project_root, &root_canonical, fs, budget, cancellation)?;
+    let outside_package_namespace = matches!(root_package, RootPackage::OutsideNamespace);
+    let manifest = root_package.into_manifest();
     if let Some(package_manifest) = manifest.as_ref()
         && !package_manifest.dependencies.is_empty()
     {
@@ -608,6 +657,20 @@ fn load_project_with_budget_state<F: FileSystemReader>(
     cancellation.checkpoint()?;
     let (files, sources) = build_loaded_files(snapshot)?;
     cancellation.checkpoint()?;
+    match manifest.as_ref() {
+        // A loose script: none of its files is in the package namespace.
+        None if outside_package_namespace => {
+            reject_wasm_plugins_outside_package_namespace(&files, &sources, |_| false)?;
+        }
+        // An ad-hoc file with no manifest loads plugins unpinned.
+        None => {}
+        Some(package_manifest) => {
+            reject_wasm_plugins_outside_package_namespace(&files, &sources, |file| {
+                root_in_package_namespace(&project_root, &file.path, package_manifest, fs)
+                    == NamespaceMembership::Exact
+            })?;
+        }
+    }
     // Single-package project: every loaded file belongs to the root package,
     // so every declared wasm plugin resolves against the project root.
     let mut plugins = read_wasm_plugins(
@@ -738,6 +801,17 @@ fn load_locked_package_project<F: FileSystemReader>(
         let (package_root, reader) = context
             .authority_for(package)
             .map_err(loader_manifest_error)?;
+        let manifest = context.graph.manifest(package).ok_or_else(|| {
+            loader_manifest_error(PackageAuthorityError::MissingPackage(package.clone()))
+        })?;
+        reject_wasm_plugins_outside_package_namespace(
+            files.iter().filter(|file| file.dag_id.package() == &owner),
+            &sources,
+            |file| {
+                root_in_package_namespace(package_root, &file.path, manifest, reader)
+                    == NamespaceMembership::Exact
+            },
+        )?;
         let mut package_plugins = read_wasm_plugins(
             files
                 .iter()
@@ -909,7 +983,7 @@ impl ModuleSourceAuthority for PackageLoadContext<'_> {
             reader,
             root,
             package: DagPackageId::new(package.as_str()),
-            module_root: ModuleRoot::SourceDir(source_dir),
+            module_root: ModuleRoot::source_dir(reader, source_dir),
         })
     }
 
@@ -920,9 +994,24 @@ impl ModuleSourceAuthority for PackageLoadContext<'_> {
         selector: PackageSelector<'_>,
         from: &PackageFileKey,
     ) -> Result<SelectedPackage<PackageInstanceId>, ResolveFailure> {
+        let unknown = || {
+            self.graph.package(&from.package).map_or_else(
+                || {
+                    ResolveFailure::PackageAuthority(PackageAuthorityError::MissingPackage(
+                        from.package.clone(),
+                    ))
+                },
+                |package| ResolveFailure::UnknownDependency {
+                    package: package.name.clone(),
+                },
+            )
+        };
+        // A segment that is not a valid package name names no package.
+        let selector = graphcal_package::ModulePackageSelector::new(selector.name().as_str())
+            .map_err(|_| unknown())?;
         let resolved = self
             .graph
-            .resolve_package_selector(&from.package, selector.name().as_str())
+            .resolve_package_selector(&from.package, &selector)
             .map_err(|error| match error {
                 // The importing file's package instance came from this graph.
                 PackageResolveError::UnknownCurrentPackage { package } => {
@@ -954,14 +1043,9 @@ fn source_root_candidate(
     match &package.source {
         PackageSource::Root => project_root.to_path_buf(),
         PackageSource::Git {
-            url,
-            commit,
+            source,
             tree_hashes,
-            ..
-        } => cache_root.git_checkout(
-            &GitSourceId::new(url.clone(), commit.clone()),
-            &tree_hashes.sha256,
-        ),
+        } => cache_root.git_checkout(source, &tree_hashes.sha256),
     }
 }
 
@@ -1096,14 +1180,21 @@ fn verify_locked_source(
     budget
         .account_source_tree(root, actual.entries(), actual.bytes())
         .map_err(loader_manifest_error)?;
-    if actual.sha256() == tree_hashes.sha256.to_string() {
+    // The loader computes only the version-1 tree hash; a new algorithm must
+    // decide here how its digests are verified. A legacy pin is held to the
+    // full version-1 coverage: anything else fails loudly and `deps lock`,
+    // which can verify the older coverage, re-pins it.
+    let expected = match tree_hashes.algorithm {
+        graphcal_package::SourceTreeHashAlgorithm::GraphcalSourceTreeV1
+        | graphcal_package::SourceTreeHashAlgorithm::LegacyUnrecordedCoverage => tree_hashes.sha256,
+    };
+    let actual = Sha256Digest::from_bytes(actual.sha256());
+    if actual == expected {
         Ok(snapshot)
     } else {
         Err(loader_manifest_error(format!(
-            "cached package `{}` hash mismatch; expected {}, got {}; run `graphcal deps lock`",
+            "cached package `{}` hash mismatch; expected {expected}, got {actual}; run `graphcal deps lock`",
             package.id,
-            tree_hashes.sha256,
-            actual.sha256()
         ))
         .into())
     }
@@ -1203,6 +1294,40 @@ fn project_root_for<F: FileSystemReader>(root_file_dir: &Path, fs: &F) -> PathBu
     discover_project_root(root_file_dir, fs).unwrap_or_else(|| root_file_dir.to_path_buf())
 }
 
+/// The canonical entry file and the project root [`load_project`] reads its
+/// package from.
+fn resolve_entry_and_project_root<F: FileSystemReader>(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+    fs: &F,
+) -> Result<(PathBuf, PathBuf), CompileError> {
+    let root_canonical = fs
+        .canonicalize(root_path)
+        .map_err(|_| io_not_found(root_path))?;
+    let root_dir = root_canonical.parent().unwrap_or(&root_canonical);
+    let project_root = resolve_project_root(root_dir, project_root_override, fs)?;
+    Ok((root_canonical, project_root))
+}
+
+/// The project root [`load_project`] would read `root_path`'s package from.
+///
+/// For shells that must act on that directory before loading (for example,
+/// to freeze its manifest and lockfile bytes). After loading, prefer
+/// [`LoadedProject::project_root`].
+///
+/// # Errors
+///
+/// Returns a [`CompileError`] if `root_path` or the override cannot be
+/// canonicalized through `fs`.
+pub fn resolve_entry_project_root<F: FileSystemReader>(
+    root_path: &Path,
+    project_root_override: Option<&Path>,
+    fs: &F,
+) -> Result<PathBuf, CompileError> {
+    resolve_entry_and_project_root(root_path, project_root_override, fs)
+        .map(|(_, project_root)| project_root)
+}
+
 /// Resolve the project root, using an explicit override if provided,
 /// otherwise falling back to automatic `graphcal.toml` discovery.
 ///
@@ -1224,14 +1349,36 @@ fn resolve_project_root<F: FileSystemReader>(
     )
 }
 
+/// How the root file relates to the manifest at the project root.
+#[derive(Debug)]
+enum RootPackage {
+    /// The root file lives inside the manifest's package namespace.
+    Member(PackageManifest),
+    /// A manifest exists, but the root file sits outside its package
+    /// namespace: a loose script that loads as a virtual package and is not
+    /// covered by the package's `graphcal.lock` pins.
+    OutsideNamespace,
+    /// No manifest at the project root: an ad-hoc virtual-package file.
+    NoManifest,
+}
+
+impl RootPackage {
+    fn into_manifest(self) -> Option<PackageManifest> {
+        match self {
+            Self::Member(manifest) => Some(manifest),
+            Self::OutsideNamespace | Self::NoManifest => None,
+        }
+    }
+}
+
 /// Load the manifest at `project_root` and decide whether the root file is
 /// part of the real package.
 ///
-/// Returns `Some(manifest)` only when a manifest is present AND the root file
-/// lives inside the package namespace (either `<source_dir>/<pkg>.gcl` or
-/// under `<source_dir>/<pkg>/`). Returns `None` for the virtual-package
-/// scenarios: no manifest, or the root file sits next to a manifest but
-/// outside the namespace (treated as a standalone script).
+/// The root file is a [`RootPackage::Member`] only when a manifest is present
+/// AND the root file lives inside the package namespace (either
+/// `<source_dir>/<pkg>.gcl` or under `<source_dir>/<pkg>/`). Otherwise it is a
+/// virtual package: a loose script under the manifest, or an ad-hoc file with
+/// no manifest at all.
 ///
 /// # Errors
 ///
@@ -1243,10 +1390,10 @@ fn load_manifest_for_root<F: FileSystemReader>(
     fs: &F,
     budget: &mut LoaderBudgetState,
     cancellation: &graphcal_compiler::cancellation::CancellationToken,
-) -> Result<Option<PackageManifest>, Outcome<CompileError>> {
+) -> Result<RootPackage, Outcome<CompileError>> {
     let manifest_path = project_root.join("graphcal.toml");
     if !fs.exists(&manifest_path) {
-        return Ok(None);
+        return Ok(RootPackage::NoManifest);
     }
     let manifest_content = budget
         .read_text(fs, &manifest_path, LoaderArtifact::Manifest, cancellation)
@@ -1261,37 +1408,83 @@ fn load_manifest_for_root<F: FileSystemReader>(
     let parsed = parse_manifest_str(&manifest_content)
         .map_err(|error| loader_manifest_error(error.to_string()))?;
 
-    if root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
-        Ok(Some(parsed))
-    } else {
-        Ok(None)
+    let source_dir = parsed.source_dir.join_to(project_root);
+    match root_in_package_namespace(project_root, root_canonical, &parsed, fs) {
+        NamespaceMembership::Exact => {
+            verify_root_module_file(fs, &source_dir, root_canonical, cancellation)?;
+            Ok(RootPackage::Member(parsed))
+        }
+        // The entry is in the namespace only if letter case is ignored. On a
+        // case-insensitive reader that keeps the requested spelling that is
+        // the same directory spelled differently (M041); when the exact
+        // spelling is its own directory entry, the file really lives outside
+        // the namespace.
+        NamespaceMembership::IgnoringCase => {
+            verify_root_module_file(fs, &source_dir, root_canonical, cancellation).or_else(
+                |error| match error {
+                    Outcome::Failed(CompileError::Load(
+                        LoadError::ModuleFileSpellingMismatch { .. },
+                    ))
+                    | Outcome::Cancelled => Err(error),
+                    Outcome::Failed(_) => Ok(()),
+                },
+            )?;
+            Ok(RootPackage::OutsideNamespace)
+        }
+        NamespaceMembership::Outside => Ok(RootPackage::OutsideNamespace),
     }
 }
 
-/// True iff `root_canonical` is the package's single-file module
+/// Whether the root file is in the package namespace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NamespaceMembership {
+    /// It is the package's single-file module or below its namespace
+    /// directory.
+    Exact,
+    /// It would be, if letter case were ignored.
+    IgnoringCase,
+    Outside,
+}
+
+/// Whether `root_canonical` is the package's single-file module
 /// (`<source_dir>/<pkg>.gcl`) or lives under the package namespace directory
 /// (`<source_dir>/<pkg>/...`).
-fn root_in_package_namespace<F: FileSystemReader>(
+fn root_in_package_namespace<F: FileSystemReader + ?Sized>(
     project_root: &Path,
     root_canonical: &Path,
     manifest: &PackageManifest,
     fs: &F,
-) -> bool {
+) -> NamespaceMembership {
     let source_root = manifest.source_dir.join_to(project_root);
-    let pkg_dir = source_root.join(manifest.name.as_str());
-    let pkg_file = source_root.join(format!("{}.gcl", manifest.name));
+    let pkg_dir = fs.canonicalize(&source_root.join(manifest.name.as_str()));
+    let pkg_file = fs.canonicalize(&source_root.join(format!("{}.gcl", manifest.name)));
 
-    if let Ok(canon_pkg_dir) = fs.canonicalize(&pkg_dir)
-        && root_canonical.starts_with(&canon_pkg_dir)
+    if pkg_dir
+        .as_ref()
+        .is_ok_and(|pkg_dir| root_canonical.starts_with(pkg_dir))
+        || pkg_file
+            .as_ref()
+            .is_ok_and(|pkg_file| root_canonical == pkg_file)
     {
-        return true;
+        return NamespaceMembership::Exact;
     }
-    if let Ok(canon_pkg_file) = fs.canonicalize(&pkg_file)
-        && root_canonical == canon_pkg_file
+    let folded = |path: &Path| -> Vec<String> {
+        path.components()
+            .map(|component| component.as_os_str().to_string_lossy().to_lowercase())
+            .collect()
+    };
+    let root = folded(root_canonical);
+    if pkg_dir
+        .as_deref()
+        .is_ok_and(|pkg_dir| root.starts_with(&folded(pkg_dir)))
+        || pkg_file
+            .as_deref()
+            .is_ok_and(|pkg_file| root == folded(pkg_file))
     {
-        return true;
+        NamespaceMembership::IgnoringCase
+    } else {
+        NamespaceMembership::Outside
     }
-    false
 }
 
 fn virtual_package_id_for_path(path: &Path) -> Result<DagPackageId, CompileError> {

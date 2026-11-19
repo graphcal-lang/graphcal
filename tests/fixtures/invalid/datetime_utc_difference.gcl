@@ -1,0 +1,5 @@
+// Error: a UTC difference skips the leap second at 2016-12-31T23:59:60Z, so it
+// would read 1 s where 2 s elapse; subtract in TAI instead.
+node start: Datetime = datetime("2016-12-31T23:59:59Z");
+node end: Datetime = datetime("2017-01-01T00:00:00Z");
+node gap: Time = @end - @start;

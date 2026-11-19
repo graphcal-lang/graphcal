@@ -1,0 +1,16 @@
+---
+source: crates/graphcal-project/tests/diagnostic_wording.rs
+expression: "render_error(source, \"dupinc.gcl\")"
+---
+duplicate name `x`
+    Diagnostic severity: error
+Begin snippet for dupinc.gcl starting at line 1, column 1
+
+snippet line 1: dag d { pub node y: Length = 1.0 m; }
+snippet line 2: include d() as x;
+    label at line 2, column 16: first defined here
+snippet line 3: include d() as x;
+    label at line 3, column 16: duplicate definition here
+snippet line 4: node z: Length = @x::y;
+diagnostic help: each name must be unique within its file or `dag` body
+diagnostic code: graphcal::N001
