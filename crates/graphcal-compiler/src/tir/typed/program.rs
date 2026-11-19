@@ -251,13 +251,24 @@ impl TirDraft {
 /// [`CheckedTir`](super::checked::CheckedTir).
 #[derive(Debug, Clone)]
 pub(crate) struct UncheckedTir {
-    pub(crate) core: TirCore,
-    pub(crate) dags: DagRegistry,
+    core: TirCore,
+    dags: DagRegistry,
 }
 
 impl UncheckedTir {
     pub(crate) fn into_parts(self) -> (TirCore, DagRegistry) {
         (self.core, self.dags)
+    }
+
+    /// Borrow the registry of local and imported bodies.
+    pub(in crate::tir) const fn dags(&self) -> &DagRegistry {
+        &self.dags
+    }
+
+    /// Mutably borrow the registry while instance DAGs are materialized and
+    /// local bodies are refined before checking.
+    pub(in crate::tir::typed) const fn dags_mut(&mut self) -> &mut DagRegistry {
+        &mut self.dags
     }
 
     /// Borrow the root DAG. Root presence is guaranteed by [`DagRegistry`].
@@ -427,7 +438,22 @@ impl TirRead for UncheckedTir {
 /// [`Self::check`].
 #[derive(Debug)]
 pub struct InstantiatedTir {
-    pub(crate) tir: UncheckedTir,
+    tir: UncheckedTir,
     /// The semantic instance edges of `tir`, by position.
-    pub(crate) instances: super::instance_graph::InstanceGraph,
+    instances: super::instance_graph::InstanceGraph,
+}
+
+impl InstantiatedTir {
+    /// Pair a finished TIR with the instance edges materialized into it.
+    pub(in crate::tir::typed) const fn new(
+        tir: UncheckedTir,
+        instances: super::instance_graph::InstanceGraph,
+    ) -> Self {
+        Self { tir, instances }
+    }
+
+    /// Split into the TIR and its instance edges for checking.
+    pub(in crate::tir) fn into_parts(self) -> (UncheckedTir, super::instance_graph::InstanceGraph) {
+        (self.tir, self.instances)
+    }
 }

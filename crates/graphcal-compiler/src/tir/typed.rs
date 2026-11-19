@@ -308,7 +308,7 @@ impl TirDraft {
         let instances = specialization::instantiate_semantic_edges(&mut tir, src, cancellation)?;
         augment_runtime_deps_for_dynamic_units(&mut tir);
         overrides.reconcile(&mut tir);
-        Ok(InstantiatedTir { tir, instances })
+        Ok(InstantiatedTir::new(tir, instances))
     }
 }
 
@@ -1837,7 +1837,7 @@ pub(crate) fn rigid_dimension_view(
             .dimensions
             .register_rigid_dimension(port);
     }
-    resolve_rigid_signatures(rigid.dags.localized_mut(position), &rigid_types, src)?;
+    resolve_rigid_signatures(rigid.dags_mut().localized_mut(position), &rigid_types, src)?;
     rigid.replace_project_types(rigid_types);
     Ok(rigid)
 }
@@ -1857,7 +1857,7 @@ pub(crate) fn rigid_template_dag(
 ) -> Result<DagTIR, SemanticError> {
     let rigid_types = rigid_project_types(tir, ports)
         .map_err(|_| SemanticError::located(src, site, DimensionError::DimensionOverflow))?;
-    let mut template = tir.dags.at(position).clone();
+    let mut template = tir.dags().at(position).clone();
     resolve_rigid_signatures(&mut template, &rigid_types, src)?;
     Ok(template)
 }

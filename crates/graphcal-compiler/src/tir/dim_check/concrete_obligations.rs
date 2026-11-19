@@ -53,7 +53,7 @@ pub(super) fn validate_project(
     cancellation: &CancellationToken,
 ) -> Result<(), Outcome<SemanticError>> {
     let tir: &dyn TirRead = checking;
-    for (dag, bodies) in checking.tir.dags.with_local_facts(checking.bodies) {
+    for (dag, bodies) in checking.tir.dags().with_local_facts(checking.bodies) {
         for (_, annotation) in dag.value_decl_types() {
             validate_concrete_type_obligations(
                 &annotation.checked().declared().to_symbolic(),

@@ -87,8 +87,7 @@ fn source_level_extreme_dimension_exponent_formats_exactly() {
          pub dim Mixed = Y * X^-2147483647;\n",
     )
     .unwrap();
-    let mixed = tir
-        .core
+    let mixed = crate::tir::typed::TirRead::core(&tir)
         .dimension(&crate::resolved_name::ResolvedDimName::for_test(
             tir.root_dag_id().clone(),
             crate::syntax::dimension::DimName::expect_valid("Mixed"),

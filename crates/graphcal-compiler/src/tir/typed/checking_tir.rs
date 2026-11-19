@@ -37,7 +37,7 @@ impl PublishedBodies for Option<&crate::tir::texpr::CheckedBodies> {
 
 impl<B: PublishedBodies> TirRead for CheckingTir<'_, B> {
     fn core(&self) -> &TirCore {
-        &self.tir.core
+        self.tir.core()
     }
 
     fn root(&self) -> &DagTIR {
@@ -57,7 +57,7 @@ impl<B: PublishedBodies> TirRead for CheckingTir<'_, B> {
         dag_id: &crate::dag_id::DagId,
     ) -> Option<&crate::tir::texpr::CheckedBodies> {
         self.tir
-            .dags
+            .dags()
             .local_fact(self.bodies, dag_id)
             .and_then(PublishedBodies::published)
             .or_else(|| self.tir.checked_bodies(dag_id))

@@ -51,14 +51,14 @@ impl Schedules {
         src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<Self, Outcome<SemanticError>> {
-        let constants = ConstSchedule::build(tir.dags.local_positioned())
+        let constants = ConstSchedule::build(tir.dags().local_positioned())
             .map_err(|cycle| constant_cycle(&cycle, src))?;
         let unit_scale_reads = crate::tir::typed::dynamic_unit_scale_reads(tir);
-        let callables = tir.dags.map_local(|position, dag| {
+        let callables = tir.dags().map_local(|position, dag| {
             cancellation.checkpoint()?;
             RuntimeSchedule::build(
                 position,
-                |position| tir.dags.at(position),
+                |position| tir.dags().at(position),
                 |position| instances.instances_of(position),
                 |component| {
                     crate::tir::recurrence_group::check_component(
@@ -162,7 +162,7 @@ impl<'a> IncludeSites<'a> {
         tir: &'a UncheckedTir,
         instances: &'a InstanceGraph,
     ) -> Self {
-        let dag = tir.dags.at(callable);
+        let dag = tir.dags().at(callable);
         let sites = dag
             .semantic_instances()
             .iter()
@@ -171,7 +171,7 @@ impl<'a> IncludeSites<'a> {
                 let mut reached = HashSet::new();
                 let mut pending = vec![instance];
                 while let Some(position) = pending.pop() {
-                    if reached.insert(tir.dags.at(position).dag_id()) {
+                    if reached.insert(tir.dags().at(position).dag_id()) {
                         pending.extend(instances.instances_of(position));
                     }
                 }

@@ -633,10 +633,7 @@ impl crate::tir::typed::InstantiatedTir {
         src: SourceId,
         cancellation: &crate::cancellation::CancellationToken,
     ) -> Result<crate::tir::typed::CheckedTir, Outcome<SemanticError>> {
-        let Self {
-            tir,
-            instances: graph,
-        } = self;
+        let (tir, graph) = self.into_parts();
         cancellation.checkpoint()?;
         let schedules = schedules::Schedules::build(&tir, &graph, src, cancellation)?;
         detect_cross_dag_cycles(&tir, src)?;
@@ -644,7 +641,7 @@ impl crate::tir::typed::InstantiatedTir {
         // Canonical bodies are checked once. Instance trees are specialized
         // below from the canonical trees; only independently lowered bindings
         // infer.
-        let inferred = graph.map_canonical(&tir.dags, |position, dag| {
+        let inferred = graph.map_canonical(tir.dags(), |position, dag| {
             cancellation.checkpoint()?;
             let observations = infer::hir::BodyObservations::default();
             let plot_shapes =
@@ -655,7 +652,7 @@ impl crate::tir::typed::InstantiatedTir {
                 plot_shapes,
             })
         })?;
-        let instances = graph.map_instances(&tir.dags, |position, dag, origin| {
+        let instances = graph.map_instances(tir.dags(), |position, dag, origin| {
             let substitution =
                 crate::tir::typed::complete_substitution::CompleteSubstitution::try_new(
                     &origin.specialization().substitution,
@@ -690,7 +687,7 @@ impl crate::tir::typed::InstantiatedTir {
             cancellation,
         )?;
         let bodies = graph.join(
-            &tir.dags,
+            tir.dags(),
             canonical.map_ref(|canonical| canonical.bodies.clone()),
             checked.map_ref(|checked| checked.bodies.clone()),
         );
@@ -1181,7 +1178,7 @@ fn field_constraint_definition_dag<'a>(
     src: SourceId,
     span: Span,
 ) -> Result<&'a crate::tir::typed::DagTIR, SemanticError> {
-    tir.dags.get(owning_type.owner()).ok_or_else(|| {
+    tir.dags().get(owning_type.owner()).ok_or_else(|| {
         SemanticError::internal_error(
             format!(
                 "field-constraint owner `{}` has no checked DAG",
@@ -1333,7 +1330,7 @@ fn detect_cross_dag_cycles(
     use crate::dag_id::DagId;
 
     let calls: BTreeMap<&DagId, BTreeMap<DagId, Span>> = tir
-        .dags
+        .dags()
         .iter()
         .map(|(dag_id, dag)| {
             let mut targets = BTreeMap::new();
