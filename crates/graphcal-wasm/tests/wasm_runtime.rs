@@ -281,8 +281,8 @@ fn javascript_boundary_rejects_aggregate_path_metadata() {
     let files = Array::new();
     for index in 0..MAX_PLAYGROUND_FILES {
         let path = format!(
-            "{index:02}{}.gcl",
-            "x".repeat(MAX_PLAYGROUND_PATH_BYTES - 6)
+            "{index:04}{}.gcl",
+            "x".repeat(MAX_PLAYGROUND_PATH_BYTES - 8)
         );
         files.push(&js_file(&JsValue::from_str(&path), &JsValue::from_str("")));
     }
