@@ -8,8 +8,9 @@ use thiserror::Error;
 const PROJECT_ROOT: &str = "/playground";
 const MANIFEST_FILE: &str = "graphcal.toml";
 
-/// Maximum number of files in one browser playground request.
-pub const MAX_PLAYGROUND_FILES: usize = 16;
+/// Maximum number of files in one browser playground request. The byte limits
+/// below are what bound a request's memory; this only bounds the entry count.
+pub const MAX_PLAYGROUND_FILES: usize = 1024;
 /// Maximum UTF-8 byte length of one file's contents.
 pub const MAX_PLAYGROUND_FILE_BYTES: usize = 256 * 1024;
 /// Maximum aggregate UTF-8 byte length of all file contents.
@@ -622,8 +623,8 @@ mod tests {
         let files: Vec<PlaygroundFile> = (0..MAX_PLAYGROUND_FILES)
             .map(|index| PlaygroundFile {
                 path: format!(
-                    "{index:02}{}.gcl",
-                    "x".repeat(MAX_PLAYGROUND_PATH_BYTES - 6)
+                    "{index:04}{}.gcl",
+                    "x".repeat(MAX_PLAYGROUND_PATH_BYTES - 8)
                 ),
                 content: String::new(),
             })
