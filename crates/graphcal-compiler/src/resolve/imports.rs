@@ -87,7 +87,21 @@ impl ModuleResolver {
         self.module_symbols(owner)?;
         self.module_symbols(target)?;
         if tail.requires_visible_module_path() {
-            self.ensure_module_path_visible(target, access)?;
+            // A private DAG on the path is reported at the path that names it.
+            self.ensure_module_path_visible(target, access)
+                .map_err(|error| match error {
+                    ModuleResolveError::PrivateName {
+                        owner,
+                        category,
+                        name,
+                    } => ModuleResolveError::PrivateImportItem {
+                        owner,
+                        category,
+                        name,
+                        span: path.span(),
+                    },
+                    error => error,
+                })?;
         }
 
         let additions = self.import_additions(path, tail, target, access, role)?;

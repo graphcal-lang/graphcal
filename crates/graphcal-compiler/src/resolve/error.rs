@@ -215,13 +215,14 @@ pub enum ModuleResolveError {
         category: NameCategory,
         name: NameAtom,
     },
-    /// A selective import item names an item that is not public in its module.
+    /// A selective import item, or a DAG on an import's module path, is not
+    /// public in its module.
     #[error("private {category} `{name}` in module `{owner}`")]
     PrivateImportItem {
         owner: DagId,
         category: NameCategory,
         name: NameAtom,
-        /// The import item's source name.
+        /// The import item's source name, or the import's module path.
         span: Span,
     },
     /// The index exists, but the requested variant is absent.
