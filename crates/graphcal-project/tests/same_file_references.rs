@@ -201,6 +201,36 @@ fn file_root_import_of_a_top_level_dag_conflicts_with_a_same_named_declaration()
     );
 }
 
+#[test]
+fn file_root_import_of_a_private_top_level_dag_labels_the_import_path() {
+    let dir = package(
+        "pipeline",
+        &[(
+            "pipeline/main.gcl",
+            "dag d {\n\
+                 pub const node c: Dimensionless = 2.0;\n\
+             }\n\
+             import d::{c};\n\
+             node a: Bool = @c == 2.0;\n",
+        )],
+    );
+    let error = eval_error(&source_path(&dir, "pipeline/main.gcl"));
+    assert_eq!(
+        error.code().map(|code| code.to_string()).as_deref(),
+        Some("graphcal::V001"),
+        "{error:?}"
+    );
+    let CompileError::Eval(error) = error else {
+        panic!("expected a semantic error, got {error:?}");
+    };
+    let label = error.labels().unwrap().next().unwrap();
+    let span = label.inner();
+    assert_eq!(
+        &error.registered_source().text()[span.offset()..span.offset() + span.len()],
+        "d"
+    );
+}
+
 const NASA_ROOT: &str = "pub const node g0: Dimensionless = 1.0;\n";
 
 const NASA_INLINE_IMPORT: &str = "\

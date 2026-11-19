@@ -1070,13 +1070,17 @@ fn selective_import_from_private_inline_dag_is_rejected() {
     modules.add(main_id.clone(), &main.declarations);
     modules.import(&main_id, import, &helper_id);
 
+    // The span names the import's module path, so the diagnostic points at it.
     assert!(matches!(
         modules.build(),
-        Err(ModuleResolveError::PrivateName {
+        Err(ModuleResolveError::PrivateImportItem {
             owner,
             category: NameCategory::Dag,
             name,
-        }) if owner == lib_id && name.as_str() == "helper"
+            span,
+        }) if owner == lib_id
+            && name.as_str() == "helper"
+            && span == Span::new("import ".len(), "lib.helper".len())
     ));
 }
 
