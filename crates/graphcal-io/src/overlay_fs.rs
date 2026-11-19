@@ -141,21 +141,20 @@ impl<F: FileSystemReader> OverlayFileSystem<F> {
         self.overlay_directory(&path).map(OverlayPath::Directory)
     }
 
+    /// Directory identity for a strict ancestor of an overlay's canonical path.
+    ///
+    /// Only canonical ancestors are overlay directories. An alias spelling
+    /// maps to its overlay file and nothing else: its ancestors fall through
+    /// to the base, because a file alias (e.g. a symlinked file) says nothing
+    /// about where its directories resolve.
     fn overlay_directory(&self, path: &VirtualAbsolutePath) -> Option<VirtualAbsolutePath> {
-        self.overlays.iter().find_map(|entry| {
-            entry.aliases.iter().find_map(|alias| {
-                let relative = alias.as_path().strip_prefix(path.as_path()).ok()?;
-                let depth = relative.components().count();
-                if depth == 0 {
-                    return None;
-                }
-                let mut canonical = entry.canonical().as_path();
-                for _ in 0..depth {
-                    canonical = canonical.parent()?;
-                }
-                VirtualAbsolutePath::new(canonical.to_path_buf()).ok()
+        self.overlays
+            .iter()
+            .any(|entry| {
+                let canonical = entry.canonical().as_path();
+                canonical != path.as_path() && canonical.starts_with(path.as_path())
             })
-        })
+            .then(|| path.clone())
     }
 
     fn overlay_child_names(&self, directory: &VirtualAbsolutePath) -> BTreeSet<OsString> {
@@ -598,6 +597,31 @@ mod tests {
         let canonical = fs.canonicalize(Path::new("/project/unsaved.gcl")).unwrap();
         assert_eq!(canonical, PathBuf::from("/project/unsaved.gcl"));
         assert!(fs.exists(Path::new("/project/unsaved.gcl")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_file_alias_does_not_remap_its_ancestors() {
+        let directory = tempfile::tempdir().unwrap();
+        let project = directory.path().canonicalize().unwrap().join("project");
+        let sub = project.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        let target = sub.join("config.toml");
+        std::fs::write(&target, "base").unwrap();
+        let alias = project.join("graphcal.toml");
+        std::os::unix::fs::symlink("sub/config.toml", &alias).unwrap();
+        let base = RealFileSystem::rooted(&project).unwrap();
+
+        let fs = OverlayFileSystem::new(base, alias.clone(), "overlay".to_string()).unwrap();
+
+        assert_eq!(fs.canonicalize(&alias).unwrap(), target);
+        assert_eq!(fs.canonicalize(&project).unwrap(), project);
+        assert_eq!(fs.canonicalize(&sub).unwrap(), sub);
+        assert_eq!(
+            fs.read_to_string_bounded(&alias, TEST_LIMIT, &CancellationToken::unbounded())
+                .unwrap(),
+            "overlay"
+        );
     }
 
     #[test]
