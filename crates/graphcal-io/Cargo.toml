@@ -20,10 +20,10 @@ tempfile.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-cap-std = "4.0.2"
+cap-std.workspace = true
 
 [target."cfg(unix)".dependencies]
-libc = "0.2.189"
+libc.workspace = true
 
 [dev-dependencies]
 graphcal-compiler = { workspace = true, features = ["test-cancellation"] }
