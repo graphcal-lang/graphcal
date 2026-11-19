@@ -1,6 +1,5 @@
 //! Project diagnostics for module-resolution failures.
 
-use graphcal_compiler::resolve::category::ExportedImportItemKind;
 use graphcal_compiler::resolve::error::ModuleResolveError;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::graph::DagReference;
@@ -21,21 +20,9 @@ fn duplicate_name(
     SemanticError::located(src, duplicate, NameError::DuplicateName { name, first })
 }
 
-/// N009 for a selective alias that takes a reserved spelling.
-fn reserved_alias(
-    kind: ExportedImportItemKind,
-    name: NameAtom,
-    span: Span,
-    src: SourceId,
-) -> SemanticError {
-    SemanticError::located(
-        src,
-        span,
-        NameError::BuiltinNameShadowed {
-            kind: ShadowingName::ImportAlias(kind),
-            name,
-        },
-    )
+/// N009 for a selective or module alias that takes a reserved spelling.
+fn reserved_alias(kind: ShadowingName, name: NameAtom, span: Span, src: SourceId) -> SemanticError {
+    SemanticError::located(src, span, NameError::BuiltinNameShadowed { kind, name })
 }
 
 pub(super) fn module_resolve_compile_error(
@@ -101,7 +88,10 @@ pub(super) fn module_resolve_compile_error_at(
         ),
         ModuleResolveError::ReservedImportName {
             kind, name, span, ..
-        } => reserved_alias(kind, name, span, src),
+        } => reserved_alias(ShadowingName::ImportAlias(kind), name, span, src),
+        ModuleResolveError::ReservedModuleAlias { name, span, .. } => {
+            reserved_alias(ShadowingName::ModuleAlias, name, span, src)
+        }
         ModuleResolveError::DuplicateSymbol {
             name,
             first,

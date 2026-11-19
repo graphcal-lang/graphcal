@@ -365,6 +365,47 @@ fn constructor_import_colliding_with_local_constructor_is_rejected() {
 }
 
 #[test]
+fn module_aliases_cannot_take_reserved_spellings() {
+    let lib_id = DagId::root_in_package("test", "lib");
+    let main_id = DagId::root_in_package("test", "main");
+    let lib = desugared_source("pub const node one: Dimensionless = 1.0;");
+    // Explicit `as` aliases and implicit aliases (the path's last segment).
+    for source in [
+        "import lib as sqrt;",
+        "import sqrt;",
+        "include lib() as sqrt;",
+        "include sqrt();",
+    ] {
+        let main = desugared_source(source);
+        let mut modules = TestModules::default();
+        modules.add(lib_id.clone(), &lib.declarations);
+        modules.add(main_id.clone(), &main.declarations);
+        let path = if source.starts_with("include") {
+            first_include(&main).0
+        } else {
+            first_import(&main).path()
+        };
+        modules.edge(&main_id, path, &lib_id);
+        let err = modules.build().unwrap_err();
+        let alias_start = source.find("sqrt").unwrap();
+        assert!(
+            matches!(
+                &err,
+                ModuleResolveError::ReservedModuleAlias {
+                    owner,
+                    name,
+                    reserved: ReservedName::BuiltinFunction(_),
+                    span,
+                } if owner == &main_id
+                    && name.as_str() == "sqrt"
+                    && *span == Span::new(alias_start, "sqrt".len())
+            ),
+            "{source}: {err:?}"
+        );
+    }
+}
+
+#[test]
 fn imported_value_constructor_collisions_are_rejected_in_either_direction() {
     let lib_id = DagId::root_in_package("test", "lib");
     let main_id = DagId::root_in_package("test", "main");
@@ -1980,7 +2021,7 @@ fn include_of_a_later_sibling_sees_its_completed_scope() {
 fn include_instances_are_expanded_through_nested_templates() {
     let leaf = desugared_source("pub node value: Dimensionless = 1.0;");
     let middle = desugared_source("include leaf() as inner;");
-    let main = desugared_source("include middle() as outer;");
+    let main = desugared_source("include middle() as wrapper;");
     let leaf_id = DagId::root_in_package("test", "leaf");
     let middle_id = DagId::root_in_package("test", "middle");
     let main_id = DagId::root_in_package("test", "main");
@@ -1997,7 +2038,7 @@ fn include_instances_are_expanded_through_nested_templates() {
             crate::syntax::module_name::ModuleAliasName::expect_valid(alias),
         )
     };
-    let outer = main_id.instance_child(named("outer"));
+    let outer = main_id.instance_child(named("wrapper"));
     let inner = outer.instance_child(named("inner"));
     assert!(resolver.symbols(&outer).is_some());
     assert!(resolver.symbols(&inner).is_some());

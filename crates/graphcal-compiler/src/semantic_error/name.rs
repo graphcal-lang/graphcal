@@ -134,6 +134,8 @@ pub enum ShadowingName {
     ImportAlias(ExportedImportItemKind),
     /// An unqualified graph value brought into an inline DAG's scope.
     GraphValueAlias,
+    /// An `import` / module-form `include` alias.
+    ModuleAlias,
 }
 
 impl std::fmt::Display for ShadowingName {
@@ -149,6 +151,7 @@ impl std::fmt::Display for ShadowingName {
                 ExportedImportItemKind::Index => "index alias",
             },
             Self::GraphValueAlias => "graph-value alias",
+            Self::ModuleAlias => "module alias",
         })
     }
 }

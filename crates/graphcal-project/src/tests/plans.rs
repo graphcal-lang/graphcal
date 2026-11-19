@@ -507,10 +507,10 @@ fn instances_sharing_a_template_body_keep_its_callees() {
     let source = "dag helper { pub node out: Dimensionless = 10.0; } \
                   dag inner { param input: Dimensionless = 2.0; pub node value: Dimensionless = @input * @helper()::out; } \
                   include inner(input: 3.0) as first; \
-                  include inner(input: 4.0) as second; \
+                  include inner(input: 4.0) as later; \
                   dag other { pub node out: Dimensionless = 5.0; } \
                   include inner(input: @other()::out) as third; \
-                  node output: Dimensionless = @first::value + @second::value + @third::value;";
+                  node output: Dimensionless = @first::value + @later::value + @third::value;";
     let tir = compile_to_tir(source, "shared-callees.gcl").unwrap();
     let mut sources = graphcal_compiler::source_registry::SourceRegistry::new();
     let src = sources.register(
