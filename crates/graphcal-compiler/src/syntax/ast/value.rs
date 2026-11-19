@@ -196,6 +196,19 @@ pub enum InputBindingCategory {
     Index,
 }
 
+impl std::fmt::Display for InputBindingCategory {
+    /// The input category's diagnostic noun (the marker keyword, or `param`
+    /// for an unmarked binding).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unmarked => "param",
+            Self::Type => "type",
+            Self::Dimension => "dim",
+            Self::Index => "index",
+        })
+    }
+}
+
 /// One categorized input binding in an `include` or direct DAG invocation.
 #[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]

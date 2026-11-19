@@ -5,7 +5,7 @@ use graphcal_compiler::resolve::error::ModuleResolveError;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::graph::DagReference;
 use graphcal_compiler::semantic_error::module::ModuleError;
-use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
+use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError, ShadowingName};
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::names::NameAtom;
@@ -28,15 +28,14 @@ fn reserved_alias(
     span: Span,
     src: SourceId,
 ) -> SemanticError {
-    let kind = match kind {
-        ExportedImportItemKind::Decl(_) => "Term alias",
-        ExportedImportItemKind::Constructor => "constructor alias",
-        ExportedImportItemKind::Dimension => "dimension alias",
-        ExportedImportItemKind::Unit(_) => "unit alias",
-        ExportedImportItemKind::Type => "type alias",
-        ExportedImportItemKind::Index => "index alias",
-    };
-    SemanticError::located(src, span, NameError::BuiltinNameShadowed { kind, name })
+    SemanticError::located(
+        src,
+        span,
+        NameError::BuiltinNameShadowed {
+            kind: ShadowingName::ImportAlias(kind),
+            name,
+        },
+    )
 }
 
 pub(super) fn module_resolve_compile_error(

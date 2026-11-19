@@ -13,6 +13,7 @@ use crate::resolve::error::ModuleResolveError;
 use crate::resolved_name::ResolvedStructTypeName;
 use crate::semantic::index_def::{IndexBindingCategory, IndexBindingTarget, IndexCategory};
 use crate::semantic_error::graph::DagReference;
+use crate::syntax::ast::InputBindingCategory;
 use crate::syntax::dimension::UnitRef;
 use crate::syntax::import_category::{ImportItemCategoryMismatch, ImportItemNamespace};
 use crate::syntax::index_name::IndexName;
@@ -90,7 +91,7 @@ pub enum ModuleError {
     #[error("`{name}` is not a {expected} input of the invoked DAG")]
     DagInputCategoryMismatch {
         name: NameAtom,
-        expected: &'static str,
+        expected: InputBindingCategory,
     },
     #[error("invalid type-level binding value for `{name}`")]
     InvalidTypeLevelBindingValue {
