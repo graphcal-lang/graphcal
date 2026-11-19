@@ -407,6 +407,61 @@ fn reserved_name_policy_covers_import_include_and_reexport_aliases() {
 }
 
 #[test]
+fn module_aliases_cannot_take_reserved_spellings() {
+    let library = "pub node output: Dimensionless = 1.0;\n";
+    // Explicit `as` aliases, and implicit aliases taken from the path's last
+    // segment (a file named `sqrt.gcl`).
+    for main in [
+        "import pipeline.lib as sqrt;\n",
+        "import pipeline.sqrt;\n",
+        "include pipeline.lib() as sqrt;\n",
+        "include pipeline.sqrt();\n",
+    ] {
+        let (_directory, root) = write_pipeline_project(
+            &[
+                ("lib.gcl", library),
+                ("sqrt.gcl", library),
+                ("main.gcl", main),
+            ],
+            "main.gcl",
+        );
+        let error = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap_err();
+        let CompileError::Eval(RenderedSemanticError {
+            error:
+                SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+                    kind: SemanticErrorKind::Name(name_error),
+                    primary: span,
+                    ..
+                }),
+            ..
+        }) = error
+        else {
+            panic!("{main}: expected N009, got {error:?}");
+        };
+        assert!(
+            matches!(
+                &name_error,
+                NameError::BuiltinNameShadowed {
+                    kind: graphcal_compiler::semantic_error::name::ShadowingName::ModuleAlias,
+                    ..
+                }
+            ),
+            "{main}: {name_error:?}"
+        );
+        assert_eq!(
+            name_error.to_string(),
+            "module alias `sqrt` shadows a built-in name",
+            "{main}"
+        );
+        assert_eq!(
+            span,
+            graphcal_compiler::syntax::span::Span::new(main.find("sqrt").unwrap(), "sqrt".len()),
+            "{main}: the diagnostic points at the alias"
+        );
+    }
+}
+
+#[test]
 fn repeated_include_producers_are_rejected_before_metadata_maps() {
     let producer = "pub node x: Dimensionless = 1.0;\n\
                     pub assert okay = @x == 2.0;\n\

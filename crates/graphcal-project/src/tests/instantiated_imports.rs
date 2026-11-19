@@ -154,8 +154,8 @@ fn aliased_include_does_not_bind_the_source_module_name() {
 fn nested_instantiated_file_include_keeps_multiple_instances_isolated() {
     let (_dir, root) = write_nested_file_include_project(
         "include demo.middle(x: 3.0) as first;\n\
-         include demo.middle(x: 5.0) as second;\n\
-         pub node result: Dimensionless = @first::out + @second::out;\n",
+         include demo.middle(x: 5.0) as later;\n\
+         pub node result: Dimensionless = @first::out + @later::out;\n",
     );
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();

@@ -116,7 +116,7 @@ fn repeated_empty_includes_keep_distinct_output_names() {
             ),
             (
                 "main.gcl",
-                "include pipeline.lib() as first;\ninclude pipeline.lib() as second;\n",
+                "include pipeline.lib() as first;\ninclude pipeline.lib() as later;\n",
             ),
         ],
         "main.gcl",
@@ -124,7 +124,7 @@ fn repeated_empty_includes_keep_distinct_output_names() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     assert_quantity_value(&result, "first::output", 2.0);
-    assert_quantity_value(&result, "second::output", 2.0);
+    assert_quantity_value(&result, "later::output", 2.0);
 }
 
 #[test]
@@ -192,7 +192,7 @@ fn nested_configured_includes_keep_instance_local_bindings_and_assertions() {
             ),
             (
                 "main.gcl",
-                "include pipeline.middle(input: 2.0) as first;\ninclude pipeline.middle(input: 5.0) as second;\n",
+                "include pipeline.middle(input: 2.0) as first;\ninclude pipeline.middle(input: 5.0) as later;\n",
             ),
         ],
         "main.gcl",
@@ -200,7 +200,7 @@ fn nested_configured_includes_keep_instance_local_bindings_and_assertions() {
 
     let result = compile_and_eval_project(&root, &HashMap::new(), None, &fs()).unwrap();
     assert_quantity_value(&result, "first::output", 2.0);
-    assert_quantity_value(&result, "second::output", 5.0);
+    assert_quantity_value(&result, "later::output", 5.0);
     assert_eq!(
         result
             .assertions
@@ -367,7 +367,7 @@ fn shared_modules_keep_equal_static_instances_and_dynamic_units_independent() {
             ),
             (
                 "main.gcl",
-                "include pipeline.lib(dim Measure: Length, measured: 1.0 m, scale: 1.0) as first; include pipeline.lib(dim Measure: Length, measured: 2.0 m, scale: 2.0) as second; node low: Length = @first::out; node high: Length = @second::out; node first_measurement: Length = @first::measurement; node second_measurement: Length = @second::measurement;",
+                "include pipeline.lib(dim Measure: Length, measured: 1.0 m, scale: 1.0) as first; include pipeline.lib(dim Measure: Length, measured: 2.0 m, scale: 2.0) as later; node low: Length = @first::out; node high: Length = @later::out; node first_measurement: Length = @first::measurement; node second_measurement: Length = @later::measurement;",
             ),
         ],
         "main.gcl",
@@ -626,7 +626,7 @@ fn nested_instances_retain_template_and_concrete_parent_identity() {
             ),
             (
                 "main.gcl",
-                "include pipeline.middle(input: 2.0) as first;\ninclude pipeline.middle(input: 5.0) as second;\n",
+                "include pipeline.middle(input: 2.0) as first;\ninclude pipeline.middle(input: 5.0) as later;\n",
             ),
         ],
         "main.gcl",

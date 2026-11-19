@@ -789,7 +789,7 @@ fn nested_includes_keep_runtime_unit_scales_instance_scoped() {
     .unwrap();
     std::fs::write(
         package_dir.join("wrapper.gcl"),
-        "import nested_dynamic_instances.lib as units;\nparam first_factor: Dimensionless;\nparam second_factor: Dimensionless;\ninclude nested_dynamic_instances.lib(factor: @first_factor) as first;\ninclude nested_dynamic_instances.lib(factor: @second_factor) as second;\npub node out: units::Money = @first::out + @second::out;\n",
+        "import nested_dynamic_instances.lib as units;\nparam first_factor: Dimensionless;\nparam second_factor: Dimensionless;\ninclude nested_dynamic_instances.lib(factor: @first_factor) as first;\ninclude nested_dynamic_instances.lib(factor: @second_factor) as later;\npub node out: units::Money = @first::out + @later::out;\n",
     )
     .unwrap();
     let root = package_dir.join("main.gcl");

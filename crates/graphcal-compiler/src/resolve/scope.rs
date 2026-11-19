@@ -159,21 +159,20 @@ impl ModuleScope {
 
     /// Install the names one `import` / `include` edge introduces.
     ///
-    /// Each selective item's local name must not take a spelling reserved in
-    /// its namespace (a prelude unit or dimension, a built-in type, function,
-    /// or constant), and each name must claim a free slot of the owner's
-    /// collision unit: local declarations, earlier imports, and the edge's own
-    /// earlier names all occupy it.
-    ///
-    /// Module aliases are exempt from the reserved-name policy: they are only
-    /// reachable as a path qualifier, never as a bare name.
+    /// Each local name (a selective item's or a module alias) must not take a
+    /// spelling reserved in its namespace (a prelude unit or dimension, a
+    /// built-in type, function, or constant), and each name must claim a free
+    /// slot of the owner's collision unit: local declarations, earlier
+    /// imports, and the edge's own earlier names all occupy it.
     ///
     /// # Errors
     ///
     /// Returns [`ModuleResolveError::DuplicateImportName`] for the first
-    /// addition whose slot is already occupied, and
+    /// addition whose slot is already occupied,
     /// [`ModuleResolveError::ReservedImportName`] for the first selective
-    /// item whose local name is reserved.
+    /// item whose local name is reserved, and
+    /// [`ModuleResolveError::ReservedModuleAlias`] for a reserved module
+    /// alias.
     pub(super) fn add_imports(
         &mut self,
         symbols: &ModuleSymbols,
@@ -194,15 +193,25 @@ impl ModuleScope {
                     duplicate: local.span,
                 });
             }
-            if let Some(kind) = addition.target.item_kind()
-                && let Err(error) = validate_reserved_name(namespace, &local.value)
-            {
-                return Err(ModuleResolveError::ReservedImportName {
-                    owner: symbols.owner().clone(),
-                    kind,
-                    name: local.value.clone(),
-                    reserved: error.reserved,
-                    span: local.span,
+            if let Err(error) = validate_reserved_name(namespace, &local.value) {
+                let owner = symbols.owner().clone();
+                let name = local.value.clone();
+                let reserved = error.reserved;
+                let span = local.span;
+                return Err(match addition.target.item_kind() {
+                    Some(kind) => ModuleResolveError::ReservedImportName {
+                        owner,
+                        kind,
+                        name,
+                        reserved,
+                        span,
+                    },
+                    None => ModuleResolveError::ReservedModuleAlias {
+                        owner,
+                        name,
+                        reserved,
+                        span,
+                    },
                 });
             }
             self.install(addition);
