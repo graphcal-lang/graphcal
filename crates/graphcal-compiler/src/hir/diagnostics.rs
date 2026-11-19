@@ -176,6 +176,9 @@ pub fn expr_lower_error_to_semantic(err: &ExprLowerError, src: SourceId) -> Sema
                 name: name.clone(),
             },
         ),
+        ExprLowerError::FiniteIndexBinding(error) => {
+            SemanticError::located(src, error.span, error.index_error())
+        }
         ExprLowerError::TodoHoleNotAllowed { span } => {
             SemanticError::located(src, *span, GraphError::TodoHoleOutsideFormula)
         }
