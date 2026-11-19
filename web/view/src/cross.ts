@@ -2,13 +2,14 @@
 // right end of its box's head, runs down the gutter between the pane columns,
 // enters the consumer's channel (below its own lanes) and rises into the port
 // box.
+import { SVG_NS } from "./dom.ts";
 import type { Layout } from "./layout.ts";
 import { isExternal, type ViewModel, type ViewNode } from "./model.ts";
 import { readTarget, sameTarget, type ViewTarget } from "./target.ts";
 import {
   anchorsOf,
-  CHANNEL_PAD,
   LANE_GAP,
+  laneYOf,
   marker,
   roundedPath,
   scalarTierCount,
@@ -101,7 +102,6 @@ export function extraLanes(links: CrossLink[], sheet: CrossSheet): Map<number, n
   return lanes;
 }
 
-const SVG_NS = "http://www.w3.org/2000/svg";
 const GUTTER_PAD = 10;
 
 /**
@@ -136,8 +136,7 @@ export function drawCrossWires(
     const lane = (ownLanes.get(link.to)?.get(link.channel) ?? 0) + (used.get(link.channel) ?? 0);
     used.set(link.channel, (used.get(link.channel) ?? 0) + 1);
     laneUsed.set(link.to, used);
-    const y =
-      (channel.getBoundingClientRect().top - origin.top) / k + CHANNEL_PAD + lane * LANE_GAP;
+    const y = laneYOf(channel, lane, origin, k);
     const gutter = gutterUsed.get(link.from) ?? 0;
     gutterUsed.set(link.from, gutter + 1);
     const paneRight = (link.from.paneEl.getBoundingClientRect().right - origin.left) / k;

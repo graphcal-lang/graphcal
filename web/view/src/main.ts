@@ -21,7 +21,7 @@ import type { Revised } from "./revisions.ts";
 import { bindInput } from "./inlineInput.ts";
 import { inlaysOf } from "./inlays.ts";
 import { Menu } from "./menu.ts";
-import { instanceOf, isExternal, type ViewModel, type ViewNode } from "./model.ts";
+import { guessedFileName, instanceOf, isExternal, type ViewModel, type ViewNode } from "./model.ts";
 import { gapKeys, placeHalo, renderView, RULER_WIDTH } from "./render.ts";
 import { parseRoute } from "./route.ts";
 import { hiddenOf, pick } from "./rows.ts";
@@ -100,7 +100,7 @@ function known(module: string): boolean {
 /** `power_max.gcl` for a module id, from its model's file. */
 function fileNameOfModule(module: string): string {
   const model = host.model(moduleTarget(module));
-  return model ? fileNameOf(model) : `${module.split(".").at(-1) ?? module}.gcl`;
+  return model ? fileNameOf(model) : guessedFileName(module);
 }
 
 function sheetOf(target: Element): Sheet | null {
