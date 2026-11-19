@@ -1027,39 +1027,45 @@ fn unit_name_spelled_like_a_visible_local_is_rejected_for_every_binder_kind() {
     use crate::semantic_error::name::UnitNameSite;
     use crate::syntax::ast::MulDivOp;
 
+    /// The expected site; a continuation names the literal it closes.
+    enum Expected {
+        Continuation(MulDivOp, &'static str),
+        Site(UnitNameSite),
+    }
+
     let cases = [
         (
             "match-arm field binding",
             "match @p { Pair(a: _, b: s) => 2.0 m / s, }",
-            UnitNameSite::LiteralContinuation(MulDivOp::Div),
+            Expected::Continuation(MulDivOp::Div, "2.0 m / s"),
         ),
         (
             "for binder",
             "for m: Leg { 5.0 N * m }",
-            UnitNameSite::LiteralContinuation(MulDivOp::Mul),
+            Expected::Continuation(MulDivOp::Mul, "5.0 N * m"),
         ),
         (
             "for binder named by a tuple-key marker",
             "for leg: Leg, s: Phase { (leg, s) => 2.0 m / s }",
-            UnitNameSite::LiteralContinuation(MulDivOp::Div),
+            Expected::Continuation(MulDivOp::Div, "2.0 m / s"),
         ),
         (
             "scan lambda parameter",
             "scan(@durations, 0.0 m, |acc, s| acc + 2.0 m / s * 1.0 s)",
-            UnitNameSite::LiteralContinuation(MulDivOp::Div),
+            Expected::Continuation(MulDivOp::Div, "2.0 m / s"),
         ),
         (
             "unfold lambda parameter",
             "unfold(Leg, 0.0 s, |s, previous, current| 1.0 s)",
-            UnitNameSite::LiteralLeading,
+            Expected::Site(UnitNameSite::LiteralLeading),
         ),
         (
             "conversion target",
             "match @p { Pair(a: _, b: h) => @speed -> km / h, }",
-            UnitNameSite::ConversionTarget,
+            Expected::Site(UnitNameSite::ConversionTarget),
         ),
     ];
-    for (binder, body, expected_site) in cases {
+    for (binder, body, expected) in cases {
         let source = format!("{UNIT_LOCAL_PRELUDE}node out: Dimensionless = {body};\n");
         let error = lower_strict_node(&source, "out").unwrap_err();
         let ExprLowerError::UnitNameIsLocal {
@@ -1071,7 +1077,23 @@ fn unit_name_spelled_like_a_visible_local_is_rejected_for_every_binder_kind() {
         else {
             panic!("{binder}: expected UnitNameIsLocal, got {error:?}");
         };
-        assert_eq!(site, expected_site, "{binder}");
+        match (expected, site) {
+            (
+                Expected::Continuation(expected_op, expected_literal),
+                UnitNameSite::LiteralContinuation { op, literal },
+            ) => {
+                assert_eq!(op, expected_op, "{binder}");
+                assert_eq!(
+                    &source[literal.offset()..literal.offset() + literal.len()],
+                    expected_literal,
+                    "{binder}"
+                );
+            }
+            (Expected::Site(expected_site), site) => assert_eq!(site, expected_site, "{binder}"),
+            (Expected::Continuation(..), site) => {
+                panic!("{binder}: expected a literal continuation, got {site:?}");
+            }
+        }
         assert_eq!(
             &source[span.offset()..span.offset() + span.len()],
             name.as_str(),

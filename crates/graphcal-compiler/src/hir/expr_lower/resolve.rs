@@ -124,8 +124,9 @@ pub(super) enum ResolvedCallable<'r> {
 /// The expression position a unit expression is written in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum UnitExprSite {
-    /// The unit suffix of a quantity literal (`2.0 m / s`).
-    QuantityLiteral,
+    /// The unit suffix of a quantity literal (`2.0 m / s`), with the span of
+    /// the whole literal.
+    QuantityLiteral { literal: Span },
     /// The target of a `->` conversion (`@speed -> km / h`).
     ConversionTarget,
 }
@@ -133,8 +134,10 @@ pub(super) enum UnitExprSite {
 impl UnitExprSite {
     const fn term_site(self, position: usize, op: ast::MulDivOp) -> UnitNameSite {
         match (self, position) {
-            (Self::QuantityLiteral, 0) => UnitNameSite::LiteralLeading,
-            (Self::QuantityLiteral, _) => UnitNameSite::LiteralContinuation(op),
+            (Self::QuantityLiteral { .. }, 0) => UnitNameSite::LiteralLeading,
+            (Self::QuantityLiteral { literal }, _) => {
+                UnitNameSite::LiteralContinuation { op, literal }
+            }
             (Self::ConversionTarget, _) => UnitNameSite::ConversionTarget,
         }
     }

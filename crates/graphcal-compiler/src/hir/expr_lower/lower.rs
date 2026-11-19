@@ -389,7 +389,8 @@ impl ExprLowerer<'_> {
             },
             ast::ExprKind::QuantityLiteral { value, unit } => ExprKind::QuantityLiteral {
                 value: *value,
-                unit: self.lower_unit_expr(unit, UnitExprSite::QuantityLiteral)?,
+                unit: self
+                    .lower_unit_expr(unit, UnitExprSite::QuantityLiteral { literal: expr.span })?,
             },
             ast::ExprKind::Convert { expr, target } => {
                 let target = self.lower_unit_expr(target, UnitExprSite::ConversionTarget)?;

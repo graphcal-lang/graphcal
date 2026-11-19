@@ -39,7 +39,12 @@ pub enum UnitNameSite {
     LiteralLeading,
     /// A unit that continues a quantity literal after `*` or `/`
     /// (`2.0 m / s`), where the source may have meant arithmetic on the local.
-    LiteralContinuation(MulDivOp),
+    LiteralContinuation {
+        op: MulDivOp,
+        /// The whole quantity literal, from its number to its last unit;
+        /// closing it before `op` is the arithmetic reading's fix.
+        literal: Span,
+    },
     /// A unit of a `->` conversion target.
     ConversionTarget,
 }
@@ -494,7 +499,7 @@ impl DiagnosticKind for NameError {
 fn unit_name_is_local_help(name: &LocalName, site: UnitNameSite) -> String {
     let rename = format!("to use the unit `{name}`, rename the local");
     match site {
-        UnitNameSite::LiteralContinuation(op) => {
+        UnitNameSite::LiteralContinuation { op, .. } => {
             let (verb, operator) = match op {
                 MulDivOp::Mul => ("multiply", '*'),
                 MulDivOp::Div => ("divide", '/'),
