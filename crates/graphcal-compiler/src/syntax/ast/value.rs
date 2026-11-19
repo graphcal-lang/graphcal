@@ -880,10 +880,9 @@ pub enum ExprKind<P: Phase = Raw> {
     },
     /// Inline DAG invocation: `@dag(args)::out` or `@module.dag(args)::out`.
     ///
-    /// Each syntactic occurrence denotes a fresh DAG instantiation that is
-    /// desugared during TIR lowering to the equivalent
-    /// `include <path>(args) as <synthetic>; @<synthetic>.out`. Preserved as
-    /// a distinct AST variant so source spans survive for diagnostics.
+    /// Each syntactic occurrence denotes a fresh DAG instantiation. HIR
+    /// expression lowering resolves the path, bindings, and output and lowers
+    /// it directly to a HIR `ExprKind::DagCall`.
     ///
     /// The post-`@` expression as a whole must denote a graph value.
     /// `@dag(args)::out` may project an explicitly exported node or the

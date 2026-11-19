@@ -217,7 +217,7 @@ pub struct LoadedFile<T = ResolvedModuleTarget> {
     /// Identity of the source text in the project's source registry.
     pub(super) source_id: SourceId,
     /// Loader-resolved DAG identities for each import declaration, keyed by the
-    /// import path's display string (e.g. `"./lib.gcl"` or `"nasa/rocket"`).
+    /// span-free key of the import's module path (`ModulePath::key`).
     /// Produced by the loader so that downstream consumers (evaluator, LSP) can
     /// look up resolved imports without re-resolving.
     pub(super) resolved_imports: HashMap<ModulePathKey, T>,
