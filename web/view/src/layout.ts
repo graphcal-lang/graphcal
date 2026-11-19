@@ -218,7 +218,6 @@ export interface BoxSize {
 export interface PackedZone {
   stacks: Column[][];
   width: number;
-  height: number;
 }
 
 /**
@@ -233,7 +232,7 @@ export function packZone(
   width: number,
   folded: ReadonlySet<string>,
 ): PackedZone {
-  if (boxes.length === 0) return { stacks: [], width: 0, height: 0 };
+  if (boxes.length === 0) return { stacks: [], width: 0 };
   const tallest = Math.max(...boxes.map((b) => size(b.node.id).height));
   let cap = tallest;
   for (;;) {
@@ -261,7 +260,7 @@ export function packZone(
     }
     const total = widths.reduce((sum, w) => sum + w, 0) + (stacks.length - 1) * BOX_GAP;
     if (total <= width || cap > tallest * 4) {
-      return { stacks, width: total, height: Math.max(...heights) };
+      return { stacks, width: total };
     }
     cap += 8;
   }
