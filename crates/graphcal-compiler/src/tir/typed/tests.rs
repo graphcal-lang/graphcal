@@ -1940,6 +1940,11 @@ fn rigid_views_keep_bound_defaulted_ports_opaque_and_recompute_derived_dimension
     ] {
         statics.insert_dimension(identity.clone(), default).unwrap();
         if let Some(generic) = generic {
+            let generic = crate::ir::module_definitions::PortGenericDimension {
+                value: generic,
+                source: make_src(),
+                span: crate::syntax::span::Span::new(0, 1),
+            };
             statics
                 .insert_port_generic_dimension(identity.clone(), generic)
                 .unwrap();
