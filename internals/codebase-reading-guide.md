@@ -213,7 +213,10 @@ When a post-desugar match sees an impossible payload, use
 ### 1.2 Lexing and Parsing
 
 The lexer is `logos`-based and produces tokens with byte-accurate `Span`s.
-The parser is recursive descent with Pratt-style expression precedence.
+The parser is recursive descent. Expressions use precedence climbing with one
+function per precedence level (`parse_convert` → `parse_conditional` → … →
+`parse_postfix` → `parse_atom` in `syntax/parser/expr.rs`), not binding-power
+tables.
 
 Key files:
 
@@ -1134,7 +1137,8 @@ compiled modules or DAG bodies.
 LoadedProject
   files: LoadedFiles
     ordered: DependencyOrdered<LoadedFile>  // { deps, root }: dependencies first; root last
-    owners: HashMap<DagId, usize>  // file-root and inline DAG -> owning file position
+    modules: HashMap<DagId, LoadedModuleId>  // file-root and inline DAG -> { file, inline } position
+  sources: Arc<SourceRegistry>  // every loaded source text; resolves SourceIds
   plugins: HashMap<PluginIdentity, PluginFileEntry>
   plugin_call_policy: PluginCallPolicy
   package_closure: Option<LoadedPackageClosure>
@@ -1144,9 +1148,10 @@ LoadedFile
   dag_id: DagId
   source: Arc<String>
   ast: File<Desugared>
-  named_source: NamedSource<Arc<String>>
+  source_id: SourceId  // identity in LoadedProject.sources
   resolved_imports: HashMap<ModulePathKey, ResolvedModuleTarget>
   inline_dags: Vec<LoadedDag>  // source preorder
+  interface: ModuleInterface  // declared interface of the file root
 
 LoadedDag
   dag_id: DagId
