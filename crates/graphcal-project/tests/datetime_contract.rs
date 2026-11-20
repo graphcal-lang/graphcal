@@ -165,3 +165,26 @@ node unix_before_epoch: Bool = to_unix(datetime("1969-12-31T23:59:59.999999999Z"
         assert_true(&result, name);
     }
 }
+
+// Unix time does not count the leap second 2016-12-31T23:59:60Z, so the
+// readings on either side of it are one second apart, in both directions.
+#[test]
+fn unix_time_skips_the_leap_second_at_the_end_of_2016() {
+    let result = compile_and_eval(
+        r#"
+node after_to_unix: Bool = to_unix(datetime("2017-01-01T00:00:00Z")) == 1483228800.0;
+node before_to_unix: Bool = to_unix(datetime("2016-12-31T23:59:59Z")) == 1483228799.0;
+node after_from_unix: Bool = from_unix(1483228800.0) == datetime("2017-01-01T00:00:00Z");
+node before_from_unix: Bool = from_unix(1483228799.0) == datetime("2016-12-31T23:59:59Z");
+"#,
+    )
+    .unwrap();
+    for name in [
+        "after_to_unix",
+        "before_to_unix",
+        "after_from_unix",
+        "before_from_unix",
+    ] {
+        assert_true(&result, name);
+    }
+}
