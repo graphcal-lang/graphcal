@@ -556,8 +556,8 @@ impl<P: Phase> IncludeDecl<P> {
 
 /// Inline DAG declaration: `dag name { ... }`
 ///
-/// The body contains declarations (same as file-level). Semantics are not yet
-/// implemented — this phase only parses the syntax.
+/// The body contains declarations (same as file-level). Project compilation
+/// treats each inline DAG as a DAG module of its own, like a file root.
 #[derive(Debug, Clone, FormatEquivalent)]
 #[fe(phase = Raw)]
 pub struct DagDecl<P: Phase = Raw> {

@@ -100,9 +100,10 @@ pub fn compile_and_eval_named(source: &str, name: &str) -> Result<EvalResult, Co
 
 /// Full pipeline with parameter overrides.
 ///
-/// Each entry in `overrides` maps a param name to a replacement expression.
-/// The overrides are validated (must refer to existing params, not consts/nodes)
-/// and then substituted before dimension checking and evaluation.
+/// Each entry in `overrides` maps a param name to a closed value expression.
+/// The project is checked and prepared first; each override is then bound to
+/// its parameter port as a closed value (names that are not parameters are
+/// rejected) and the bound row is evaluated. No source is rewritten.
 ///
 /// # Errors
 ///

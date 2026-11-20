@@ -8,7 +8,7 @@
 //! - [`Syntax`]: desugared AST bodies, each paired with the module scope that
 //!   will resolve it ([`InScope`]). Include assembly rewrites these before the
 //!   freeze boundary.
-//! - The lowered phase (defined next to the frozen HIR DAG in `ir::lower`):
+//! - The lowered phase (`Lowered`, defined in `ir::model`):
 //!   strictly lowered HIR bodies whose references are already canonical.
 
 use std::fmt;

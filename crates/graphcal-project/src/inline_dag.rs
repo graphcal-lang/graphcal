@@ -24,7 +24,7 @@ use crate::import_surface::import_item_not_found_error;
 
 /// Pre-process `import <self>::{...}` declarations inside a dag body.
 ///
-/// A self-import is one whose `ModulePath` display string is keyed in
+/// A self-import is one whose `ModulePath` key maps in
 /// `body_resolved_imports` to `parent_dag_id` — i.e. the loader resolved
 /// the path back to the dag's own enclosing parent DAG. For each
 /// self-import, every brace-list item is classified in the namespace it
