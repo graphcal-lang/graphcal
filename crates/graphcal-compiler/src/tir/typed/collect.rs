@@ -22,7 +22,7 @@ pub(super) fn augment_runtime_deps_for_dynamic_units(tir: &mut super::UncheckedT
     if scale_deps.is_empty() {
         return;
     }
-    for dag in tir.dags.locals_mut() {
+    for dag in tir.dags_mut().locals_mut() {
         add_dynamic_unit_reads(dag, &scale_deps);
     }
 }
@@ -34,7 +34,7 @@ pub fn dynamic_unit_scale_reads(
     tir: &super::UncheckedTir,
 ) -> HashMap<crate::resolved_name::ResolvedUnitName, BTreeSet<ResolvedDeclName>> {
     let direct = tir
-        .dags
+        .dags()
         .iter()
         .flat_map(|(_, dag)| {
             let frame = dag.frame();

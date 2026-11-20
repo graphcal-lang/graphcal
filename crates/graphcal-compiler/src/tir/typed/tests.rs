@@ -604,8 +604,8 @@ fn unit_overlay_tir_with(
     let info = tir.unit_info(&unit).unwrap().clone();
     tir.insert_runtime_unit(unit.clone(), info).unwrap();
     extra(&mut tir, &unit);
-    let instances = super::instance_graph::InstanceGraph::new(&tir.dags);
-    let tir = InstantiatedTir { tir, instances }
+    let instances = super::instance_graph::InstanceGraph::new(tir.dags());
+    let tir = InstantiatedTir::new(tir, instances)
         .check(
             crate::source_registry::SourceRegistry::new()
                 .register(path, Arc::new(source.to_string())),
@@ -699,18 +699,18 @@ fn installed_stores_bring_every_dag_their_bodies_call() {
         Err(DagStoreInsertError::MissingCallee { caller: found, target })
             if found == caller && &target == leaf_id
     ));
-    assert_eq!(alone.finish().dags.len(), 1, "nothing is installed");
+    assert_eq!(alone.finish().dags().len(), 1, "nothing is installed");
 
     let mut together = draft();
     together
         .install_shared_dag_stores([&calling, &leaf])
         .unwrap();
-    assert_eq!(together.finish().dags.len(), 2);
+    assert_eq!(together.finish().dags().len(), 2);
 
     let mut callee_first = draft();
     callee_first.install_shared_dag_stores([&leaf]).unwrap();
     callee_first.install_shared_dag_stores([&calling]).unwrap();
-    assert_eq!(callee_first.finish().dags.len(), 2);
+    assert_eq!(callee_first.finish().dags().len(), 2);
 }
 
 #[test]
@@ -734,7 +734,7 @@ fn local_and_shared_body_collisions_fail_in_both_insertion_orders() {
                 matches!(root.install_shared_dag_stores([&leaf]), Err(DagStoreInsertError::Registry(DagRegistryError::DuplicateDag { dag_id })) if &dag_id == owner)
             );
         }
-        assert_eq!(root.finish().dags.len(), 2);
+        assert_eq!(root.finish().dags().len(), 2);
     }
 }
 
@@ -2016,22 +2016,22 @@ fn instance_graph_splits_canonical_bodies_from_materialized_instances() {
     let mut tir = draft_with_local_children().finish();
     let root_id = tir.root_dag_id().clone();
     let a_id = root_id.inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid("a"));
-    let mut graph = InstanceGraph::new(&tir.dags);
+    let mut graph = InstanceGraph::new(tir.dags());
     assert!(
         graph
             .template(
-                &tir.dags,
+                tir.dags(),
                 &root_id.instance_child(ScopeSegment::Named(ModuleAliasName::expect_valid("nope")))
             )
             .is_none()
     );
-    let (a_position, template) = graph.template(&tir.dags, &a_id).unwrap();
+    let (a_position, template) = graph.template(tir.dags(), &a_id).unwrap();
     assert!(matches!(template, TemplateBody::Local(_)));
 
     // Materialize one instance of `a` under the root.
     let instance_id =
         root_id.instance_child(ScopeSegment::Named(ModuleAliasName::expect_valid("i")));
-    let mut instance = tir.dags.at(a_position).clone();
+    let mut instance = tir.dags().at(a_position).clone();
     instance.dag_id = instance_id.clone();
     let specialization = crate::ir::static_substitution::StaticSpecializationId::new(
         a_id.clone(),
@@ -2039,7 +2039,7 @@ fn instance_graph_splits_canonical_bodies_from_materialized_instances() {
     );
     let instance_position = graph
         .push_instance(
-            &mut tir.dags,
+            tir.dags_mut(),
             instance,
             (a_position, template),
             specialization.clone(),
@@ -2052,18 +2052,18 @@ fn instance_graph_splits_canonical_bodies_from_materialized_instances() {
     );
     assert_eq!(graph.instances_of(a_position), []);
     // An instance is never a template.
-    assert!(graph.template(&tir.dags, &instance_id).is_none());
+    assert!(graph.template(tir.dags(), &instance_id).is_none());
 
     let canonical = graph
-        .map_canonical(&tir.dags, |position, dag| {
-            assert_eq!(tir.dags.position(dag.dag_id()), Some(position));
+        .map_canonical(tir.dags(), |position, dag| {
+            assert_eq!(tir.dags().position(dag.dag_id()), Some(position));
             Ok::<_, ()>(dag.dag_id().clone())
         })
         .unwrap();
     assert_eq!(canonical.iter().count(), 3);
     assert!(canonical.iter().all(|dag_id| dag_id != &instance_id));
     let instances = graph
-        .map_instances(&tir.dags, |position, dag, origin| {
+        .map_instances(tir.dags(), |position, dag, origin| {
             assert_eq!(position, instance_position);
             assert_eq!(origin.template_position(), a_position);
             assert_eq!(origin.specialization(), &specialization);
@@ -2077,10 +2077,10 @@ fn instance_graph_splits_canonical_bodies_from_materialized_instances() {
         })
         .unwrap();
     // The joined table pairs every local body with its own fact.
-    let joined = graph.join(&tir.dags, canonical, instances);
-    assert_eq!(tir.dags.with_local_facts(&joined).count(), 4);
+    let joined = graph.join(tir.dags(), canonical, instances);
+    assert_eq!(tir.dags().with_local_facts(&joined).count(), 4);
     assert!(
-        tir.dags
+        tir.dags()
             .with_local_facts(&joined)
             .all(|(dag, fact)| dag.dag_id() == fact)
     );
@@ -2106,21 +2106,21 @@ fn draft_positions_follow_insertion_while_visits_follow_identity() {
         let dag_id = tir
             .root_dag_id()
             .inline_dag_child(crate::syntax::decl_name::DeclName::expect_valid(name));
-        tir.dags.position(&dag_id).unwrap().index()
+        tir.dags().position(&dag_id).unwrap().index()
     };
     // `b` joined before `a`.
     assert_eq!((position("b"), position("a")), (1, 2));
-    assert_eq!(tir.dags.positioned().count(), 3);
+    assert_eq!(tir.dags().positioned().count(), 3);
     let visited = tir
-        .dags
+        .dags()
         .local_iter()
         .map(|(dag_id, _)| dag_id.to_string())
         .collect::<Vec<_>>();
     assert_eq!(visited[0], tir.root_dag_id().to_string());
     assert!(visited[1].ends_with('a') && visited[2].ends_with('b'));
-    assert!(tir.dags.positioned().all(|(position, dag)| {
-        tir.dags.position(dag.dag_id()) == Some(position)
-            && std::ptr::eq(tir.dags.at(position), dag)
+    assert!(tir.dags().positioned().all(|(position, dag)| {
+        tir.dags().position(dag.dag_id()) == Some(position)
+            && std::ptr::eq(tir.dags().at(position), dag)
     }));
 }
 
@@ -2134,41 +2134,41 @@ fn imported_slots_keep_their_position_when_localized() {
         parse_and_type_resolve_builder_named("node x: Dimensionless = 1.0;", "root.gcl").unwrap();
     draft.install_shared_dag_stores([&leaf]).unwrap();
     let mut tir = draft.finish();
-    let imported = tir.dags.position(leaf_id).unwrap();
+    let imported = tir.dags().position(leaf_id).unwrap();
     assert_eq!(imported.index(), 1);
     assert!(std::ptr::eq(
-        tir.dags.shared_at(imported).unwrap(),
+        tir.dags().shared_at(imported).unwrap(),
         leaf.get(leaf_id).unwrap()
     ));
     assert!(
-        tir.dags
+        tir.dags()
             .shared_at(super::dag_position::DagPosition::ROOT)
             .is_none()
     );
-    assert_eq!(tir.dags[leaf_id].dag_id(), leaf_id);
+    assert_eq!(tir.dags()[leaf_id].dag_id(), leaf_id);
     let facts = tir
-        .dags
+        .dags()
         .map_local(|_, dag| Ok::<_, ()>(dag.dag_id().clone()))
         .unwrap();
-    assert!(tir.dags.local_fact(&facts, leaf_id).is_none());
-    assert!(tir.dags.local_with_fact(&facts, leaf_id).is_none());
+    assert!(tir.dags().local_fact(&facts, leaf_id).is_none());
+    assert!(tir.dags().local_with_fact(&facts, leaf_id).is_none());
     assert_eq!(
-        tir.dags.local_fact(&facts, tir.root_dag_id()),
+        tir.dags().local_fact(&facts, tir.root_dag_id()),
         Some(tir.root_dag_id())
     );
     let unknown = crate::dag_id::DagId::root_in_package("elsewhere", "elsewhere");
-    assert!(tir.dags.local_fact(&facts, &unknown).is_none());
-    assert!(tir.dags.local_with_fact(&facts, &unknown).is_none());
+    assert!(tir.dags().local_fact(&facts, &unknown).is_none());
+    assert!(tir.dags().local_with_fact(&facts, &unknown).is_none());
 
     // Localizing the import copies its body into a local slot at the same
     // position; it is then visited with the local bodies.
-    let localized = tir.dags.localized_mut(imported).dag_id().clone();
+    let localized = tir.dags_mut().localized_mut(imported).dag_id().clone();
     assert_eq!(&localized, leaf_id);
-    assert_eq!(tir.dags.position(leaf_id), Some(imported));
-    assert!(tir.dags.shared_at(imported).is_none());
-    assert!(tir.dags.shared(leaf_id).is_none());
-    assert_eq!(tir.dags.local_iter().count(), 2);
-    assert_eq!(tir.dags.len(), 2);
+    assert_eq!(tir.dags().position(leaf_id), Some(imported));
+    assert!(tir.dags().shared_at(imported).is_none());
+    assert!(tir.dags().shared(leaf_id).is_none());
+    assert_eq!(tir.dags().local_iter().count(), 2);
+    assert_eq!(tir.dags().len(), 2);
     // A localized import is not owned by the root's file.
     assert_eq!(
         tir.local_dags()
@@ -2181,15 +2181,15 @@ fn imported_slots_keep_their_position_when_localized() {
     // bodies, so pairing them fails loudly instead of truncating, even when
     // the looked-up DAG is unknown.
     let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tir.dags.local_fact(&facts, &unknown).is_none()
+        tir.dags().local_fact(&facts, &unknown).is_none()
     }));
     assert!(stale.is_err());
     let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tir.dags.local_with_fact(&facts, &unknown).is_none()
+        tir.dags().local_with_fact(&facts, &unknown).is_none()
     }));
     assert!(stale.is_err());
     let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        tir.dags.map_local_facts(facts, |_, fact| fact)
+        tir.dags().map_local_facts(facts, |_, fact| fact)
     }));
     assert!(stale.is_err());
 }
@@ -2198,15 +2198,15 @@ fn imported_slots_keep_their_position_when_localized() {
 fn local_dag_facts_pair_each_local_body_with_the_fact_mapped_from_it() {
     let tir = draft_with_local_children().finish();
     let facts = tir
-        .dags
+        .dags()
         .map_local(|position, dag| {
-            assert_eq!(tir.dags.position(dag.dag_id()), Some(position));
+            assert_eq!(tir.dags().position(dag.dag_id()), Some(position));
             Ok::<_, ()>(dag.dag_id().clone())
         })
         .unwrap();
     // Visited in identity order, paired by body.
     let visited = tir
-        .dags
+        .dags()
         .with_local_facts(&facts)
         .map(|(dag, fact)| {
             assert_eq!(dag.dag_id(), fact);
@@ -2217,7 +2217,7 @@ fn local_dag_facts_pair_each_local_body_with_the_fact_mapped_from_it() {
     assert_eq!(visited[0], tir.root_dag_id().to_string());
     assert!(visited[1].ends_with('a') && visited[2].ends_with('b'));
     assert_eq!(
-        tir.dags.local_fact(&facts, tir.root_dag_id()),
+        tir.dags().local_fact(&facts, tir.root_dag_id()),
         Some(tir.root_dag_id())
     );
 
@@ -2227,13 +2227,14 @@ fn local_dag_facts_pair_each_local_body_with_the_fact_mapped_from_it() {
         .unwrap();
     let (owners, rendered) = facts.zip(rendered).unzip();
     let lengths = tir
-        .dags
+        .dags()
         .map_local_facts(rendered.map(|text| text.len()), |dag, length| {
             assert_eq!(length, dag.dag_id().to_string().len());
             length
         });
     let paired = tir
-        .dags
+        .into_parts()
+        .1
         .zip_locals(owners.zip(lengths), |dag, (owner, length)| {
             assert_eq!(dag.dag_id(), &owner);
             assert_eq!(length, owner.to_string().len());
@@ -2246,7 +2247,7 @@ fn local_dag_facts_pair_each_local_body_with_the_fact_mapped_from_it() {
 fn local_dag_facts_stop_at_the_first_failure_in_visiting_order() {
     let tir = draft_with_local_children().finish();
     let mut visited = Vec::new();
-    let failure = tir.dags.map_local(|_, dag| {
+    let failure = tir.dags().map_local(|_, dag| {
         visited.push(dag.dag_id().clone());
         if visited.len() == 2 {
             Err(dag.dag_id().clone())
@@ -2260,7 +2261,7 @@ fn local_dag_facts_stop_at_the_first_failure_in_visiting_order() {
     assert_eq!(visited.len(), 2);
     assert!(failed.to_string().ends_with('a'));
     let facts = tir
-        .dags
+        .dags()
         .map_local(|_, dag| Ok::<_, ()>(dag.dag_id().clone()))
         .unwrap();
     assert_eq!(

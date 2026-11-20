@@ -244,7 +244,7 @@ fn template_of<'a>(
     canonical: &'a CanonicalFacts<CanonicalChecked>,
     origin: &'a InstanceOrigin,
 ) -> (&'a crate::tir::typed::model::DagTIR, &'a CheckedBodies) {
-    let dag = tir.dags.at(origin.template_position());
+    let dag = tir.dags().at(origin.template_position());
     match canonical.template(origin.template()) {
         TemplateFact::Local(checked) => (dag, &checked.bodies),
         TemplateFact::Shared(shared) => (dag, shared.bodies()),
@@ -264,7 +264,7 @@ pub(super) fn instance_bodies<'t>(
     cancellation: &CancellationToken,
 ) -> Result<InstanceFacts<InstanceChecked>, Outcome<SemanticError>> {
     let published = graph.join(
-        &tir.dags,
+        tir.dags(),
         canonical.map_ref(|checked| Some(&checked.bodies)),
         instances.map_ref(|_| None),
     );
