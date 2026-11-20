@@ -180,6 +180,11 @@ export function parseViewModel(raw: unknown): ViewModel {
   return viewModelSchema.parse(raw);
 }
 
+/** `power_max.gcl` for the module id `power_project.power_max`, guessed when no model names its file. */
+export function guessedFileName(module: string): string {
+  return `${module.split(".").at(-1) ?? module}.gcl`;
+}
+
 /** Whether a node is a declaration of another module that this one reads. */
 export function isExternal(node: ViewNode): boolean {
   return node.origin.kind !== "local";
