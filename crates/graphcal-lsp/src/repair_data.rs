@@ -6,7 +6,7 @@
 //! diagnostic's code string or on string-keyed JSON fields. The JSON shape
 //! exists only on the wire between the two.
 
-use tower_lsp::lsp_types::Diagnostic;
+use tower_lsp::lsp_types::{Diagnostic, Position};
 
 /// Category marker an unknown-name auto-import inserts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -82,6 +82,10 @@ pub enum RepairData {
     /// V008: add `type T, …` for each listed type to the selection of the
     /// selective include the diagnostic spans.
     SelectTypes { types: Vec<String> },
+    /// N037: close the quantity literal that starts at `literal_start`
+    /// before the `*` or `/` of the unit the diagnostic spans, so the
+    /// operator applies to the same-named local (`(2.0 m) / s`).
+    CloseQuantityLiteral { literal_start: Position },
     /// Import an unknown bare name from a loaded module that exports it.
     AutoImport {
         name: String,
@@ -137,6 +141,9 @@ mod tests {
             },
             RepairData::SelectTypes {
                 types: vec!["T".to_string(), "U".to_string()],
+            },
+            RepairData::CloseQuantityLiteral {
+                literal_start: Position::new(3, 14),
             },
         ] {
             let diagnostic = Diagnostic {

@@ -7,6 +7,7 @@
 //! - V003: Add `pub` to a private item referenced by a public declaration.
 //! - V006: Add `pub` to a leaked symbol referenced by a re-exported declaration.
 //! - V008: Select the rebound-dependent types a selective include exposes.
+//! - N037: Close a quantity literal before a unit spelled like a local.
 //! - Unknown names: add a category-marked selective import from a loaded module.
 //!
 //! Each repair is dispatched on the diagnostic's typed [`RepairData`].
@@ -18,7 +19,7 @@ use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::syntax::token::Token;
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
-    Diagnostic, Range, TextEdit, Url, WorkspaceEdit,
+    Diagnostic, Position, Range, TextEdit, Url, WorkspaceEdit,
 };
 
 use crate::analysis::AnalysisResult;
@@ -55,6 +56,14 @@ pub fn code_actions(
             }
             Some(RepairData::SelectTypes { types }) => {
                 actions.extend(make_select_types_action(diag, source, uri, &types));
+            }
+            Some(RepairData::CloseQuantityLiteral { literal_start }) => {
+                actions.extend(make_close_quantity_literal_action(
+                    diag,
+                    source,
+                    uri,
+                    literal_start,
+                ));
             }
             Some(RepairData::AutoImport { name, category }) => {
                 actions.extend(make_auto_import_actions(
@@ -297,6 +306,71 @@ fn selection_list_start(source: &str, include: Span) -> Option<usize> {
         previous = Some(token);
     }
     None
+}
+
+/// N037: wrap the quantity literal up to the unit's operator in parentheses,
+/// so `2.0 m / s` becomes `(2.0 m) / s` and the operator applies to the local.
+fn make_close_quantity_literal_action(
+    diag: &Diagnostic,
+    source: &str,
+    uri: &Url,
+    literal_start: Position,
+) -> Option<CodeActionOrCommand> {
+    let start = crate::convert::position_to_byte_offset(source, literal_start);
+    let unit = crate::convert::position_to_byte_offset(source, diag.range.start);
+    let close = literal_close_offset(source, Span::new(start, unit.checked_sub(start)?))?;
+    let lines = LineIndex::new(source);
+    let insert = |offset: usize, text: &str| {
+        let position = lines.position(offset);
+        TextEdit {
+            range: Range {
+                start: position,
+                end: position,
+            },
+            new_text: text.to_string(),
+        }
+    };
+    let mut changes = HashMap::new();
+    changes.insert(uri.clone(), vec![insert(start, "("), insert(close, ")")]);
+    Some(CodeActionOrCommand::CodeAction(CodeAction {
+        title: "Close the quantity literal with parentheses".to_string(),
+        kind: Some(CodeActionKind::QUICKFIX),
+        diagnostics: Some(vec![diag.clone()]),
+        edit: Some(WorkspaceEdit {
+            changes: Some(changes),
+            ..Default::default()
+        }),
+        // Renaming the local is the other fix; neither is the obvious one.
+        is_preferred: Some(false),
+        ..Default::default()
+    }))
+}
+
+/// Where `)` closes the quantity literal whose text before the offending
+/// unit is `prefix`: after the token that precedes the unit's `*` or `/`.
+///
+/// `None` when the unit does not directly follow a top-level `*` or `/` of
+/// the literal, as inside a parenthesized unit group (`2.0 m / (kg * s)`),
+/// where closing the literal there would not parse.
+fn literal_close_offset(source: &str, prefix: Span) -> Option<usize> {
+    let text = source.get(prefix.offset()..prefix.offset() + prefix.len())?;
+    let mut lexer = Lexer::new(text);
+    let mut depth = 0usize;
+    let mut tokens = Vec::new();
+    while let Some((token, span)) = lexer.next_token() {
+        match token {
+            Token::LParen => depth += 1,
+            Token::RParen => depth = depth.checked_sub(1)?,
+            _ => {}
+        }
+        tokens.push((token, span));
+    }
+    match tokens.as_slice() {
+        [.., (_, before), (Token::Star | Token::Slash, _)] if depth == 0 => {
+            Some(prefix.offset() + before.offset() + before.len())
+        }
+        _ => None,
+    }
 }
 
 /// The declaration of `item` a visibility fix edits: the only one spelled
@@ -548,6 +622,88 @@ include lib(index I: K, x: { K#p: 1.0 m, K#q: 2.0 m })::{ out };
             "{updated}: {:?}",
             checked.diagnostics
         );
+    }
+
+    /// The quick fixes offered for `source`'s diagnostics with `code`.
+    fn quick_fixes(source: &str, code: &str) -> Option<CodeActionResponse> {
+        let uri = Url::parse("untitled:fix.gcl").unwrap();
+        let analysis = crate::analysis_pipeline::run_analysis_for_test(&uri, source);
+        let diagnostics: Vec<_> = analysis.diagnostics[&uri]
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.code
+                    == Some(tower_lsp::lsp_types::NumberOrString::String(
+                        code.to_string(),
+                    ))
+            })
+            .cloned()
+            .collect();
+        assert!(!diagnostics.is_empty(), "{:?}", analysis.diagnostics);
+        code_actions(&make_params(&uri, diagnostics), &analysis, source)
+    }
+
+    /// #2285: N037's fix closes the literal before the unit's operator, so
+    /// the operator applies to the local, and the program compiles.
+    #[test]
+    fn n037_closes_the_quantity_literal_before_the_local() {
+        let source = "\
+type Pair {
+    Pair(a: Length, b: Time),
+}
+node p: Pair = Pair(a: 1.0 m, b: 10.0 s);
+node v: Velocity = match @p {
+    Pair(a: _, b: s) => 2.0 m / s,
+};
+";
+        let updated = apply_first_quick_fix(source, "graphcal::N037");
+        assert!(updated.contains("=> (2.0 m) / s,"), "{updated}");
+        let uri = Url::parse("untitled:fix.gcl").unwrap();
+        let checked = crate::analysis_pipeline::run_analysis_for_test(&uri, &updated);
+        assert!(
+            checked.has_no_diagnostics(),
+            "{updated}: {:?}",
+            checked.diagnostics
+        );
+    }
+
+    /// The literal closes after every unit before the local's operator,
+    /// powers and leading groups included.
+    #[test]
+    fn n037_keeps_earlier_units_inside_the_literal() {
+        let prelude = "index Leg = { A, B };\n";
+        for (body, fixed) in [
+            ("1.0 m^2 * kg / s", "(1.0 m^2 * kg) / s"),
+            ("1.0 (m * kg)^2 / s", "(1.0 (m * kg)^2) / s"),
+            // A sign negates the literal; it stays outside.
+            ("-1.0 m * s", "-(1.0 m) * s"),
+        ] {
+            let source =
+                format!("{prelude}node out: Dimensionless[Leg] = for s: Leg {{ {body} }};\n");
+            let updated = apply_first_quick_fix(&source, "graphcal::N037");
+            assert!(updated.contains(&format!("{{ {fixed} }}")), "{updated}");
+        }
+    }
+
+    /// A leading unit, a conversion target, or a unit inside a parenthesized
+    /// unit group has no literal to close before it: only a rename helps.
+    #[test]
+    fn n037_without_a_closable_literal_has_no_quick_fix() {
+        let prelude = "\
+type Pair {
+    Pair(a: Length, b: Time),
+}
+node p: Pair = Pair(a: 1.0 m, b: 10.0 s);
+param speed: Velocity = 1.0 m / s;
+";
+        for body in [
+            "Pair(a: _, b: s) => 2.0 s",
+            "Pair(a: _, b: h) => @speed -> km / h",
+            "Pair(a: _, b: s) => 2.0 m / (kg * s)",
+            "Pair(a: _, b: s) => 2.0 m / (s)",
+        ] {
+            let source = format!("{prelude}node out: Dimensionless = match @p {{ {body}, }};\n");
+            assert!(quick_fixes(&source, "graphcal::N037").is_none(), "{body}");
+        }
     }
 
     /// LSP-7: the fix edits the named declaration, not the first declaration
