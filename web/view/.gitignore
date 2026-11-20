@@ -9,9 +9,7 @@ lerna-debug.log*
 
 test-results/
 playwright-report/
-public/examples/
 public/pkg/
-public/vega/
 node_modules
 dist
 dist-ssr
