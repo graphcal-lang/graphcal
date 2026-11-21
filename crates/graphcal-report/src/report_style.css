@@ -352,9 +352,11 @@ button.title-cell:hover { background: var(--panel); }
 .pinned-stack:has(> .pinned-values:empty):has(> .pinned-checks:empty) { display: none; }
 .workspace-pinned.is-empty .pinned-body { display: none; }
 .pinned-values { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(12.5rem, 100%), 1fr)); gap: 0.45rem; }
-/* Pinned cards are a compact readout: name and value; the description stays below. */
+/* Pinned cards are a compact readout: name, value, and the description clamped
+   to two lines like the inputs outline. Pinning moves the card, so the board is
+   the only place its description is shown. */
 .pinned-values > .card { background: var(--paper); padding: 0.45rem 0.65rem 0.55rem; }
-.pinned-values > .card > .card-doc { display: none; }
+.pinned-values > .card > .card-doc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .pinned-values > .card .card-value { font-size: 1.15rem; margin-top: 0.2rem; }
 .pinned-checks > .check { padding: 0.35rem 0.1rem; }
 .pinned-checks { margin: 0; padding: 0 0.6rem; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); }

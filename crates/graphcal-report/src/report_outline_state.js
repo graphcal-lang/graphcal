@@ -33,10 +33,20 @@
     return group.rows.concat(Array.from(group.groups.values()).flatMap(descendants));
   }
 
+  // A field stands for its whole parameter when it is that parameter's only
+  // field. Its row then carries the parameter description and override marker,
+  // wherever it is shown (in the tree or among the pinned inputs).
+  function standsForParameter(field, fields) {
+    return fields.every(function (other) {
+      return other === field || other.parameter !== field.parameter;
+    });
+  }
+
   global.GraphcalReportOutlineState = {
     matches: matches,
     isPathPrefix: isPathPrefix,
     tree: tree,
     descendants: descendants,
+    standsForParameter: standsForParameter,
   };
 })(window);
