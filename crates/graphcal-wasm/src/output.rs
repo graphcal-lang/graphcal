@@ -75,7 +75,7 @@ impl From<&EvalResult> for EvaluationView {
                     // hydration must not remove its scale-bound interaction.
                     graphcal_report::vega::add_pan_zoom(&mut figure.spec);
                     FigureView {
-                        name: figure.name,
+                        name: figure.name.to_string(),
                         spec: figure.spec,
                     }
                 })

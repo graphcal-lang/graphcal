@@ -115,7 +115,7 @@ fn render_page(document: &ReportDocument, vega_scripts: &str, hydration_block: &
         }
         for (index, card) in document.figures.iter().enumerate() {
             let div_id = format!("graphcal-figure-{index}");
-            let name = html_escape(&card.figure.name);
+            let name = html_escape(&card.figure.name.to_string());
             let _ = write!(
                 body,
                 "<figure class=\"plot\" data-figure=\"{name}\" tabindex=\"0\" aria-label=\"{name} plot\">\n<figcaption><span class=\"figure-name\">{name}</span>"

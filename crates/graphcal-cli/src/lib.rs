@@ -8,4 +8,6 @@
     reason = "CLI adapters are an imperative shell where reviewed graceful-degradation fallbacks are intentional"
 )]
 
+pub mod figure_selection;
 pub mod format;
+pub mod plot_svg;

@@ -246,7 +246,8 @@ graphcal eval [OPTIONS] <FILE>
 | `--params-json <JSON>` | インラインの JSON オブジェクトから param を束縛します |
 | `--params-json-file <FILE>` | JSON ファイルから param を束縛します。`-` は標準入力から読み取ります |
 | `--params-json-max-bytes <BYTES>` | JSON パラメータードキュメントの最大サイズ（デフォルト: 1 MiB） |
-| `--plot <MODE>` | プロットの出力モード: `browser`（ブラウザで開く）、`json`（プロットの JSON のみを標準出力に出力）、または `.html` で終わるパス（自己完結型の HTML ページを書き出す） |
+| `--plot <MODE>` | プロットの出力モード: `browser`（ブラウザで開く）、`json`（プロットの JSON のみを標準出力に出力）、`.html` で終わるパス（自己完結型の HTML ページを書き出す）、または `.svg` で終わるパス（1 つの図を静的な SVG 画像として書き出す） |
+| `--figure <NAME>` | `--plot FILE.svg` で書き出す図。表示される図が 2 つ以上ある場合は必須です |
 | `--root <ROOT>` | プロジェクトのルートディレクトリ（`graphcal.toml` の自動検出を上書きします） |
 
 `--params-json` と `--params-json-file` は同時に指定できません。繰り返し指定可能な
@@ -472,7 +473,7 @@ Assertions:
 ### プロット出力 { #plot-output }
 
 ファイルに `plot`、`figure`、`layer` 宣言が含まれている場合、`--plot` オプションを使用して
-それらを描画します。3 つの出力モードが利用できます：
+それらを描画します。4 つの出力モードが利用できます：
 
 **ブラウザモード**は、すべての図を含む自己完結型の HTML ファイルを生成し
 （[Vega-Embed](https://github.com/vega/vega-embed) で描画され、Vega のバンドルが
@@ -500,6 +501,16 @@ graphcal eval analysis.gcl --plot json
 
 ```bash
 graphcal eval analysis.gcl --plot report.html
+```
+
+**SVG ファイルモード**は、1 つの図を静的な SVG 画像として書き出します（パスは `.svg`
+で終わる必要があります）。Markdown ページなどの文書に図を埋め込むときに使います。
+画像の表示に JavaScript は不要です。表示される図が 2 つ以上ある場合は、書き出す図を
+`--figure` で指定します。指定しないとコマンドは失敗し、指定できる図の名前を一覧表示します。
+通常の評価出力は `--format` に従って引き続き出力されます：
+
+```bash
+graphcal eval analysis.gcl --plot thrust.svg --figure thrust_curve
 ```
 
 配列内の各図は `name` と `spec`（Vega-Lite JSON）を持ちます：

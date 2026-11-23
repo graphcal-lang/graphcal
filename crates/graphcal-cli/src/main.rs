@@ -57,6 +57,11 @@ use graphcal::format::{
     FileDiscovery, FormatStatus, TraversalFailures, collect_gcl_files, format_status,
 };
 
+use graphcal::figure_selection::{parse_figure_name, select_figure};
+use graphcal::plot_svg::SvgRenderer;
+use graphcal_compiler::syntax::module_name::ScopedName;
+use graphcal_report::vega::RenderedFigure;
+
 use crate::display::{OutputBlock, build_output_blocks, format_indexed_table, max_flat_name_len};
 use crate::overrides::{
     OverrideParseError, ParameterArgs, ParsedOverrides, parse_overrides_with_sources,
@@ -115,10 +120,19 @@ enum Commands {
         #[arg(long)]
         root: Option<PathBuf>,
         /// Plot output mode: `browser` opens the rendered plots in the default
-        /// browser, `json` prints the Vega-Lite spec array to stdout, and a
-        /// path ending in `.html` writes a self-contained HTML page to that file
-        #[arg(long, value_name = "browser|json|FILE.html", value_parser = parse_plot_output)]
+        /// browser, `json` prints the Vega-Lite spec array to stdout, a path
+        /// ending in `.html` writes a self-contained HTML page to that file,
+        /// and a path ending in `.svg` writes one figure as a static SVG image
+        #[arg(
+            long,
+            value_name = "browser|json|FILE.html|FILE.svg",
+            value_parser = parse_plot_output
+        )]
         plot: Option<PlotOutput>,
+        /// The figure `--plot FILE.svg` writes; required when the model
+        /// displays more than one figure
+        #[arg(long, value_name = "NAME", requires = "plot", value_parser = parse_figure_arg)]
+        figure: Option<ScopedName>,
         /// Permit unfinished results; genuine evaluation and assertion failures still fail
         #[arg(long)]
         allow_incomplete: bool,
@@ -381,22 +395,60 @@ enum PlotOutput {
     Json,
     /// Write the self-contained HTML page to the given path.
     HtmlFile(PathBuf),
+    /// Write one figure as a static SVG image to the given path.
+    SvgFile {
+        /// The destination file.
+        path: PathBuf,
+        /// The figure named with `--figure`, if any.
+        figure: Option<ScopedName>,
+    },
 }
 
-/// Parse the `--plot` argument: `browser`, `json`, or a `.html` file path.
+/// Parse the `--plot` argument: `browser`, `json`, or a `.html` or `.svg`
+/// file path.
 fn parse_plot_output(s: &str) -> Result<PlotOutput, String> {
+    let has_extension = |expected: &str| {
+        Path::new(s)
+            .extension()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
+    };
     match s {
         "browser" => Ok(PlotOutput::Browser),
         "json" => Ok(PlotOutput::Json),
-        path if Path::new(path)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("html")) =>
-        {
-            Ok(PlotOutput::HtmlFile(PathBuf::from(path)))
-        }
+        path if has_extension("html") => Ok(PlotOutput::HtmlFile(PathBuf::from(path))),
+        path if has_extension("svg") => Ok(PlotOutput::SvgFile {
+            path: PathBuf::from(path),
+            figure: None,
+        }),
         other => Err(format!(
-            "expected `browser`, `json`, or a path ending in `.html`, got `{other}`"
+            "expected `browser`, `json`, or a path ending in `.html` or `.svg`, got `{other}`"
         )),
+    }
+}
+
+/// Parse the `--figure` argument as a declaration name.
+fn parse_figure_arg(s: &str) -> Result<ScopedName, String> {
+    parse_figure_name(s).map_err(|error| format!("`{s}` {error}"))
+}
+
+/// Attach the `--figure` selection to the plot output it applies to.
+///
+/// Only a single-image output chooses one figure; the other outputs write
+/// every displayed figure, so a selection there is rejected rather than
+/// ignored.
+fn with_figure_selection(
+    plot: Option<PlotOutput>,
+    figure: Option<ScopedName>,
+) -> Result<Option<PlotOutput>, &'static str> {
+    match (plot, figure) {
+        (plot, None) => Ok(plot),
+        (Some(PlotOutput::SvgFile { path, figure: _ }), Some(figure)) => {
+            Ok(Some(PlotOutput::SvgFile {
+                path,
+                figure: Some(figure),
+            }))
+        }
+        (_, Some(_)) => Err("`--figure` applies only to `--plot FILE.svg`"),
     }
 }
 
@@ -495,8 +547,14 @@ fn run_command(cli: Cli) {
             parameters,
             root,
             plot: plot_output,
+            figure,
             allow_incomplete,
         } => {
+            let plot_output =
+                with_figure_selection(plot_output, figure).unwrap_or_else(|message| {
+                    eprintln!("error: {message}");
+                    process::exit(2);
+                });
             let overrides = match parse_overrides_with_sources(&parameters) {
                 Ok(overrides) => overrides,
                 Err(error) => report_parameter_error(&error),
@@ -916,6 +974,9 @@ fn handle_plot_output(result: &EvalResult, plot_mode: &PlotOutput) -> bool {
     }
     match plot_mode {
         PlotOutput::Browser | PlotOutput::HtmlFile(_) if rendered.is_empty() => {}
+        PlotOutput::SvgFile { path, figure } => {
+            return !write_svg(&rendered, figure.as_ref(), path);
+        }
         PlotOutput::HtmlFile(path) => {
             let html = graphcal_report::plot_page::render_html(&rendered)
                 .unwrap_or_else(|e| bail_with("could not render plots as HTML", e, 2));
@@ -951,6 +1012,29 @@ fn handle_plot_output(result: &EvalResult, plot_mode: &PlotOutput) -> bool {
         }
     }
     no_displayed_plots
+}
+
+/// Write the selected figure to `path` as SVG, reporting any failure.
+///
+/// Returns whether the file was written.
+fn write_svg(rendered: &[RenderedFigure], figure: Option<&ScopedName>, path: &Path) -> bool {
+    let selected = match select_figure(rendered, figure) {
+        Ok(selected) => selected,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return false;
+        }
+    };
+    let rendered_svg = SvgRenderer::new()
+        .and_then(|renderer| renderer.render(&selected.spec))
+        .unwrap_or_else(|e| bail_with(&format!("figure `{}`", selected.name), e, 2));
+    for warning in &rendered_svg.warnings {
+        eprintln!("warning: figure `{}`: {warning}", selected.name);
+    }
+    std::fs::write(path, rendered_svg.svg)
+        .unwrap_or_else(|e| bail_with(&format!("could not write {}", path.display()), e, 2));
+    eprintln!("wrote figure `{}` to {}", selected.name, path.display());
+    true
 }
 
 /// Resolve CLI path arguments without erasing incomplete directory traversal.

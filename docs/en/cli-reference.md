@@ -250,7 +250,8 @@ graphcal eval [OPTIONS] <FILE>
 | `--params-json <JSON>` | Bind params from an inline JSON object |
 | `--params-json-file <FILE>` | Bind params from a JSON file; `-` reads stdin |
 | `--params-json-max-bytes <BYTES>` | Maximum size of the JSON parameter document (default: 1 MiB) |
-| `--plot <MODE>` | Plot output mode: `browser` (open in browser), `json` (print only plot JSON to stdout), or a path ending in `.html` (write a self-contained HTML page) |
+| `--plot <MODE>` | Plot output mode: `browser` (open in browser), `json` (print only plot JSON to stdout), a path ending in `.html` (write a self-contained HTML page), or a path ending in `.svg` (write one figure as a static SVG image) |
+| `--figure <NAME>` | The figure that `--plot FILE.svg` writes; required when more than one figure is displayed |
 | `--root <ROOT>` | Project root directory (overrides automatic `graphcal.toml` detection) |
 
 `--params-json` and `--params-json-file` are mutually exclusive. Repeatable
@@ -484,7 +485,7 @@ Assertions:
 ### Plot Output
 
 When a file contains `plot`, `figure`, or `layer` declarations, use the
-`--plot` option to render them. Three output modes are available:
+`--plot` option to render them. Four output modes are available:
 
 **Browser mode** generates a self-contained HTML file with all figures
 (rendered via [Vega-Embed](https://github.com/vega/vega-embed), with the
@@ -512,6 +513,17 @@ output is still printed according to `--format`:
 
 ```bash
 graphcal eval analysis.gcl --plot report.html
+```
+
+**SVG file mode** writes one figure as a static SVG image (the path must end
+in `.svg`), for embedding in documents such as Markdown pages. The image
+needs no JavaScript to view. If more than one figure is displayed, name the
+one to write with `--figure`; without it, the command fails and lists the
+available figure names. Normal evaluation output is still printed according
+to `--format`:
+
+```bash
+graphcal eval analysis.gcl --plot thrust.svg --figure thrust_curve
 ```
 
 Each figure in the array has a `name` and a `spec` (Vega-Lite JSON):
