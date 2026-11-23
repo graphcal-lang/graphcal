@@ -167,10 +167,29 @@ pub struct ViewNode {
     pub source: Option<ViewSource>,
     /// The evaluated value, when available.
     pub value: Option<ViewValue>,
+    /// Why an evaluated model has no value here, when the cause is an
+    /// unfinished formula. Absent with a value, without an evaluation, and
+    /// for a value that failed to evaluate.
+    pub unavailable: Option<ViewUnavailable>,
     /// Why parts of the value are not shown as declared: a display unit
     /// that could not be applied, so the SI value is shown instead. Empty
     /// without an evaluation.
     pub presentation: Vec<String>,
+}
+
+/// Why a node of an evaluated model has no value, as `graphcal eval` reports
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ViewUnavailable {
+    /// The node's own formula has a `todo` hole.
+    Todo,
+    /// The node reads unfinished declarations.
+    Blocked {
+        /// The unfinished declarations it waits on, named as `graphcal
+        /// eval` names them (`demo.consts::v`, `inst::pending`).
+        unfinished: Vec<String>,
+    },
 }
 
 /// An include instance a node is read through.

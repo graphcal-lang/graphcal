@@ -49,6 +49,7 @@
         "si_value": 10.0,
         "unit": "m/s"
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -93,6 +94,7 @@
         "si_value": 20.0,
         "unit": "m/s"
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -132,6 +134,7 @@
         "cells": []
       },
       "value": null,
+      "unavailable": null,
       "presentation": []
     }
   ]

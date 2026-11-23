@@ -607,6 +607,37 @@ body {
   font-size: 10px;
   cursor: help;
 }
+/* The page's own tooltip (tip.ts): shown at once, and in a VS Code webview too. */
+.tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 420px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--node-head);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  /* A doc comment and a list of reasons keep their lines. */
+  white-space: pre-wrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+/* In place of a value an unfinished formula withholds; the reason is in its tip. */
+.status {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  cursor: help;
+}
+.status-todo {
+  color: #e06c6c;
+}
+.status-blocked {
+  color: var(--muted);
+}
 .mark {
   color: var(--muted);
 }

@@ -86,6 +86,14 @@ still check, so a library with a required param can be edited. Its rules:
   that cannot be applied leaves the SI value, and the node lists why in
   `presentation`; every host projects the same way (`graphcal view` also
   prints those lines and exits with 1, as `graphcal eval` does).
+- A node without a value because a formula is unfinished says so in
+  `unavailable`: `{ kind: "todo" }` for a `todo` hole of its own, or
+  `{ kind: "blocked", unfinished }` naming the unfinished declarations it
+  waits on, as `graphcal eval` names them. The sheet shows `TODO` or
+  `BLOCKED` where the value would be (beside the name of a table), with the
+  names in a tooltip of the page's own (`src/tip.ts`; a native `title` does
+  not show in a VS Code webview). A value that failed to evaluate has no
+  `unavailable`.
 - `module.id` and `node.module` are module paths as the loader records them
   for each file, the root included.
 

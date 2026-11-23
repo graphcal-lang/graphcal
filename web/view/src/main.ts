@@ -43,7 +43,8 @@ import {
 import { mountShell } from "./shell.ts";
 import { moduleTarget, readTarget, sameTarget, targetOf, type ViewTarget } from "./target.ts";
 import { EmptyHost, mountStart } from "./start.ts";
-import { displayOf, oneLine, valueAt } from "./values.ts";
+import { mountTips } from "./tip.ts";
+import { displayAt, displayOf, oneLine, valueAt } from "./values.ts";
 import { inVsCode, VsCodeHost } from "./vscodeHost.ts";
 import { drawWires, planRoutes } from "./wires.ts";
 
@@ -150,7 +151,7 @@ function renderFormula(): void {
     entries: entryNames(s, node, keys),
     expr: node.expr === null ? null : oneLine(node.expr),
     editable: editableExpr(node, editAt(s, node)) !== null,
-    value: displayOf(valueAt(node.value, keys)),
+    value: displayAt(node, keys),
     change: change ? changeNote(change, node.value, keys) : null,
   });
 }
@@ -928,3 +929,5 @@ if (!route && !inVsCode()) {
   fileEl.textContent = "";
   mountStart(startEl, location.hash.length > 1 ? location.hash : null);
 }
+
+mountTips(document);

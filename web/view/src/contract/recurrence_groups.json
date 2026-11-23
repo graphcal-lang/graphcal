@@ -88,6 +88,7 @@
         "si_value": 1.0,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -129,6 +130,7 @@
         "si_value": 0.5,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -215,6 +217,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -301,6 +304,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -344,6 +348,7 @@
         "si_value": 1.875,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -385,6 +390,7 @@
         "si_value": 0.0,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -426,6 +432,7 @@
         "si_value": 1.0,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -512,6 +519,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -598,6 +606,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -692,6 +701,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -786,6 +796,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -953,6 +964,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1120,6 +1132,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1161,6 +1174,7 @@
         "si_value": 0.5,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1247,6 +1261,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1332,6 +1347,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1373,6 +1389,7 @@
         "si_value": 1.0,
         "unit": "m/s"
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1458,6 +1475,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1544,6 +1562,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1587,6 +1606,7 @@
         "si_value": 7.5,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1628,6 +1648,7 @@
         "display": "PASS",
         "value": true
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -1716,6 +1737,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     }
   ]

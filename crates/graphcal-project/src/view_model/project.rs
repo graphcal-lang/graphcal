@@ -38,7 +38,8 @@ use crate::project_compiler::CheckedProject;
 use super::cells::definition_cells;
 use super::model::{
     ViewCall, ViewCell, ViewElement, ViewIndex, ViewIndexEntry, ViewInstance, ViewModel,
-    ViewModule, ViewNode, ViewNodeKind, ViewOrigin, ViewSource, ViewSubject, ViewValue,
+    ViewModule, ViewNode, ViewNodeKind, ViewOrigin, ViewSource, ViewSubject, ViewUnavailable,
+    ViewValue,
 };
 use super::target::{ViewModels, ViewTarget};
 use super::value::{common_unit, view_value};
@@ -214,6 +215,16 @@ impl ViewProjection {
                     .map(|value| view_value(value, &values.result.render, &mut problems)),
             };
             node.unit = value.as_ref().and_then(common_unit);
+            node.unavailable = match binding.kind {
+                ValueBindingKind::CallOutput => None,
+                ValueBindingKind::Assertion => match values.assertion(&binding.declaration) {
+                    Some(AssertResult::Blocked { reason }) => unavailable_view(reason),
+                    _ => None,
+                },
+                ValueBindingKind::Value => values
+                    .unavailable(&binding.declaration)
+                    .and_then(unavailable_view),
+            };
             node.value = value;
             node.presentation = problems;
         }
@@ -985,6 +996,7 @@ impl<'a> NodeBuilder<'a> {
             source,
             doc: doc.map(str::to_string),
             value: None,
+            unavailable: None,
             presentation: Vec::new(),
         };
         Ok((node, binding))
@@ -1194,6 +1206,12 @@ impl<'e> EvaluatedValues<'e> {
         self.by_identity.get(id)?.as_ref().ok()
     }
 
+    /// Why the evaluation has no value for `id`, when it reports it without
+    /// one.
+    fn unavailable(&self, id: &ResolvedDeclName) -> Option<&'e OutputUnavailable> {
+        self.by_identity.get(id)?.as_ref().err()
+    }
+
     /// The display failures the evaluation reported for the value of `id`
     /// (plot channels aside), each with the path of the leaf it concerns.
     fn presentation(&self, id: &ResolvedDeclName) -> Vec<String> {
@@ -1311,6 +1329,17 @@ fn assertion_value(outcome: &AssertResult) -> Option<ViewValue> {
             value: false,
         }),
         AssertResult::Blocked { .. } | AssertResult::Error { .. } => None,
+    }
+}
+
+/// The unfinished formula behind a missing value; `None` for a failure.
+fn unavailable_view(reason: &OutputUnavailable) -> Option<ViewUnavailable> {
+    match reason {
+        OutputUnavailable::Todo { .. } => Some(ViewUnavailable::Todo),
+        OutputUnavailable::Blocked { unfinished, .. } => Some(ViewUnavailable::Blocked {
+            unfinished: unfinished.iter().map(ToString::to_string).collect(),
+        }),
+        OutputUnavailable::EvalFailed { .. } | OutputUnavailable::DependencyFailed { .. } => None,
     }
 }
 

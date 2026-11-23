@@ -1,0 +1,267 @@
+{
+  "version": 1,
+  "module": {
+    "id": "unfinished",
+    "file": "unfinished.gcl",
+    "package": "unfinished"
+  },
+  "target": {
+    "kind": "module"
+  },
+  "indexes": [],
+  "nodes": [
+    {
+      "id": "p:unfinished/f:unfinished/n:cell_voltage",
+      "label": "cell_voltage",
+      "name": "cell_voltage",
+      "module": "unfinished",
+      "kind": "const",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "todo<Dimensionless> {}",
+      "doc": null,
+      "source": {
+        "file": "unfinished.gcl",
+        "line": 2,
+        "expr_range": {
+          "start": {
+            "line": 1,
+            "character": 41
+          },
+          "end": {
+            "line": 1,
+            "character": 63
+          }
+        },
+        "cells": []
+      },
+      "value": null,
+      "unavailable": {
+        "kind": "todo"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:unfinished/f:unfinished/n:cells",
+      "label": "cells",
+      "name": "cells",
+      "module": "unfinished",
+      "kind": "param",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [],
+      "expr": "8.0",
+      "doc": null,
+      "source": {
+        "file": "unfinished.gcl",
+        "line": 3,
+        "expr_range": {
+          "start": {
+            "line": 2,
+            "character": 29
+          },
+          "end": {
+            "line": 2,
+            "character": 32
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "8",
+        "magnitude": "8",
+        "si_value": 8.0,
+        "unit": null
+      },
+      "unavailable": null,
+      "presentation": []
+    },
+    {
+      "id": "p:unfinished/f:unfinished/n:bus_voltage",
+      "label": "bus_voltage",
+      "name": "bus_voltage",
+      "module": "unfinished",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:unfinished/f:unfinished/n:cell_voltage",
+        "p:unfinished/f:unfinished/n:cells"
+      ],
+      "expr": "@cell_voltage * @cells",
+      "doc": null,
+      "source": {
+        "file": "unfinished.gcl",
+        "line": 4,
+        "expr_range": {
+          "start": {
+            "line": 3,
+            "character": 34
+          },
+          "end": {
+            "line": 3,
+            "character": 56
+          }
+        },
+        "cells": []
+      },
+      "value": null,
+      "unavailable": {
+        "kind": "blocked",
+        "unfinished": [
+          "cell_voltage"
+        ]
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:unfinished/f:unfinished/n:harness_loss",
+      "label": "harness_loss",
+      "name": "harness_loss",
+      "module": "unfinished",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:unfinished/f:unfinished/n:bus_voltage"
+      ],
+      "expr": "todo<Dimensionless> { @bus_voltage }",
+      "doc": null,
+      "source": {
+        "file": "unfinished.gcl",
+        "line": 5,
+        "expr_range": {
+          "start": {
+            "line": 4,
+            "character": 35
+          },
+          "end": {
+            "line": 4,
+            "character": 71
+          }
+        },
+        "cells": []
+      },
+      "value": null,
+      "unavailable": {
+        "kind": "todo"
+      },
+      "presentation": []
+    },
+    {
+      "id": "p:unfinished/f:unfinished/n:margin",
+      "label": "margin",
+      "name": "margin",
+      "module": "unfinished",
+      "kind": "node",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "quantity",
+      "axes": [],
+      "dimension": "Dimensionless",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:unfinished/f:unfinished/n:cells"
+      ],
+      "expr": "@cells - 2.0",
+      "doc": null,
+      "source": {
+        "file": "unfinished.gcl",
+        "line": 6,
+        "expr_range": {
+          "start": {
+            "line": 5,
+            "character": 29
+          },
+          "end": {
+            "line": 5,
+            "character": 41
+          }
+        },
+        "cells": []
+      },
+      "value": {
+        "kind": "quantity",
+        "display": "6",
+        "magnitude": "6",
+        "si_value": 6.0,
+        "unit": null
+      },
+      "unavailable": null,
+      "presentation": []
+    },
+    {
+      "id": "p:unfinished/f:unfinished/n:bus_in_range",
+      "label": "bus_in_range",
+      "name": "bus_in_range",
+      "module": "unfinished",
+      "kind": "assert",
+      "origin": {
+        "kind": "local"
+      },
+      "element": "bool",
+      "axes": [],
+      "dimension": "Bool",
+      "unit": null,
+      "pub": false,
+      "deps": [
+        "p:unfinished/f:unfinished/n:bus_voltage",
+        "p:unfinished/f:unfinished/n:harness_loss"
+      ],
+      "expr": "@bus_voltage - @harness_loss > 20.0",
+      "doc": null,
+      "source": {
+        "file": "unfinished.gcl",
+        "line": 7,
+        "expr_range": {
+          "start": {
+            "line": 6,
+            "character": 22
+          },
+          "end": {
+            "line": 6,
+            "character": 57
+          }
+        },
+        "cells": []
+      },
+      "value": null,
+      "unavailable": {
+        "kind": "blocked",
+        "unfinished": [
+          "cell_voltage",
+          "harness_loss"
+        ]
+      },
+      "presentation": []
+    }
+  ]
+}

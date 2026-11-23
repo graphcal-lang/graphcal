@@ -28,7 +28,7 @@ mod wire_key;
 pub use model::{
     ViewCall, ViewCell, ViewElement, ViewEntry, ViewIndex, ViewIndexEntry, ViewInstance, ViewModel,
     ViewModule, ViewNode, ViewNodeKind, ViewOrigin, ViewPosition, ViewRange, ViewSource,
-    ViewSubject, ViewValue,
+    ViewSubject, ViewUnavailable, ViewValue,
 };
 pub use project::{
     ViewProjection, ViewProjectionError, ViewProjections, project_view, project_views,

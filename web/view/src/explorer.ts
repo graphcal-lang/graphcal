@@ -2,6 +2,7 @@
 // reads a repository) the ref being read, with a menu of the branches, tags
 // and pull requests to switch to. It opens from the breadcrumb at the top
 // left and closes from it again.
+import { setTip } from "./tip.ts";
 import { el } from "./dom.ts";
 import type { Refs, RefsFailure } from "./github.ts";
 
@@ -127,14 +128,14 @@ export class Explorer {
     this.root = root;
     this.options = options;
     this.titleEl = el("div", "explorer-title", options.title);
-    this.titleEl.title = options.subtitle;
+    setTip(this.titleEl, options.subtitle, "hint");
     this.treeEl = el("div", "explorer-tree");
     root.replaceChildren(this.titleEl);
     if (options.refs) {
       const row = el("div", "explorer-ref-row");
       this.refEl = el("button", "explorer-ref");
       this.refEl.type = "button";
-      this.refEl.title = "switch branch, tag or pull request";
+      setTip(this.refEl, "switch branch, tag or pull request", "hint");
       this.refEl.addEventListener("click", () => this.toggleMenu());
       row.append(this.refEl);
       this.menuEl = el("div", "refs-menu");
@@ -209,7 +210,7 @@ export class Explorer {
         const folded = this.collapsed.has(row.path);
         rowEl.classList.toggle("folded", folded);
         rowEl.append(el("span", "tree-mark", folded ? "▸" : "▾"));
-        rowEl.title = folded ? "open" : "close";
+        setTip(rowEl, folded ? "open" : "close", "hint");
       } else {
         rowEl.append(el("span", "tree-mark", ""));
         if (row.name.endsWith(".gcl")) rowEl.classList.add("openable");
@@ -220,7 +221,7 @@ export class Explorer {
       if (row.kind === "file" && changed.has(row.path)) {
         rowEl.classList.add("changed");
         rowEl.append(el("span", "tree-changed", "●"));
-        rowEl.title = "differs from the base";
+        setTip(rowEl, "differs from the base", "hint");
       }
       this.treeEl.append(rowEl);
     }
@@ -337,6 +338,6 @@ export class Explorer {
   /** The repository or package shown changed. */
   setTitle(title: string, subtitle: string): void {
     this.titleEl.textContent = title;
-    this.titleEl.title = subtitle;
+    setTip(this.titleEl, subtitle, "hint");
   }
 }

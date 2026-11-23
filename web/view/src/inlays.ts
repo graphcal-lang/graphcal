@@ -3,7 +3,7 @@
 import { axisName, entryName, type Axis } from "./layout.ts";
 import type { ViewModel } from "./model.ts";
 import type { Selection } from "./selection.ts";
-import { displayOf, valueAt } from "./values.ts";
+import { displayAt } from "./values.ts";
 
 /** A value shown at the end of a line: the line is 1-based, as the model counts. */
 export interface Inlay {
@@ -29,7 +29,7 @@ export function inlaysOf(
     const picked = selection !== null && selection.id === node.id;
     let text: string;
     if (node.axes.length === 0) {
-      text = `= ${displayOf(node.value)}`;
+      text = `= ${displayAt(node, [])}`;
     } else {
       const names = `[${node.axes.map((axis) => axisName(axes, axis)).join(", ")}]`;
       const keys = picked
@@ -37,9 +37,7 @@ export function inlaysOf(
         : [];
       const entries = keys.map((key, i) => entryName(axes, node.axes[i] ?? "", key));
       text =
-        keys.length > 0
-          ? `${names} · ${entries.join(", ")} = ${displayOf(valueAt(node.value, keys))}`
-          : names;
+        keys.length > 0 ? `${names} · ${entries.join(", ")} = ${displayAt(node, keys)}` : names;
     }
     inlays.push({ line: node.source.line, text, selected: picked });
   }

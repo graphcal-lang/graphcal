@@ -1,0 +1,7 @@
+// Unfinished formulas: a `todo` hole, and what waits on it.
+const node cell_voltage: Dimensionless = todo<Dimensionless> {};
+param cells: Dimensionless = 8.0;
+node bus_voltage: Dimensionless = @cell_voltage * @cells;
+node harness_loss: Dimensionless = todo<Dimensionless> { @bus_voltage };
+node margin: Dimensionless = @cells - 2.0;
+assert bus_in_range = @bus_voltage - @harness_loss > 20.0;
