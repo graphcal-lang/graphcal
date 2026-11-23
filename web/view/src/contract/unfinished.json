@@ -26,6 +26,7 @@
       "pub": false,
       "deps": [],
       "expr": "todo<Dimensionless> {}",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "unfinished.gcl",
@@ -64,6 +65,7 @@
       "pub": false,
       "deps": [],
       "expr": "8.0",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "unfinished.gcl",
@@ -109,6 +111,7 @@
         "p:unfinished/f:unfinished/n:cells"
       ],
       "expr": "@cell_voltage * @cells",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "unfinished.gcl",
@@ -152,6 +155,7 @@
         "p:unfinished/f:unfinished/n:bus_voltage"
       ],
       "expr": "todo<Dimensionless> { @bus_voltage }",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "unfinished.gcl",
@@ -192,6 +196,7 @@
         "p:unfinished/f:unfinished/n:cells"
       ],
       "expr": "@cells - 2.0",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "unfinished.gcl",
@@ -237,6 +242,7 @@
         "p:unfinished/f:unfinished/n:harness_loss"
       ],
       "expr": "@bus_voltage - @harness_loss > 20.0",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "unfinished.gcl",

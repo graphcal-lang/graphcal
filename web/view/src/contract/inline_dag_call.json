@@ -26,6 +26,7 @@
       "pub": false,
       "deps": [],
       "expr": "10.0 m/s",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "main.gcl",
@@ -71,6 +72,7 @@
         "p:main/f:main/n:doubled_result/c:0/p:main/f:main/d:scale/n:result"
       ],
       "expr": "@scale(factor: 2.0, v: @speed)::result",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "main.gcl",
@@ -117,6 +119,7 @@
       "pub": true,
       "deps": [],
       "expr": "@v * @factor",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "main.gcl",

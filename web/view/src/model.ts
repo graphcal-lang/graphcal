@@ -129,6 +129,12 @@ export const viewNodeSchema = z.object({
   deps: z.array(z.string()),
   /** Source expression text, for the formula bar. */
   expr: z.string().nullable(),
+  /**
+   * For a param whose default is exactly a reference to one declaration
+   * (`param margin: Dimensionless = @n::margin;`): that declaration's node id,
+   * one of `deps`.
+   */
+  receives: z.string().nullable().optional(),
   /** The declaration's `///` documentation, lines joined with newlines. */
   doc: z.string().nullable().optional(),
   source: z

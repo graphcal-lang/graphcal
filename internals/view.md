@@ -86,6 +86,12 @@ still check, so a library with a required param can be edited. Its rules:
   that cannot be applied leaves the SI value, and the node lists why in
   `presentation`; every host projects the same way (`graphcal view` also
   prints those lines and exits with 1, as `graphcal eval` does).
+- A param whose default is exactly a reference to one declaration
+  (`param margin: Dimensionless = @n::margin;`) names that declaration's node
+  in `receives`. When the declaration is imported and nothing else reads it,
+  the sheet draws the two as one box: the param, under its own name, with the
+  file the value comes from (`receivedBy` in `src/layout.ts`). A value read
+  straight from another file is named as the formulas spell it (`n::limit`).
 - A node without a value because a formula is unfinished says so in
   `unavailable`: `{ kind: "todo" }` for a `todo` hole of its own, or
   `{ kind: "blocked", unfinished }` naming the unfinished declarations it

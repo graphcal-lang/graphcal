@@ -17,6 +17,12 @@ export function zoneOf(role: Role): Zone {
 
 export interface Column {
   node: ViewNode;
+  /**
+   * The value of another file this param receives and stands for (see
+   * `receivedBy`): the column shows where the value comes from, and the
+   * received node has no column of its own.
+   */
+  received: ViewNode | null;
   role: Role;
   depth: number;
   bandIndex: number;
@@ -83,7 +89,10 @@ export interface Band {
 
 export interface Layout {
   bands: Band[];
+  /** The column of each node drawn; a received node (`standIns`) has none. */
   columns: Map<string, Column>;
+  /** For each node that is not drawn, the param drawn in its place. */
+  standIns: Map<string, string>;
   /** Direct consumers of each node id within the module. */
   users: Map<string, string[]>;
   /** Every axis of the model, by id. */
@@ -132,7 +141,8 @@ function computeDepths(model: ViewModel): Map<string, number> {
   return depths;
 }
 
-export function computeLayout(model: ViewModel): Layout {
+/** Direct consumers of each node id within the module. */
+function usersOf(model: ViewModel): Map<string, string[]> {
   const users = new Map<string, string[]>();
   for (const node of model.nodes) {
     for (const dep of node.deps) {
@@ -141,6 +151,36 @@ export function computeLayout(model: ViewModel): Layout {
       users.set(dep, list);
     }
   }
+  return users;
+}
+
+/**
+ * The imported values a param only gives a local name to, by the param's id.
+ *
+ * `param margin: Dimensionless = @n::margin;` and the imported `n::margin`
+ * would be two boxes with the same value side by side. When nothing else
+ * reads the imported value, the param stands for both: one box, under the
+ * param's name (the one the file's formulas use) with the origin of the
+ * value. A value some formula also reads directly keeps its own box.
+ */
+export function receivedBy(model: ViewModel): Map<string, ViewNode> {
+  const byId = new Map(model.nodes.map((n) => [n.id, n]));
+  const users = usersOf(model);
+  const received = new Map<string, ViewNode>();
+  for (const node of model.nodes) {
+    if (node.kind !== "param" || isExternal(node)) continue;
+    const source = byId.get(node.receives ?? "");
+    if (source === undefined || source.origin.kind !== "imported") continue;
+    if ((users.get(source.id) ?? []).length !== 1) continue;
+    received.set(node.id, source);
+  }
+  return received;
+}
+
+export function computeLayout(model: ViewModel): Layout {
+  const users = usersOf(model);
+  const received = receivedBy(model);
+  const standIns = new Map([...received].map(([param, source]) => [source.id, param]));
   const depths = computeDepths(model);
   const axes = axesOf(model);
   const labelsOf = (axis: string): string[] => axes.get(axis)?.keys ?? [];
@@ -152,6 +192,7 @@ export function computeLayout(model: ViewModel): Layout {
 
   const grouped = new Map<string | null, ViewNode[]>();
   for (const node of model.nodes) {
+    if (standIns.has(node.id)) continue;
     const axis = bandAxisOf(node);
     grouped.set(axis, [...(grouped.get(axis) ?? []), node]);
   }
@@ -188,6 +229,7 @@ export function computeLayout(model: ViewModel): Layout {
       const consumers = users.get(node.id) ?? [];
       const column: Column = {
         node,
+        received: received.get(node.id) ?? null,
         role: roleOfNode(node),
         depth: depths.get(node.id) ?? 0,
         bandIndex,
@@ -204,7 +246,7 @@ export function computeLayout(model: ViewModel): Layout {
     });
     bands.push(band);
   });
-  return { bands, columns, users, axes };
+  return { bands, columns, standIns, users, axes };
 }
 
 export const BOX_GAP = 10;

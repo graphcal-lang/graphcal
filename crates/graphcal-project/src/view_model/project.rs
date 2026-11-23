@@ -22,8 +22,9 @@ use graphcal_compiler::text_position::Utf16LineIndex;
 use graphcal_compiler::tir::typed::declaration_view::{
     DeclarationKind, DeclarationView, ValueDeclaration,
 };
+use graphcal_compiler::tir::typed::scoped_node::{ConstRef, NodeKind};
 use graphcal_compiler::tir::typed::{
-    CheckedDag, CheckedDeclType, CheckedTir, ResolvedIndex, ResolvedValueType,
+    BodyKind, CheckedDag, CheckedDeclType, CheckedTir, ResolvedIndex, ResolvedValueType,
 };
 use graphcal_eval::eval::public_projection::coordinate_entry_display_names;
 use graphcal_eval::eval::{AssertResult, EvalResult, OutputUnavailable, Value};
@@ -966,6 +967,14 @@ impl<'a> NodeBuilder<'a> {
         };
 
         let (expr, source) = self.definition_of(&input, span, definition);
+        let receives = match (kind, input.definition) {
+            (ViewNodeKind::Param, Definition::Declared) => {
+                received_declaration(self.scope.tir, identity)
+                    .map(|declaration| ViewNodeId::of(&declaration))
+                    .filter(|id| input.deps.contains(id))
+            }
+            _ => None,
+        };
         let element = match kind {
             ViewNodeKind::Assert => ViewElement::Bool,
             _ => decl_type.map_or(ViewElement::Other, |ty| element_of(ty.element())),
@@ -993,6 +1002,7 @@ impl<'a> NodeBuilder<'a> {
             is_public: input.is_public && kind != ViewNodeKind::Param,
             deps: input.deps,
             expr,
+            receives,
             source,
             doc: doc.map(str::to_string),
             value: None,
@@ -1329,6 +1339,26 @@ fn assertion_value(outcome: &AssertResult) -> Option<ViewValue> {
             value: false,
         }),
         AssertResult::Blocked { .. } | AssertResult::Error { .. } => None,
+    }
+}
+
+/// The declaration a param's default is exactly a reference to, when the
+/// default is nothing else.
+fn received_declaration(tir: &CheckedTir, param: &ResolvedDeclName) -> Option<ResolvedDeclName> {
+    let BodyKind::Param {
+        default: Some(default),
+    } = tir.declaration_body(param)?.kind()
+    else {
+        return None;
+    };
+    let tree = default.executable().ok()?;
+    match tree.root().kind() {
+        NodeKind::GraphRef(target) => Some(target.value),
+        NodeKind::Const(target) => match target.value {
+            ConstRef::Decl(declaration) => Some(declaration),
+            ConstRef::Constructor(_) => None,
+        },
+        _ => None,
     }
 }
 

@@ -16,13 +16,21 @@ const MARK: Record<NodeKind, string> = {
 /** A value taken from another file: a diamond with a dot inside. */
 export const EXTERNAL_MARK = "⟐";
 
-function markOf(node: ViewNode): string {
-  return isExternal(node) ? EXTERNAL_MARK : MARK[node.kind];
+/**
+ * The node whose file a column's value comes from, when that is not this
+ * file: the external node itself, or the imported value a param receives.
+ */
+function externalOf(column: Column): ViewNode | null {
+  return isExternal(column.node) ? column.node : column.received;
+}
+
+function markOf(column: Column): string {
+  return externalOf(column) !== null ? EXTERNAL_MARK : MARK[column.node.kind];
 }
 
 /** The head class: `kind-external` for a value read from another file, else the declaration kind. */
-function kindClass(node: ViewNode): string {
-  return `kind-${isExternal(node) ? "external" : node.kind}`;
+function kindClass(column: Column): string {
+  return `kind-${externalOf(column) !== null ? "external" : column.node.kind}`;
 }
 
 export const RULER_WIDTH = 136;
@@ -49,12 +57,18 @@ function statusChip(status: Status): HTMLElement {
 
 function renderHead(column: Column, folded = false): HTMLElement {
   const { node } = column;
-  const head = el("div", `col-head ${kindClass(node)}`);
+  const head = el("div", `col-head ${kindClass(column)}`);
   head.dataset.node = node.id;
   // An external names the file it is taken from in small type above its name.
-  if (isExternal(node)) head.append(el("div", "col-origin", guessedFileName(node.module)));
+  const external = externalOf(column);
+  if (external !== null) {
+    head.append(el("div", "col-origin", guessedFileName(external.module)));
+  }
   const title = el("div", "col-title");
-  title.append(el("span", "mark", markOf(node)), el("span", "name", node.name));
+  // A value read straight from another file is named as the formulas spell
+  // it (`n::limit`); a param that receives one has a name of its own.
+  const name = isExternal(node) ? node.label : node.name;
+  title.append(el("span", "mark", markOf(column)), el("span", "name", name));
   // The first line of the `///` doc sits after the name, cut short; folded, there is no room.
   const doc = node.doc?.split("\n")[0]?.trim() ?? "";
   if (doc !== "" && !folded) {
@@ -210,9 +224,9 @@ function renderFolded(column: Column, band: Band, hidden: Hidden): HTMLElement {
     return root;
   }
   root.classList.add("strip");
-  const head = el("div", `col-head fold-head ${kindClass(column.node)}`);
+  const head = el("div", `col-head fold-head ${kindClass(column)}`);
   head.dataset.node = column.node.id;
-  head.append(el("span", "mark", markOf(column.node)));
+  head.append(el("span", "mark", markOf(column)));
   root.append(head);
   const strip = el("div", "fold-strip");
   strip.append(el("span", "fold-name", column.node.name));

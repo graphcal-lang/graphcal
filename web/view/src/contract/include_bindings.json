@@ -26,6 +26,7 @@
       "pub": false,
       "deps": [],
       "expr": "2.0",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "src/review/main.gcl",
@@ -70,6 +71,7 @@
         "p:review/f:review/f:main/s:p/n:out"
       ],
       "expr": "@p::out",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "src/review/main.gcl",
@@ -117,6 +119,7 @@
       "pub": true,
       "deps": [],
       "expr": "@gain",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "src/review/lib.gcl",

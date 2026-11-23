@@ -720,8 +720,10 @@ panesEl.addEventListener("contextmenu", (event) => {
     return;
   }
   const head = target.closest<HTMLElement>(".col-head.kind-external");
-  const node = head?.dataset.node ? s.model.nodes.find((n) => n.id === head.dataset.node) : null;
-  if (!node) return;
+  const shown = head?.dataset.node ? s.model.nodes.find((n) => n.id === head.dataset.node) : null;
+  if (!shown) return;
+  // A param that receives an imported value offers that value's file.
+  const node = s.layout.columns.get(shown.id)?.received ?? shown;
   event.preventDefault();
   externalMenu(ws, s, node, event);
 });

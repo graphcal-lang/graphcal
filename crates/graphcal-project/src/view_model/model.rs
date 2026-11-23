@@ -160,6 +160,12 @@ pub struct ViewNode {
     /// Source text of the defining expression (const body, param default,
     /// node formula, assertion operands).
     pub expr: Option<String>,
+    /// For a param whose default is exactly a reference to one declaration
+    /// (`param margin: Dimensionless = @n::margin;`): that declaration's
+    /// node, one of `deps`. The param only gives the value a local name, so
+    /// a view may show the two as one. Absent when the default computes
+    /// anything, and for a param an include argument defines.
+    pub receives: Option<ViewNodeId>,
     /// The declaration's `///` documentation: one line per `///` line,
     /// joined with newlines. The view shows its first line beside the name.
     pub doc: Option<String>,

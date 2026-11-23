@@ -483,6 +483,7 @@ fn bare_node(id: &ViewNodeId, deps: &[&ViewNodeId]) -> ViewNode {
         expr: None,
         doc: None,
         source: None,
+        receives: None,
         value: None,
         unavailable: None,
         presentation: Vec::new(),
@@ -719,6 +720,44 @@ node last: Dimensionless = 2.0;
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].contains("SI value retained"), "{problems:?}");
     assert_eq!(node(&view, "first").presentation, Vec::<String>::new());
+}
+
+#[test]
+fn a_param_that_only_names_another_value_says_which() {
+    let views = evaluated_views_of_package(
+        &[
+            (
+                "nominal.gcl",
+                "pub const node margin: Dimensionless = 0.2;\npub const node limit: Power = 150.0 W;\n",
+            ),
+            (
+                "sheet.gcl",
+                "\
+import review.nominal as n;
+param margin: Dimensionless = @n::margin;
+param wrapped: Dimensionless = (@n::margin);
+param scaled: Dimensionless = @n::margin * 2.0;
+param shown: Power = @n::limit -> W;
+param own: Dimensionless = 0.5;
+param local_copy: Dimensionless = @own;
+node total: Dimensionless = @margin + @own;
+",
+            ),
+        ],
+        "sheet.gcl",
+    );
+    let view = views.get(&ViewTarget::Module).unwrap();
+    let receives = |label| node(view, label).receives.clone();
+    assert_eq!(receives("margin"), Some(id_of(view, "n::margin")));
+    assert_eq!(receives("local_copy"), Some(id_of(view, "own")));
+    // A default that computes or converts is a value of its own.
+    assert_eq!(receives("scaled"), None);
+    assert_eq!(receives("shown"), None);
+    assert_eq!(receives("own"), None);
+    assert_eq!(receives("total"), None);
+    assert_eq!(receives("n::margin"), None);
+    // Parentheses add nothing to the reference.
+    assert_eq!(receives("wrapped"), Some(id_of(view, "n::margin")));
 }
 
 #[test]

@@ -74,7 +74,9 @@ export function crossLinks(sheets: CrossSheet[]): CrossLink[] {
     for (const node of to.model.nodes) {
       if (!isExternal(node)) continue;
       const found = producerOf(sheets, to, node);
-      const column = to.layout.columns.get(node.id);
+      // A value a param receives is drawn as that param's box.
+      const shown = to.layout.standIns.get(node.id) ?? node.id;
+      const column = to.layout.columns.get(shown);
       if (!found || !column || !found.from.layout.columns.has(found.producer.id)) continue;
       const { from, producer } = found;
       const onTop = to.layout.bands[column.bandIndex]?.axis !== null;
@@ -82,11 +84,11 @@ export function crossLinks(sheets: CrossSheet[]): CrossLink[] {
         from,
         fromSelector: `.col[data-node="${producer.id}"]`,
         to,
-        toSelector: `.col[data-node="${node.id}"]`,
+        toSelector: `.col[data-node="${shown}"]`,
         toSide: onTop ? "top" : "bottom",
         channel: onTop ? column.bandIndex : tiers,
         fromId: producer.id,
-        toId: node.id,
+        toId: shown,
       });
     }
   }
