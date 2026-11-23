@@ -311,6 +311,57 @@ fn structural_index_binding_cardinality_must_be_closed() {
     ));
 }
 
+/// An include binding and an inline DAG-call binding evaluate the same
+/// `Fin(...)` values: both accept a closed cardinality and both reject an
+/// invalid one with the same code.
+#[test]
+fn include_and_inline_call_index_bindings_accept_the_same_fin_values() {
+    use graphcal_compiler::diagnostic::DiagnosticKind;
+
+    let library = "dag lib {\n\
+                       pub(bind) index I;\n\
+                       pub node n: Dimensionless = 1.0;\n\
+                   }\n";
+    let include = |cardinality: &str| {
+        format!(
+            "{library}include lib(index I: Fin({cardinality})) as inst;\n\
+             node a: Dimensionless = @inst::n;"
+        )
+    };
+    let inline = |cardinality: &str| {
+        format!("{library}node a: Dimensionless = @lib(index I: Fin({cardinality}))::n;")
+    };
+    let outcome = |source: String| match compile_and_eval(&source) {
+        Ok(_) => None,
+        Err(CompileError::Eval(RenderedSemanticError {
+            error: SemanticError::Located(diagnostic),
+            ..
+        })) => Some(diagnostic.kind.code()),
+        Err(other) => panic!("unexpected error for {source}: {other:?}"),
+    };
+    for (cardinality, expected) in [
+        ("2", None),
+        ("1 + 1", None),
+        ("1 + 2 * 3", None),
+        ("N + 1", Some("graphcal::I001")),
+        ("0", Some("graphcal::I037")),
+        ("1000 * 1001", Some("graphcal::I037")),
+        ("18446744073709551615 + 1", Some("graphcal::I039")),
+        ("4294967296 * 4294967296", Some("graphcal::I040")),
+    ] {
+        assert_eq!(
+            outcome(include(cardinality)),
+            expected,
+            "include Fin({cardinality})"
+        );
+        assert_eq!(
+            outcome(inline(cardinality)),
+            expected,
+            "inline Fin({cardinality})"
+        );
+    }
+}
+
 #[test]
 fn include_rejects_required_static_inputs_as_binding_targets() {
     let source = "pub(bind) type Replacement;\n\
@@ -434,7 +485,7 @@ fn fixed_static_declarations_are_not_binding_ports() {
         CompileError::Eval(RenderedSemanticError {
             error: SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
                 kind: SemanticErrorKind::Module(ModuleError::DagInputCategoryMismatch {
-                    expected: "type",
+                    expected: graphcal_compiler::syntax::ast::InputBindingCategory::Type,
                     ..
                 }),
                 ..

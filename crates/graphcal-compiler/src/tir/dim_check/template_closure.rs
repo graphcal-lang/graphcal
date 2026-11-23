@@ -327,7 +327,7 @@ fn check_in_rigid_view<R>(
     plots: impl FnOnce(&DimCheckContext<'_>) -> Result<R, Outcome<SemanticError>>,
 ) -> Result<(R, infer::hir::FinishedObservations), Outcome<SemanticError>> {
     let rigid_tir = crate::tir::typed::rigid_dimension_view(tir, template, ports, src)?;
-    let rigid_dag = rigid_tir.dags.at(template);
+    let rigid_dag = rigid_tir.dags().at(template);
     let observations = infer::hir::BodyObservations::default();
     let rigid_ctx = DimCheckContext {
         position: template,
@@ -464,7 +464,7 @@ pub(super) fn port_generic_trees(
     src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<PortGenericTrees, Outcome<SemanticError>> {
-    debug_assert!(std::ptr::eq(tir.dags.at(position), template));
+    debug_assert!(std::ptr::eq(tir.dags().at(position), template));
     let (plot_channels, finished) = check_in_rigid_view(
         tir,
         position,

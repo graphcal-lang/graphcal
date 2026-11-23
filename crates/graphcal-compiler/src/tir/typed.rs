@@ -308,7 +308,7 @@ impl TirDraft {
         let instances = specialization::instantiate_semantic_edges(&mut tir, src, cancellation)?;
         augment_runtime_deps_for_dynamic_units(&mut tir);
         overrides.reconcile(&mut tir);
-        Ok(InstantiatedTir { tir, instances })
+        Ok(InstantiatedTir::new(tir, instances))
     }
 }
 
@@ -544,14 +544,23 @@ impl<'a> DeclTypeResolver<'a> {
                     })
             })
             .collect::<HashMap<_, _>>();
+        // Earliest include first, so a failure is reported deterministically.
+        let mut instances = projection_substitutions.values().collect::<Vec<_>>();
+        instances.sort_by_key(|(_, include_span)| include_span.offset());
         let mut views = HashMap::new();
-        for (substitution, _) in projection_substitutions.values() {
+        for (substitution, include_span) in instances {
+            if views.contains_key(*substitution) {
+                continue;
+            }
             let complete =
                 complete_substitution::CompleteSubstitution::try_new(substitution, types)
                     .map_err(|error| error.into_graphcal(src))?;
             views.insert(
                 *substitution,
-                (instance_type_view(types, substitution, src)?, complete),
+                (
+                    instance_type_view(types, substitution, src, *include_span)?,
+                    complete,
+                ),
             );
         }
         Ok(Self {
@@ -621,11 +630,14 @@ fn resolve_declared_types<'d>(
 
 /// The type view a template annotation is resolved in for an include with
 /// `substitution`: the defaulted dimension ports it binds stay rigid, so the
-/// substitution reaches every dimension defined over them.
+/// substitution reaches every dimension defined over them. An exponent
+/// overflow of the view is reported at `site` in `src`, the include that
+/// materializes the instance.
 fn instance_type_view<'s>(
     types: &'s ProjectTypeStore,
     substitution: &crate::ir::static_substitution::StaticSubstitution,
     src: SourceId,
+    site: crate::syntax::span::Span,
 ) -> Result<std::borrow::Cow<'s, ProjectTypeStore>, SemanticError> {
     let ports = types.bound_defaulted_dimension_ports(substitution);
     if ports.is_empty() {
@@ -634,9 +646,7 @@ fn instance_type_view<'s>(
     types
         .with_rigid_dimensions(&ports)
         .map(std::borrow::Cow::Owned)
-        .map_err(|_| {
-            SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
-        })
+        .map_err(|_| SemanticError::located(src, site, DimensionError::DimensionOverflow))
 }
 
 /// Resolve a template annotation in `view` (from [`instance_type_view`]) and
@@ -1193,7 +1203,9 @@ impl<'d, 'c> TypeDefCollector<'d, 'c> {
                 let complete =
                     complete_substitution::CompleteSubstitution::try_new(substitution, ctx.types)
                         .map_err(|error| error.into_graphcal(definition_src))?;
-                instance_type_view(ctx.types, substitution, definition_src)
+                // A projected definition is located at the include item that
+                // projects it, in `definition_src`.
+                instance_type_view(ctx.types, substitution, definition_src, type_def.span())
                     .map(|view| (complete, view))
             })
             .transpose()?;
@@ -1816,7 +1828,8 @@ pub(crate) fn rigid_dimension_view(
     ports: &[ResolvedDimName],
     src: SourceId,
 ) -> Result<UncheckedTir, SemanticError> {
-    let rigid_types = rigid_project_types(tir, ports, src)?;
+    let rigid_types =
+        rigid_project_types(tir, ports).map_err(model::RigidDimensionOverflow::at_declaration)?;
     let mut rigid = tir.clone();
     for port in ports {
         rigid
@@ -1824,7 +1837,7 @@ pub(crate) fn rigid_dimension_view(
             .dimensions
             .register_rigid_dimension(port);
     }
-    resolve_rigid_signatures(rigid.dags.localized_mut(position), &rigid_types, src)?;
+    resolve_rigid_signatures(rigid.dags_mut().localized_mut(position), &rigid_types, src)?;
     rigid.replace_project_types(rigid_types);
     Ok(rigid)
 }
@@ -1832,15 +1845,19 @@ pub(crate) fn rigid_dimension_view(
 /// The DAG at `position` alone, with its source-authored declaration
 /// signatures re-resolved where the optional dimension `ports` are rigid:
 /// what an include binding these ports specializes. Unlike
-/// [`rigid_dimension_view`], no other DAG is copied.
+/// [`rigid_dimension_view`], no other DAG is copied, and an exponent overflow
+/// of the view is reported at `site` in `src`, the include that binds the
+/// ports.
 pub(crate) fn rigid_template_dag(
     tir: &UncheckedTir,
     position: dag_position::DagPosition,
     ports: &[ResolvedDimName],
     src: SourceId,
+    site: Span,
 ) -> Result<DagTIR, SemanticError> {
-    let rigid_types = rigid_project_types(tir, ports, src)?;
-    let mut template = tir.dags.at(position).clone();
+    let rigid_types = rigid_project_types(tir, ports)
+        .map_err(|_| SemanticError::located(src, site, DimensionError::DimensionOverflow))?;
+    let mut template = tir.dags().at(position).clone();
     resolve_rigid_signatures(&mut template, &rigid_types, src)?;
     Ok(template)
 }
@@ -1862,15 +1879,10 @@ pub fn rigid_view_builds_for_test() -> usize {
 fn rigid_project_types(
     tir: &UncheckedTir,
     ports: &[ResolvedDimName],
-    src: SourceId,
-) -> Result<ProjectTypeStore, SemanticError> {
+) -> Result<ProjectTypeStore, model::RigidDimensionOverflow> {
     #[cfg(any(test, feature = "test-identities"))]
     RIGID_VIEW_BUILDS.with(|builds| builds.set(builds.get().saturating_add(1)));
-    tir.project_type_store()
-        .with_rigid_dimensions(ports)
-        .map_err(|_| {
-            SemanticError::located(src, src.whole_span(), DimensionError::DimensionOverflow)
-        })
+    tir.project_type_store().with_rigid_dimensions(ports)
 }
 
 /// Re-resolve the source-authored declaration signatures of `dag` in

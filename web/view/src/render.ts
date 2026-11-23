@@ -1,6 +1,7 @@
+import { el } from "./dom.ts";
 import type { Axis, Band, Column, Layout, Role, Zone } from "./layout.ts";
 import { axisName, entryName, ZONES, zoneOf } from "./layout.ts";
-import { isExternal, type NodeKind, type ViewNode } from "./model.ts";
+import { guessedFileName, isExternal, type NodeKind, type ViewNode } from "./model.ts";
 import { rowRuns, type Hidden } from "./rows.ts";
 import { displayOf, shortMagnitude, valueAt } from "./values.ts";
 
@@ -23,21 +24,14 @@ function kindClass(node: ViewNode): string {
   return `kind-${isExternal(node) ? "external" : node.kind}`;
 }
 
-function fileOf(module: string): string {
-  return `${module.split(".").at(-1) ?? module}.gcl`;
-}
-
 export const RULER_WIDTH = 136;
 
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className: string,
-  text?: string,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
+/**
+ * Whether `column` shows a sub-header line: in an axis band, when any column
+ * of the band has sub-columns (so their rows line up); otherwise its own.
+ */
+function hasSubRow(column: Column, band: Band): boolean {
+  return band.axis !== null ? band.columns.some((c) => c.subs.length > 0) : column.subs.length > 0;
 }
 
 /**
@@ -50,7 +44,7 @@ function renderHead(column: Column, folded = false): HTMLElement {
   const head = el("div", `col-head ${kindClass(node)}`);
   head.dataset.node = node.id;
   // An external names the file it is taken from in small type above its name.
-  if (isExternal(node)) head.append(el("div", "col-origin", fileOf(node.module)));
+  if (isExternal(node)) head.append(el("div", "col-origin", guessedFileName(node.module)));
   const title = el("div", "col-title");
   title.append(el("span", "mark", markOf(node)), el("span", "name", node.name));
   // The first line of the `///` doc sits after the name, cut short; folded, there is no room.
@@ -131,8 +125,7 @@ function renderTable(
   root.dataset.node = column.node.id;
   root.append(renderHead(column));
   const inBand = band.axis !== null;
-  const hasSub = inBand ? band.columns.some((c) => c.subs.length > 0) : column.subs.length > 0;
-  if (hasSub) {
+  if (hasSubRow(column, band)) {
     const sub = el("div", "col-sub");
     sub.style.gridTemplateColumns = `repeat(${Math.max(1, column.subs.length)}, minmax(0, 1fr))`;
     const subAxis = column.node.axes[1] ?? "";
@@ -206,9 +199,7 @@ function renderFolded(column: Column, band: Band, hidden: Hidden): HTMLElement {
   const strip = el("div", "fold-strip");
   strip.append(el("span", "fold-name", column.node.name));
   const ticks = el("div", "fold-ticks");
-  const inBand = band.axis !== null;
-  const hasSub = inBand ? band.columns.some((c) => c.subs.length > 0) : column.subs.length > 0;
-  if (hasSub) ticks.append(el("span", "fold-sub"));
+  if (hasSubRow(column, band)) ticks.append(el("span", "fold-sub"));
   for (const run of rowRuns(column.rows, hidden.get(column.node.axes[0] ?? ""))) {
     if (run.kind === "gap") {
       ticks.append(el("span", "fold-gap"));
@@ -259,7 +250,7 @@ function renderRuler(band: Band, hidden: Hidden, axes: ReadonlyMap<string, Axis>
   if (origin !== null) {
     // Where the axis is declared, in small type above its name as on an external's head.
     box.classList.add("imported");
-    box.append(el("div", "ruler-origin", fileOf(origin)));
+    box.append(el("div", "ruler-origin", guessedFileName(origin)));
   }
   box.append(el("div", "ruler-axis", axisName(axes, band.axis)), note);
   inner.append(box);

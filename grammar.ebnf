@@ -142,20 +142,31 @@ source_file
 (* ================================================================== *)
 (* 3. Declarations                                                    *)
 (* ================================================================== *)
-(* Eligible ordinary declarations may carry a visibility annotation:
+(* A declaration may carry a visibility prefix where its kind allows one:
    - bare:         private (not exported outside the library)
    - "pub":        exported at an include/import boundary (fixed)
    - "pub(bind)":  exported AND bindable via include bindings
-   A `param` instead declares an annotation-free named input port; both
-   `pub param` and `pub(bind) param` are rejected semantically. "bind" is
-   contextual inside the parens after "pub" and remains an identifier
-   elsewhere. *)
+   The allowed prefix depends on the declaration kind, and a disallowed
+   prefix is a parse error:
+   - `param` and `include`: no prefix.
+   - `dim`, `type`, `index`: `pub` or `pub(bind)` (bindable_declaration).
+   - whole-DAG `import` (bare or aliased): `pub` only (see import_decl);
+     selective and plugin imports: no prefix.
+   - every other kind: `pub` only (public_declaration).
+   "bind" is contextual inside the parens after "pub" and remains an
+   identifier elsewhere. *)
 declaration
    = regular_declaration
    | multi_decl;
 
+visibility
+   = "pub", [ "(", "bind", ")" ];
+
+public
+   = "pub";
+
 regular_declaration
-   = { attribute }, [ "pub", [ "(", "bind", ")" ] ], regular_declaration_kind;
+   = { attribute }, regular_declaration_kind;
 
 (* Recognized attribute names: "assumes" (node/param), "expected_fail"
    (assert), "hidden" (plot; suppresses standalone display), "lazy".
@@ -186,19 +197,32 @@ attribute_group
 
 regular_declaration_kind
    = param_decl
-   | node_decl
-   | const_decl
-   | dimension_decl
-   | unit_decl
-   | type_decl
-   | index_decl
-   | import_decl
    | include_decl
+   | import_decl
+   | public_declaration
+   | bindable_declaration;
+
+public_declaration
+   = [ public ], public_declaration_kind;
+
+public_declaration_kind
+   = node_decl
+   | const_decl
+   | base_dimension_decl
+   | unit_decl
    | dag_decl
    | assert_decl
    | plot_decl
    | figure_decl
    | layer_decl;
+
+bindable_declaration
+   = [ visibility ], bindable_declaration_kind;
+
+bindable_declaration_kind
+   = dimension_decl
+   | type_decl
+   | index_decl;
 
 (* --- param --- *)
 (* A param is a named DAG input port, tracked separately from declarations
@@ -233,12 +257,12 @@ multi_decl
      "=", multi_table_expr, ";";
 
 multi_decl_slot
-   = [ visibility ], decl_kind, IDENT, ":", type_expr;
+   = multi_decl_slot_kind, IDENT, ":", type_expr;
 
-decl_kind
+multi_decl_slot_kind
    = "param"
-   | "node"
-   | "const", "node";
+   | [ public ], "node"
+   | [ public ], "const", "node";
 
 multi_table_expr
    = "table", "[", multi_index_list, "]", "{", multi_table_body, "}";
@@ -287,9 +311,11 @@ multi_data_row
    1. Base dimension:     base dim Information;
    2. Required dimension: dim D;                     (must be bound via include)
    3. Derived dimension:  dim Jerk = Length / Time^3; *)
+base_dimension_decl
+   = "base", "dim", IDENT, ";";
+
 dimension_decl
-   = "base", "dim", IDENT, ";"
-   | "dim", IDENT, ";"
+   = "dim", IDENT, ";"
    | "dim", IDENT, "=", dim_expr, ";";
 
 (* --- unit --- *)
@@ -457,7 +483,8 @@ index_decl
    re-exports use `pub` on each brace item. `pub(bind) import ...` and a
    leading `pub` on a selective import are invalid. *)
 import_decl
-   = "import", module_path, [ import_tail ], ";"
+   = [ public ], "import", module_path, [ "as", IDENT ], ";"
+   | "import", module_path, "::", "{", import_item_list, "}", ";"
    | plugin_import_decl;
 
 (* --- plugin import (extern functions, issue #943 / #25 Phase A) --- *)
@@ -502,10 +529,6 @@ extern_generic_binder
 
 extern_fn_param
    = IDENT, ":", type_expr;
-
-import_tail
-   = "as", IDENT
-   | "::", "{", import_item_list, "}";
 
 module_path
    = IDENT, { ".", IDENT };

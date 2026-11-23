@@ -272,6 +272,16 @@ role = "contracts"
 
 [[module]]
 package = "compiler"
+path = ["finite_index_binding"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
+path = ["finite_index_binding", "tests"]
+role = "contracts"
+
+[[module]]
+package = "compiler"
 path = ["finite_value"]
 role = "contracts"
 

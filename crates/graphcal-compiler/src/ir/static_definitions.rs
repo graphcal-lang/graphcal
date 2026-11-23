@@ -519,6 +519,21 @@ impl<'a> StaticDefinitionEvaluator<'a> {
                 let dimension = self.dimension(symbol.resolved())?;
                 let generic = self.port_generic_dimension(symbol.resolved())?;
                 if generic != dimension {
+                    let source = self
+                        .modules
+                        .get(owner)
+                        .map(|module| module.src)
+                        .ok_or_else(|| {
+                            missing_definition_internal_error(
+                                &format!("dimension `{}`", symbol.resolved()),
+                                fallback_src,
+                            )
+                        })?;
+                    let generic = crate::ir::module_definitions::PortGenericDimension {
+                        value: generic,
+                        source,
+                        span: symbol.span(),
+                    };
                     definitions
                         .insert_port_generic_dimension(symbol.resolved().clone(), generic)
                         .map_err(foreign)?;

@@ -2,6 +2,7 @@
 // reads a repository) the ref being read, with a menu of the branches, tags
 // and pull requests to switch to. It opens from the breadcrumb at the top
 // left and closes from it again.
+import { el } from "./dom.ts";
 import type { Refs, RefsFailure } from "./github.ts";
 
 export interface TreeRow {
@@ -105,17 +106,6 @@ export interface ExplorerOptions {
   subtitle: string;
   refs: RefSource | null;
   onOpen(file: string): void;
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className: string,
-  text = "",
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== "") node.textContent = text;
-  return node;
 }
 
 export class Explorer {

@@ -1,3 +1,4 @@
+import { SVG_NS } from "./dom.ts";
 import type { Layout } from "./layout.ts";
 import type { ViewModel } from "./model.ts";
 
@@ -96,8 +97,6 @@ export function planRoutes(model: ViewModel, layout: Layout): RoutePlan {
   return { routes };
 }
 
-const SVG_NS = "http://www.w3.org/2000/svg";
-
 interface Port {
   x: number;
   y: number;
@@ -139,6 +138,11 @@ export function anchorsOf(
     headLeft: { x: (h.left - origin.left) / k, y: headY },
     headRight: { x: (h.right - origin.left) / k, y: headY },
   };
+}
+
+/** The y of `lane` in the channel element `channel`, unscaled and relative to `origin`. */
+export function laneYOf(channel: HTMLElement, lane: number, origin: DOMRect, k: number): number {
+  return (channel.getBoundingClientRect().top - origin.top) / k + CHANNEL_PAD + lane * LANE_GAP;
 }
 
 /** Orthogonal polyline with rounded corners. */
@@ -296,8 +300,7 @@ export function drawWires(
   svg.append(defs);
   const laneY = (channel: number, lane: number): number => {
     const el = view.querySelector<HTMLElement>(`.channel[data-channel="${channel}"]`);
-    if (!el) return 0;
-    return (el.getBoundingClientRect().top - origin.top) / k + CHANNEL_PAD + lane * LANE_GAP;
+    return el ? laneYOf(el, lane, origin, k) : 0;
   };
 
   for (const route of plan.routes) {

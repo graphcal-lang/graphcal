@@ -389,7 +389,8 @@ impl ExprLowerer<'_> {
             },
             ast::ExprKind::QuantityLiteral { value, unit } => ExprKind::QuantityLiteral {
                 value: *value,
-                unit: self.lower_unit_expr(unit, UnitExprSite::QuantityLiteral)?,
+                unit: self
+                    .lower_unit_expr(unit, UnitExprSite::QuantityLiteral { literal: expr.span })?,
             },
             ast::ExprKind::Convert { expr, target } => {
                 let target = self.lower_unit_expr(target, UnitExprSite::ConversionTarget)?;
@@ -804,17 +805,15 @@ impl ExprLowerer<'_> {
                                 source,
                                 span: binding.value.span(),
                             })?,
-                        ast::IndexExpr::Finite {
-                            cardinality: ast::NatExpr::Literal(cardinality, _),
-                            ..
-                        } => crate::semantic::index_def::FiniteIndex::try_from_u64(*cardinality)
+                        ast::IndexExpr::Finite { cardinality, .. } => {
+                            crate::finite_index_binding::finite_index_binding(
+                                cardinality,
+                                binding.value.span(),
+                            )
                             .map(InstanceIndexBindingTarget::Finite)
-                            .map_err(|_| ExprLowerError::InvalidStaticBindingValue {
-                                kind: crate::static_interface::StaticInputKind::Index,
-                                name: binding.name.name.atom().clone(),
-                                span: binding.value.span(),
-                            })?,
-                        _ => {
+                            .map_err(ExprLowerError::FiniteIndexBinding)?
+                        }
+                        ast::IndexExpr::BareNat(_) => {
                             return Err(ExprLowerError::InvalidStaticBindingValue {
                                 kind: crate::static_interface::StaticInputKind::Index,
                                 name: binding.name.name.atom().clone(),

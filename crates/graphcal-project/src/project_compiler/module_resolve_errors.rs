@@ -1,11 +1,10 @@
 //! Project diagnostics for module-resolution failures.
 
-use graphcal_compiler::resolve::category::ExportedImportItemKind;
 use graphcal_compiler::resolve::error::ModuleResolveError;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::graph::DagReference;
 use graphcal_compiler::semantic_error::module::ModuleError;
-use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError};
+use graphcal_compiler::semantic_error::name::{DuplicateDeclaration, NameError, ShadowingName};
 use graphcal_compiler::semantic_error::visibility::VisibilityError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::syntax::names::NameAtom;
@@ -21,21 +20,8 @@ fn duplicate_name(
     SemanticError::located(src, duplicate, NameError::DuplicateName { name, first })
 }
 
-/// N009 for a selective alias that takes a reserved spelling.
-fn reserved_alias(
-    kind: ExportedImportItemKind,
-    name: NameAtom,
-    span: Span,
-    src: SourceId,
-) -> SemanticError {
-    let kind = match kind {
-        ExportedImportItemKind::Decl(_) => "Term alias",
-        ExportedImportItemKind::Constructor => "constructor alias",
-        ExportedImportItemKind::Dimension => "dimension alias",
-        ExportedImportItemKind::Unit(_) => "unit alias",
-        ExportedImportItemKind::Type => "type alias",
-        ExportedImportItemKind::Index => "index alias",
-    };
+/// N009 for a selective or module alias that takes a reserved spelling.
+fn reserved_alias(kind: ShadowingName, name: NameAtom, span: Span, src: SourceId) -> SemanticError {
     SemanticError::located(src, span, NameError::BuiltinNameShadowed { kind, name })
 }
 
@@ -102,7 +88,10 @@ pub(super) fn module_resolve_compile_error_at(
         ),
         ModuleResolveError::ReservedImportName {
             kind, name, span, ..
-        } => reserved_alias(kind, name, span, src),
+        } => reserved_alias(ShadowingName::ImportAlias(kind), name, span, src),
+        ModuleResolveError::ReservedModuleAlias { name, span, .. } => {
+            reserved_alias(ShadowingName::ModuleAlias, name, span, src)
+        }
         ModuleResolveError::DuplicateSymbol {
             name,
             first,

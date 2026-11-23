@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::required_bindability::{self, InterfaceDecl, Violation as RequiredBindabilityViolation};
 use crate::semantic_error::attribute::AttributeError;
-use crate::semantic_error::name::NameError;
+use crate::semantic_error::name::{NameError, ShadowingName};
 use crate::semantic_error::visibility::VisibilityError;
 use crate::source_id::SourceId;
 use crate::static_interface::{Requirement, StaticInputKind as NominalKind};
@@ -104,7 +104,7 @@ fn check_builtin_name_shadowing(file: &File, src: SourceId) -> Result<(), Semant
                         src,
                         introduced.span(),
                         NameError::BuiltinNameShadowed {
-                            kind: introduced.kind().describe(),
+                            kind: ShadowingName::Declaration(introduced.kind()),
                             name: introduced.atom().clone(),
                         },
                     )
@@ -129,7 +129,7 @@ fn check_imported_graph_value_names(
                     src,
                     *span,
                     NameError::BuiltinNameShadowed {
-                        kind: "graph-value alias",
+                        kind: ShadowingName::GraphValueAlias,
                         name: atom.clone(),
                     },
                 )

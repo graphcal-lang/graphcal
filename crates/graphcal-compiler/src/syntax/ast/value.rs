@@ -196,6 +196,19 @@ pub enum InputBindingCategory {
     Index,
 }
 
+impl std::fmt::Display for InputBindingCategory {
+    /// The input category's diagnostic noun (the marker keyword, or `param`
+    /// for an unmarked binding).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unmarked => "param",
+            Self::Type => "type",
+            Self::Dimension => "dim",
+            Self::Index => "index",
+        })
+    }
+}
+
 /// One categorized input binding in an `include` or direct DAG invocation.
 #[derive(Debug, Clone, PhaseLift, FormatEquivalent)]
 #[phase_lift(from = Raw, to = Desugared)]
@@ -867,10 +880,9 @@ pub enum ExprKind<P: Phase = Raw> {
     },
     /// Inline DAG invocation: `@dag(args)::out` or `@module.dag(args)::out`.
     ///
-    /// Each syntactic occurrence denotes a fresh DAG instantiation that is
-    /// desugared during TIR lowering to the equivalent
-    /// `include <path>(args) as <synthetic>; @<synthetic>.out`. Preserved as
-    /// a distinct AST variant so source spans survive for diagnostics.
+    /// Each syntactic occurrence denotes a fresh DAG instantiation. HIR
+    /// expression lowering resolves the path, bindings, and output and lowers
+    /// it directly to a HIR `ExprKind::DagCall`.
     ///
     /// The post-`@` expression as a whole must denote a graph value.
     /// `@dag(args)::out` may project an explicitly exported node or the

@@ -789,7 +789,7 @@ fn nested_includes_keep_runtime_unit_scales_instance_scoped() {
     .unwrap();
     std::fs::write(
         package_dir.join("wrapper.gcl"),
-        "import nested_dynamic_instances.lib as units;\nparam first_factor: Dimensionless;\nparam second_factor: Dimensionless;\ninclude nested_dynamic_instances.lib(factor: @first_factor) as first;\ninclude nested_dynamic_instances.lib(factor: @second_factor) as second;\npub node out: units::Money = @first::out + @second::out;\n",
+        "import nested_dynamic_instances.lib as units;\nparam first_factor: Dimensionless;\nparam second_factor: Dimensionless;\ninclude nested_dynamic_instances.lib(factor: @first_factor) as first;\ninclude nested_dynamic_instances.lib(factor: @second_factor) as later;\npub node out: units::Money = @first::out + @later::out;\n",
     )
     .unwrap();
     let root = package_dir.join("main.gcl");
@@ -893,6 +893,84 @@ fn include_binding_lowering_error_uses_importer_source() {
         }
         other => panic!("expected importer-owned N002 diagnostic, got {other:?}"),
     }
+}
+
+/// Assert that `root` fails with a D002 whose every label lies in the source
+/// named `importer` and whose primary label covers the binding `20.0 kg`
+/// (#2189).
+fn assert_binding_d002_labels_importer(root: &std::path::Path, importer: &str) {
+    let error = compile_and_eval_project(root, &HashMap::new(), None, &RealFileSystem::default())
+        .unwrap_err();
+    let CompileError::Eval(rendered) = error else {
+        panic!("expected semantic error, got {error:?}");
+    };
+    let SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+        kind: SemanticErrorKind::Dimension(DimensionError::DimensionMismatchInAnnotation { .. }),
+        primary: span,
+        ..
+    }) = &rendered.error
+    else {
+        panic!("expected D002, got {:?}", rendered.error);
+    };
+    let src = rendered.registered_source();
+    assert!(
+        src.name().ends_with(importer),
+        "wrong source: {}",
+        src.name()
+    );
+    assert_eq!(
+        &src.text()[span.offset()..span.offset() + span.len()],
+        "20.0 kg"
+    );
+    for label in rendered.labels().unwrap() {
+        assert_eq!(
+            (label.inner().offset(), label.inner().len()),
+            (span.offset(), span.len()),
+            "every label must be the binding"
+        );
+    }
+}
+
+#[test]
+fn include_binding_dimension_mismatch_labels_the_binding() {
+    let (_dir, root) = write_test_project(
+        "binding_d002",
+        &[
+            (
+                "lib.gcl",
+                "param thrust: Force;\npub node out: Force = @thrust;\n",
+            ),
+            (
+                "main.gcl",
+                "// padding line so the offsets differ\ninclude binding_d002.lib(thrust: 20.0 kg) as a;\nnode t: Force = @a::out;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    assert_binding_d002_labels_importer(&root, "main.gcl");
+}
+
+#[test]
+fn nested_include_binding_dimension_mismatch_labels_the_binding() {
+    let (_dir, root) = write_test_project(
+        "nested_binding_d002",
+        &[
+            (
+                "lib.gcl",
+                "param thrust: Force;\npub node out: Force = @thrust;\n",
+            ),
+            (
+                "mid.gcl",
+                "// pad\n// more padding\ninclude nested_binding_d002.lib(thrust: 20.0 kg) as b;\npub node u: Force = @b::out;\n",
+            ),
+            (
+                "main.gcl",
+                "include nested_binding_d002.mid() as m;\nnode v: Force = @m::u;\n",
+            ),
+        ],
+        "main.gcl",
+    );
+    assert_binding_d002_labels_importer(&root, "mid.gcl");
 }
 
 fn write_required_runtime_input_type_project(

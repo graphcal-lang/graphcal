@@ -264,10 +264,6 @@ body {
 .zone-node {
   padding-right: 6px;
 }
-.zone-output {
-  padding-left: 6px;
-  border-left: 1px dashed var(--border);
-}
 .band .zone:empty {
   padding: 0;
 }
@@ -433,14 +429,10 @@ body {
 .ruler-axis {
   font-weight: 600;
 }
-.ruler-note,
-.ruler-unrolled {
+.ruler-note {
   color: var(--muted);
   font-size: 10px;
   white-space: nowrap;
-}
-.ruler-unrolled {
-  color: var(--sel);
 }
 /* taken from another file: that file, small, above the name */
 .ruler-origin,

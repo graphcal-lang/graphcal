@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev",
-    "build": "tsc && vp build",
     "preview": "vp preview",
     "engine": "wasm-pack build ../../crates/graphcal-wasm --target web --out-dir ../../web/view/public/pkg --profile wasm-release --no-typescript --no-pack"
   },

@@ -114,8 +114,8 @@ fn instances_share_one_type_definition_table() {
                   pub node y: Dimensionless = 1.0;\n\
                   }\n\
                   include middle() as first;\n\
-                  include middle() as second;\n\
-                  node r: Dimensionless = @first::y + @second::y;\n";
+                  include middle() as later;\n\
+                  node r: Dimensionless = @first::y + @later::y;\n";
     let tir = compile_to_tir(source, "shared.gcl").unwrap();
     let instances = tir
         .local_dags()

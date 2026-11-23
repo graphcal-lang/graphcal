@@ -158,6 +158,18 @@ pub enum ModuleResolveError {
         /// The local name's source span.
         span: Span,
     },
+    /// An `import` / module-form `include` alias (explicit `as` or the
+    /// path's last segment) takes a Term spelling the language reserves (for
+    /// example `import p.lib.f as sqrt`).
+    #[error("module alias `{name}` in module `{owner}` is reserved by the {reserved}")]
+    ReservedModuleAlias {
+        owner: DagId,
+        name: NameAtom,
+        reserved: ReservedName,
+        /// The alias's source span: the `as` name, or the path segment that
+        /// becomes the alias.
+        span: Span,
+    },
     /// A name was not found where the lookup searched.
     #[error("unknown {category} `{name}` in module `{owner}`")]
     UnknownName {
@@ -215,13 +227,14 @@ pub enum ModuleResolveError {
         category: NameCategory,
         name: NameAtom,
     },
-    /// A selective import item names an item that is not public in its module.
+    /// A selective import item, or a DAG on an import's module path, is not
+    /// public in its module.
     #[error("private {category} `{name}` in module `{owner}`")]
     PrivateImportItem {
         owner: DagId,
         category: NameCategory,
         name: NameAtom,
-        /// The import item's source name.
+        /// The import item's source name, or the import's module path.
         span: Span,
     },
     /// The index exists, but the requested variant is absent.

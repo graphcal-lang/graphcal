@@ -571,27 +571,31 @@ struct InstanceTemplates {
 }
 
 impl InstanceTemplates {
-    /// The template at `position` for an include rebinding `ports`.
+    /// The template at `position` for an include rebinding `ports`, at
+    /// `site` in `src`.
     fn template<'a>(
         &'a mut self,
         tir: &'a UncheckedTir,
         position: DagPosition,
         ports: Vec<ResolvedDimName>,
         src: SourceId,
+        site: Span,
     ) -> Result<&'a DagTIR, SemanticError> {
         if ports.is_empty() {
-            return Ok(tir.dags.at(position));
+            return Ok(tir.dags().at(position));
         }
         match self.rigid.entry((position, ports)) {
             std::collections::hash_map::Entry::Occupied(rigid) => Ok(rigid.into_mut()),
             std::collections::hash_map::Entry::Vacant(vacant) => {
-                let rigid = super::rigid_template_dag(tir, position, &vacant.key().1, src)?;
+                let rigid = super::rigid_template_dag(tir, position, &vacant.key().1, src, site)?;
                 Ok(vacant.insert(rigid))
             }
         }
     }
 }
 
+/// Clone the template of `edge` as its instance, reporting a failure at
+/// `site` in `src` (see [`instantiate_semantic_edge`]).
 fn clone_checked_instance(
     template_position: super::dag_position::DagPosition,
     edge: &HirInstanceRecord,
@@ -599,7 +603,7 @@ fn clone_checked_instance(
     runtime_units: impl IntoIterator<Item = UnitName>,
     tir: &UncheckedTir,
     templates: &mut InstanceTemplates,
-    src: SourceId,
+    (src, site): (SourceId, Span),
 ) -> Result<DagTIR, SemanticError> {
     // An instance rebinding a defaulted dimension port is built from the
     // template's view where that port is rigid, then specialized like a
@@ -607,7 +611,7 @@ fn clone_checked_instance(
     let ports = tir
         .project_type_store()
         .bound_defaulted_dimension_ports(&edge.instance.specialization().substitution);
-    let template = templates.template(tir, template_position, ports, src)?;
+    let template = templates.template(tir, template_position, ports, src, site)?;
     let mut instance = template.clone();
     initialize_instance_identity(&mut instance, template, edge, parent, runtime_units);
     // A substitution can bind a port to a type of any module, so an instance
@@ -698,7 +702,7 @@ impl PlotProjections {
         for (instance_owner, target, exposed) in projections {
             // Imported instances already carry their complete checked
             // projections.
-            let local = tir.dags.local_with_fact(presentation, &instance_owner);
+            let local = tir.dags().local_with_fact(presentation, &instance_owner);
             if let Some((instance, _)) = local {
                 self.collect(tir, presentation, instance, src)?;
             }
@@ -710,7 +714,7 @@ impl PlotProjections {
                 .or_else(|| {
                     local
                         .or_else(|| {
-                            tir.dags
+                            tir.dags()
                                 .shared(&instance_owner)
                                 .map(super::CheckedDag::presentation)
                         })
@@ -747,11 +751,11 @@ pub fn add_plot_projections(
     src: SourceId,
 ) -> Result<LocalDagFacts<DagPresentationFacts>, SemanticError> {
     let mut projections = PlotProjections::default();
-    for (_, parent) in tir.dags.local_iter() {
+    for (_, parent) in tir.dags().local_iter() {
         projections.collect(tir, &presentation, parent, src)?;
     }
     let mut projected = projections.projected;
-    Ok(tir.dags.map_local_facts(presentation, |dag, mut facts| {
+    Ok(tir.dags().map_local_facts(presentation, |dag, mut facts| {
         if let Some(plots) = projected.remove(dag.dag_id()) {
             facts.plot_channels.extend(plots);
         }
@@ -761,7 +765,7 @@ pub fn add_plot_projections(
 
 /// Bind the names each body exposes from its instances' projections.
 fn install_semantic_projection_bindings(tir: &mut UncheckedTir) {
-    for dag in tir.dags.locals_mut() {
+    for dag in tir.dags_mut().locals_mut() {
         for edge in dag.semantic_instances.clone() {
             for projection in &edge.output_projections {
                 match projection.body() {
@@ -805,7 +809,7 @@ fn instantiate_semantic_edge(
 ) -> Result<DagPosition, SemanticError> {
     let owner = edge.instance.id().owner();
     let template_body = graph
-        .template(&tir.dags, edge.instance.id().template())
+        .template(tir.dags(), edge.instance.id().template())
         .ok_or_else(|| {
             SemanticError::internal_error(
                 format!(
@@ -817,7 +821,7 @@ fn instantiate_semantic_edge(
             )
         })?;
     let template_position = template_body.0;
-    let template = tir.dags.at(template_position);
+    let template = tir.dags().at(template_position);
     let substitution =
         CompleteSubstitution::try_new(edge.instance.substitution(), tir.project_type_store())
             .map_err(|error| error.into_graphcal(src))?;
@@ -852,7 +856,7 @@ fn instantiate_semantic_edge(
         .collect::<Result<Vec<_>, SemanticError>>()?;
     // The edge is materialized in the frame of the DAG that includes it: the
     // instance's parent, whose record list holds the edge.
-    let parent_frame = tir.dags.at(parent).frame();
+    let parent_frame = tir.dags().at(parent).frame();
     let mut instance = clone_checked_instance(
         template_position,
         edge,
@@ -860,7 +864,7 @@ fn instantiate_semantic_edge(
         runtime_unit_names,
         tir,
         templates,
-        src,
+        (src, site),
     )?;
     specialize_instance_semantics(&mut instance, edge, &substitution, src, site)?;
     for (unit, info) in runtime_unit_infos {
@@ -870,7 +874,7 @@ fn instantiate_semantic_edge(
     }
     graph
         .push_instance(
-            &mut tir.dags,
+            tir.dags_mut(),
             instance,
             template_body,
             edge.instance.specialization().clone(),
@@ -904,16 +908,16 @@ pub fn instantiate_semantic_edges(
     src: SourceId,
     cancellation: &crate::cancellation::CancellationToken,
 ) -> Result<InstanceGraph, crate::outcome::Outcome<SemanticError>> {
-    let mut graph = InstanceGraph::new(&tir.dags);
+    let mut graph = InstanceGraph::new(tir.dags());
     // Every instance is a copy of a DAG present now, so the definitions of
     // the DAGs present now are every definition an instance can see.
     let mut templates = InstanceTemplates {
         type_defs: super::ResolvedTypeDefs::union(
-            tir.dags.iter().map(|(_, dag)| &dag.semantic.type_defs),
+            tir.dags().iter().map(|(_, dag)| &dag.semantic.type_defs),
         ),
         rigid: HashMap::new(),
     };
-    let mut holders = tir.dags.iter_positions().collect::<Vec<_>>();
+    let mut holders = tir.dags().iter_positions().collect::<Vec<_>>();
     // The include in `src` each materialized instance descends from. An edge
     // of a local DAG is written in `src`; an edge of a materialized instance
     // is written in its template's source, so it inherits its holder's site.
@@ -923,7 +927,7 @@ pub fn instantiate_semantic_edges(
         let edges = holders
             .iter()
             .flat_map(|&holder| {
-                tir.dags
+                tir.dags()
                     .at(holder)
                     .semantic_instances()
                     .iter()
@@ -936,14 +940,14 @@ pub fn instantiate_semantic_edges(
             cancellation.checkpoint()?;
             // An instance an imported store or an earlier edge already holds
             // is reused.
-            if let Some(instance) = tir.dags.position(edge.instance.id().owner()) {
+            if let Some(instance) = tir.dags().position(edge.instance.id().owner()) {
                 graph.record_edge(holder, instance);
                 continue;
             }
             let site = match sites.get(&holder) {
                 Some(inherited) => *inherited,
                 None => tir
-                    .dags
+                    .dags()
                     .shared_at(holder)
                     .is_none()
                     .then_some(edge.include_span),
@@ -964,10 +968,10 @@ pub fn instantiate_semantic_edges(
             graph.record_edge(holder, instance);
         }
         materialized.sort_by(|left, right| {
-            tir.dags
+            tir.dags()
                 .at(*left)
                 .dag_id()
-                .cmp(tir.dags.at(*right).dag_id())
+                .cmp(tir.dags().at(*right).dag_id())
         });
         holders = materialized;
     }

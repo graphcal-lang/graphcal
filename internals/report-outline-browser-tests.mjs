@@ -27,6 +27,7 @@ param pair: Pair = Pair(left: 2.0 m, right: 3.0 m);
 param bundle: Bundle = Bundle(first: Pair(left: 1.0 m, right: 2.0 m), second: Pair(left: 3.0 m, right: 4.0 m), last: Reading(value: 5.0 m));
 param choice: Choice = Amount(value: 2.0 m);
 param samples: Int[Fin(40)] = for i: Fin(40) { 1 };
+/// Twice the first input.
 node doubled: Length = @input_0 * 2.0;
 node selected: Choice = @choice;
 node reciprocal: Dimensionless[Fin(2)] = for i: Fin(2) { 1.0 / (@input_0 / (1.0 m)) };
@@ -74,6 +75,12 @@ assert positive = @input_0 > 0.0 m;
   await fill(".outline-search", "calibration annotation");
   assert.equal(await evaluate("document.querySelectorAll('.outline-content .outline-row').length"), 1, "descriptions participate in search");
   assert.equal(await evaluate("document.querySelectorAll('untrusted').length"), 0, "description text is not HTML");
+  const readingDescription = `${query(field("reading value"))}.closest('.outline-row').querySelector('.outline-desc')`;
+  await click('[aria-label="Pin input reading › value"]');
+  assert.equal(await evaluate(`${query(field("reading value"))}.closest('.outline-favorites') !== null`), true);
+  assert.equal(await evaluate(`${readingDescription}.checkVisibility()`), true, "a pinned input keeps its parameter description");
+  await click('[aria-label="Pin input reading › value"]');
+  assert.equal(await evaluate(`${readingDescription}.checkVisibility()`), true, "an unpinned input keeps its parameter description");
   await fill(".outline-search", "bundle › second › right");
   assert.equal(await evaluate(`${query(field("bundle second right"))}.checkVisibility()`), true, "search expands ancestors and accepts pasted display paths");
   await click('[aria-label="Pin input bundle › second › right"]');
@@ -124,6 +131,7 @@ assert positive = @input_0 > 0.0 m;
   assert.equal(await evaluate("document.querySelector('.title-cell--inputs .title-cell__value').innerText.trim().includes('overridden')"), true, "the header reports overridden inputs");
 
   await click('.workspace-output-pin[aria-label="Pin value doubled"]');
+  assert.equal(await evaluate("document.querySelector('.pinned-values [data-decl=doubled] .card-doc').checkVisibility()"), true, "a pinned value keeps its description");
   await click('.workspace-output-pin[aria-label="Pin check positive"]');
   assert.equal(await evaluate("document.querySelector('.pinned-checks [data-check=positive]') !== null"), true, "checks can be pinned");
   await evaluate(`${tab("Provenance")}.click()`);

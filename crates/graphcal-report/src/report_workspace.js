@@ -221,7 +221,7 @@
       cached.label.title = field.labels.join(" › ");
       text(cached.hint, field.hint || "");
       cached.hint.hidden = !field.hint;
-      cached.description.hidden = !field.description || !cached.root || isPinned;
+      cached.description.hidden = !field.description || !cached.root;
       cached.row.classList.toggle("outline-row--overridden", cached.root && overridden.has(field.parameter));
       cached.row.classList.toggle("outline-row--draft", cached.root && drafted.has(field.parameter));
       cached.pin.setAttribute("aria-pressed", String(isPinned));
@@ -312,7 +312,7 @@
           var query = search.value.trim();
           var matching = items.filter(function (field) { return state.matches(field.labels, field.description, query); });
           var favoriteItems = matching.filter(function (field) { return pins.has(field.key); });
-          favoriteRows.replaceChildren.apply(favoriteRows, favoriteItems.map(function (field) { return rowFor(field, undefined, false); }));
+          favoriteRows.replaceChildren.apply(favoriteRows, favoriteItems.map(function (field) { return rowFor(field, undefined, state.standsForParameter(field, items)); }));
           favorites.hidden = !favoriteItems.length;
           content.replaceChildren();
           parameterGroups.clear();

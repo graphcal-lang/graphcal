@@ -14,10 +14,11 @@ use crate::generic_param::{
 };
 use crate::hir::expr::UnappliedFunctionRef;
 use crate::hir::types::IndexRef;
-use crate::resolve::category::DeclSymbolKind;
+use crate::resolve::category::{DeclSymbolKind, ExportedImportItemKind};
 use crate::resolved_name::ResolvedConstructorName;
 use crate::semantic::time_scale::TimeScale;
 use crate::syntax::ast::GenericConstraint;
+use crate::syntax::ast::IntroducedKind;
 use crate::syntax::ast::MulDivOp;
 use crate::syntax::function_name::FnName;
 use crate::syntax::index_name::IndexVariantName;
@@ -38,7 +39,12 @@ pub enum UnitNameSite {
     LiteralLeading,
     /// A unit that continues a quantity literal after `*` or `/`
     /// (`2.0 m / s`), where the source may have meant arithmetic on the local.
-    LiteralContinuation(MulDivOp),
+    LiteralContinuation {
+        op: MulDivOp,
+        /// The whole quantity literal, from its number to its last unit;
+        /// closing it before `op` is the arithmetic reading's fix.
+        literal: Span,
+    },
     /// A unit of a `->` conversion target.
     ConversionTarget,
 }
@@ -124,6 +130,37 @@ impl std::fmt::Display for PlotPropertyContext {
     }
 }
 
+/// What introduced a name that shadows a built-in spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShadowingName {
+    /// A declaration or `type` constructor of the module itself.
+    Declaration(IntroducedKind),
+    /// The local name of a selective import / include item.
+    ImportAlias(ExportedImportItemKind),
+    /// An unqualified graph value brought into an inline DAG's scope.
+    GraphValueAlias,
+    /// An `import` / module-form `include` alias.
+    ModuleAlias,
+}
+
+impl std::fmt::Display for ShadowingName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Declaration(kind) => kind.describe(),
+            Self::ImportAlias(kind) => match kind {
+                ExportedImportItemKind::Decl(_) => "Term alias",
+                ExportedImportItemKind::Constructor => "constructor alias",
+                ExportedImportItemKind::Dimension => "dimension alias",
+                ExportedImportItemKind::Unit(_) => "unit alias",
+                ExportedImportItemKind::Type => "type alias",
+                ExportedImportItemKind::Index => "index alias",
+            },
+            Self::GraphValueAlias => "graph-value alias",
+            Self::ModuleAlias => "module alias",
+        })
+    }
+}
+
 #[derive(Debug, Clone, Error)]
 pub enum NameError {
     #[error("duplicate name `{name}`")]
@@ -140,7 +177,7 @@ pub enum NameError {
         first: Span,
     },
     #[error("{kind} `{name}` shadows a built-in name")]
-    BuiltinNameShadowed { kind: &'static str, name: NameAtom },
+    BuiltinNameShadowed { kind: ShadowingName, name: NameAtom },
     #[error("property `{property}` is not valid in {context}")]
     InvalidPlotProperty {
         property: crate::syntax::ast::PlotPropertyName,
@@ -462,7 +499,7 @@ impl DiagnosticKind for NameError {
 fn unit_name_is_local_help(name: &LocalName, site: UnitNameSite) -> String {
     let rename = format!("to use the unit `{name}`, rename the local");
     match site {
-        UnitNameSite::LiteralContinuation(op) => {
+        UnitNameSite::LiteralContinuation { op, .. } => {
             let (verb, operator) = match op {
                 MulDivOp::Mul => ("multiply", '*'),
                 MulDivOp::Div => ("divide", '/'),

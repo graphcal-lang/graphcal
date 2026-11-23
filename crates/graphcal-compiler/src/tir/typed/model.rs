@@ -45,7 +45,8 @@ pub struct ProjectTypeStore {
     dimensions: HashMap<ResolvedDimName, Dimension>,
     /// Values that differ when each module's defaulted bindable dimension
     /// ports stay opaque; each such port maps to its own base.
-    port_generic_dimensions: HashMap<ResolvedDimName, Dimension>,
+    port_generic_dimensions:
+        BTreeMap<ResolvedDimName, crate::ir::module_definitions::PortGenericDimension>,
     /// Defaulted dimension ports this view keeps rigid (empty for the
     /// canonical store).
     rigid_ports: std::collections::BTreeSet<ResolvedDimName>,
@@ -53,6 +54,28 @@ pub struct ProjectTypeStore {
     indexes: HashMap<ResolvedIndexName, Arc<IndexDef>>,
     struct_types: HashMap<ResolvedStructTypeName, Arc<NominalTypeDef>>,
     constructors: HashMap<ResolvedConstructorName, crate::hir::nominal::ResolvedConstructor>,
+}
+
+/// A dimension whose value overflows when a rigid view recomputes it from
+/// its port-generic value (`graphcal::D010`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RigidDimensionOverflow {
+    /// The file declaring the dimension.
+    source: SourceId,
+    /// The dimension's name in its declaration in `source`.
+    span: Span,
+}
+
+impl RigidDimensionOverflow {
+    /// The overflow reported at the dimension's declaration.
+    #[must_use]
+    pub(crate) fn at_declaration(self) -> SemanticError {
+        SemanticError::located(
+            self.source,
+            self.span,
+            crate::semantic_error::dimension::DimensionError::DimensionOverflow,
+        )
+    }
 }
 
 /// Failure to transfer one module's definitions into the semantic project type store.
@@ -335,7 +358,9 @@ impl ProjectTypeStore {
     /// (`pub(bind) dim Q = Length;`): its port-generic value is its own base.
     #[must_use]
     fn is_defaulted_dimension_port(&self, identity: &ResolvedDimName) -> bool {
-        self.port_generic_dimensions.get(identity)
+        self.port_generic_dimensions
+            .get(identity)
+            .map(|generic| &generic.value)
             == Some(&Dimension::base(crate::dimension::BaseDimId::UserDefined(
                 identity.clone(),
             )))
@@ -369,37 +394,40 @@ impl ProjectTypeStore {
     ///
     /// # Errors
     ///
-    /// Returns an error when re-expanding a default overflows.
+    /// Returns the first dimension (in identity order) whose recomputed value
+    /// overflows.
     pub(crate) fn with_rigid_dimensions(
         &self,
         ports: &[ResolvedDimName],
-    ) -> Result<Self, crate::ratio::RatioError> {
+    ) -> Result<Self, RigidDimensionOverflow> {
         let mut rigid = self.clone();
         rigid.rigid_ports.extend(ports.iter().cloned());
         for (identity, generic) in &self.port_generic_dimensions {
-            let value =
-                generic
-                    .iter()
-                    .try_fold(Dimension::dimensionless(), |acc, (base, exponent)| {
-                        let factor = match base {
-                            crate::dimension::BaseDimId::UserDefined(port)
-                                if self.is_defaulted_dimension_port(port)
-                                    && !rigid.rigid_ports.contains(port) =>
-                            {
-                                self.dimensions
-                                    .get(port)
-                                    .cloned()
-                                    .unwrap_or_else(|| Dimension::base(base.clone()))
-                            }
-                            crate::dimension::BaseDimId::UserDefined(_)
-                            | crate::dimension::BaseDimId::Prelude(_) => {
-                                Dimension::base(base.clone())
-                            }
-                        };
-                        factor
-                            .pow(*exponent)
-                            .and_then(|factor| acc.checked_mul(&factor))
-                    })?;
+            let value = generic
+                .value
+                .iter()
+                .try_fold(Dimension::dimensionless(), |acc, (base, exponent)| {
+                    let factor = match base {
+                        crate::dimension::BaseDimId::UserDefined(port)
+                            if self.is_defaulted_dimension_port(port)
+                                && !rigid.rigid_ports.contains(port) =>
+                        {
+                            self.dimensions
+                                .get(port)
+                                .cloned()
+                                .unwrap_or_else(|| Dimension::base(base.clone()))
+                        }
+                        crate::dimension::BaseDimId::UserDefined(_)
+                        | crate::dimension::BaseDimId::Prelude(_) => Dimension::base(base.clone()),
+                    };
+                    factor
+                        .pow(*exponent)
+                        .and_then(|factor| acc.checked_mul(&factor))
+                })
+                .map_err(|_| RigidDimensionOverflow {
+                    source: generic.source,
+                    span: generic.span,
+                })?;
             rigid.dimensions.insert(identity.clone(), value);
         }
         Ok(rigid)

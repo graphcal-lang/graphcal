@@ -4,7 +4,7 @@ use graphcal_compiler::semantic_error::SemanticErrorKind;
 use graphcal_compiler::semantic_error::dimension::DimensionError;
 use graphcal_compiler::semantic_error::domain::DomainError;
 use graphcal_compiler::semantic_error::index::IndexError;
-use graphcal_compiler::semantic_error::name::NameError;
+use graphcal_compiler::semantic_error::name::{NameError, UnitNameSite};
 use graphcal_compiler::semantic_error::structure::StructError;
 use graphcal_compiler::semantic_error::structure::UnknownLocal;
 use graphcal_compiler::semantic_error::visibility::{IncludeForm, VisibilityError};
@@ -294,9 +294,6 @@ pub fn compile_error_to_diagnostics_grouped(
     documents: &DocumentUris,
 ) -> HashMap<Url, Vec<Diagnostic>> {
     let diag: &dyn miette::Diagnostic = error;
-    let data = structured_data(error)
-        .as_ref()
-        .and_then(RepairData::to_value);
 
     // Source-less errors carry no labels either, so an empty source is safe
     // for the LineIndex (which is unused when there are no labels).
@@ -304,6 +301,9 @@ pub fn compile_error_to_diagnostics_grouped(
         || (documents.root().clone(), ""),
         |source| (documents.of_source(source.origin()), source.text().as_str()),
     );
+    let data = structured_data(error, &LineIndex::new(source))
+        .as_ref()
+        .and_then(RepairData::to_value);
 
     let diags = compile_error_to_diagnostics_in_source(diag, source, &uri, data);
 
@@ -318,7 +318,8 @@ pub fn compile_error_to_diagnostics_grouped(
 /// the rendered message and re-parsing it in `code_actions` was exactly the
 /// string-convention round trip the project bans. `Diagnostic::data` rides
 /// along with the diagnostic to the `textDocument/codeAction` request.
-fn structured_data(error: &CompileError) -> Option<RepairData> {
+/// `lines` indexes the source the error is located in.
+fn structured_data(error: &CompileError, lines: &LineIndex<'_>) -> Option<RepairData> {
     use graphcal_compiler::semantic_error::SemanticError;
 
     let CompileError::Eval(e) = error else {
@@ -360,6 +361,14 @@ fn structured_data(error: &CompileError) -> Option<RepairData> {
                 .iter()
                 .map(|dependency| dependency.nominal.to_string())
                 .collect(),
+        }),
+        // N037: after `*` or `/`, the arithmetic reading closes the literal;
+        // a leading unit or a conversion target only has a rename.
+        SemanticErrorKind::Name(NameError::UnitNameIsLocal {
+            site: UnitNameSite::LiteralContinuation { literal, .. },
+            ..
+        }) => Some(RepairData::CloseQuantityLiteral {
+            literal_start: lines.position(literal.offset()),
         }),
         // D020: an exact replacement exists only when the decimal spelling
         // maps exactly into the dimension rational model.

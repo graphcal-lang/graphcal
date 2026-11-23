@@ -903,6 +903,31 @@ fn lsp_publishes_package_mode_compile_errors_to_their_own_documents() {
             .all(|(uri, codes)| uri != &file_uri(&uses_broken) || codes.is_empty()),
         "{published:?}"
     );
+
+    // Opened through a symlink alias, the cached dependency receives its
+    // importer's diagnostics under the exact URI the editor opened.
+    let dependency_suffix = Path::new("src/unit_lib/broken.gcl");
+    let cached = find_cached_file(&cache, dependency_suffix).expect("cached dependency file");
+    let cached_package = cached.ancestors().nth(3).unwrap();
+    let alias_root = dir.path().join("dependency-alias");
+    std::os::unix::fs::symlink(cached_package, &alias_root).unwrap();
+    let alias = alias_root.join(dependency_suffix);
+    let mut session = LspSession::start(&[("GRAPHCAL_CACHE_DIR", &cache)]);
+    session.open(&alias);
+    session.diagnostics_until_an_error();
+    session.open(&uses_broken);
+    let published = session.diagnostics_until_an_error();
+    assert_eq!(
+        published.last().unwrap(),
+        &(file_uri(&alias), vec!["graphcal::D002".to_owned()]),
+        "{published:?}"
+    );
+    assert!(
+        published
+            .iter()
+            .all(|(uri, codes)| uri != &file_uri(&uses_broken) || codes.is_empty()),
+        "{published:?}"
+    );
 }
 
 #[cfg(unix)]

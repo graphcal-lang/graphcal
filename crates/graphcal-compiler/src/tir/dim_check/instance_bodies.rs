@@ -22,7 +22,7 @@ use crate::tir::typed::specialization::specialize_expression_type;
 
 use super::body_specialization::DerivedTrees;
 use super::plot::CheckedPlotChannelShapes;
-use super::{DimCheckContext, check_decl_expr_type, infer};
+use super::{DimCheckContext, check_ineffective_conversions, infer};
 
 fn check_retained_reconciliations(
     dag: &crate::tir::typed::model::DagTIR,
@@ -176,37 +176,39 @@ fn check_instance_defaults(
             .default
             .as_deref()
             .is_some_and(|template_default| template_default.id() == id);
-        if !inherited {
-            check_decl_expr_type(
-                ctx,
-                crate::ir::entry::ValueOrigin::Source,
-                &entry.identity(),
-                &entry.type_ann,
-                default,
-            )?;
-            continue;
-        }
         let declaration = entry.identity();
-        check_retained_reconciliations(
-            ctx.env.dag,
-            &declaration,
-            template_bodies.nominal_uses(id),
-        )?;
-        let checked_type = template_entry.type_ann.checked().declared().to_symbolic();
-        let specialized = specialize_expression_type(&checked_type, substitution).map_err(
-            crate::tir::typed::specialization::specialization_overflow(ctx.env.src, default.span),
-        )?;
+        let found = if inherited {
+            check_retained_reconciliations(
+                ctx.env.dag,
+                &declaration,
+                template_bodies.nominal_uses(id),
+            )?;
+            let checked_type = template_entry.type_ann.checked().declared().to_symbolic();
+            specialize_expression_type(&checked_type, substitution).map_err(
+                crate::tir::typed::specialization::specialization_overflow(
+                    ctx.env.src,
+                    default.span,
+                ),
+            )?
+        } else {
+            ctx.infer_hir(default, Some(&declaration))?
+        };
         let expected = entry.type_ann.checked().declared();
-        if specialized != expected.to_symbolic() {
+        // The annotation lives in the template's source, so the mismatch is
+        // reported at the default, which lives in the instance's (#2189).
+        if found != expected.to_symbolic() {
             return Err(SemanticError::located(
                 ctx.env.src,
                 default.span,
                 DimensionError::DimensionMismatchInAnnotation {
                     declared: expected.spelling(&ctx.env.registry.dimensions),
-                    inferred: specialized.spelling(&ctx.env.registry.dimensions),
+                    inferred: found.spelling(&ctx.env.registry.dimensions),
                 },
             )
             .into());
+        }
+        if !inherited {
+            check_ineffective_conversions(default, true, ctx.env.src)?;
         }
     }
     Ok(())
@@ -242,7 +244,7 @@ fn template_of<'a>(
     canonical: &'a CanonicalFacts<CanonicalChecked>,
     origin: &'a InstanceOrigin,
 ) -> (&'a crate::tir::typed::model::DagTIR, &'a CheckedBodies) {
-    let dag = tir.dags.at(origin.template_position());
+    let dag = tir.dags().at(origin.template_position());
     match canonical.template(origin.template()) {
         TemplateFact::Local(checked) => (dag, &checked.bodies),
         TemplateFact::Shared(shared) => (dag, shared.bodies()),
@@ -262,7 +264,7 @@ pub(super) fn instance_bodies<'t>(
     cancellation: &CancellationToken,
 ) -> Result<InstanceFacts<InstanceChecked>, Outcome<SemanticError>> {
     let published = graph.join(
-        &tir.dags,
+        tir.dags(),
         canonical.map_ref(|checked| Some(&checked.bodies)),
         instances.map_ref(|_| None),
     );
