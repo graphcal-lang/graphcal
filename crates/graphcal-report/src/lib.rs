@@ -15,4 +15,4 @@ pub mod report_markdown;
 pub mod report_provenance;
 pub mod value_display;
 pub mod vega;
-pub(crate) mod vega_assets;
+pub mod vega_assets;

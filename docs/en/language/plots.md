@@ -475,6 +475,9 @@ graphcal eval file.gcl --plot json
 
 # Write a self-contained HTML page (headless/CI-friendly)
 graphcal eval file.gcl --plot report.html
+
+# Write one figure as a static SVG image (for embedding in documents)
+graphcal eval file.gcl --plot figure.svg --figure my_plot
 ```
 
 In `--plot json` mode, stdout is exactly one JSON array of figure objects,

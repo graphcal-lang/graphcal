@@ -42,12 +42,13 @@ pub fn render_report_markdown(document: &ReportDocument) -> String {
     if !document.figures.is_empty() || !document.plot_errors.is_empty() {
         out.push_str("\n## Plots\n\n");
         for card in &document.figures {
+            let name = code(&card.figure.name.to_string());
             match &card.doc {
                 Some(doc) => {
-                    let _ = writeln!(out, "- {} — {}", code(&card.figure.name), text(doc));
+                    let _ = writeln!(out, "- {name} — {}", text(doc));
                 }
                 None => {
-                    let _ = writeln!(out, "- {}", code(&card.figure.name));
+                    let _ = writeln!(out, "- {name}");
                 }
             }
         }
