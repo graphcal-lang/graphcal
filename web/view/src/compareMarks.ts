@@ -3,7 +3,7 @@
 import { previousValue, type ModelDiff } from "./compare.ts";
 import type { ViewModel } from "./model.ts";
 import { setTip } from "./tip.ts";
-import { displayOf } from "./values.ts";
+import { displayOf, statusOf, type Status } from "./values.ts";
 
 /**
  * Light the wires between changed nodes in green, the way a selection lights
@@ -18,6 +18,15 @@ export function markChangedWires(wiresEl: SVGSVGElement, diff: ModelDiff): void 
     w.classList.add("diff");
     if (w.classList.contains("wire")) w.setAttribute("marker-end", "url(#arrow-diff)");
   }
+}
+
+/**
+ * The tip of a changed cell: what it was. A cell that lost its value to an
+ * unfinished formula keeps that reason first, since the sheet shows it no
+ * other way.
+ */
+export function cellTip(status: Status | null, was: string): string {
+  return status === null ? `was ${was}` : `${status.note}\nwas ${was}`;
 }
 
 /** Put the diff's classes on a rendered sheet: frames on columns, tint on cells, `was` under boxes. */
@@ -44,7 +53,7 @@ export function markChanges(viewEl: HTMLElement, model: ViewModel, diff: ModelDi
       const was = previousValue(change, node.value, labels);
       if (was === undefined) continue;
       cell.classList.add("diff-cell");
-      setTip(cell, `was ${displayOf(was)}`);
+      setTip(cell, cellTip(statusOf(node), displayOf(was)));
     }
     const box = col.querySelector<HTMLElement>(".box-value");
     const was = previousValue(change, node.value, []);
