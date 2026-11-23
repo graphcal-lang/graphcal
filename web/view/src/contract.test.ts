@@ -39,7 +39,8 @@ describe("view model contract", () => {
       for (const axis of node.axes) expect(indexes.has(axis), `${node.label} axis`).toBe(true);
     }
     const layout = computeLayout(model);
-    expect(layout.columns.size).toBe(model.nodes.length);
+    // Every node is drawn, or stands behind the param that receives it.
+    expect(layout.columns.size + layout.standIns.size).toBe(model.nodes.length);
   });
 
   test.each(models())("%s: every cell of a value over known axes finds its value", (_p, model) => {

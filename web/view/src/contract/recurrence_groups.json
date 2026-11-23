@@ -65,6 +65,7 @@
       "pub": false,
       "deps": [],
       "expr": "1.0",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -107,6 +108,7 @@
       "pub": false,
       "deps": [],
       "expr": "0.5",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -154,6 +156,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:state"
       ],
       "expr": "for t: Step { -@k * @state[t] }",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -241,6 +244,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:initial_state"
       ],
       "expr": "unfold(Step, @initial_state, |s, prev_t, t| s + @action[prev_t])",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -325,6 +329,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:state"
       ],
       "expr": "sum(@state)",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -367,6 +372,7 @@
       "pub": false,
       "deps": [],
       "expr": "0.0",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -409,6 +415,7 @@
       "pub": false,
       "deps": [],
       "expr": "1.0",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -456,6 +463,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:x_before"
       ],
       "expr": "unfold(Step, @x_before, |ignored, prev_t, t| @x[prev_t])",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -543,6 +551,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:x0"
       ],
       "expr": "unfold(Step, @x0, |s, prev_t, t| s + @prev_x[prev_t])",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -627,6 +636,7 @@
       "pub": false,
       "deps": [],
       "expr": "{\n    Region#North: 100.0,\n    Region#South: 50.0,\n}",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -722,6 +732,7 @@
       "pub": false,
       "deps": [],
       "expr": "{\n    Region#North: 0.1,\n    Region#South: 0.2,\n}",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -821,6 +832,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:pop0"
       ],
       "expr": "unfold(\n    Step,\n    @pop0,\n    |p, prev_t, t| for r: Region { p[r] + @births[prev_t, r] }\n)",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -989,6 +1001,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:rate"
       ],
       "expr": "for t: Step, r: Region { @rate[r] * @pop[t, r] }",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -1151,6 +1164,7 @@
       "pub": false,
       "deps": [],
       "expr": "0.5",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -1198,6 +1212,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:level"
       ],
       "expr": "for t: Step {\n    sum(unfold(Substep, @level[t], |acc, prev_u, u| acc * @decay))\n}",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -1284,6 +1299,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:outflow"
       ],
       "expr": "unfold(Step, 10.0, |s, prev_t, t| s - 0.1 * @outflow[prev_t])",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -1366,6 +1382,7 @@
       "pub": false,
       "deps": [],
       "expr": "1.0 m/s",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -1412,6 +1429,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:velocity"
       ],
       "expr": "unfold(\n    Step,\n    0.0 m,\n    |s, prev_t, t| s + @velocity[prev_t] * (coord(t) - coord(prev_t))\n) -> km",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -1499,6 +1517,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:speed"
       ],
       "expr": "for t: Step { @speed + @position[t] / 10.0 s }",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -1583,6 +1602,7 @@
         "p:recurrence_groups/f:recurrence_groups/s:loop/n:response"
       ],
       "expr": "sum(@loop::response)",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -1627,6 +1647,7 @@
         "p:recurrence_groups/f:recurrence_groups/n:state"
       ],
       "expr": "for t: Step { @state[t] > 0.0 }",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
@@ -1674,6 +1695,7 @@
       "pub": true,
       "deps": [],
       "expr": "unfold(T, @start, |s, prev_t, t| s + @command[prev_t])",
+      "receives": null,
       "doc": null,
       "source": {
         "file": "recurrence_groups.gcl",
