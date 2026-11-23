@@ -3,7 +3,8 @@ import type { Axis, Band, Column, Layout, Role, Zone } from "./layout.ts";
 import { axisName, entryName, ZONES, zoneOf } from "./layout.ts";
 import { guessedFileName, isExternal, type NodeKind, type ViewNode } from "./model.ts";
 import { rowRuns, type Hidden } from "./rows.ts";
-import { displayOf, shortMagnitude, valueAt } from "./values.ts";
+import { setTip } from "./tip.ts";
+import { displayOf, shortMagnitude, statusOf, valueAt, type Status } from "./values.ts";
 
 const MARK: Record<NodeKind, string> = {
   param: "◇",
@@ -39,6 +40,13 @@ function hasSubRow(column: Column, band: Band): boolean {
  * line; the type on the second. Folded, the value joins the second line, so the
  * values of a stack of folded boxes line up at their right edge.
  */
+/** `TODO` / `BLOCKED` in place of a value; hovering it names the unfinished formulas (see `tip.ts`). */
+function statusChip(status: Status): HTMLElement {
+  const chip = el("span", `status status-${status.kind}`, status.label);
+  setTip(chip, status.note);
+  return chip;
+}
+
 function renderHead(column: Column, folded = false): HTMLElement {
   const { node } = column;
   const head = el("div", `col-head ${kindClass(node)}`);
@@ -51,15 +59,18 @@ function renderHead(column: Column, folded = false): HTMLElement {
   const doc = node.doc?.split("\n")[0]?.trim() ?? "";
   if (doc !== "" && !folded) {
     const note = el("span", "col-doc", doc);
-    note.title = node.doc ?? "";
+    setTip(note, node.doc ?? "");
     title.append(note);
   }
   // A display unit that could not be applied: the value is shown in SI.
   if (node.presentation.length > 0) {
     const warn = el("span", "col-presentation", "⚠");
-    warn.title = node.presentation.join("\n");
+    setTip(warn, node.presentation.join("\n"));
     title.append(warn);
   }
+  // A table has no single value to replace, so its status sits beside its name.
+  const status = statusOf(node);
+  if (status !== null && column.rows.length > 0) title.append(statusChip(status));
   head.append(title);
   const meta = el("div", "col-meta");
   if (node.dimension !== null) {
@@ -79,6 +90,8 @@ function renderHead(column: Column, folded = false): HTMLElement {
 /** A value as spans: magnitude with its unit set apart, pass / fail for an assert. */
 function valueSpans(column: Column): HTMLElement[] {
   const value = column.node.value;
+  const status = statusOf(column.node);
+  if (status !== null) return [statusChip(status)];
   if (value && value.kind === "quantity" && value.unit) {
     return [
       el("span", "magnitude", shortMagnitude(value.magnitude)),
@@ -110,7 +123,7 @@ function renderGap(keys: string[], axis: string, axes: ReadonlyMap<string, Axis>
   // The keys are opaque, so they travel as a JSON array rather than joined.
   gap.dataset.keys = JSON.stringify(keys);
   const names = keys.map((key) => entryName(axes, axis, key));
-  gap.title = `${keys.length} hidden: ${names.join(", ")} · click to show`;
+  setTip(gap, `${keys.length} hidden: ${names.join(", ")} · click to show`, "hint");
   return gap;
 }
 
@@ -138,6 +151,7 @@ function renderTable(
   const subCount = Math.max(1, column.subs.length);
   body.style.gridTemplateColumns = `${inBand ? "" : "auto "}repeat(${subCount}, minmax(0, 1fr))`;
   const rowAxis = column.node.axes[0] ?? "";
+  const status = statusOf(column.node);
   for (const run of rowRuns(column.rows, hidden.get(rowAxis))) {
     if (run.kind === "gap") {
       const gap = renderGap(run.labels, rowAxis, axes);
@@ -156,6 +170,7 @@ function renderTable(
         cellText(column, [row, ...(sub === null ? [] : [sub])]),
       );
       cell.dataset.node = column.node.id;
+      if (status !== null) setTip(cell, status.note);
       cell.dataset.row = row;
       if (sub !== null) cell.dataset.sub = sub;
       body.append(cell);
@@ -172,6 +187,9 @@ function renderBox(column: Column): HTMLElement {
   root.append(renderHead(column));
   const body = el("div", "box-value");
   body.dataset.node = column.node.id;
+  // The whole value area answers a hover, not only the short word in it.
+  const status = statusOf(column.node);
+  if (status !== null) setTip(body, status.note);
   body.append(...valueSpans(column));
   root.append(body);
   return root;
@@ -186,7 +204,7 @@ function renderBox(column: Column): HTMLElement {
 function renderFolded(column: Column, band: Band, hidden: Hidden): HTMLElement {
   const root = el("div", `col role-${column.role} folded`);
   root.dataset.node = column.node.id;
-  root.title = `${column.node.name} · click to expand`;
+  setTip(root, `${column.node.name} · click to expand`, "hint");
   if (column.rows.length === 0) {
     root.append(renderHead(column, true));
     return root;
@@ -396,7 +414,7 @@ export function placeHalo(container: HTMLElement): void {
   halo.style.top = `${top}px`;
   halo.style.width = `${right - left}px`;
   halo.style.height = `${bottom - top}px`;
-  halo.title = "outputs: nodes nothing in this file reads, pub nodes, and asserts";
+  setTip(halo, "outputs: nodes nothing in this file reads, pub nodes, and asserts", "hint");
   halo.append(el("span", "halo-label", "outputs"));
   container.prepend(halo);
 }

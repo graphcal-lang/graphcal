@@ -49,6 +49,7 @@
         "si_value": 2.0,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -92,6 +93,7 @@
         "si_value": 2.0,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -138,6 +140,7 @@
         "si_value": 2.0,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     }
   ]

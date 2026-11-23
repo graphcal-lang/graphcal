@@ -100,6 +100,15 @@ export type Element = z.infer<typeof elementSchema>;
 const cellSchema = z.object({ keys: z.array(z.string()), range: rangeSchema });
 export type Cell = z.infer<typeof cellSchema>;
 
+/** Why an evaluated model has no value for a node: an unfinished formula. */
+export const unavailableSchema = z.discriminatedUnion("kind", [
+  /** The node's own formula has a `todo` hole. */
+  z.object({ kind: z.literal("todo") }),
+  /** The node reads unfinished declarations, named as `graphcal eval` names them. */
+  z.object({ kind: z.literal("blocked"), unfinished: z.array(z.string()) }),
+]);
+export type Unavailable = z.infer<typeof unavailableSchema>;
+
 export const viewNodeSchema = z.object({
   /** Opaque, unique within the model and stable across evaluations. */
   id: z.string(),
@@ -137,6 +146,8 @@ export const viewNodeSchema = z.object({
     })
     .nullable(),
   value: valueSchema.nullable(),
+  /** Set when the value is missing because a formula is unfinished; a failure leaves it null. */
+  unavailable: unavailableSchema.nullable().optional(),
   /** Why parts of the value are shown in SI instead of their display unit. */
   presentation: z.array(z.string()),
 });

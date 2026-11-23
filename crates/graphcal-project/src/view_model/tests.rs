@@ -484,6 +484,7 @@ fn bare_node(id: &ViewNodeId, deps: &[&ViewNodeId]) -> ViewNode {
         doc: None,
         source: None,
         value: None,
+        unavailable: None,
         presentation: Vec::new(),
     }
 }
@@ -718,6 +719,42 @@ node last: Dimensionless = 2.0;
     assert_eq!(problems.len(), 1, "{problems:?}");
     assert!(problems[0].contains("SI value retained"), "{problems:?}");
     assert_eq!(node(&view, "first").presentation, Vec::<String>::new());
+}
+
+#[test]
+fn a_missing_value_names_the_unfinished_formula_behind_it() {
+    let view = evaluated_view_of_source(
+        "\
+const node k: Mass = todo<Mass> {};
+param p: Mass = @k;
+node missing: Length = todo<Length> {};
+node waiting: Length = 2.0 * @missing;
+node both: Dimensionless = @p / 1.0 kg + @waiting / 1.0 m;
+node known: Mass = 1.0 kg;
+node failed: Dimensionless = 1.0 / (@known / 1.0 kg - 1.0);
+assert pending = @missing > 0.0 m;
+",
+    );
+    let unavailable = |label| node(&view, label).unavailable.clone();
+    let blocked = |names: &[&str]| {
+        Some(ViewUnavailable::Blocked {
+            unfinished: names.iter().map(ToString::to_string).collect(),
+        })
+    };
+    assert_eq!(unavailable("k"), Some(ViewUnavailable::Todo));
+    assert_eq!(unavailable("missing"), Some(ViewUnavailable::Todo));
+    assert_eq!(unavailable("p"), blocked(&["k"]));
+    assert_eq!(unavailable("waiting"), blocked(&["missing"]));
+    // The holes themselves, not the blocked nodes in between.
+    assert_eq!(unavailable("both"), blocked(&["k", "missing"]));
+    assert_eq!(unavailable("pending"), blocked(&["missing"]));
+    // A value, and a value that failed to evaluate, carry no such reason.
+    assert_eq!(unavailable("known"), None);
+    assert_eq!(unavailable("failed"), None);
+    assert!(node(&view, "known").value.is_some());
+    for label in ["k", "p", "missing", "waiting", "both", "failed", "pending"] {
+        assert!(node(&view, label).value.is_none(), "{label}");
+    }
 }
 
 /// Every target of `entry` in a package `review` of `files` (under

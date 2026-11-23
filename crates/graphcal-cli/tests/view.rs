@@ -153,6 +153,12 @@ const CONTRACT_FIXTURES: &[ContractFixture] = &[
         instance_of: None,
     },
     ContractFixture {
+        name: "unfinished",
+        file: "crates/graphcal-project/tests/fixtures/view_model/unfinished.gcl",
+        project_root: None,
+        instance_of: None,
+    },
+    ContractFixture {
         name: "include_bindings",
         file: INCLUDE_BINDINGS,
         project_root: Some(INCLUDE_BINDINGS_ROOT),

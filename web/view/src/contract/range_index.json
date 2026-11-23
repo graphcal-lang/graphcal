@@ -69,6 +69,7 @@
         "si_value": 0.5,
         "unit": "Hz"
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -110,6 +111,7 @@
         "si_value": 1.0,
         "unit": null
       },
+      "unavailable": null,
       "presentation": []
     },
     {
@@ -186,6 +188,7 @@
           }
         ]
       },
+      "unavailable": null,
       "presentation": []
     }
   ]

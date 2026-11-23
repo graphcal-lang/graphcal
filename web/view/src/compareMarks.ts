@@ -2,6 +2,7 @@
 // columns, tint on cells, `was` under boxes, green wires between changed nodes.
 import { previousValue, type ModelDiff } from "./compare.ts";
 import type { ViewModel } from "./model.ts";
+import { setTip } from "./tip.ts";
 import { displayOf } from "./values.ts";
 
 /**
@@ -43,7 +44,7 @@ export function markChanges(viewEl: HTMLElement, model: ViewModel, diff: ModelDi
       const was = previousValue(change, node.value, labels);
       if (was === undefined) continue;
       cell.classList.add("diff-cell");
-      cell.title = `was ${displayOf(was)}`;
+      setTip(cell, `was ${displayOf(was)}`);
     }
     const box = col.querySelector<HTMLElement>(".box-value");
     const was = previousValue(change, node.value, []);

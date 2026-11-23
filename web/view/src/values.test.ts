@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vite-plus/test";
-import { shortMagnitude } from "./values.ts";
+import type { Value } from "./model.ts";
+import { displayAt, shortMagnitude, statusOf } from "./values.ts";
 
 describe("shortMagnitude", () => {
   test.each([
@@ -31,5 +32,42 @@ describe("shortMagnitude", () => {
         expect(Number(shown), shown).not.toBe(0);
       }
     }
+  });
+});
+
+describe("statusOf", () => {
+  const mass: Value = {
+    kind: "quantity",
+    display: "2 kg",
+    magnitude: "2",
+    si_value: 2,
+    unit: "kg",
+  };
+
+  test("a todo hole", () => {
+    const node = { value: null, unavailable: { kind: "todo" as const } };
+    expect(statusOf(node)).toEqual({
+      kind: "todo",
+      label: "TODO",
+      note: "TODO: this formula is unfinished",
+    });
+    expect(displayAt(node, [])).toBe("TODO");
+  });
+
+  test("a blocked node names every unfinished formula it waits on", () => {
+    const node = {
+      value: null,
+      unavailable: { kind: "blocked" as const, unfinished: ["cell_voltage", "eps::loss"] },
+    };
+    expect(statusOf(node)?.note).toBe("BLOCKED: waits on the unfinished cell_voltage, eps::loss");
+    expect(displayAt(node, ["Safe"])).toBe("BLOCKED");
+  });
+
+  test("a value, a failure, and a model from an older engine have no status", () => {
+    expect(statusOf({ value: mass, unavailable: null })).toBeNull();
+    expect(statusOf({ value: null, unavailable: null })).toBeNull();
+    expect(statusOf({ value: null })).toBeNull();
+    expect(displayAt({ value: mass }, [])).toBe("2 kg");
+    expect(displayAt({ value: null }, [])).toBe("—");
   });
 });
