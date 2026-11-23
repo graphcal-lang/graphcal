@@ -33,7 +33,7 @@ pub fn render_html(figures: &[RenderedFigure]) -> Result<String, serde_json::Err
     for (i, fig) in figures.iter().enumerate() {
         let div_id = format!("graphcal-plot-{i}");
         let spec_json = escape_json_for_script(&serde_json::to_string(&fig.spec)?);
-        let escaped_name = html_escape(&fig.name);
+        let escaped_name = html_escape(&fig.name.to_string());
         let _ = write!(
             divs,
             r#"<div style="margin-bottom: 2em;">
@@ -76,7 +76,7 @@ pub fn render_json(figures: &[RenderedFigure]) -> Result<String, serde_json::Err
         .iter()
         .map(|fig| {
             json!({
-                "name": fig.name,
+                "name": fig.name.to_string(),
                 "spec": fig.spec,
             })
         })
@@ -86,13 +86,16 @@ pub fn render_json(figures: &[RenderedFigure]) -> Result<String, serde_json::Err
 
 #[cfg(test)]
 mod tests {
+    use graphcal_compiler::syntax::decl_name::DeclName;
+    use graphcal_compiler::syntax::module_name::ScopedName;
+
     use super::*;
 
     #[test]
     fn script_close_sequence_in_title_is_escaped() {
         let rendered = vec![RenderedFigure {
             doc: None,
-            name: "legitimate title".to_string(),
+            name: ScopedName::local(DeclName::expect_valid("legitimate_title")),
             spec: json!({"title": "</script><script>alert(1)</script>"}),
         }];
         let html = render_html(&rendered).unwrap();
@@ -118,7 +121,7 @@ mod tests {
     fn inline_page_embeds_vega_and_references_no_cdn() {
         let rendered = vec![RenderedFigure {
             doc: None,
-            name: "p".to_string(),
+            name: ScopedName::local(DeclName::expect_valid("p")),
             spec: json!({"mark": "line"}),
         }];
         let html = render_html(&rendered).unwrap();
