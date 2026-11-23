@@ -6621,6 +6621,109 @@ fn eval_plot_html_file_with_only_hidden_plots_fails_without_artifact() {
     assert!(!out_path.exists());
 }
 
+/// Run `graphcal eval FIXTURE --plot <dir>/out.svg EXTRA...`, returning the
+/// process output and the SVG path.
+fn eval_plot_svg(
+    fixture_name: &str,
+    extra: &[&str],
+) -> (std::process::Output, PathBuf, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let out_path = dir.path().join("out.svg");
+    let output = graphcal_bin()
+        .args(["eval", &fixture(fixture_name), "--plot"])
+        .arg(&out_path)
+        .args(extra)
+        .output()
+        .expect("failed to run graphcal");
+    (output, out_path, dir)
+}
+
+#[test]
+fn eval_plot_svg_writes_the_only_displayed_figure() {
+    // figure_hidden.gcl displays only the `comparison` figure.
+    let (output, out_path, _dir) = eval_plot_svg("valid/figure_hidden.gcl", &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    assert!(
+        stderr.contains("wrote figure `comparison`"),
+        "stderr: {stderr}"
+    );
+    let svg = std::fs::read_to_string(&out_path).expect("expected SVG file to be written");
+    assert!(
+        svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""),
+        "{svg}"
+    );
+    assert!(
+        !svg.contains("<script"),
+        "SVG must not need JavaScript: {svg}"
+    );
+}
+
+#[test]
+fn eval_plot_svg_with_several_figures_requires_a_figure_name() {
+    let (output, out_path, _dir) = eval_plot_svg("valid/figure_basic.gcl", &[]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "3 figures are displayed; choose one with `--figure <NAME>` \
+             (available: `curve_a`, `curve_b`, `comparison`)"
+        ),
+        "stderr: {stderr}"
+    );
+    assert!(!out_path.exists());
+}
+
+#[test]
+fn eval_plot_svg_writes_the_named_figure() {
+    let (output, out_path, _dir) =
+        eval_plot_svg("valid/figure_basic.gcl", &["--figure", "curve_b"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "stderr: {stderr}");
+    let svg = std::fs::read_to_string(&out_path).expect("expected SVG file to be written");
+    assert!(
+        svg.contains("Values Plus One"),
+        "expected curve_b's title: {svg}"
+    );
+    assert!(
+        !svg.contains("Values Squared"),
+        "expected only curve_b: {svg}"
+    );
+}
+
+#[test]
+fn eval_plot_svg_rejects_an_unknown_figure_name() {
+    let (output, out_path, _dir) = eval_plot_svg("valid/figure_basic.gcl", &["--figure", "nope"]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no displayed figure named `nope`"),
+        "stderr: {stderr}"
+    );
+    assert!(!out_path.exists());
+}
+
+#[test]
+fn eval_plot_figure_is_rejected_for_multi_figure_outputs() {
+    let output = graphcal_bin()
+        .args([
+            "eval",
+            &fixture("valid/figure_basic.gcl"),
+            "--plot",
+            "json",
+            "--figure",
+            "comparison",
+        ])
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("`--figure` applies only to `--plot FILE.svg`"),
+        "stderr: {stderr}"
+    );
+}
+
 #[test]
 fn eval_plot_rejects_non_html_path() {
     // Anything that is not browser/json/*.html is a CLI argument error (#848)
@@ -6637,7 +6740,7 @@ fn eval_plot_rejects_non_html_path() {
     assert!(!output.status.success(), "expected argument parse failure");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("expected `browser`, `json`, or a path ending in `.html`"),
+        stderr.contains("expected `browser`, `json`, or a path ending in `.html` or `.svg`"),
         "expected helpful --plot error message, got: {stderr}"
     );
 }
