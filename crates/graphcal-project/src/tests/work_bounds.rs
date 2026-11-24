@@ -394,3 +394,24 @@ fn eval_rocket_milestone() {
         "delta_v = {delta_v}, expected = {expected_delta_v}"
     );
 }
+
+/// A slice of a call output that forms a declaration's value runs the call
+/// once, also when the slice keeps cells (#2405).
+#[test]
+fn a_slice_of_a_call_output_runs_the_call_once() {
+    for grid in [
+        "for i: Fin(2), j: Fin(2) { 1.0 }",
+        "for i: Fin(2), j: Fin(2) { if to_int(j) == 1 { todo<Dimensionless> {} } else { 1.0 } }",
+    ] {
+        let source = format!(
+            "dag f {{ pub node grid: Dimensionless[Fin(2), Fin(2)] = {grid}; }}\n\
+             node row: Dimensionless[Fin(2)] = @f()::grid[0];\n"
+        );
+        let project = crate::loader::LoadedProject::from_source(&source, "slice.gcl").unwrap();
+        let prepared = ProjectCompiler::new(&project).prepare().unwrap();
+        let row = prepared.binding_builder().finish().unwrap();
+        let (_, counts) = graphcal_eval::pipeline_metrics::measure(|| prepared.evaluate(&row));
+        // The root frame and one frame of `f`.
+        assert_eq!(counts.frame_executions, 2, "{grid}: {counts:?}");
+    }
+}

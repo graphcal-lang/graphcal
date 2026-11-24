@@ -273,6 +273,38 @@ impl PartialValue {
         &self.cells
     }
 
+    /// Visit every cell with a value, with its entry keys, outermost first,
+    /// in axis order, until `visit` returns an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error of `visit`.
+    pub fn try_for_each_value<E>(
+        &self,
+        visit: &mut impl FnMut(&[IndexEntryKey], &EvaluatedRuntimeValue) -> Result<(), E>,
+    ) -> Result<(), E> {
+        fn walk<E>(
+            cell: &Cell,
+            path: &mut Vec<IndexEntryKey>,
+            visit: &mut impl FnMut(&[IndexEntryKey], &EvaluatedRuntimeValue) -> Result<(), E>,
+        ) -> Result<(), E> {
+            match cell {
+                Cell::Value(value) => visit(path, value),
+                Cell::Axis(cells) => cells.iter().try_for_each(|(key, cell)| {
+                    path.push(key.into_owned());
+                    let walked = walk(cell, path, visit);
+                    path.pop();
+                    walked
+                }),
+                Cell::Unavailable(_) | Cell::Failed(_) => Ok(()),
+            }
+        }
+        self.cells.iter().try_for_each(|(key, cell)| {
+            let mut path = vec![key.into_owned()];
+            walk(cell, &mut path, visit)
+        })
+    }
+
     /// The first failed cell's error, in axis order.
     #[must_use]
     pub fn first_failure(&self) -> Option<&SemanticError> {

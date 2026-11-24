@@ -113,6 +113,29 @@ pub(super) fn resolve_domain_constraints_for_dag(
             )
             .into());
         }
+        // A constant with cells without a value: every cell that has one is
+        // checked, as a complete constant's value is (#2405).
+        if is_const && let Some(cells) = consts.cells(&resolved_key) {
+            cells.try_for_each_value(&mut |path, cell| {
+                let value = cell.value();
+                crate::domain_check::check_domain_constraint(&value, &resolved_constraint).map_err(
+                    |failure| {
+                        let failure = failure.map_error(|violation| {
+                            path.iter()
+                                .rev()
+                                .fold(violation, |violation, key| violation.at_entry(key.clone()))
+                        });
+                        Outcome::from(domain_check_error(
+                            failure,
+                            DomainSubject::Declaration(name.clone()),
+                            &value,
+                            src,
+                            decl_span,
+                        ))
+                    },
+                )
+            })?;
+        }
         constraints.insert(resolved_key, resolved_constraint);
     }
     Ok(constraints)

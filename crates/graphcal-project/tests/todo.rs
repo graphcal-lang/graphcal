@@ -1192,5 +1192,100 @@ node middle: Int = @twice(input: @qty)::out[1];
         Err(NodeUnavailable::Blocked { .. })
     ));
     // The hole is the caller's own: no invoked DAG is unfinished.
-    assert!(evaluation.unfinished_calls.is_empty());
+    assert_eq!(evaluation.unfinished_calls, Vec::new());
+}
+
+#[test]
+fn an_unfold_keeps_the_steps_before_the_first_one_without_a_value() {
+    let evaluation = compile_and_eval(
+        r"
+index Step = range(0.0 s, 4.0 s, step: 1.0 s);
+param zero: Dimensionless = 0.0;
+node state: Dimensionless[Step] = unfold(Step, 1.0, |x, prev_t, t| if coord(t) < 1.5 s { x * 2.0 } else { todo<Dimensionless> { x } });
+node total: Dimensionless[Step] = scan(@state, 0.0, |acc, v| acc + v);
+node ratio: Dimensionless[Step] = scan(for t: Step { 1.0 }, 0.0, |acc, v| if acc < 1.5 { acc + v } else { acc / @zero });
+",
+    )
+    .unwrap();
+    let state = cells(&evaluation, "state");
+    let shown = state
+        .entries
+        .values()
+        .map(|cell| match cell {
+            graphcal_eval::eval::ValueCell::Value(value) => {
+                value.si_value().unwrap().get().to_string()
+            }
+            graphcal_eval::eval::ValueCell::Unavailable(reason) => reason.status_label().to_owned(),
+            graphcal_eval::eval::ValueCell::Cells(_) => panic!("nested cells"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(shown, ["1", "2", "TODO", "TODO", "TODO"]);
+    // A scan over a value with missing cells reads it as a whole.
+    assert!(matches!(
+        result(&evaluation, "total"),
+        Err(NodeUnavailable::Blocked { .. })
+    ));
+    // The steps before the failing one keep their values; the failing step
+    // and every later one, which reads it, have none.
+    let ratio = cells(&evaluation, "ratio")
+        .entries
+        .values()
+        .map(|cell| match cell {
+            graphcal_eval::eval::ValueCell::Value(value) => {
+                value.si_value().unwrap().get().to_string()
+            }
+            graphcal_eval::eval::ValueCell::Unavailable(reason) => reason.status_label().to_owned(),
+            graphcal_eval::eval::ValueCell::Cells(_) => panic!("nested cells"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ratio, ["1", "2", "ERROR", "ERROR", "ERROR"]);
+    assert!(evaluation.has_errors());
+}
+
+#[test]
+fn references_arguments_and_call_slices_keep_their_cells() {
+    let evaluation = compile_and_eval(
+        r"
+index Row = { A, B };
+index Col = { X, Y };
+const node limits: Int[Col] = table[Col] { X: 1; Y: todo<Int> {}; };
+node alias: Int[Col] = @limits;
+node grid: Int[Fin(2), Fin(2)] = for i: Fin(2), j: Fin(2) { if to_int(i) == 0 && to_int(j) == 1 { todo<Int> {} } else { 1 } };
+dag pass {
+    param unused: Int;
+    param used: Int;
+    param m: Int[Fin(2), Fin(2)];
+    pub node out: Int = @used * 2;
+    pub node same: Int[Fin(2), Fin(2)] = @m;
+}
+node unread_hole: Int = @pass(unused: todo<Int> {}, used: 3, m: @grid)::out;
+node row: Int[Fin(2)] = @pass(unused: 1, used: 1, m: @grid)::same[0];
+",
+    )
+    .unwrap();
+    assert_eq!(int_of(cell(cells(&evaluation, "alias"), "X")), 1);
+    assert!(
+        result(&evaluation, "unread_hole").is_ok(),
+        "{:?}",
+        result(&evaluation, "unread_hole")
+    );
+    let row = cells(&evaluation, "row");
+    assert_eq!(int_of(cell(row, "#0")), 1);
+    assert!(matches!(
+        cell(row, "#1"),
+        graphcal_eval::eval::ValueCell::Unavailable(NodeUnavailable::Blocked { .. })
+    ));
+}
+
+#[test]
+fn the_available_cells_of_a_constant_are_checked_against_its_domain() {
+    let code = rejection_code(
+        "index Part = { Wheel, Bracket }; \
+         const node c: Int(min: 0)[Part] = table[Part] { Wheel: -1; Bracket: todo<Int> {}; };",
+    );
+    assert!(code.starts_with("graphcal::"), "{code}");
+    assert!(check(
+        "index Part = { Wheel, Bracket }; \
+         const node c: Int(min: 0)[Part] = table[Part] { Wheel: 1; Bracket: todo<Int> {}; };"
+    ));
 }

@@ -176,7 +176,7 @@ fn eval_cells(
     let presented = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| {
         eval_texpr_evaluated(node, values, presentation_values, locals, session)
     };
-    let call = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| match node.kind() {
+    let stepped = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| match node.kind() {
         NodeKind::DagCall { call, args, output } => eval_dag_call_cells(
             call,
             args,
@@ -186,6 +186,29 @@ fn eval_cells(
             locals,
             session,
         ),
+        NodeKind::Scan(scan) => eval_scan_cells(scan, values, presentation_values, locals, session)
+            .map(crate::cells::Cell::Axis),
+        NodeKind::Unfold {
+            recurrence,
+            init,
+            body,
+            axis,
+        } => eval_unfold_cells(
+            ScopedUnfold {
+                recurrence,
+                init,
+                body,
+                axis,
+            },
+            values,
+            presentation_values,
+            locals,
+            session,
+        )
+        .map(crate::cells::Cell::Axis),
+        NodeKind::Index { .. } => {
+            eval_call_slice_cells(node, values, presentation_values, locals, session)
+        }
         _ => presented(node, locals).map(crate::cells::Cell::Value),
     };
     super::result_cells::eval_result(
@@ -194,7 +217,7 @@ fn eval_cells(
         &super::result_cells::Whole {
             value: &value,
             presented: &presented,
-            call: &call,
+            stepped: &stepped,
         },
         session,
     )
@@ -1072,35 +1095,15 @@ fn eval_index_access(
                 local_values,
                 ctx,
             )?;
-            match &call_cells {
-                crate::cells::Cell::Value(value) => value.as_ref(),
-                crate::cells::Cell::Axis(cells) => {
-                    match read_cells(output, cells, args, &operands, local_values, ctx)? {
-                        CellRead::Value {
-                            value,
-                            consumed: read,
-                        } => {
-                            consumed = read;
-                            value.as_ref()
-                        }
-                        CellRead::Cells(cells) => {
-                            return crate::cells::Cell::Axis(cells.clone())
-                                .complete()
-                                .map_err(|_| unavailable_cells(output, cells, ctx).into());
-                        }
-                    }
+            match call_output_base(&call_cells, output, args, &operands, local_values, ctx)? {
+                CallBase::Read {
+                    base,
+                    consumed: read,
+                } => {
+                    consumed = read;
+                    base
                 }
-                crate::cells::Cell::Unavailable(reason) => {
-                    return Err(SemanticError::located(
-                        ctx.src,
-                        output.span,
-                        EvaluationError::Unavailable {
-                            reason: reason.clone(),
-                        },
-                    )
-                    .into());
-                }
-                crate::cells::Cell::Failed(error) => return Err(error.clone().into()),
+                CallBase::Done(value) => return Ok(value),
             }
         }
         NodeKind::GraphRef(_) if let Some((target, slots)) = member => {
@@ -1123,9 +1126,23 @@ fn eval_index_access(
             evaluated.as_ref()
         }
     };
+    select_entries(base, args, consumed, &operands, local_values, span, ctx)
+}
+
+/// Select inside `base` the entries the index arguments after the first
+/// `consumed` name.
+fn select_entries<'t>(
+    base: PresentedRef<'_, PendingLeaf>,
+    args: Scoped<'t, [TIndexArg]>,
+    consumed: usize,
+    operands: &super::operations::Operands<'_, 't>,
+    local_values: &HirLocalValueMap<'_>,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let mut current = base;
     for arg in args.iter().skip(consumed) {
-        let selector = entry_selector(arg.view(), &operands, local_values, ctx)?;
+        let selector = entry_selector(arg.view(), operands, local_values, ctx)?;
         // The checker proved the selector names an entry of the value's
         // axis, so a value without that entry contradicts its checked type.
         current = read_shape(
@@ -1142,6 +1159,115 @@ fn eval_index_access(
         )?;
     }
     Ok(current.to_owned_with(clone_index_access_result))
+}
+
+/// Evaluate `@f(…)::out[…]` in a result position: the call once, then the
+/// cells or the entry the index arguments name. A slice of cells some of
+/// which have no value keeps its cells.
+fn eval_call_slice_cells(
+    expr: ScopedNode<'_>,
+    values: &RuntimeValueMap,
+    presentation_values: Option<&PendingPresentedMap>,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalSession<'_>,
+) -> Result<crate::cells::Cell, Outcome<SemanticError>> {
+    let NodeKind::Index { expr: inner, args } = expr.kind() else {
+        return eval_texpr_evaluated(expr, values, presentation_values, local_values, ctx)
+            .map(crate::cells::Cell::Value);
+    };
+    let NodeKind::DagCall {
+        call,
+        args: call_args,
+        output,
+    } = inner.kind()
+    else {
+        return eval_texpr_evaluated(expr, values, presentation_values, local_values, ctx)
+            .map(crate::cells::Cell::Value);
+    };
+    let call_cells = eval_dag_call_cells(
+        call,
+        call_args,
+        output,
+        values,
+        presentation_values,
+        local_values,
+        ctx,
+    )?;
+    let evaluate = |node| eval_value(node, values, local_values, ctx);
+    let operands = super::operations::Operands::new(&evaluate, ctx);
+    let (base, consumed) = match &call_cells {
+        crate::cells::Cell::Axis(cells) => {
+            match read_cells(output, cells, args, &operands, local_values, ctx)? {
+                CellRead::Cells(cells) => return Ok(crate::cells::Cell::Axis(cells.clone())),
+                CellRead::Value { value, consumed } => (value.as_ref(), consumed),
+            }
+        }
+        other => match call_output_base(other, output, args, &operands, local_values, ctx)? {
+            CallBase::Read { base, consumed } => (base, consumed),
+            CallBase::Done(value) => return Ok(crate::cells::Cell::Value(value)),
+        },
+    };
+    select_entries(
+        base,
+        args,
+        consumed,
+        &operands,
+        local_values,
+        expr.span(),
+        ctx,
+    )
+    .map(crate::cells::Cell::Value)
+}
+
+/// Where an element read of a call output starts.
+enum CallBase<'c> {
+    /// The value the remaining index arguments select inside, after
+    /// `consumed` arguments selected the cell holding it.
+    Read {
+        base: PresentedRef<'c, PendingLeaf>,
+        consumed: usize,
+    },
+    /// The whole read: a slice of cells that all have values.
+    Done(EvaluatedRuntimeValue),
+}
+
+/// Select, in `cells`, the cells of the call output `output`, the cell that
+/// `args` name; a cell without a value makes the read unavailable.
+fn call_output_base<'c, 't>(
+    cells: &'c crate::cells::Cell,
+    output: &Spanned<ResolvedDeclName>,
+    args: Scoped<'t, [TIndexArg]>,
+    operands: &super::operations::Operands<'_, 't>,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalSession<'_>,
+) -> Result<CallBase<'c>, Outcome<SemanticError>> {
+    match cells {
+        crate::cells::Cell::Value(value) => Ok(CallBase::Read {
+            base: value.as_ref(),
+            consumed: 0,
+        }),
+        crate::cells::Cell::Axis(cells) => {
+            match read_cells(output, cells, args, operands, local_values, ctx)? {
+                CellRead::Value { value, consumed } => Ok(CallBase::Read {
+                    base: value.as_ref(),
+                    consumed,
+                }),
+                CellRead::Cells(cells) => crate::cells::Cell::Axis(cells.clone())
+                    .complete()
+                    .map(CallBase::Done)
+                    .map_err(|_| unavailable_cells(output, cells, ctx).into()),
+            }
+        }
+        crate::cells::Cell::Unavailable(reason) => Err(SemanticError::located(
+            ctx.src,
+            output.span,
+            EvaluationError::Unavailable {
+                reason: reason.clone(),
+            },
+        )
+        .into()),
+        crate::cells::Cell::Failed(error) => Err(error.clone().into()),
+    }
 }
 
 /// The element of the recurrence group member `target` that `@target[k, …]`
@@ -1191,6 +1317,24 @@ fn recurrence_read<'s>(
 }
 
 fn eval_scan(
+    scan: ScopedScan<'_>,
+    values: &RuntimeValueMap,
+    presentation_values: Option<&PendingPresentedMap>,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    let body_span = scan.body.span();
+    whole_steps(
+        eval_scan_cells(scan, values, presentation_values, local_values, ctx)?,
+        body_span,
+        ctx,
+    )
+}
+
+/// Evaluate a `scan` step by step (#2405): a step whose evaluation has no
+/// value leaves the earlier steps intact, and every later step, which reads
+/// the accumulated value, has none for the same reason.
+fn eval_scan_cells(
     ScopedScan {
         source,
         init,
@@ -1202,7 +1346,7 @@ fn eval_scan(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+) -> Result<IndexedValue<crate::cells::Cell>, Outcome<SemanticError>> {
     let source_entries = read_shape(
         eval_texpr_evaluated(source, values, presentation_values, local_values, ctx)?,
         "an indexed value",
@@ -1210,23 +1354,20 @@ fn eval_scan(
         ctx,
         EvaluatedRuntimeValue::into_entries,
     )?;
-    let evaluated_init =
-        eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
-    let initial = evaluated_init.clone();
-    let mut accumulated = evaluated_init;
+    let initial = eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
+    let mut accumulated = Ok(initial.clone());
     let mut scan_locals = local_values.child(Vec::new());
-    let result_entries = source_entries.try_map(|_, item| {
-        scan_locals.bind(acc.id, accumulated.clone());
+    source_entries.try_map(|_, item| {
+        let previous = match &accumulated {
+            Ok(previous) => previous.clone(),
+            Err(missing) => return Ok(later_step(missing)),
+        };
+        scan_locals.bind(acc.id, previous);
         scan_locals.bind(val.id, item);
-        accumulated = with_initial_presentation(
-            eval_texpr_evaluated(body, values, presentation_values, &scan_locals, ctx)?,
-            &initial,
-            body.span(),
-            ctx,
-        )?;
-        Ok::<_, Outcome<SemanticError>>(accumulated.clone())
-    })?;
-    Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
+        let step = eval_texpr_evaluated(body, values, presentation_values, &scan_locals, ctx)
+            .and_then(|value| with_initial_presentation(value, &initial, body.span(), ctx));
+        step_cell(step, &mut accumulated)
+    })
 }
 
 /// An unfold node with its operands and the axis it unfolds along.
@@ -1238,6 +1379,22 @@ struct ScopedUnfold<'t> {
 }
 
 fn eval_unfold(
+    unfold: ScopedUnfold<'_>,
+    values: &RuntimeValueMap,
+    presentation_values: Option<&PendingPresentedMap>,
+    local_values: &HirLocalValueMap<'_>,
+    ctx: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    let body_span = unfold.body.span();
+    whole_steps(
+        eval_unfold_cells(unfold, values, presentation_values, local_values, ctx)?,
+        body_span,
+        ctx,
+    )
+}
+
+/// Evaluate an `unfold` step by step (#2405), as [`eval_scan_cells`] does.
+fn eval_unfold_cells(
     ScopedUnfold {
         recurrence,
         init,
@@ -1248,22 +1405,26 @@ fn eval_unfold(
     presentation_values: Option<&PendingPresentedMap>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+) -> Result<IndexedValue<crate::cells::Cell>, Outcome<SemanticError>> {
     require_coordinates(index_axis, recurrence.axis.span, ctx)?;
     let evaluated_init =
         eval_texpr_evaluated(init, values, presentation_values, local_values, ctx)?;
-    let mut previous_state = evaluated_init.clone();
+    let mut previous_state = Ok(evaluated_init.clone());
 
     let mut unfold_locals = local_values.child(Vec::new());
-    let result_entries = IndexedValue::try_from_axis(index_axis.clone(), |key| {
+    IndexedValue::try_from_axis(index_axis.clone(), |key| {
         let Some(previous_key) = key
             .position()
             .checked_sub(1)
             .and_then(|previous| KeyValue::at(index_axis.clone(), previous))
         else {
-            return Ok(evaluated_init.clone());
+            return Ok(crate::cells::Cell::Value(evaluated_init.clone()));
         };
-        unfold_locals.bind(recurrence.previous_state.id, previous_state.clone());
+        let previous = match &previous_state {
+            Ok(previous) => previous.clone(),
+            Err(missing) => return Ok(later_step(missing)),
+        };
+        unfold_locals.bind(recurrence.previous_state.id, previous);
         unfold_locals.bind(
             recurrence.previous_index.id,
             EvaluatedRuntimeValue::plain(RuntimeValue::Key(previous_key)),
@@ -1272,15 +1433,79 @@ fn eval_unfold(
             recurrence.current_index.id,
             EvaluatedRuntimeValue::plain(RuntimeValue::Key(key.clone())),
         );
-        previous_state = with_initial_presentation(
-            eval_texpr_evaluated(body, values, presentation_values, &unfold_locals, ctx)?,
-            &evaluated_init,
-            body.span(),
-            ctx,
-        )?;
-        Ok::<_, Outcome<SemanticError>>(previous_state.clone())
-    })?;
-    Ok(EvaluatedRuntimeValue::from_indexed(result_entries))
+        let step = eval_texpr_evaluated(body, values, presentation_values, &unfold_locals, ctx)
+            .and_then(|value| with_initial_presentation(value, &evaluated_init, body.span(), ctx));
+        step_cell(step, &mut previous_state)
+    })
+}
+
+/// The cell of one step, carrying its value, or why it has none, to the
+/// next step. Cancellation and violated invariants stop the evaluation.
+fn step_cell(
+    step: Result<EvaluatedRuntimeValue, Outcome<SemanticError>>,
+    carried: &mut Result<
+        EvaluatedRuntimeValue,
+        graphcal_compiler::node_unavailable::RuntimeUnavailable,
+    >,
+) -> Result<crate::cells::Cell, Outcome<SemanticError>> {
+    match step {
+        Ok(value) => {
+            *carried = Ok(value.clone());
+            Ok(crate::cells::Cell::Value(value))
+        }
+        Err(Outcome::Failed(error)) if !matches!(error, SemanticError::Internal(_)) => {
+            let cell = crate::cells::Cell::of_error(error);
+            if let Some(reason) = cell.reason() {
+                *carried = Err(reason);
+            }
+            Ok(cell)
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// A step after one without a value: it reads that step, so it has none
+/// either, for the same reason.
+fn later_step(
+    missing: &graphcal_compiler::node_unavailable::RuntimeUnavailable,
+) -> crate::cells::Cell {
+    crate::cells::Cell::Unavailable(missing.clone())
+}
+
+/// The steps of a `scan` or `unfold` read as a whole: their value, or the
+/// first step's reason for having none.
+fn whole_steps(
+    steps: IndexedValue<crate::cells::Cell>,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+    match crate::cells::Cell::Axis(steps).collect() {
+        crate::cells::Collected::Complete(value) => Ok(value),
+        crate::cells::Collected::Partial(steps) => {
+            let error = steps.first_failure().cloned().unwrap_or_else(|| {
+                crate::cells::Cell::Axis(steps.cells().clone())
+                    .reason()
+                    .map_or_else(
+                        || ctx.internal_error("steps without a value have no reason", span),
+                        |reason| {
+                            SemanticError::located(
+                                ctx.src,
+                                span,
+                                EvaluationError::Unavailable { reason },
+                            )
+                        },
+                    )
+            });
+            Err(error.into())
+        }
+        crate::cells::Collected::Unavailable(reason) => {
+            Err(
+                SemanticError::located(ctx.src, span, EvaluationError::Unavailable { reason })
+                    .into(),
+            )
+        }
+        crate::cells::Collected::Failed(error) => Err(error.into()),
+    }
 }
 
 /// Evaluate the arm matching the constructor of the union value
@@ -1375,13 +1600,15 @@ fn eval_dag_call_cells(
     );
     for scoped_binding in args.iter() {
         let binding = scoped_binding.get();
-        let cells = eval_cells(
+        // An argument without a value is bound as such: only what reads it
+        // in the callee has no value.
+        let cells = super::result_cells::cell(eval_cells(
             scoped_binding.map(|binding| &binding.value),
             caller_values,
             caller_presentations,
             caller_locals,
             ctx,
-        )?;
+        ))?;
         frame.bind_argument_cells(&binding.target, cells, ctx.src, binding.value.span())?;
     }
 
