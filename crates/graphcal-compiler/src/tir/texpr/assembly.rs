@@ -265,7 +265,6 @@ impl PendingNodes {
                     .iter()
                     .map(|entry| self.take_value(expr, entry))
                     .collect::<Result<_, _>>()?,
-                executable: (),
             },
             ExprKind::BinOp { op, lhs, rhs } => binary(
                 *op,

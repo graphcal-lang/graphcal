@@ -118,6 +118,9 @@ pub enum NodeKind<'t> {
     },
     /// A qualified label, as the key it denotes.
     Variant(&'t KeyValue),
+    /// A `todo<T> { … }` hole: reaching it leaves the evaluation unfinished.
+    /// Its interface entries are dependencies, never evaluated.
+    TodoHole,
     DagCall {
         /// The call target, named by its slot in the scope's body.
         call: ScopedCall<'t>,
@@ -273,11 +276,7 @@ impl<'t> Scoped<'t, TExpr> {
                 target.span,
             )),
             TExprKind::Local(local) => NodeKind::Local(local),
-            #[expect(
-                clippy::uninhabited_references,
-                reason = "ExecutableHole is uninhabited: no concrete tree contains a hole"
-            )]
-            TExprKind::TodoHole { executable, .. } => match *executable {},
+            TExprKind::TodoHole { .. } => NodeKind::TodoHole,
             TExprKind::DatetimeLiteral(literal) => NodeKind::DatetimeLiteral(literal),
             TExprKind::Aggregate { function, arg } => NodeKind::Aggregate {
                 function: *function,

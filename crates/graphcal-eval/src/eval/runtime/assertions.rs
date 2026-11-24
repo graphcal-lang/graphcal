@@ -48,7 +48,7 @@ pub(super) fn evaluate_assertions(
             let span = entry.get().span;
             let body = entry.map(|entry| &*entry.body);
             let entry_ctx = ctx.for_decl(&owner);
-            let assert_result = match assert_dependency_failure(body, errors, names, &entry_ctx)? {
+            let assert_result = match assert_dependency_failure(body, errors, names) {
                 Some(result) => result,
                 None => {
                     evaluate_assert_with_expected_fail(body, unit.expected_fail(), &mut |expr| {
@@ -79,7 +79,7 @@ pub(super) fn evaluate_assertions(
         let body = entry.map(|entry| &*entry.body);
         // A dependency failure names its declarations as the root does,
         // exactly as for the root's own assertions.
-        let result = match assert_dependency_failure(body, errors, names, &assertion_ctx)? {
+        let result = match assert_dependency_failure(body, errors, names) {
             Some(result) => result,
             None => evaluate_assert_with_expected_fail(body, expected, &mut |expr| {
                 eval_root(&assertion_ctx.executable(expr)?, values, &assertion_ctx)
@@ -223,8 +223,7 @@ fn assert_dependency_failure(
     body: Scoped<'_, graphcal_compiler::hir::expr::AssertBody>,
     errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
     names: &RootNames<'_>,
-    ctx: &EvalSession<'_>,
-) -> Result<Option<AssertResult<ResolvedDeclName>>, Outcome<SemanticError>> {
+) -> Option<AssertResult<ResolvedDeclName>> {
     let body_exprs = match body.operands() {
         AssertionOperands::Condition(expr) => vec![expr],
         AssertionOperands::Tolerance {
@@ -233,17 +232,6 @@ fn assert_dependency_failure(
             tolerance,
         } => vec![actual, expected, tolerance],
     };
-    Ok(
-        match ctx.unavailable_dependencies(body_exprs.iter().copied()) {
-            Ok(Some(reason)) if reason.is_incomplete() => Some(AssertResult::Blocked { reason }),
-            Err(error @ (Outcome::Cancelled | Outcome::Failed(SemanticError::Internal(_)))) => {
-                return Err(error);
-            }
-            Err(Outcome::Failed(error)) => Some(AssertResult::Error {
-                message: error.to_string(),
-            }),
-            Ok(_) => dependency_failure_message(body_exprs, errors, names)
-                .map(|message| AssertResult::Error { message }),
-        },
-    )
+    dependency_failure_message(body_exprs, errors, names)
+        .map(|message| AssertResult::Error { message })
 }

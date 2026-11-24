@@ -93,9 +93,9 @@ node delta_v: Velocity = @v_exhaust * ln(@mass_ratio);
 
 A hole has the written type `T` and can replace a whole formula or any part of one, such as `@mass * todo<Acceleration> { @g0 }`; the rest of the formula is still type-checked. Holes are allowed in `node` and `const node` formulas (see [Constants](#constants)), and a declaration whose formula contains a hole is unfinished. The braces list **all possible direct dependencies** of the missing part; transitive dependencies need not be listed. An entry is a reference `@y`, an element `@y[t]` keyed by local variables in scope, or a local variable such as `s`, which documents intent without being a graph dependency. Element entries let an unfinished recurrence state which step it reads. An explicitly empty interface is `todo<T> {}`. References have the usual name, visibility, and cycle checks. Constant references are permitted without making constants runtime DAG nodes.
 
-Here, `mass_ratio` evaluates, `v_exhaust` is **TODO**, and `delta_v` is **BLOCKED**. An unfinished node is TODO even if evaluation would not reach its hole, and blocking follows the static dependency graph, including references in unselected branches. These outcomes are not values, `null`, or evaluation errors.
+Here, `mass_ratio` evaluates, `v_exhaust` is **TODO**, and `delta_v` is **BLOCKED**. Evaluation decides these outcomes: a declaration is TODO when its evaluation reaches one of its own holes, and BLOCKED when it reads a value that is TODO or BLOCKED. A hole that evaluation does not reach, such as one in an unselected branch, does not affect the result. These outcomes are not values, `null`, or evaluation errors, and no formula can test for them. A value that is computed is therefore the same however the holes are later filled.
 
-Replace every hole with an expression to finish the node. The formula then determines its dependencies; no historical contract remains. `check` accepts otherwise-valid unfinished models and summarizes them (`--deny-todo` rejects them). `eval` prints partial results but exits unsuccessfully unless `--allow-incomplete` is given. That flag never suppresses genuine evaluation or assertion failures.
+Replace every hole with an expression to finish the node. The formula then determines its dependencies; no historical contract remains. `check` accepts otherwise-valid unfinished models and summarizes them (`--deny-todo` rejects them). `eval` prints partial results but exits unsuccessfully unless `--allow-incomplete` is given, even when no result reached a hole with the given inputs. That flag never suppresses genuine evaluation or assertion failures.
 
 ### Constants
 
@@ -105,7 +105,7 @@ const node g0: Acceleration = 9.80665 m/s^2;
 
 Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes. DAG calls are anonymous runtime includes, so they are also prohibited in `const node` expressions and compile-time domain bounds.
 
-A constant whose value is not decided yet can be written with a hole, such as `const node v_exhaust: Velocity = todo<Velocity> { @g0 };`. Its interface may list only constants. An unfinished constant is TODO, and everything that reads it is BLOCKED, as for nodes. A domain bound must be known when the model is checked, so a bound that reads an unfinished constant is an error. Because constants are checked at compile time, filling in the hole can make `check` report an error that was not visible before, such as a value outside the constant's domain.
+A constant whose value is not decided yet can be written with a hole, such as `const node v_exhaust: Velocity = todo<Velocity> { @g0 };`. Its interface may list only constants. As for nodes, a constant whose evaluation reaches a hole is TODO, and everything that reads it is BLOCKED. A domain bound must be known when the model is checked, so a bound that reads an unfinished constant is an error. Because constants are checked at compile time, filling in the hole can make `check` report an error that was not visible before, such as a value outside the constant's domain.
 
 ### Assertions
 

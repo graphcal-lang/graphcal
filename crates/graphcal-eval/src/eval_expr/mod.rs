@@ -18,6 +18,7 @@ mod presentation;
 mod product_sum;
 mod range_safe_product;
 mod runtime_failure;
+mod strict;
 mod unit_scale;
 
 pub use crate::constant_pools::RuntimeValueMap;

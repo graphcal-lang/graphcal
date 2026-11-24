@@ -10,7 +10,7 @@ use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::tir::typed::CheckedTir;
 
 use crate::checked_program::{EvaluatedTir, ExecutionFacts};
-use crate::constant_pools::ConstPoolBuildError;
+use crate::constant_pools::{ConstPoolBuildError, UnfinishedConstant};
 use crate::deferred_field_checks::DeferredFieldChecks;
 use crate::eval_expr::{EvalSession, eval_root_with_presentation};
 use crate::runtime_presentation::PendingPresentedMap;
@@ -40,19 +40,32 @@ pub(super) fn eval_const_pool(
             cancellation.clone(),
             Rc::clone(field_checks),
         )
-        .for_decl(step.key);
+        .for_decl(step.key)
+        .with_unavailable(step.unfinished);
         reject_constant_call(step.expression.get(), src)?;
-        let presented = eval_root_with_presentation(
+        let presented = match eval_root_with_presentation(
             &session.executable(step.expression)?,
             step.visible,
             &presentations,
             &session,
-        )?;
+        ) {
+            Ok(presented) => presented,
+            // Reaching a hole leaves the constant unfinished; any other
+            // failure is a compile-time error.
+            Err(Outcome::Failed(error)) => {
+                let reason = crate::execution_frame::declaration_unavailable(step.key, &error);
+                return match UnfinishedConstant::of(step.key, &reason) {
+                    Some(unfinished) if is_unavailable(&error) => Ok(Err(unfinished)),
+                    _ => Err(Outcome::Failed(error)),
+                };
+            }
+            Err(Outcome::Cancelled) => return Err(Outcome::Cancelled),
+        };
         let value = presented.value().into_owned();
         if !presented.is_plain() {
             presentations.insert(step.key.clone(), presented);
         }
-        Ok::<_, Outcome<SemanticError>>(value)
+        Ok::<_, Outcome<SemanticError>>(Ok(value))
     })
     .map_err(|error| match error {
         ConstPoolBuildError::Evaluation(error) => error,
@@ -62,6 +75,19 @@ pub(super) fn eval_const_pool(
         }
     })?;
     Ok((evaluated, presentations))
+}
+
+/// Whether `error` only says a value is unavailable.
+const fn is_unavailable(error: &SemanticError) -> bool {
+    matches!(
+        error,
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: graphcal_compiler::semantic_error::SemanticErrorKind::Evaluation(
+                graphcal_compiler::semantic_error::evaluation::EvaluationError::Unavailable { .. }
+            ),
+            ..
+        })
+    )
 }
 
 fn reject_constant_call(

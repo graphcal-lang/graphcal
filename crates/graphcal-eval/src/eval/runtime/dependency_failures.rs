@@ -13,7 +13,8 @@ use super::root_names::RootNames;
 /// If any declaration referenced by the given expressions failed to
 /// evaluate, render a `dependency failed: ...` message naming each failed
 /// dependency as the root names it (direct failures carry their root cause
-/// inline).
+/// inline). An unfinished declaration has not failed: the expression is
+/// blocked only if its evaluation reaches it.
 ///
 /// Shared by assertions (#814) and plots (#842): a reference to a failed
 /// declaration is not "undefined", it is unevaluable, and the report must
@@ -33,7 +34,7 @@ pub(super) fn dependency_failure_message<'a>(
     let failed: Vec<String> = deps
         .iter()
         .filter_map(|dep| {
-            errors.get(dep).map(|err| {
+            errors.get(dep).filter(|err| err.has_failure()).map(|err| {
                 let name = names.name(dep);
                 match err {
                     NodeUnavailable::EvalFailed { message } => format!("{name} ({message})"),

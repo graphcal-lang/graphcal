@@ -310,12 +310,10 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         variant: IndexVariantRef,
         key: V::Discharged<KeyValue>,
     },
-    /// A `todo<T> { … }` hole with its checked interface entries. A formula
-    /// containing one is unfinished and is never evaluated, so a concrete
-    /// tree would carry an [`ExecutableHole`], which is uninhabited.
+    /// A `todo<T> { … }` hole with its checked interface entries. Evaluating
+    /// it has no value: the evaluation that reaches it is unfinished.
     TodoHole {
         interface: Vec<TExpr<V>>,
-        executable: V::Discharged<ExecutableHole>,
     },
     /// An inline call of the DAG `slot` names in the call targets of the
     /// body that holds this node.
@@ -326,12 +324,6 @@ pub enum TExprKind<V: Concreteness = Concrete> {
         output: Spanned<ResolvedDeclName>,
     },
 }
-
-/// What a concrete tree would carry for a `todo<T> { … }` hole. It is
-/// uninhabited: discharging a tree with a hole yields an unfinished body
-/// instead of an executable one, so evaluation never meets a hole.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExecutableHole {}
 
 /// A datetime literal a constructor call builds, as checking parsed it.
 #[derive(Debug, Clone)]

@@ -222,7 +222,12 @@ impl EvaluatedTir {
     pub fn evaluate<E>(
         tir: CheckedTir,
         inherited: &ExecutionFacts,
-        evaluate: impl FnMut(ConstStep<'_>) -> Result<RuntimeValue, E>,
+        evaluate: impl FnMut(
+            ConstStep<'_>,
+        ) -> Result<
+            Result<RuntimeValue, crate::constant_pools::UnfinishedConstant>,
+            E,
+        >,
     ) -> Result<Self, ConstPoolBuildError<E>> {
         let (consts, pools) = ConstPool::build(&tir, &inherited.consts, evaluate)?;
         Ok(Self {

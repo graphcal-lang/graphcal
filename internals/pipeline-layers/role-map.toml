@@ -1,16 +1,6 @@
 # Explicit role for every discovered source module. Review new entries before accepting them.
 
 [[module]]
-package = "eval"
-path = ["static_incompleteness"]
-role = "interpreter"
-
-[[module]]
-package = "eval"
-path = ["unfinished_reach"]
-role = "contracts"
-
-[[module]]
 package = "compiler"
 path = ["node_unavailable"]
 role = "contracts"
@@ -2755,6 +2745,11 @@ role = "interpreter"
 [[module]]
 package = "eval"
 path = ["eval_expr", "runtime_failure"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "strict"]
 role = "interpreter"
 
 [[module]]

@@ -128,12 +128,13 @@ const value = (values, name) => values.find(item => item.name === name).outcome.
   for (const active of [true, false, true, false]) {
     const outcome = run.prepared.evaluateBindings([{ name: "active", expr: String(active) }]);
     assert.equal(outcome.status, "evaluated");
-    assert.equal(outcome.evaluation.incomplete, active);
+    // The model has a hole whether or not this run reaches it.
+    assert.equal(outcome.evaluation.incomplete, true);
     assert.equal(outcome.evaluation.has_errors, false);
     run.api.patchEvaluationNotices(outcome.evaluation);
     const banner = run.main.children.find(child => child.id === "incomplete-notice");
     const calls = run.main.children.find(child => child.id === "call-notices");
-    assert.equal(banner.hidden, !active);
+    assert.equal(banner.hidden, false);
     assert.equal(calls.hidden, !active);
     assert.equal(calls.children.length, active ? 2 : 1, "no stale or duplicate call notices");
   }

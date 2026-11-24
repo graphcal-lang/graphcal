@@ -442,8 +442,9 @@ Each element ends in one of [`Status`, `Group.process`]:
 
 - **computed**;
 - **failed**: its own evaluation failed, including a domain violation;
-- **unavailable**: its member reads an unavailable outside declaration, or an
-  element it reads is failed or unavailable.
+- **unavailable**: its own evaluation reaches a `todo` hole, its member reads
+  an unavailable outside declaration, or an element it reads is failed or
+  unavailable.
 
 Evaluation continues past failures. Each element's status depends only on the
 statuses of the elements it reads, so it is the same for every valid order
@@ -462,18 +463,22 @@ dependency graph. Every member that is not supplied has exactly one outcome
 
 | Outcome | Condition |
 |---------|-----------|
-| **ok** | None of its elements failed, none of its outside inputs is unavailable, and the same holds for every member it depends on (transitively, through reads of members that are not supplied). |
+| **ok** | None of its elements failed or reached a hole, none of its outside inputs is unavailable, and the same holds for every member it depends on (transitively, through reads of members that are not supplied). |
 | **failed** | Some element failed. The reported error is the failure at its earliest step. |
 | **dependency unavailable** | Otherwise. The reason kind (TODO, blocked, dependency failed) follows today's evaluator. |
 
-A group with an unfinished member is not evaluated: its unfinished members are
-TODO, and every other member is blocked by them, since each one reaches them
-through the group's cycle. Element statuses (§5.1) apply to groups whose
-members are all finished.
+A `todo` hole is evaluated like any other expression (#2405): an element
+whose evaluation reaches a hole is **unavailable**, and its member is TODO.
+An element that reads it, directly or through a hole's interface, is
+unavailable too, so its member is blocked. Element statuses (§5.1) apply to
+every group, finished or not.
 
 Every element of an ok member is computed [`ValidOrder.run_memberOk`]. In
-particular, if no element fails and every outside input is available, every
-element is computed [`ValidOrder.run_complete`].
+particular, if no element fails or reaches a hole and every outside input is
+available, every element is computed [`ValidOrder.run_complete`]. The Lean
+model has no holes: its theorems cover evaluations that reach none, and a
+reached hole behaves there like an unavailable outside input of that
+element.
 
 **Example.** In the `state` / `action` group, suppose `action` violates its
 domain at step 3. `state[3]` reads `action[2]`, not `action[3]`, so all of

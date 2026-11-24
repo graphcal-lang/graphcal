@@ -173,7 +173,7 @@ fn checked_nodes(
                 };
                 nodes.insert(node.id().clone(), summary);
             }),
-            CheckedBody::Deferred(body) | CheckedBody::Unfinished(body) => {
+            CheckedBody::Deferred(body) => {
                 visit_tnodes(body.as_node(), &mut |node| {
                     let summary = match node {
                         TNodeRef::Value(expr) => (expr.span(), None, false),

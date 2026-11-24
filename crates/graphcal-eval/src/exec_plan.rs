@@ -9,7 +9,7 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::tir::schedule::ScheduleUnit;
-use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, FormulaBody};
+use graphcal_compiler::tir::typed::evaluation_unit::BodyKind;
 
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::execution_plan::{
@@ -130,10 +130,7 @@ fn prepare_declarations<'p>(
         for unit in tir.declaration_bodies(position) {
             let key = unit.identity();
             let body = match unit.kind() {
-                BodyKind::Node(FormulaBody::Unfinished(_)) => {
-                    PlannedBody::Computed(ComputedBody::Todo)
-                }
-                BodyKind::Node(FormulaBody::Formula(root))
+                BodyKind::Node(root)
                 | BodyKind::Param {
                     default: Some(root),
                 } => PlannedBody::Computed(ComputedBody::Expression {
@@ -426,10 +423,9 @@ mod tests {
         .unwrap();
         let debug = format!("{prepared:?}");
         assert!(debug.starts_with("ExecPlan {"), "{debug}");
-        for kind in ["\"executable\"", "\"supplied\"", "\"todo\""] {
+        for kind in ["\"executable\"", "\"supplied\""] {
             assert!(debug.contains(kind), "{kind} in {debug}");
         }
-        assert!(prepared.plan().has_unfinished_definitions());
     }
 
     #[test]
@@ -468,7 +464,10 @@ mod tests {
             .steps()
             .find(|step| step.declaration().key().as_str() == "pending")
             .unwrap();
-        assert!(matches!(pending.body(), ComputedBody::Todo));
+        assert!(matches!(
+            pending.body(),
+            ComputedBody::Expression { tree: Ok(_), .. }
+        ));
     }
 
     #[test]

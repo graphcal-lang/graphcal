@@ -6,9 +6,9 @@
 //! immutable and shared: callable plans view them through their sealed DAGs and
 //! imports through a [`ConstantReference`], without copying constant payloads.
 //!
-//! An unfinished constant has no value, never a placeholder: its formula, or
-//! the formula of a constant it reads, contains a `todo` hole. The pool
-//! records why, as an [`UnfinishedConstant`], instead of a value.
+//! An unfinished constant has no value, never a placeholder: its evaluation
+//! reached a `todo` hole, in its own formula or in a constant it reads. The
+//! pool records why, as an [`UnfinishedConstant`], instead of a value.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -22,7 +22,7 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
 use graphcal_compiler::tir::typed::dag_position::DagPosition;
-use graphcal_compiler::tir::typed::evaluation_unit::{BodyKind, FormulaBody};
+use graphcal_compiler::tir::typed::evaluation_unit::BodyKind;
 use thiserror::Error;
 
 pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;
@@ -30,10 +30,10 @@ pub type RuntimeValueMap = HashMap<ResolvedDeclName, RuntimeValue>;
 /// Why a constant has no value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnfinishedConstant {
-    /// Its own formula contains a `todo` hole.
+    /// Its evaluation reached a `todo` hole of its own formula.
     Todo,
-    /// It reads unfinished constants: the constants whose own formulas
-    /// contain the holes.
+    /// Its evaluation read unfinished constants: the constants whose own
+    /// holes were reached.
     Blocked(NonEmpty<ResolvedDeclName>),
 }
 
@@ -96,6 +96,28 @@ pub struct ConstStep<'a> {
     pub expression: Scoped<'a, Expr>,
     /// Every constant evaluated so far, inherited ones included.
     pub visible: &'a RuntimeValueMap,
+    /// Why each unfinished constant so far has no value, as a read of it
+    /// reports.
+    pub unfinished: &'a HashMap<ResolvedDeclName, RuntimeUnavailable>,
+}
+
+impl UnfinishedConstant {
+    /// The reason the constant `key` is unfinished, given why its evaluation
+    /// has no value. `None` when the reason is a failure, not an unfinished
+    /// formula.
+    #[must_use]
+    pub fn of(key: &ResolvedDeclName, reason: &RuntimeUnavailable) -> Option<Self> {
+        if reason.has_failure() {
+            return None;
+        }
+        let origins = reason.unfinished();
+        if origins.contains(key) {
+            return Some(Self::Todo);
+        }
+        NonEmpty::try_from_vec(origins.to_vec())
+            .ok()
+            .map(Self::Blocked)
+    }
 }
 
 /// The evaluated constants of every DAG of one checked TIR, one immutable
@@ -112,7 +134,8 @@ pub struct ConstPool {
 impl ConstPool {
     /// Evaluate the constants of `tir`'s scheduled DAGs, calling `evaluate`
     /// exactly once per constant in the checker's constant schedule; every
-    /// other DAG of `tir` shares its pool from `inherited`.
+    /// other DAG of `tir` shares its pool from `inherited`. `evaluate` gives
+    /// a constant's value, or why it is unfinished.
     ///
     /// The result covers exactly the DAGs of `tir`.
     ///
@@ -123,7 +146,7 @@ impl ConstPool {
     pub fn build<E>(
         tir: &CheckedTir,
         inherited: &Self,
-        mut evaluate: impl FnMut(ConstStep<'_>) -> Result<RuntimeValue, E>,
+        mut evaluate: impl FnMut(ConstStep<'_>) -> Result<Result<RuntimeValue, UnfinishedConstant>, E>,
     ) -> Result<(Self, PositionedPools), ConstPoolBuildError<E>> {
         let invalid = |error| Err(ConstPoolBuildError::Invalid(error));
         let schedule = tir.const_schedule();
@@ -149,6 +172,10 @@ impl ConstPool {
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<RuntimeValueMap>();
         let mut unfinished = inherited.unfinished.as_ref().clone();
+        let mut reasons = unfinished
+            .iter()
+            .map(|(key, unfinished)| (key.clone(), unfinished.reason(key)))
+            .collect::<HashMap<_, _>>();
         for key in schedule.order() {
             let (Some(formula), Some(pool)) = (
                 tir.declaration_body(key)
@@ -160,26 +187,24 @@ impl ConstPool {
             ) else {
                 return invalid(ConstantPoolError::MissingDeclaration(key.clone()));
             };
-            let expression = match formula {
-                FormulaBody::Unfinished(_) => {
-                    unfinished.insert(key.clone(), UnfinishedConstant::Todo);
-                    continue;
-                }
-                FormulaBody::Formula(expression) => expression,
-            };
-            if let Some(blocked) = blocked_by(tir, key, &unfinished) {
-                unfinished.insert(key.clone(), blocked);
-                continue;
-            }
-            let value = evaluate(ConstStep {
+            match evaluate(ConstStep {
                 tir,
                 key,
-                expression,
+                expression: formula,
                 visible: &visible,
+                unfinished: &reasons,
             })
-            .map_err(ConstPoolBuildError::Evaluation)?;
-            visible.insert(key.clone(), value.clone());
-            pool.insert(key.clone(), value);
+            .map_err(ConstPoolBuildError::Evaluation)?
+            {
+                Ok(value) => {
+                    visible.insert(key.clone(), value.clone());
+                    pool.insert(key.clone(), value);
+                }
+                Err(why) => {
+                    reasons.insert(key.clone(), why.reason(key));
+                    unfinished.insert(key.clone(), why);
+                }
+            }
         }
         by_dag.extend(
             fresh
@@ -243,30 +268,6 @@ impl ConstPool {
                 target: ReferenceTarget::Unfinished(unfinished.clone()),
             })
     }
-}
-
-/// Why the constant `key` is blocked, when it reads an unfinished constant.
-fn blocked_by(
-    tir: &CheckedTir,
-    key: &ResolvedDeclName,
-    unfinished: &UnfinishedConstantMap,
-) -> Option<UnfinishedConstant> {
-    let origins = tir
-        .dag_containing_declaration(key)
-        .and_then(|dag| dag.dependencies().const_deps.get(key))
-        .into_iter()
-        .flatten()
-        .filter_map(|dependency| {
-            unfinished
-                .get(dependency)
-                .map(|reason| reason.origins(dependency))
-        })
-        .flatten()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    NonEmpty::try_from_vec(origins.into_iter().collect())
-        .ok()
-        .map(UnfinishedConstant::Blocked)
 }
 
 /// The pool of every DAG of the checked TIR one [`ConstPool`] was built
