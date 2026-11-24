@@ -192,6 +192,36 @@ impl Cell {
     }
 }
 
+/// What a declaration's result is, given its cells.
+#[derive(Debug)]
+pub enum Collected {
+    /// Every cell has a value.
+    Complete(EvaluatedRuntimeValue),
+    /// Some cells have no value.
+    Partial(PartialValue),
+    /// The value has none as a whole, for this reason.
+    Unavailable(RuntimeUnavailable),
+    /// The value's own evaluation failed.
+    Failed(SemanticError),
+}
+
+impl Cell {
+    /// What a declaration whose formula evaluated to this tree has.
+    #[must_use]
+    pub fn collect(self) -> Collected {
+        match self.complete() {
+            Ok(value) | Err(Self::Value(value)) => Collected::Complete(value),
+            Err(Self::Unavailable(reason)) => Collected::Unavailable(reason),
+            Err(Self::Failed(error)) => Collected::Failed(error),
+            Err(Self::Axis(cells)) => match PartialValue::new(cells) {
+                Ok(partial) => Collected::Partial(partial),
+                // Every cell has a value: collecting completes it.
+                Err(complete) => complete.collect(),
+            },
+        }
+    }
+}
+
 /// A cell without a value, and why.
 #[derive(Debug, Clone, Copy)]
 pub enum MissingCell<'a> {

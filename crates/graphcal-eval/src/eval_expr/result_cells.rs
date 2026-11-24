@@ -31,6 +31,8 @@ pub(super) struct Whole<'w> {
     pub(super) value: &'w dyn Fn(ScopedNode<'_>, &HirLocalValueMap<'_>) -> Evaluated<RuntimeValue>,
     pub(super) presented:
         &'w dyn Fn(ScopedNode<'_>, &HirLocalValueMap<'_>) -> Evaluated<EvaluatedRuntimeValue>,
+    /// An inline DAG call, to the cells of its output.
+    pub(super) call: &'w dyn Fn(ScopedNode<'_>, &HirLocalValueMap<'_>) -> Evaluated<Cell>,
 }
 
 /// Evaluate `expr`, a formula in its result position, to its cells.
@@ -93,11 +95,13 @@ fn eval_result_inner(
             if let NodeKind::GraphRef(target) = inner.kind()
                 && let Some(partial) = partial(&target.value) =>
         {
-            match read_cells(&target, partial, args, &operands, local_values, ctx)? {
+            match read_cells(&target, partial.cells(), args, &operands, local_values, ctx)? {
                 CellRead::Cells(cells) => Ok(Cell::Axis(cells.clone()).read_from(&target.value)),
                 CellRead::Value { .. } => (whole.presented)(expr, local_values).map(Cell::Value),
             }
         }
+        // A call output keeps its cells.
+        NodeKind::DagCall { .. } => (whole.call)(expr, local_values),
         _ => (whole.presented)(expr, local_values).map(Cell::Value),
     }
 }

@@ -9,10 +9,11 @@ use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::source_id::SourceId;
 use graphcal_compiler::tir::typed::CheckedTir;
 
+use crate::cells::{Cell, Collected};
 use crate::checked_program::{EvaluatedTir, ExecutionFacts};
-use crate::constant_pools::{ConstPoolBuildError, UnfinishedConstant};
+use crate::constant_pools::{ConstOutcome, ConstPoolBuildError, UnfinishedConstant};
 use crate::deferred_field_checks::DeferredFieldChecks;
-use crate::eval_expr::{EvalSession, eval_root_with_presentation};
+use crate::eval_expr::{EvalSession, eval_root_cells};
 use crate::runtime_presentation::PendingPresentedMap;
 use std::rc::Rc;
 
@@ -41,31 +42,40 @@ pub(super) fn eval_const_pool(
             Rc::clone(field_checks),
         )
         .for_decl(step.key)
-        .with_unavailable(step.unfinished);
+        .with_unavailable(step.unfinished)
+        .with_partial(step.partial);
         reject_constant_call(step.expression.get(), src)?;
-        let presented = match eval_root_with_presentation(
+        let cells = match eval_root_cells(
             &session.executable(step.expression)?,
             step.visible,
             &presentations,
             &session,
         ) {
-            Ok(presented) => presented,
-            // Reaching a hole leaves the constant unfinished; any other
-            // failure is a compile-time error.
-            Err(Outcome::Failed(error)) => {
-                let reason = crate::execution_frame::declaration_unavailable(step.key, &error);
-                return match UnfinishedConstant::of(step.key, &reason) {
-                    Some(unfinished) if is_unavailable(&error) => Ok(Err(unfinished)),
-                    _ => Err(Outcome::Failed(error)),
-                };
-            }
+            Ok(cells) => cells,
+            Err(Outcome::Failed(error)) => Cell::of_error(error),
             Err(Outcome::Cancelled) => return Err(Outcome::Cancelled),
+        };
+        // Reaching a hole leaves the constant unfinished, with its cells when
+        // some have values (#2405); any failure is a compile-time error.
+        let presented = match cells.collect() {
+            Collected::Complete(presented) => presented,
+            Collected::Failed(error) => return Err(Outcome::Failed(error)),
+            Collected::Unavailable(reason) => {
+                return unfinished(step.key, &reason, src).map(ConstOutcome::Unfinished);
+            }
+            Collected::Partial(cells) => {
+                if let Some(error) = cells.first_failure() {
+                    return Err(Outcome::Failed(error.clone()));
+                }
+                return unfinished(step.key, &cells.reason(step.key), src)
+                    .map(|unfinished| ConstOutcome::Partial { unfinished, cells });
+            }
         };
         let value = presented.value().into_owned();
         if !presented.is_plain() {
             presentations.insert(step.key.clone(), presented);
         }
-        Ok::<_, Outcome<SemanticError>>(Ok(value))
+        Ok::<_, Outcome<SemanticError>>(ConstOutcome::Value(value))
     })
     .map_err(|error| match error {
         ConstPoolBuildError::Evaluation(error) => error,
@@ -77,17 +87,21 @@ pub(super) fn eval_const_pool(
     Ok((evaluated, presentations))
 }
 
-/// Whether `error` only says a value is unavailable.
-const fn is_unavailable(error: &SemanticError) -> bool {
-    matches!(
-        error,
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: graphcal_compiler::semantic_error::SemanticErrorKind::Evaluation(
-                graphcal_compiler::semantic_error::evaluation::EvaluationError::Unavailable { .. }
-            ),
-            ..
-        })
-    )
+/// The constant `key` as unfinished for `reason`, which names no failure:
+/// a failed read of a constant is a compile-time error before it.
+fn unfinished(
+    key: &graphcal_compiler::resolved_name::ResolvedDeclName,
+    reason: &graphcal_compiler::node_unavailable::RuntimeUnavailable,
+    src: SourceId,
+) -> Result<UnfinishedConstant, Outcome<SemanticError>> {
+    UnfinishedConstant::of(key, &reason.clone().of_declaration(key)).ok_or_else(|| {
+        SemanticError::internal_error(
+            format!("constant `{key}` has no value for a failure without an error"),
+            src,
+            DiagnosticAnchor::WholeFile,
+        )
+        .into()
+    })
 }
 
 fn reject_constant_call(

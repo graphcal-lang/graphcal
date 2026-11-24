@@ -123,7 +123,8 @@ pub(super) fn resolve_domain_constraints_for_dag(
 struct BoundCheckingContext<'a, 'b> {
     evaluation: &'a EvalSession<'b>,
     bindings: &'a HashMap<graphcal_compiler::hir::types::GenericParamId, u64>,
-    /// The constants, to reject a bound that reads an unfinished one.
+    /// The constants, to reject a bound whose evaluation reads an unfinished
+    /// one, or a cell of one that has no value.
     consts: &'a ConstPool,
 }
 
@@ -217,24 +218,40 @@ fn evaluate_domain_bounds<T: PartialOrd>(
             let tree = graphcal_compiler::tir::dim_check::body_specialization::specialize_bound_expression(
                 ctx.evaluation.tir, scoped_bound, ctx.bindings,
             )?;
-            if let Some(constant) = tree
-                .root()
-                .referenced_declarations()
-                .into_iter()
-                .find(|declaration| ctx.consts.unfinished(declaration).is_some())
-            {
-                return Err(SemanticError::located(
-                    bound.src,
-                    bound.value.span,
-                    DomainError::DomainBoundReadsUnfinishedConstant {
-                        name: display_name.clone(),
-                        bound_name: bound.kind,
-                        constant: constant.leaf().clone(),
+            let reasons = ctx.consts.unavailable_reasons();
+            let session = ctx
+                .evaluation
+                .clone()
+                .with_unavailable(&reasons)
+                .with_partial(ctx.consts.cells_by_constant());
+            let runtime_value = match eval_root(&tree, values, &session) {
+                Ok(value) => value,
+                // The bound's evaluation read an unfinished constant, or a
+                // cell of one without a value: the bound is not known.
+                Err(Outcome::Failed(SemanticError::Located(
+                    graphcal_compiler::diagnostic::Diagnostic {
+                        kind:
+                            graphcal_compiler::semantic_error::SemanticErrorKind::Evaluation(
+                                graphcal_compiler::semantic_error::evaluation::EvaluationError::Unavailable {
+                                    ref reason,
+                                },
+                            ),
+                        ..
                     },
-                )
-                .into());
-            }
-            let runtime_value = eval_root(&tree, values, ctx.evaluation)?;
+                ))) if let Some(constant) = reason.unfinished().first() => {
+                    return Err(SemanticError::located(
+                        bound.src,
+                        bound.value.span,
+                        DomainError::DomainBoundReadsUnfinishedConstant {
+                            name: display_name.clone(),
+                            bound_name: bound.kind,
+                            constant: constant.leaf().clone(),
+                        },
+                    )
+                    .into());
+                }
+                Err(error) => return Err(error),
+            };
             let (value, display) = read(&runtime_value, bound)?.ok_or_else(|| {
                 SemanticError::internal_error(
                     format!(

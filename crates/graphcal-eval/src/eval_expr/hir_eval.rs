@@ -22,7 +22,9 @@ use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap, Pr
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::context::EvalSession;
-use super::entry_reads::{CellRead, EvaluatorBug, entry_selector, read_cells, unavailable_cells};
+use super::entry_reads::{
+    CellRead, EvaluatorBug, entry_selector, partial_target, read_cells, unavailable_cells,
+};
 use super::kernel_checkpoint::KernelCheckpoint;
 use super::operations::read_shape;
 use super::runtime_failure::{ExternFailure, InlineAssertionFailure, RuntimeFailure};
@@ -141,6 +143,63 @@ pub fn eval_root_with_presentation<T: std::borrow::Borrow<TExpr>>(
     )
 }
 
+/// Evaluate the root tree of a declaration's formula cell by cell in its
+/// result position (see the `result_cells` module), in the scope it was
+/// handed out with.
+pub fn eval_root_cells<T: std::borrow::Borrow<TExpr>>(
+    root: &ScopedTree<'_, T>,
+    values: &RuntimeValueMap,
+    presentation_values: &PendingPresentedMap,
+    session: &EvalSession<'_>,
+) -> Result<crate::cells::Cell, Outcome<SemanticError>> {
+    eval_cells(
+        root.root(),
+        values,
+        Some(presentation_values),
+        &HirLocalValueMap::root(),
+        session,
+    )
+}
+
+/// Evaluate `expr`, which forms a declaration's value (or a call argument),
+/// cell by cell (see the `result_cells` module).
+fn eval_cells(
+    expr: ScopedNode<'_>,
+    values: &RuntimeValueMap,
+    presentation_values: Option<&PendingPresentedMap>,
+    local_values: &HirLocalValueMap<'_>,
+    session: &EvalSession<'_>,
+) -> Result<crate::cells::Cell, Outcome<SemanticError>> {
+    let value = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| {
+        eval_value(node, values, locals, session)
+    };
+    let presented = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| {
+        eval_texpr_evaluated(node, values, presentation_values, locals, session)
+    };
+    let call = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| match node.kind() {
+        NodeKind::DagCall { call, args, output } => eval_dag_call_cells(
+            call,
+            args,
+            output,
+            values,
+            presentation_values,
+            locals,
+            session,
+        ),
+        _ => presented(node, locals).map(crate::cells::Cell::Value),
+    };
+    super::result_cells::eval_result(
+        expr,
+        local_values,
+        &super::result_cells::Whole {
+            value: &value,
+            presented: &presented,
+            call: &call,
+        },
+        session,
+    )
+}
+
 /// Evaluate what a frame schedules, selecting the session of either.
 ///
 /// A declaration's formula is evaluated cell by cell in its result position
@@ -152,24 +211,12 @@ pub fn eval_scheduled(
     session: &EvalSession<'_>,
 ) -> Result<crate::cells::Cell, Outcome<SemanticError>> {
     match scheduled {
-        crate::execution_frame::Scheduled::Declaration(declaration) => {
-            let session = session.for_declaration(declaration);
-            let value = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| {
-                eval_value(node, values, locals, &session)
-            };
-            let presented = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| {
-                eval_texpr_evaluated(node, values, Some(presentation_values), locals, &session)
-            };
-            super::result_cells::eval_result(
-                declaration.body().root(),
-                &HirLocalValueMap::root(),
-                &super::result_cells::Whole {
-                    value: &value,
-                    presented: &presented,
-                },
-                &session,
-            )
-        }
+        crate::execution_frame::Scheduled::Declaration(declaration) => eval_root_cells(
+            declaration.body(),
+            values,
+            presentation_values,
+            &session.for_declaration(declaration),
+        ),
         crate::execution_frame::Scheduled::Element(element) => eval_recurrence_element(
             element,
             values,
@@ -563,7 +610,7 @@ fn eval_texpr_inner(
             ),
         },
         NodeKind::Variant(key) => Ok(plain(RuntimeValue::Key(key.clone()))),
-        NodeKind::DagCall { call, args, output } => eval_dag_call(
+        NodeKind::DagCall { call, args, output } => match eval_dag_call_cells(
             call,
             args,
             output,
@@ -571,7 +618,27 @@ fn eval_texpr_inner(
             presentation_values,
             local_values,
             ctx,
-        ),
+        )?
+        .collect()
+        {
+            crate::cells::Collected::Complete(value) => Ok(value),
+            // A call output read as a whole needs every cell.
+            crate::cells::Collected::Partial(cells) => Err(SemanticError::located(
+                ctx.src,
+                output.span,
+                EvaluationError::Unavailable {
+                    reason: cells.reason(&output.value),
+                },
+            )
+            .into()),
+            crate::cells::Collected::Unavailable(reason) => Err(SemanticError::located(
+                ctx.src,
+                output.span,
+                EvaluationError::Unavailable { reason },
+            )
+            .into()),
+            crate::cells::Collected::Failed(error) => Err(error.into()),
+        },
     }
 }
 
@@ -959,6 +1026,7 @@ fn eval_index_access(
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let evaluated;
+    let call_cells;
     // A member of the recurrence group being evaluated is read element by
     // element: its leading key selects the element, the rest select inside it.
     let mut consumed = 0;
@@ -972,13 +1040,9 @@ fn eval_index_access(
     let evaluate = |node| eval_value(node, values, local_values, ctx);
     let operands = super::operations::Operands::new(&evaluate, ctx);
     let base = match inner.kind() {
-        NodeKind::GraphRef(target)
-            if !values.contains_key(&target.value)
-                && let Some(partial) =
-                    ctx.partial.and_then(|partial| partial.get(&target.value)) =>
-        {
+        _ if let Some((target, partial)) = partial_target(inner, ctx) => {
             ctx.cancellation.checkpoint()?;
-            match read_cells(&target, partial, args, &operands, local_values, ctx)? {
+            match read_cells(&target, partial.cells(), args, &operands, local_values, ctx)? {
                 CellRead::Value {
                     value,
                     consumed: read,
@@ -991,6 +1055,52 @@ fn eval_index_access(
                         .complete()
                         .map_err(|_| unavailable_cells(&target, cells, ctx).into());
                 }
+            }
+        }
+        // An element of a call output reads one of its cells.
+        NodeKind::DagCall {
+            call,
+            args: call_args,
+            output,
+        } => {
+            call_cells = eval_dag_call_cells(
+                call,
+                call_args,
+                output,
+                values,
+                presentation_values,
+                local_values,
+                ctx,
+            )?;
+            match &call_cells {
+                crate::cells::Cell::Value(value) => value.as_ref(),
+                crate::cells::Cell::Axis(cells) => {
+                    match read_cells(output, cells, args, &operands, local_values, ctx)? {
+                        CellRead::Value {
+                            value,
+                            consumed: read,
+                        } => {
+                            consumed = read;
+                            value.as_ref()
+                        }
+                        CellRead::Cells(cells) => {
+                            return crate::cells::Cell::Axis(cells.clone())
+                                .complete()
+                                .map_err(|_| unavailable_cells(output, cells, ctx).into());
+                        }
+                    }
+                }
+                crate::cells::Cell::Unavailable(reason) => {
+                    return Err(SemanticError::located(
+                        ctx.src,
+                        output.span,
+                        EvaluationError::Unavailable {
+                            reason: reason.clone(),
+                        },
+                    )
+                    .into());
+                }
+                crate::cells::Cell::Failed(error) => return Err(error.clone().into()),
             }
         }
         NodeKind::GraphRef(_) if let Some((target, slots)) = member => {
@@ -1238,7 +1348,11 @@ fn arm_bindings(
         .collect()
 }
 
-fn eval_dag_call(
+/// Evaluate an inline DAG call to the cells of its output: its value, or,
+/// when some cells of the output have no value, every cell (#2405). Each
+/// argument is evaluated like a declaration's value, so the callee sees the
+/// cells of an argument that has some.
+fn eval_dag_call_cells(
     call: ScopedCall<'_>,
     args: Scoped<'_, [TParamBinding]>,
     output: &Spanned<ResolvedDeclName>,
@@ -1246,7 +1360,7 @@ fn eval_dag_call(
     caller_presentations: Option<&PendingPresentedMap>,
     caller_locals: &HirLocalValueMap,
     ctx: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+) -> Result<crate::cells::Cell, Outcome<SemanticError>> {
     // Calls nest and repeat without bound on the work they multiply (#2251):
     // every call observes cancellation before it allocates its frame.
     ctx.cancellation.checkpoint()?;
@@ -1261,14 +1375,14 @@ fn eval_dag_call(
     );
     for scoped_binding in args.iter() {
         let binding = scoped_binding.get();
-        let evaluated = eval_texpr_evaluated(
+        let cells = eval_cells(
             scoped_binding.map(|binding| &binding.value),
             caller_values,
             caller_presentations,
             caller_locals,
             ctx,
         )?;
-        frame.bind_argument(&binding.target, evaluated, ctx.src, binding.value.span())?;
+        frame.bind_argument_cells(&binding.target, cells, ctx.src, binding.value.span())?;
     }
 
     let evaluated = frame.run(&ctx.cancellation, |entry, frame| {
@@ -1279,9 +1393,19 @@ fn eval_dag_call(
         eval_scheduled(&entry, frame.values(), frame.presentations(), &session)
     });
     if let Some(calls) = ctx.unfinished_calls {
-        calls
-            .borrow_mut()
-            .extend(frame.unfinished_origins().cloned());
+        // Only the invoked DAG's own holes: an argument's unfinished origins
+        // belong to the caller, which reports them itself.
+        let callee = callable
+            .execution_dags()
+            .iter()
+            .map(|closure| closure.scope().dag().dag_id())
+            .collect::<std::collections::HashSet<_>>();
+        calls.borrow_mut().extend(
+            frame
+                .unfinished_origins()
+                .filter(|origin| callee.contains(origin.owner()))
+                .cloned(),
+        );
     }
     evaluated?;
     let crate::execution_frame::FrameOutcome {
@@ -1300,6 +1424,19 @@ fn eval_dag_call(
     )?;
 
     let output_key = &output.value;
+    if let Some(cells) = partial.get(output_key) {
+        // The caller sees the output's cells as read from the output.
+        let cells = crate::cells::Cell::Axis(cells.cells().clone()).read_from(output_key);
+        return cells.try_map_values(&mut |value| {
+            super::presentation::resolve_frame(
+                value.clone(),
+                &dag_values,
+                ctx,
+                callable,
+                eval_executable,
+            )
+        });
+    }
     let output_value = dag_values.get(output_key).ok_or_else(|| {
         if let Some(reason) = errors.get(output_key) {
             return SemanticError::located(ctx.src, output.span, EvaluationError::Unavailable { reason: reason.clone() });
@@ -1326,7 +1463,7 @@ fn eval_dag_call(
     )?;
     #[cfg(any(test, feature = "test-internals"))]
     record_call_retention(&dag_values, &presented);
-    Ok(presented)
+    Ok(crate::cells::Cell::Value(presented))
 }
 
 #[cfg(any(test, feature = "test-internals"))]

@@ -717,6 +717,50 @@ fn a_bound_reading_an_unfinished_constant_is_a_compile_error() {
 }
 
 #[test]
+fn a_bound_is_an_error_only_when_it_reads_a_missing_value() {
+    let source = r"
+index Part = { Wheel, Bracket };
+const node lo: Length = todo<Length> {};
+const node limits: Length[Part] = table[Part] { Wheel: 1.0 m; Bracket: todo<Length> {}; };
+param unselected: Length(min: if true { 0.0 m } else { @lo }) = 1.0 m;
+param known_cell: Length(max: @limits[Part#Wheel]) = 0.5 m;
+";
+    assert!(check(source));
+    assert_eq!(
+        rejection_code(&format!(
+            "{source}param missing_cell: Length(max: @limits[Part#Bracket]) = 0.5 m;"
+        )),
+        "graphcal::C010"
+    );
+}
+
+#[test]
+fn a_constant_table_with_an_unfinished_cell_keeps_its_other_cells() {
+    let evaluation = compile_and_eval(
+        r"
+index Part = { Wheel, Bracket, Panel };
+const node qty: Int[Part] = table[Part] { Wheel: 4; Bracket: todo<Int> {}; Panel: 2; };
+const node wheels: Int = @qty[Part#Wheel];
+const node bracket: Int = @qty[Part#Bracket];
+node doubled: Int[Part] = for p: Part { @qty[p] * 2 };
+",
+    )
+    .unwrap();
+    assert!(matches!(
+        result(&evaluation, "qty"),
+        Err(NodeUnavailable::Todo { .. })
+    ));
+    let qty = cells(&evaluation, "qty");
+    assert_eq!(int_of(cell(qty, "Wheel")), 4);
+    assert!(result(&evaluation, "wheels").is_ok());
+    assert!(matches!(
+        result(&evaluation, "bracket"),
+        Err(NodeUnavailable::Blocked { .. })
+    ));
+    assert_eq!(int_of(cell(cells(&evaluation, "doubled"), "Panel")), 4);
+}
+
+#[test]
 fn a_constant_hole_names_only_constants() {
     for source in [
         "param m: Mass = 1.0 kg; const node c: Mass = todo<Mass> { @m };",
@@ -1116,4 +1160,37 @@ node mixed: Int[Part] = table[Part] { Wheel: 1; Bracket: todo<Int> {}; Panel: di
     assert!(reason.has_failure(), "{reason:?}");
     assert!(reason.is_incomplete(), "{reason:?}");
     assert!(evaluation.has_errors());
+}
+
+#[test]
+fn cells_pass_through_inline_dag_call_arguments_and_outputs() {
+    let evaluation = compile_and_eval(
+        r"
+node qty: Int[Fin(3)] = table[Fin(3)] { 4; todo<Int> {}; 2; };
+dag twice {
+    param input: Int[Fin(3)];
+    pub node out: Int[Fin(3)] = for i: Fin(3) { @input[i] * 2 };
+    pub node first: Int = @input[0];
+}
+node doubled: Int[Fin(3)] = @twice(input: @qty)::out;
+node first: Int = @twice(input: @qty)::first;
+node last: Int = @twice(input: @qty)::out[2];
+node middle: Int = @twice(input: @qty)::out[1];
+",
+    )
+    .unwrap();
+    let doubled = cells(&evaluation, "doubled");
+    assert_eq!(int_of(cell(doubled, "#0")), 8);
+    assert!(matches!(
+        cell(doubled, "#1"),
+        graphcal_eval::eval::ValueCell::Unavailable(NodeUnavailable::Blocked { .. })
+    ));
+    assert!(result(&evaluation, "first").is_ok());
+    assert!(result(&evaluation, "last").is_ok());
+    assert!(matches!(
+        result(&evaluation, "middle"),
+        Err(NodeUnavailable::Blocked { .. })
+    ));
+    // The hole is the caller's own: no invoked DAG is unfinished.
+    assert!(evaluation.unfinished_calls.is_empty());
 }

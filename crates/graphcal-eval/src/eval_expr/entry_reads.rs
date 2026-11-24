@@ -86,6 +86,26 @@ pub(super) fn entry_selector<'t>(
     })
 }
 
+/// The declaration `node` reads as a whole, with its cells, when `node` is
+/// a reference to a declaration (a graph reference or a constant) whose
+/// indexed value has cells without a value.
+pub(super) fn partial_target<'s>(
+    node: graphcal_compiler::tir::typed::scoped_node::ScopedNode<'_>,
+    ctx: &EvalSession<'s>,
+) -> Option<(Spanned<ResolvedDeclName>, &'s crate::cells::PartialValue)> {
+    use graphcal_compiler::tir::typed::scoped_node::{ConstRef, NodeKind};
+    let target = match node.kind() {
+        NodeKind::GraphRef(target) => target,
+        NodeKind::Const(Spanned {
+            value: ConstRef::Decl(declaration),
+            span,
+        }) => Spanned::new(declaration, span),
+        _ => return None,
+    };
+    let partial = ctx.partial?.get(&target.value)?;
+    Some((target, partial))
+}
+
 /// What reading the cells of a partial value with some index arguments
 /// selects.
 pub(super) enum CellRead<'p> {
@@ -99,18 +119,18 @@ pub(super) enum CellRead<'p> {
     Cells(&'p IndexedValue<crate::cells::Cell>),
 }
 
-/// Select the cell of `partial`, the partial value of `target`, that
+/// Select the cell of `cells`, the cells of `target`, that
 /// `args` name. A cell without a value makes the read unavailable for its
 /// reason; a read of the whole value is not a cell read.
 pub(super) fn read_cells<'p, 't>(
     target: &Spanned<ResolvedDeclName>,
-    partial: &'p crate::cells::PartialValue,
+    cells: &'p IndexedValue<crate::cells::Cell>,
     args: Scoped<'t, [TIndexArg]>,
     operands: &Operands<'_, 't>,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<CellRead<'p>, Outcome<SemanticError>> {
-    let mut level = partial.cells();
+    let mut level = cells;
     for (position, arg) in args.iter().enumerate() {
         let selector = entry_selector(arg.view(), operands, local_values, ctx)?;
         let cell = selector.select_cell(level).ok_or_else(|| {

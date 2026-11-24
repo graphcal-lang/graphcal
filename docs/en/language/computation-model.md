@@ -120,7 +120,7 @@ const node g0: Acceleration = 9.80665 m/s^2;
 
 Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes. DAG calls are anonymous runtime includes, so they are also prohibited in `const node` expressions and compile-time domain bounds.
 
-A constant whose value is not decided yet can be written with a hole, such as `const node v_exhaust: Velocity = todo<Velocity> { @g0 };`. Its interface may list only constants. As for nodes, a constant whose evaluation reaches a hole is TODO, and everything that reads it is BLOCKED. A domain bound must be known when the model is checked, so a bound that reads an unfinished constant is an error. Because constants are checked at compile time, filling in the hole can make `check` report an error that was not visible before, such as a value outside the constant's domain.
+A constant whose value is not decided yet can be written with a hole, such as `const node v_exhaust: Velocity = todo<Velocity> { @g0 };`. Its interface may list only constants. As for nodes, a constant whose evaluation reaches a hole is TODO, and everything that reads it is BLOCKED. A domain bound must be known when the model is checked, so a bound whose evaluation reads an unfinished constant, or a cell of one that has no value, is an error. Because constants are checked at compile time, filling in the hole can make `check` report an error that was not visible before, such as a value outside the constant's domain.
 
 ### Assertions
 

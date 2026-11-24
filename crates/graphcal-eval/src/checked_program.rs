@@ -23,8 +23,6 @@ use graphcal_compiler::tir::typed::checked_dag::CheckedDag;
 use graphcal_compiler::tir::typed::dag_position::DagPosition;
 use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
 
-use crate::runtime_value::RuntimeValue;
-
 use crate::constant_pools::{
     ConstPool, ConstPoolBuildError, ConstStep, ConstantReference, PositionedPools, RuntimeValueMap,
 };
@@ -222,12 +220,7 @@ impl EvaluatedTir {
     pub fn evaluate<E>(
         tir: CheckedTir,
         inherited: &ExecutionFacts,
-        evaluate: impl FnMut(
-            ConstStep<'_>,
-        ) -> Result<
-            Result<RuntimeValue, crate::constant_pools::UnfinishedConstant>,
-            E,
-        >,
+        evaluate: impl FnMut(ConstStep<'_>) -> Result<crate::constant_pools::ConstOutcome, E>,
     ) -> Result<Self, ConstPoolBuildError<E>> {
         let (consts, pools) = ConstPool::build(&tir, &inherited.consts, evaluate)?;
         Ok(Self {

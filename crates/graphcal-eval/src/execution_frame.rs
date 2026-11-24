@@ -267,6 +267,9 @@ impl<'a> ExecutionFrame<'a> {
         let mut values = RuntimeValueMap::new();
         // An unfinished constant has no value; whatever reads it is blocked.
         let mut unfinished_constants = HashMap::new();
+        // The cells of an unfinished constant some of whose cells have
+        // values: a read of one of them sees it (#2405).
+        let mut partial = HashMap::new();
         for import in callable.constant_imports() {
             match import.value.value() {
                 Ok(value) => {
@@ -277,6 +280,9 @@ impl<'a> ExecutionFrame<'a> {
                         import.destination.clone(),
                         unfinished.reason(import.value.key()),
                     );
+                    if let Some(cells) = import.value.cells() {
+                        partial.insert(import.destination.clone(), cells.clone());
+                    }
                 }
             }
         }
@@ -299,6 +305,17 @@ impl<'a> ExecutionFrame<'a> {
                 })
                 .map(|(key, unfinished)| (key.clone(), unfinished.reason(key))),
         );
+        partial.extend(
+            callable
+                .execution_dags()
+                .iter()
+                .flat_map(|closure| {
+                    let dag_id = closure.scope().dag().dag_id();
+                    pool.partial_constants()
+                        .filter(move |(key, _)| key.owner() == dag_id)
+                })
+                .map(|(key, cells)| (key.clone(), cells.clone())),
+        );
         let presented = plan
             .program()
             .facts()
@@ -313,7 +330,7 @@ impl<'a> ExecutionFrame<'a> {
             values,
             presented,
             errors: unfinished_constants,
-            partial: HashMap::new(),
+            partial,
         }
     }
 
@@ -424,6 +441,21 @@ impl<'a> ExecutionFrame<'a> {
             self.values.insert(key.clone(), value.value().into_owned());
             self.presented.insert(key.clone(), value);
         }
+    }
+
+    /// Bind the cells a call argument for `key` evaluated to before the frame
+    /// runs: its value, or why it has none, with its cells when some have
+    /// values (#2405). Each cell is domain-checked like every value the
+    /// frame computes.
+    pub fn bind_argument_cells(
+        &mut self,
+        key: &ResolvedDeclName,
+        cells: crate::cells::Cell,
+        source: SourceId,
+        span: Span,
+    ) -> Result<(), SemanticError> {
+        let domain = self.plan.domain_constraint(key);
+        self.bind_cells(key, domain, cells, source, span)
     }
 
     /// Bind a value the caller supplies for `key` (a runtime parameter
