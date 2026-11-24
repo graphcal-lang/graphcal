@@ -1420,11 +1420,13 @@ fn print_text(result: &EvalResult, output_view: EvalOutputView) {
 
     // Build output blocks preserving source order. Names render their full
     // alias-qualified path so multiple instantiations stay distinct (#813).
-    let rendered_names: Vec<(String, &Result<Value, OutputUnavailable>)> = result
+    let rendered_names: Vec<(String, &Result<Value, OutputUnavailable>, _)> = result
         .output_values(output_view)
-        .map(|entry| (entry.name.to_string(), &entry.outcome))
+        .map(|entry| (entry.name.to_string(), &entry.outcome, entry.cells.as_ref()))
         .collect();
-    let items = rendered_names.iter().map(|(n, r)| (n.as_str(), *r));
+    let items = rendered_names
+        .iter()
+        .map(|(n, r, cells)| (n.as_str(), *r, *cells));
     let blocks = build_output_blocks(items);
     let max_name_len = max_flat_name_len(&blocks);
 

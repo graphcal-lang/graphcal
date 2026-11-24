@@ -166,10 +166,13 @@ fn evaluate_entry(
                 .map(|presentation| (key.clone(), presentation))
         })
         .collect::<Result<ResolvedPresentedMap, _>>()?;
+    let resolved_cells = resolve_cells(&outcome, &ctx)?;
     let names = root_names::RootNames::new(entry, display_names);
     let evaluated = EvaluatedRoot {
         values: outcome.values(),
         errors: outcome.errors(),
+        partial: outcome.partial(),
+        resolved_cells: &resolved_cells,
         names: &names,
         presentations: &presentations,
         frame_presentations: outcome.presentations(),
@@ -236,6 +239,36 @@ fn evaluate_entry(
         values,
         errors,
     })
+}
+
+/// The cells of each declaration with cells, their presentations resolved
+/// against the complete root frame.
+fn resolve_cells(
+    outcome: &RootOutcome,
+    ctx: &crate::eval_expr::EvalSession<'_>,
+) -> Result<
+    HashMap<
+        graphcal_compiler::resolved_name::ResolvedDeclName,
+        crate::runtime_value::IndexedValue<
+            crate::cells::Cell<crate::runtime_presentation::ResolvedValue>,
+        >,
+    >,
+    Outcome<SemanticError>,
+> {
+    outcome
+        .partial()
+        .iter()
+        .map(|(key, partial)| {
+            partial
+                .cells()
+                .try_map_ref(|_, cell| {
+                    cell.try_map_values(&mut |value| {
+                        crate::eval_expr::resolve_presentation(value.clone(), outcome.values(), ctx)
+                    })
+                })
+                .map(|cells| (key.clone(), cells))
+        })
+        .collect()
 }
 
 /// The domain constraints of the entry's own declarations, by their source

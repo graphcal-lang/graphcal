@@ -50,6 +50,10 @@ pub struct ExecutionFrame<'a> {
     /// Why a declaration has no value. Unfinished constants are recorded
     /// from the start.
     errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    /// The cells of each declaration whose indexed value has cells without
+    /// a value. Such a declaration is also in `errors`, with the reason a
+    /// read of it as a whole has no value.
+    partial: HashMap<ResolvedDeclName, crate::cells::PartialValue>,
 }
 
 /// What a finished frame computed.
@@ -58,6 +62,9 @@ pub struct FrameOutcome {
     /// The presented value of every value with a presentation.
     pub presented: PendingPresentedMap,
     pub errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    /// The cells of each declaration in `errors` whose indexed value has
+    /// cells with values.
+    pub partial: HashMap<ResolvedDeclName, crate::cells::PartialValue>,
 }
 
 /// One scheduled declaration handed to a frame's expression adapter.
@@ -306,6 +313,7 @@ impl<'a> ExecutionFrame<'a> {
             values,
             presented,
             errors: unfinished_constants,
+            partial: HashMap::new(),
         }
     }
 
@@ -354,7 +362,15 @@ impl<'a> ExecutionFrame<'a> {
             values: self.values,
             presented: self.presented,
             errors: self.errors,
+            partial: self.partial,
         }
+    }
+
+    /// The cells of the declarations bound so far whose indexed values have
+    /// cells without a value.
+    #[must_use]
+    pub const fn partial(&self) -> &HashMap<ResolvedDeclName, crate::cells::PartialValue> {
+        &self.partial
     }
 
     pub(crate) fn unfinished_origins(
@@ -462,8 +478,7 @@ impl<'a> ExecutionFrame<'a> {
         mut evaluate: impl for<'s> FnMut(
             Scheduled<'a, 's>,
             &Self,
-        )
-            -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>>,
+        ) -> Result<crate::cells::Cell, Outcome<SemanticError>>,
     ) -> Result<(), Outcome<SemanticError>> {
         crate::pipeline_metrics::record(crate::pipeline_metrics::Event::FrameExecution);
         let callable = self.callable;
@@ -486,8 +501,7 @@ impl<'a> ExecutionFrame<'a> {
         evaluate: &mut impl for<'s> FnMut(
             Scheduled<'a, 's>,
             &Self,
-        )
-            -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>>,
+        ) -> Result<crate::cells::Cell, Outcome<SemanticError>>,
     ) -> Result<(), Outcome<SemanticError>> {
         let declaration = step.declaration();
         let key = declaration.key();
@@ -509,19 +523,73 @@ impl<'a> ExecutionFrame<'a> {
             self,
         );
         match result {
-            Ok(evaluated) => {
-                self.bind(
-                    key,
-                    declaration.domain(),
-                    evaluated,
-                    scope.source(),
-                    root.span,
-                )?;
+            Ok(cell) => {
+                self.bind_cells(key, declaration.domain(), cell, scope.source(), root.span)?;
             }
             Err(Outcome::Cancelled) => return Err(Outcome::Cancelled),
             Err(Outcome::Failed(error)) => self.failure(key, error)?,
         }
         Ok(())
+    }
+
+    /// Bind `key` to the cells its formula evaluated to: its value when
+    /// every cell has one, else its partial value. Each cell is
+    /// domain-checked; a cell outside the domain fails by itself. Under
+    /// [`FailurePolicy::Propagate`] a failed cell fails the evaluation.
+    fn bind_cells(
+        &mut self,
+        key: &ResolvedDeclName,
+        domain: Option<&ResolvedDomainConstraint>,
+        cell: crate::cells::Cell,
+        source: SourceId,
+        span: Span,
+    ) -> Result<(), SemanticError> {
+        // Each cell of an indexed value is checked by itself, also when every
+        // cell has a value: a cell outside the domain fails alone.
+        let cell = match (cell, domain) {
+            (crate::cells::Cell::Value(value), _) => {
+                return self.bind(key, domain, value, source, span);
+            }
+            (cell, Some(domain)) => cell.check_values(&mut |path, value| {
+                Self::domain_violation(value, Some(domain)).map(|failure| {
+                    let failure = failure.map_error(|violation| {
+                        path.iter()
+                            .rev()
+                            .fold(violation, |violation, key| violation.at_entry(key.clone()))
+                    });
+                    Self::violation_error(failure, source, span)
+                })
+            }),
+            (cell, None) => cell,
+        };
+        let cell = match cell.complete() {
+            Ok(value) => return self.bind(key, None, value, source, span),
+            Err(cell) => cell,
+        };
+        match cell {
+            crate::cells::Cell::Value(value) => self.bind(key, None, value, source, span),
+            crate::cells::Cell::Unavailable(reason) => {
+                self.errors.insert(key.clone(), reason);
+                Ok(())
+            }
+            crate::cells::Cell::Failed(error) => self.failure(key, error),
+            crate::cells::Cell::Axis(cells) => match crate::cells::PartialValue::new(cells) {
+                Ok(partial) => {
+                    if let (FailurePolicy::Propagate, Some(error)) =
+                        (self.policy, partial.first_failure())
+                    {
+                        return Err(error.clone());
+                    }
+                    self.values.remove(key);
+                    self.presented.remove(key);
+                    self.errors.insert(key.clone(), partial.reason(key));
+                    self.partial.insert(key.clone(), partial);
+                    Ok(())
+                }
+                // Every cell passed its domain check: bind the value.
+                Err(complete) => self.bind_cells(key, None, complete, source, span),
+            },
+        }
     }
 
     /// Evaluate a recurrence group element by element: for every step along
@@ -540,8 +608,7 @@ impl<'a> ExecutionFrame<'a> {
         evaluate: &mut impl for<'s> FnMut(
             Scheduled<'a, 's>,
             &Self,
-        )
-            -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>>,
+        ) -> Result<crate::cells::Cell, Outcome<SemanticError>>,
     ) -> Result<(), Outcome<SemanticError>> {
         match self.evaluate_group(group, cancellation, evaluate) {
             Ok(()) => Ok(()),
@@ -591,8 +658,7 @@ impl<'a> ExecutionFrame<'a> {
         evaluate: &mut impl for<'s> FnMut(
             Scheduled<'a, 's>,
             &Self,
-        )
-            -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>>,
+        ) -> Result<crate::cells::Cell, Outcome<SemanticError>>,
     ) -> Result<(), GroupStop> {
         let callable = self.callable;
         let plan = group.plan();
@@ -705,6 +771,19 @@ impl<'a> ExecutionFrame<'a> {
                     }),
                     self,
                 );
+                let result = result.and_then(|cell| {
+                    cell.complete().map_err(|_| {
+                        SemanticError::internal_error(
+                            format!(
+                                "an element of the recurrence member `{}` has cells",
+                                keys[position]
+                            ),
+                            source,
+                            span.into(),
+                        )
+                        .into()
+                    })
+                });
                 let failure = match result {
                     Ok(value) => {
                         match Self::domain_violation(&value, steps[position].declaration().domain())

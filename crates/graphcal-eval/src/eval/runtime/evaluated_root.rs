@@ -17,6 +17,16 @@ use super::root_names::RootNames;
 pub(super) struct EvaluatedRoot<'a> {
     pub(super) values: &'a RuntimeValueMap,
     pub(super) errors: &'a HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    /// The cells of the declarations in `errors` whose indexed values have
+    /// cells with values.
+    pub(super) partial: &'a HashMap<ResolvedDeclName, crate::cells::PartialValue>,
+    /// The same cells with their presentations resolved, for output.
+    pub(super) resolved_cells: &'a HashMap<
+        ResolvedDeclName,
+        crate::runtime_value::IndexedValue<
+            crate::cells::Cell<crate::runtime_presentation::ResolvedValue>,
+        >,
+    >,
     /// The names the root gives the declarations the failures name.
     pub(super) names: &'a RootNames<'a>,
     /// The presented values of the declarations with a presentation,

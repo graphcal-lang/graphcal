@@ -1252,3 +1252,37 @@ fn model_row_failures_name_the_failures_they_originate_from() {
         "result: dependency failed: inner::out; originating failure: inner::ratio (division by zero)"
     );
 }
+
+#[test]
+fn model_row_failures_name_the_failed_cells_of_a_partly_unfinished_value() {
+    use graphcal_model_protocol::{FiniteF64, InputColumn, RequestBatch, RowFailure, RowOutcome};
+
+    let project = crate::loader::LoadedProject::from_source(
+        r"
+        param x: Length(min: 0.0 m, max: 10.0 m);
+        index Part = { Wheel, Bracket };
+        node mixed: Dimensionless[Part] = table[Part] { Wheel: todo<Dimensionless> {}; Bracket: 1.0 m / (@x - 5.0 m); };
+        pub node result: Dimensionless = sum(@mixed);
+        ",
+        "model.gcl",
+    )
+    .unwrap();
+    let prepared = prepare_from_project(&project).unwrap();
+    let schema = session_over(&prepared, &["x"], &["result"]);
+    let session = prepared
+        .model_session(std::sync::Arc::clone(&schema))
+        .unwrap();
+    let request = RequestBatch::new(
+        std::sync::Arc::clone(&schema),
+        vec![InputColumn::Quantity(vec![FiniteF64::new(5.0).unwrap()])],
+    )
+    .unwrap();
+    let result = prepared.evaluate_request(&session, &request).unwrap();
+    let Some(RowOutcome::Failure(RowFailure::EvaluationError { message })) = result.row(0) else {
+        panic!("row 0 fails to evaluate: {:?}", result.row(0));
+    };
+    assert!(
+        message.contains("originating failure: mixed (") && message.contains("division by zero"),
+        "{message}"
+    );
+}

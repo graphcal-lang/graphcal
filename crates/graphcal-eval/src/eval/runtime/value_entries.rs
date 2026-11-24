@@ -14,13 +14,15 @@ use graphcal_compiler::resolved_name::ResolvedDeclName;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::syntax::module_name::ScopedName;
 
+use crate::cells::Cell;
 use crate::eval::output_decl_name::OutputUnavailable;
 use crate::eval::public_projection;
-use crate::eval::types::{EvalEntry, Value};
+use crate::eval::types::{EvalEntry, Value, ValueCells};
 use crate::eval_expr::{EvalSession, RuntimeValue};
 use crate::execution_plan::{Entry, PlannedInstance};
 use crate::presentation_evidence::PresentationDiagnostic;
 use crate::runtime_presentation::PresentedRef;
+use crate::runtime_presentation::ResolvedValue;
 
 use super::evaluated_root::EvaluatedRoot;
 
@@ -37,6 +39,7 @@ struct ValueEntry {
     key: ResolvedDeclName,
     name: ScopedName,
     result: Result<Value, OutputUnavailable>,
+    cells: Option<ValueCells>,
     category: ValueDeclCategory,
     exposure: OutputExposure,
     diagnostics: Vec<PresentationDiagnostic>,
@@ -92,6 +95,7 @@ impl ValueEntries {
             collected.entries.push(EvalEntry {
                 name: entry.name,
                 outcome: entry.result,
+                cells: entry.cells,
                 category: entry.category,
                 identity: entry.key,
             });
@@ -138,6 +142,7 @@ fn nested_instance_entries(
                     .map(|entry| EvalEntry {
                         name: entry.name,
                         outcome: entry.result,
+                        cells: entry.cells,
                         category: entry.category,
                         identity: entry.key,
                     }),
@@ -160,12 +165,12 @@ fn root_entries(
         .filter_map(|declared| declared.value().map(|value| (declared, value.category)))
         .map(|(declared, category)| {
             let key = declared.identity().clone();
-            let (result, diagnostics) = match category {
+            let (result, cells, diagnostics) = match category {
                 ValueDeclCategory::Const => match scope.const_values().get(&key) {
                     Some(runtime) => {
                         let (value, diagnostics) =
                             project_value(&key, Some(runtime), evaluated, ctx)?;
-                        (Ok(value), diagnostics)
+                        (Ok(value), None, diagnostics)
                     }
                     // An unfinished constant: the frame recorded why.
                     None => evaluated_value(&key, evaluated, ctx)?,
@@ -178,6 +183,7 @@ fn root_entries(
                 name: ScopedName::local(declared.name().clone()),
                 key,
                 result,
+                cells,
                 category,
                 exposure: OutputExposure::Surface,
                 diagnostics,
@@ -201,11 +207,13 @@ fn projection_entries(
         .outputs()
         .iter()
         .map(|output| {
-            let (result, diagnostics) = evaluated_value(&output.target, evaluated, &instance_ctx)?;
+            let (result, cells, diagnostics) =
+                evaluated_value(&output.target, evaluated, &instance_ctx)?;
             Ok(ValueEntry {
                 name: record.instance.exposed_name(output.projection),
                 key: output.target.clone(),
                 result,
+                cells,
                 category: output.category,
                 exposure: OutputExposure::Surface,
                 diagnostics,
@@ -230,11 +238,12 @@ fn debug_entries(
         .map(|(entry, category)| {
             let key = entry.identity().clone();
             let name = planned.closure().member(entry.name());
-            let (result, diagnostics) = evaluated_value(&key, evaluated, &instance_ctx)?;
+            let (result, cells, diagnostics) = evaluated_value(&key, evaluated, &instance_ctx)?;
             Ok(ValueEntry {
                 name,
                 key,
                 result,
+                cells,
                 category,
                 exposure: OutputExposure::Debug,
                 diagnostics,
@@ -243,25 +252,36 @@ fn debug_entries(
         .collect()
 }
 
-/// The outcome of an evaluated declaration: its contained failure, or its
-/// value projected with its presentation.
+/// The outcome of an evaluated declaration: its contained failure, with the
+/// cells that have values when it has some, or its value projected with its
+/// presentation.
 fn evaluated_value(
     key: &ResolvedDeclName,
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
-) -> Result<
-    (
-        Result<Value, OutputUnavailable>,
-        Vec<PresentationDiagnostic>,
-    ),
-    SemanticError,
-> {
+) -> Result<EvaluatedOutput, SemanticError> {
     if let Some(error) = evaluated.errors.get(key) {
-        return Ok((Err(evaluated.names.present(error)), Vec::new()));
+        let (cells, diagnostics) = match evaluated.resolved_cells.get(key) {
+            Some(cells) => {
+                let (cells, diagnostics) = project_cells(key, cells, evaluated, ctx)?;
+                (Some(cells), diagnostics)
+            }
+            None => (None, Vec::new()),
+        };
+        return Ok((Err(evaluated.names.present(error)), cells, diagnostics));
     }
     let (value, diagnostics) = project_value(key, evaluated.values.get(key), evaluated, ctx)?;
-    Ok((Ok(value), diagnostics))
+    Ok((Ok(value), None, diagnostics))
 }
+
+/// A declaration's output: its value or why it has none, the cells that
+/// have values when it has none as a whole, and its presentation
+/// diagnostics.
+type EvaluatedOutput = (
+    Result<Value, OutputUnavailable>,
+    Option<ValueCells>,
+    Vec<PresentationDiagnostic>,
+);
 
 /// Project `runtime`, the value of the successfully evaluated `declaration`,
 /// to its public value, displayed as its resolved presented value (which
@@ -272,29 +292,66 @@ fn project_value(
     evaluated: EvaluatedRoot<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<(Value, Vec<PresentationDiagnostic>), SemanticError> {
-    let declared_type = ctx
-        .tir
-        .decl_type(declaration)
-        .map(graphcal_compiler::tir::typed::CheckedDeclType::declared);
-    let (runtime, declared_type) = runtime.zip(declared_type).ok_or_else(|| {
-        ctx.internal_error(
-            format!("successful declaration `{declaration}` has no runtime value or checked type"),
-            DiagnosticAnchor::WholeFile,
-        )
-    })?;
+    let (runtime, declared_type) =
+        runtime.zip(checked_type(declaration, ctx)).ok_or_else(|| {
+            ctx.internal_error(
+                format!(
+                    "successful declaration `{declaration}` has no runtime value or checked type"
+                ),
+                DiagnosticAnchor::WholeFile,
+            )
+        })?;
     let presented = evaluated.presentations.get(declaration).map_or_else(
         || PresentedRef::plain(runtime),
         |presented| presented.as_ref(),
     );
     let (value, notices) = public_projection::project(presented, declared_type)
         .map_err(|invariant| invariant.into_internal_error(ctx.src))?;
-    let diagnostics = notices
+    Ok((value, diagnostics_of(declaration, notices)))
+}
+
+/// Project `cells`, the cells of `declaration` some of which have no value,
+/// each value displayed as its resolved presentation says.
+fn project_cells(
+    declaration: &ResolvedDeclName,
+    cells: &crate::runtime_value::IndexedValue<Cell<ResolvedValue>>,
+    evaluated: EvaluatedRoot<'_>,
+    ctx: &EvalSession<'_>,
+) -> Result<(ValueCells, Vec<PresentationDiagnostic>), SemanticError> {
+    let declared_type = checked_type(declaration, ctx).ok_or_else(|| {
+        ctx.internal_error(
+            format!("declaration `{declaration}` with cells has no checked type"),
+            DiagnosticAnchor::WholeFile,
+        )
+    })?;
+    let (cells, notices) = public_projection::project_cells(cells, declared_type, &mut |missing| {
+        evaluated.names.present(&missing.reason())
+    })
+    .map_err(|invariant| invariant.into_internal_error(ctx.src))?;
+    Ok((cells, diagnostics_of(declaration, notices)))
+}
+
+/// The checked type `declaration` is declared with.
+fn checked_type<'t>(
+    declaration: &ResolvedDeclName,
+    ctx: &EvalSession<'t>,
+) -> Option<&'t graphcal_compiler::semantic::checked_type::CheckedType> {
+    ctx.tir
+        .decl_type(declaration)
+        .map(graphcal_compiler::tir::typed::CheckedDeclType::declared)
+}
+
+/// The presentation diagnostics of `declaration` from its leaves' notices.
+fn diagnostics_of(
+    declaration: &ResolvedDeclName,
+    notices: Vec<crate::presentation_evidence::LeafPresentationDiagnostic>,
+) -> Vec<PresentationDiagnostic> {
+    notices
         .into_iter()
         .map(|detail| PresentationDiagnostic {
             declaration: declaration.clone(),
             channel: None,
             detail,
         })
-        .collect();
-    Ok((value, diagnostics))
+        .collect()
 }

@@ -148,8 +148,30 @@ impl RuntimeUnavailable {
         }
     }
 
+    /// The reason of a read of `source`, which has no value for this
+    /// reason: blocked by its unfinished origins, and failed because
+    /// `source` failed.
+    #[must_use]
+    pub fn read_by(&self, source: &ResolvedDeclName) -> Self {
+        let failed_deps = if self.has_failure() {
+            vec![source.clone()]
+        } else {
+            Vec::new()
+        };
+        NonEmpty::try_from_vec(self.unfinished().to_vec()).map_or_else(
+            |_| Self::DependencyFailed {
+                failed_deps: NonEmpty::singleton(source.clone()),
+            },
+            |unfinished| Self::Blocked {
+                unfinished,
+                failed_deps,
+            },
+        )
+    }
+
     /// The declarations this reason names as failed.
-    fn failed_dependencies(&self) -> &[ResolvedDeclName] {
+    #[must_use]
+    pub fn failed_dependencies(&self) -> &[ResolvedDeclName] {
         match self {
             Self::DependencyFailed { failed_deps } => failed_deps.as_slice(),
             Self::Blocked { failed_deps, .. } => failed_deps,

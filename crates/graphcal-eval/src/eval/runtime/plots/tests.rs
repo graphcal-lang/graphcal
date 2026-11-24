@@ -46,6 +46,8 @@ fn plot_properties_preserve_cancellation_classification() {
     let evaluated = EvaluatedRoot {
         values: &values,
         errors: &errors,
+        partial: &HashMap::new(),
+        resolved_cells: &HashMap::new(),
         names: &names,
         presentations: &presentations,
         frame_presentations: &frame_presentations,

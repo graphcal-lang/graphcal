@@ -67,6 +67,9 @@ pub struct EvalEnvironment<'a> {
             graphcal_compiler::node_unavailable::RuntimeUnavailable,
         >,
     >,
+    /// The declarations whose indexed values have cells without a value,
+    /// with those cells: a read of one cell sees it (#2405).
+    pub partial: Option<&'a HashMap<ResolvedDeclName, crate::cells::PartialValue>>,
     pub unfinished_calls: Option<&'a std::cell::RefCell<BTreeSet<ResolvedDeclName>>>,
     /// The element slots of the recurrence group whose element is being
     /// evaluated: reads of its members go through them.
@@ -117,6 +120,7 @@ impl<'a> EvalSession<'a> {
             tir,
             current_decl: None,
             unavailable: None,
+            partial: None,
             unfinished_calls: None,
             recurrence: None,
         }
@@ -269,6 +273,15 @@ impl<'a> EvalSession<'a> {
         >,
     ) -> Self {
         self.environment.unavailable = Some(unavailable);
+        self
+    }
+
+    #[must_use]
+    pub(crate) const fn with_partial(
+        mut self,
+        partial: &'a HashMap<ResolvedDeclName, crate::cells::PartialValue>,
+    ) -> Self {
+        self.environment.partial = Some(partial);
         self
     }
 

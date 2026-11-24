@@ -22,6 +22,9 @@ pub struct EvalLoopResult {
     pub values: RuntimeValueMap,
     pub(crate) presentations: PendingPresentedMap,
     pub errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    /// The cells of each declaration in `errors` whose indexed value has
+    /// cells with values.
+    pub partial: HashMap<ResolvedDeclName, crate::cells::PartialValue>,
 }
 
 /// Execute the root with ordinary failures contained by the shared machine.
@@ -65,6 +68,7 @@ pub(super) fn run_entry_loop(
         // through immutable scope reselection.
         let root = EvalSession::checked(plan, src, sources, host_fns, cancellation.clone())
             .with_unavailable(frame.errors())
+            .with_partial(frame.partial())
             .with_unfinished_calls(&unfinished_calls);
         eval_scheduled(&entry, frame.values(), frame.presentations(), &root)
     })?;
@@ -74,5 +78,6 @@ pub(super) fn run_entry_loop(
         values: outcome.values,
         presentations: outcome.presented,
         errors: outcome.errors,
+        partial: outcome.partial,
     })
 }

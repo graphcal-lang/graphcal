@@ -16,6 +16,6 @@ pub use types::{
     AssertResult, AxisMeta, CompositionProperty, DisplayProjectionError, DisplayUnit,
     EvalAssertion, EvalEntry, EvalOutputView, EvalResult, FigureSpec, KeyRendering, LayerSpec,
     MarkProperty, NodeUnavailable, PlotError, PlotFieldValue, PlotProperty, PlotSpec,
-    PropertyValue, RenderContext, RuntimeUnavailable, UnitLabel, Value, datetime_literal,
-    quantity_display_value,
+    PropertyValue, RenderContext, RuntimeUnavailable, UnitLabel, Value, ValueCell, ValueCells,
+    datetime_literal, quantity_display_value,
 };

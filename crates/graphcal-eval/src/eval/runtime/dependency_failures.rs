@@ -14,7 +14,8 @@ use super::root_names::RootNames;
 /// evaluate, render a `dependency failed: ...` message naming each failed
 /// dependency as the root names it (direct failures carry their root cause
 /// inline). An unfinished declaration has not failed: the expression is
-/// blocked only if its evaluation reaches it.
+/// blocked only if its evaluation reaches it. Neither has a declaration with
+/// `partial` cells: an expression fails only if it reads a failed cell.
 ///
 /// Shared by assertions (#814) and plots (#842): a reference to a failed
 /// declaration is not "undefined", it is unevaluable, and the report must
@@ -22,6 +23,7 @@ use super::root_names::RootNames;
 pub(super) fn dependency_failure_message<'a>(
     exprs: impl IntoIterator<Item = Scoped<'a, graphcal_compiler::hir::expr::Expr>>,
     errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    partial: &HashMap<ResolvedDeclName, crate::cells::PartialValue>,
     names: &RootNames<'_>,
 ) -> Option<String> {
     if errors.is_empty() {
@@ -31,20 +33,37 @@ pub(super) fn dependency_failure_message<'a>(
         .into_iter()
         .flat_map(Scoped::<'_, graphcal_compiler::hir::expr::Expr>::graph_refs)
         .collect();
-    let failed: Vec<String> = deps
+    let failed = deps
         .iter()
-        .filter_map(|dep| {
-            errors.get(dep).filter(|err| err.has_failure()).map(|err| {
-                let name = names.name(dep);
-                match err {
-                    NodeUnavailable::EvalFailed { message } => format!("{name} ({message})"),
-                    NodeUnavailable::DependencyFailed { .. } => name.to_string(),
-                    reason @ (NodeUnavailable::Todo { .. } | NodeUnavailable::Blocked { .. }) => {
-                        format!("{name} ({})", names.present(reason))
-                    }
-                }
-            })
+        .filter(|dep| {
+            errors
+                .get(*dep)
+                .is_some_and(|err| err.has_failure() && !partial.contains_key(*dep))
         })
-        .collect();
-    (!failed.is_empty()).then(|| format!("dependency failed: {}", failed.join(", ")))
+        .collect::<Vec<_>>();
+    (!failed.is_empty()).then(|| failed_dependencies_message(failed, errors, names))
+}
+
+/// The `dependency failed: ...` message naming each of `failed`, failed
+/// declarations, as the root names it, with its root cause when it failed
+/// by itself.
+pub(super) fn failed_dependencies_message<'a>(
+    failed: impl IntoIterator<Item = &'a ResolvedDeclName>,
+    errors: &HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    names: &RootNames<'_>,
+) -> String {
+    let failed = failed
+        .into_iter()
+        .map(|dep| {
+            let name = names.name(dep);
+            match errors.get(dep) {
+                Some(NodeUnavailable::EvalFailed { message }) => format!("{name} ({message})"),
+                Some(reason @ (NodeUnavailable::Todo { .. } | NodeUnavailable::Blocked { .. })) => {
+                    format!("{name} ({})", names.present(reason))
+                }
+                Some(NodeUnavailable::DependencyFailed { .. }) | None => name.to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    format!("dependency failed: {}", failed.join(", "))
 }
