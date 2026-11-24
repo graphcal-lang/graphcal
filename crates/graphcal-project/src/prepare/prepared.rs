@@ -560,6 +560,7 @@ impl PreparedProject {
                                         )
                                 },
                             )),
+                            cells: None,
                             category: decl_type,
                             identity: imported.value().key().clone(),
                         });
@@ -587,6 +588,7 @@ impl PreparedProject {
                 entries.push(graphcal_eval::eval::EvalEntry {
                     name: name.clone(),
                     outcome: Ok(value),
+                    cells: None,
                     category: decl_type,
                     identity: imported.value().key().clone(),
                 });

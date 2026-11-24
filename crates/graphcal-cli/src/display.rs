@@ -20,7 +20,9 @@
 //! * [`FlatEntry`] / [`OutputBlock`] are the data types the renderer walks.
 
 use graphcal_compiler::dimension::Dimension;
-use graphcal_eval::eval::{KeyRendering, OutputUnavailable, RenderContext, UnitLabel, Value};
+use graphcal_eval::eval::{
+    KeyRendering, OutputUnavailable, RenderContext, UnitLabel, Value, ValueCell, ValueCells,
+};
 
 /// One line of flat output: either a successfully-evaluated value or an error.
 ///
@@ -194,6 +196,19 @@ pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatE
     }
 }
 
+/// Flatten the cells of a value that has none as a whole into one entry per
+/// cell (`name[key]`): its value, or why it has none.
+pub fn flatten_cells<'a>(prefix: &str, cells: &'a ValueCells, entries: &mut Vec<FlatEntry<'a>>) {
+    for (key, cell) in &cells.entries {
+        let name = format!("{prefix}[{}]", cells.entry_display_name(key));
+        match cell {
+            ValueCell::Value(value) => flatten_value(&name, value, entries),
+            ValueCell::Unavailable(reason) => entries.push(FlatEntry::Error(name, reason)),
+            ValueCell::Cells(inner) => flatten_cells(&name, inner, entries),
+        }
+    }
+}
+
 /// Group a sequence of `(name, Result<Value, OutputUnavailable>)` items into output
 /// blocks in source order.
 ///
@@ -202,12 +217,18 @@ pub fn flatten_value<'a>(prefix: &str, value: &'a Value, entries: &mut Vec<FlatE
 /// [`flatten_value`] into the current flat run.
 #[must_use]
 pub fn build_output_blocks<'a>(
-    items: impl IntoIterator<Item = (&'a str, &'a Result<Value, OutputUnavailable>)>,
+    items: impl IntoIterator<
+        Item = (
+            &'a str,
+            &'a Result<Value, OutputUnavailable>,
+            Option<&'a ValueCells>,
+        ),
+    >,
 ) -> Vec<OutputBlock<'a>> {
     let mut blocks: Vec<OutputBlock<'a>> = Vec::new();
     let mut current_flat: Vec<FlatEntry<'a>> = Vec::new();
 
-    for (name, node_result) in items {
+    for (name, node_result, cells) in items {
         match node_result {
             Ok(value) if value.displays_as_grid() => {
                 if !current_flat.is_empty() {
@@ -220,6 +241,9 @@ pub fn build_output_blocks<'a>(
             }
             Err(err) => {
                 current_flat.push(FlatEntry::Error(name.to_string(), err));
+                if let Some(cells) = cells {
+                    flatten_cells(name, cells, &mut current_flat);
+                }
             }
         }
     }
@@ -587,8 +611,8 @@ mod tests {
         let inner = indexed_1d("Col", &[("X", quantity(10.0))]);
         let b = Ok(indexed_1d("Row", &[("R1", inner)]));
         let c = Ok(quantity(3.0));
-        let items: Vec<(&str, &Result<Value, OutputUnavailable>)> =
-            vec![("a", &a), ("b", &b), ("c", &c)];
+        let items: Vec<(&str, &Result<Value, OutputUnavailable>, Option<&ValueCells>)> =
+            vec![("a", &a, None), ("b", &b, None), ("c", &c, None)];
         let blocks = build_output_blocks(items);
         assert_eq!(blocks.len(), 3);
         assert!(matches!(blocks[0], OutputBlock::Flat(_)));
@@ -602,10 +626,10 @@ mod tests {
         let inner = indexed_1d("Col", &[("X", quantity(10.0))]);
         let b = Ok(indexed_1d("Row", &[("R1", inner)]));
         let long = Ok(quantity(3.0));
-        let items: Vec<(&str, &Result<Value, OutputUnavailable>)> = vec![
-            ("a", &a),
-            ("b_is_a_table_and_should_be_ignored", &b),
-            ("cc", &long),
+        let items: Vec<(&str, &Result<Value, OutputUnavailable>, Option<&ValueCells>)> = vec![
+            ("a", &a, None),
+            ("b_is_a_table_and_should_be_ignored", &b, None),
+            ("cc", &long, None),
         ];
         let blocks = build_output_blocks(items);
         // Max flat name is "cc" (2) — the long name in the table is irrelevant.

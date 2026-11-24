@@ -2,10 +2,9 @@ use crate::execution_plan::{RecurrenceBody, RecurrenceDisplay};
 use crate::runtime_value::{IndexAxis, IndexedValue, KeyValue, RuntimeValue};
 use graphcal_compiler::builtin::{AggregationFn, ValueAggregation};
 use graphcal_compiler::outcome::Outcome;
-use graphcal_compiler::semantic::checked_type::{IndexTypeRef, StructTypeRef};
+use graphcal_compiler::semantic::checked_type::StructTypeRef;
 use graphcal_compiler::semantic_error::SemanticError;
 use graphcal_compiler::semantic_error::evaluation::EvaluationError;
-use graphcal_compiler::syntax::index_name::IndexEntryKey;
 use graphcal_compiler::syntax::span::{Span, Spanned};
 use graphcal_compiler::tir::texpr::{
     CoordinateSearch, TConstruct, TConstructorArm, TExpr, TExternArg, TForBinding, TIndexArg,
@@ -23,6 +22,7 @@ use crate::runtime_presentation::{EvaluatedRuntimeValue, PendingPresentedMap, Pr
 use graphcal_compiler::resolved_name::ResolvedDeclName;
 
 use super::context::EvalSession;
+use super::entry_reads::{CellRead, EvaluatorBug, entry_selector, read_cells, unavailable_cells};
 use super::kernel_checkpoint::KernelCheckpoint;
 use super::operations::read_shape;
 use super::runtime_failure::{ExternFailure, InlineAssertionFailure, RuntimeFailure};
@@ -30,30 +30,7 @@ use super::unit_scale::{checked_unit_scaled_value, resolve_unit_scale};
 use crate::constant_pools::RuntimeValueMap;
 use graphcal_compiler::tir::texpr::MapLayout;
 
-pub type HirLocalValueMap<'a> = graphcal_compiler::hir::expr::LocalEnv<'a, EvaluatedRuntimeValue>;
-
-/// A state the checker rules out, so that only a bug in the evaluator
-/// reaches it: reported as an internal error, never as a runtime failure of
-/// the program.
-#[derive(Debug, thiserror::Error)]
-enum EvaluatorBug {
-    #[error("constant `{0}` is not bound where it is read")]
-    UnboundConstant(ResolvedDeclName),
-    #[error("a local variable is not bound where it is read")]
-    UnboundLocal,
-    #[error("graph reference `@{0}` is not bound where it is read")]
-    UnboundGraphRef(ResolvedDeclName),
-    #[error("unfold steps along `{0}`, which is not coordinate-valued")]
-    UnfoldWithoutCoordinates(IndexTypeRef),
-}
-
-impl EvaluatorBug {
-    /// The internal error reporting this state at `span`.
-    #[cold]
-    fn at(self, span: Span, ctx: &EvalSession<'_>) -> SemanticError {
-        ctx.internal_error(self.to_string(), span)
-    }
-}
+pub use super::entry_reads::HirLocalValueMap;
 
 /// Check that an `unfold` steps along a coordinate axis, as checking proved.
 fn require_coordinates(
@@ -65,13 +42,6 @@ fn require_coordinates(
         Some(_) => Ok(()),
         None => Err(EvaluatorBug::UnfoldWithoutCoordinates(axis.index().clone()).at(span, ctx)),
     }
-}
-
-fn index_ref_matches_resolved(
-    actual: &IndexTypeRef,
-    expected: &graphcal_compiler::resolved_name::ResolvedIndexName,
-) -> bool {
-    actual.declared_resolved() == Some(expected)
 }
 
 /// The value of declaration `key`, `value`, borrowed with its presentation:
@@ -171,27 +141,42 @@ pub fn eval_root_with_presentation<T: std::borrow::Borrow<TExpr>>(
     )
 }
 
-/// Evaluate what a frame schedules: a declaration as a whole, or one element
-/// of a recurrence group member, selecting the session of either.
+/// Evaluate what a frame schedules, selecting the session of either.
+///
+/// A declaration's formula is evaluated cell by cell in its result position
+/// (see the `result_cells` module); a recurrence element as one value.
 pub fn eval_scheduled(
     scheduled: &crate::execution_frame::Scheduled<'_, '_>,
     values: &RuntimeValueMap,
     presentation_values: &PendingPresentedMap,
     session: &EvalSession<'_>,
-) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
+) -> Result<crate::cells::Cell, Outcome<SemanticError>> {
     match scheduled {
-        crate::execution_frame::Scheduled::Declaration(declaration) => eval_root_with_presentation(
-            declaration.body(),
-            values,
-            presentation_values,
-            &session.for_declaration(declaration),
-        ),
+        crate::execution_frame::Scheduled::Declaration(declaration) => {
+            let session = session.for_declaration(declaration);
+            let value = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| {
+                eval_value(node, values, locals, &session)
+            };
+            let presented = |node: ScopedNode<'_>, locals: &HirLocalValueMap<'_>| {
+                eval_texpr_evaluated(node, values, Some(presentation_values), locals, &session)
+            };
+            super::result_cells::eval_result(
+                declaration.body().root(),
+                &HirLocalValueMap::root(),
+                &super::result_cells::Whole {
+                    value: &value,
+                    presented: &presented,
+                },
+                &session,
+            )
+        }
         crate::execution_frame::Scheduled::Element(element) => eval_recurrence_element(
             element,
             values,
             presentation_values,
             &session.for_element(element),
-        ),
+        )
+        .map(crate::cells::Cell::Value),
     }
 }
 
@@ -984,7 +969,30 @@ fn eval_index_access(
             .map(|slots| (target, slots)),
         _ => None,
     };
+    let evaluate = |node| eval_value(node, values, local_values, ctx);
+    let operands = super::operations::Operands::new(&evaluate, ctx);
     let base = match inner.kind() {
+        NodeKind::GraphRef(target)
+            if !values.contains_key(&target.value)
+                && let Some(partial) =
+                    ctx.partial.and_then(|partial| partial.get(&target.value)) =>
+        {
+            ctx.cancellation.checkpoint()?;
+            match read_cells(&target, partial, args, &operands, local_values, ctx)? {
+                CellRead::Value {
+                    value,
+                    consumed: read,
+                } => {
+                    consumed = read;
+                    value.as_ref()
+                }
+                CellRead::Cells(cells) => {
+                    return crate::cells::Cell::Axis(cells.clone())
+                        .complete()
+                        .map_err(|_| unavailable_cells(&target, cells, ctx).into());
+                }
+            }
+        }
         NodeKind::GraphRef(_) if let Some((target, slots)) = member => {
             ctx.cancellation.checkpoint()?;
             consumed = 1;
@@ -1005,35 +1013,9 @@ fn eval_index_access(
             evaluated.as_ref()
         }
     };
-    let evaluate = |node| eval_value(node, values, local_values, ctx);
-    let operands = super::operations::Operands::new(&evaluate, ctx);
     let mut current = base;
     for arg in args.iter().skip(consumed) {
-        let selector = match arg.view() {
-            // A label selects only on its own axis, never by its leaf name.
-            ScopedIndexArg::Variant(variant) => EntrySelector::Label(&variant.variant),
-            ScopedIndexArg::Var(local) => {
-                let bound = local_values
-                    .get(local.value)
-                    .ok_or_else(|| EvaluatorBug::UnboundLocal.at(local.span, ctx))?;
-                EntrySelector::Key(read_shape(
-                    bound.value().into_owned(),
-                    "a key",
-                    local.span,
-                    ctx,
-                    |value| match value {
-                        RuntimeValue::Key(key) => Ok(key),
-                        other => Err(other),
-                    },
-                )?)
-            }
-            ScopedIndexArg::Key(operand) => EntrySelector::Key(operands.key(operand)?),
-            // A static integer position on a `Fin` axis (`@m[0, 1]`), proved
-            // in range.
-            ScopedIndexArg::Position(position) => {
-                EntrySelector::Entry(IndexEntryKey::position(position.position))
-            }
-        };
+        let selector = entry_selector(arg.view(), &operands, local_values, ctx)?;
         // The checker proved the selector names an entry of the value's
         // axis, so a value without that entry contradicts its checked type.
         current = read_shape(
@@ -1096,42 +1078,6 @@ fn recurrence_read<'s>(
             )
             .into()
         })
-}
-
-/// How one index argument selects an entry of an indexed value.
-enum EntrySelector<'t> {
-    /// A qualified label: an entry of its own axis only.
-    Label(&'t graphcal_compiler::resolved_name::ResolvedIndexVariant),
-    /// A key of the value's axis, or a narrower `Fin` key widened onto it.
-    Key(KeyValue),
-    /// A static position on a `Fin` axis.
-    Entry(IndexEntryKey),
-}
-
-impl EntrySelector<'_> {
-    /// The entry of `indexed` this selector names, if its axis has one.
-    fn select<'a, L>(
-        &self,
-        indexed: crate::runtime_presentation::EntriesRef<'a, L>,
-    ) -> Option<PresentedRef<'a, L>> {
-        match self {
-            Self::Label(variant) => index_ref_matches_resolved(indexed.index(), variant.index())
-                .then(|| indexed.get(&IndexEntryKey::named(variant.variant().clone())))
-                .flatten(),
-            Self::Key(key) => indexed.get_key(key),
-            Self::Entry(entry) => indexed.get(entry),
-        }
-    }
-}
-
-impl std::fmt::Display for EntrySelector<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Label(variant) => write!(f, "`{variant}`"),
-            Self::Key(key) => write!(f, "`{}`", key.entry_key()),
-            Self::Entry(entry) => write!(f, "`{entry}`"),
-        }
-    }
 }
 
 fn eval_scan(
@@ -1326,7 +1272,10 @@ fn eval_dag_call(
     }
 
     let evaluated = frame.run(&ctx.cancellation, |entry, frame| {
-        let session = ctx.clone().with_unavailable(frame.errors());
+        let session = ctx
+            .clone()
+            .with_unavailable(frame.errors())
+            .with_partial(frame.partial());
         eval_scheduled(&entry, frame.values(), frame.presentations(), &session)
     });
     if let Some(calls) = ctx.unfinished_calls {
@@ -1339,6 +1288,7 @@ fn eval_dag_call(
         values: dag_values,
         presented: mut dag_presented,
         errors,
+        partial,
     } = frame.finish();
 
     check_inline_plan_asserts(
@@ -1346,7 +1296,7 @@ fn eval_dag_call(
         &dag_values,
         target,
         output.span,
-        &ctx.clone().with_unavailable(&errors),
+        &ctx.clone().with_unavailable(&errors).with_partial(&partial),
     )?;
 
     let output_key = &output.value;

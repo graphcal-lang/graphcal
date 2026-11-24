@@ -2375,6 +2375,11 @@ role = "checking"
 
 [[module]]
 package = "eval"
+path = ["cells"]
+role = "contracts"
+
+[[module]]
+package = "eval"
 path = ["checked_program"]
 role = "contracts"
 
@@ -2745,6 +2750,16 @@ role = "interpreter"
 [[module]]
 package = "eval"
 path = ["eval_expr", "runtime_failure"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "entry_reads"]
+role = "interpreter"
+
+[[module]]
+package = "eval"
+path = ["eval_expr", "result_cells"]
 role = "interpreter"
 
 [[module]]

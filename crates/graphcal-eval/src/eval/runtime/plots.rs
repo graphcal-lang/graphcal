@@ -119,7 +119,9 @@ pub(super) fn evaluate_root_plots(
     let mut unavailable = UnavailablePlots::new();
     for plot in &root_plots {
         let name = ScopedName::local(plot.name.clone());
-        match evaluate_plot(plot.unit, plot.entry, evaluated, ctx) {
+        match evaluate_plot(plot.unit, plot.entry, evaluated, ctx)
+            .map_err(|error| error.with_failure_causes(evaluated))
+        {
             Ok(evaluated) => {
                 plots.push(evaluated.into_spec(
                     name,
@@ -325,6 +327,21 @@ impl From<SemanticError> for PlotEvaluationError {
 }
 
 impl PlotEvaluationError {
+    /// This error, with each failed dependency of a read that found no value
+    /// named with its root cause, as the static dependency check names it.
+    fn with_failure_causes(self, evaluated: EvaluatedRoot<'_>) -> Self {
+        match self {
+            Self::Unavailable(NodeUnavailable::DependencyFailed { failed_deps }) => {
+                Self::from(super::dependency_failures::failed_dependencies_message(
+                    failed_deps.as_slice(),
+                    evaluated.errors,
+                    evaluated.names,
+                ))
+            }
+            other => other,
+        }
+    }
+
     fn with_property(self, property: impl BlockProperty) -> Self {
         self.with_property_label("property", property)
     }
@@ -689,6 +706,7 @@ fn check_plot_expression_dependencies(
     dependency_failure_message(
         expressions.iter().copied(),
         evaluated.errors,
+        evaluated.partial,
         evaluated.names,
     )
     .map_or(Ok(()), |message| Err(PlotEvaluationError::from(message)))

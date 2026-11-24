@@ -31,7 +31,7 @@ use crate::presentation_evidence::{
     LeafPresentationDiagnostic, PresentationFailure, PresentationPathPart, QuantityDisplay,
     ResolvedLeaf,
 };
-use crate::runtime_presentation::{PresentedRef, PresentedView};
+use crate::runtime_presentation::{PresentedRef, PresentedView, ResolvedValue};
 use crate::runtime_value::{IndexedValue, RuntimeValue, StructValue};
 
 /// The value of a declaration checked as `Bool`.
@@ -168,6 +168,25 @@ pub fn project(
     Ok((projected, projection.diagnostics))
 }
 
+/// Project `cells`, some of which have no value, to the public cell model.
+///
+/// The cells belong to an indexed value checked as `declared_type`. Each
+/// value is displayed as presented; each cell without a value is reported
+/// as `missing` says.
+///
+/// # Errors
+///
+/// Returns an [`Invariant`] when a cell contradicts its checked type.
+pub fn project_cells(
+    cells: &crate::runtime_value::IndexedValue<crate::cells::Cell<ResolvedValue>>,
+    declared_type: &CheckedType,
+    missing: &mut impl FnMut(crate::cells::MissingCell<'_>) -> crate::eval::OutputUnavailable,
+) -> Result<(crate::eval::ValueCells, Vec<LeafPresentationDiagnostic>), Invariant> {
+    let mut projection = Projection::default();
+    let projected = projection.cells(cells, declared_type, &Path::Root, missing)?;
+    Ok((projected, projection.diagnostics))
+}
+
 /// Where a leaf sits in the projected value; materialized only for a
 /// diagnostic.
 #[derive(Clone, Copy)]
@@ -205,6 +224,51 @@ struct Projection {
 }
 
 impl Projection {
+    fn cells(
+        &mut self,
+        cells: &crate::runtime_value::IndexedValue<crate::cells::Cell<ResolvedValue>>,
+        declared_type: &CheckedType,
+        path: &Path<'_>,
+        missing: &mut impl FnMut(crate::cells::MissingCell<'_>) -> crate::eval::OutputUnavailable,
+    ) -> Result<crate::eval::ValueCells, Invariant> {
+        let CheckedType::Indexed { element, .. } = declared_type else {
+            return Err(mismatch(
+                format_args!("cells `{}[...]`", cells.index()),
+                declared_type,
+            ));
+        };
+        let axis = cells.axis();
+        let entry_display_names = axis.coordinate_data().map(|data| {
+            coordinate_entry_display_names(data, axis.keys().map(std::borrow::Cow::into_owned))
+        });
+        let entries = cells
+            .iter()
+            .map(|(key, cell)| {
+                let path = Path::Index(path, &key);
+                let projected = match cell {
+                    crate::cells::Cell::Value(value) => crate::eval::ValueCell::Value(
+                        self.presented(value.as_ref(), element, &path)?,
+                    ),
+                    crate::cells::Cell::Axis(inner) => {
+                        crate::eval::ValueCell::Cells(self.cells(inner, element, &path, missing)?)
+                    }
+                    crate::cells::Cell::Unavailable(reason) => crate::eval::ValueCell::Unavailable(
+                        missing(crate::cells::MissingCell::Unavailable(reason)),
+                    ),
+                    crate::cells::Cell::Failed(error) => crate::eval::ValueCell::Unavailable(
+                        missing(crate::cells::MissingCell::Failed(error)),
+                    ),
+                };
+                Ok((key.into_owned(), projected))
+            })
+            .collect::<Result<IndexMap<_, _>, Invariant>>()?;
+        Ok(crate::eval::ValueCells {
+            index_name: cells.index().clone(),
+            entries,
+            entry_display_names,
+        })
+    }
+
     fn presented(
         &mut self,
         value: PresentedRef<'_, ResolvedLeaf>,

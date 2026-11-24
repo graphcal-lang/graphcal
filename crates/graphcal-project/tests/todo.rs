@@ -846,3 +846,274 @@ fn graph_export_draws_the_constant_reads_of_an_include_binding() {
         .unwrap_or_else(|| panic!("no port node: {dot}"));
     assert!(dot.contains(&format!("{constant} -> {port};")), "{dot}");
 }
+
+/// The cells of `name`, which has no value as a whole but has cells.
+fn cells<'a>(evaluation: &'a EvalResult, name: &str) -> &'a graphcal_eval::eval::ValueCells {
+    evaluation
+        .entries
+        .iter()
+        .find(|entry| entry.name.to_string() == name)
+        .and_then(|entry| entry.cells.as_ref())
+        .unwrap_or_else(|| panic!("{name} has no cells"))
+}
+
+/// The cell of `cells` at the named entry `label`.
+fn cell<'a>(
+    cells: &'a graphcal_eval::eval::ValueCells,
+    label: &str,
+) -> &'a graphcal_eval::eval::ValueCell {
+    cells
+        .entries
+        .iter()
+        .find_map(|(key, cell)| (key.to_string() == label).then_some(cell))
+        .unwrap_or_else(|| panic!("no cell {label}"))
+}
+
+fn int_of(value: &graphcal_eval::eval::ValueCell) -> i64 {
+    match value {
+        graphcal_eval::eval::ValueCell::Value(graphcal_eval::eval::Value::Int(value)) => *value,
+        other => panic!("not an Int cell: {other:?}"),
+    }
+}
+
+const PARTS: &str = r"
+index Part = { Wheel, Bracket, Panel };
+node qty: Int[Part] = table[Part] {
+    Wheel: 4;
+    Bracket: todo<Int> {};
+    Panel: 2;
+};
+";
+
+#[test]
+fn a_hole_in_one_cell_leaves_the_other_cells_and_their_readers_available() {
+    let evaluation = compile_and_eval(&format!(
+        "{PARTS}
+node wheel_count: Int = @qty[Part#Wheel];
+node bracket_twice: Int = @qty[Part#Bracket] * 2;
+node doubled: Int[Part] = for p: Part {{ @qty[p] * 2 }};
+node total: Int = @qty[Part#Wheel] + @qty[Part#Bracket];
+node picked: Int = @qty[argmax(for p: Part {{ if p == Part#Panel {{ 1.0 }} else {{ 0.0 }} }})];
+"
+    ))
+    .unwrap();
+    assert!(matches!(
+        result(&evaluation, "qty"),
+        Err(NodeUnavailable::Todo { .. })
+    ));
+    let qty = cells(&evaluation, "qty");
+    assert_eq!(int_of(cell(qty, "Wheel")), 4);
+    assert_eq!(int_of(cell(qty, "Panel")), 2);
+    assert!(matches!(
+        cell(qty, "Bracket"),
+        graphcal_eval::eval::ValueCell::Unavailable(NodeUnavailable::Todo { .. })
+    ));
+    assert!(result(&evaluation, "wheel_count").is_ok());
+    // A runtime key reads the one cell it selects.
+    assert!(result(&evaluation, "picked").is_ok());
+    for blocked in ["bracket_twice", "total", "doubled"] {
+        assert!(
+            matches!(
+                result(&evaluation, blocked),
+                Err(NodeUnavailable::Blocked { .. })
+            ),
+            "{blocked}: {:?}",
+            result(&evaluation, blocked)
+        );
+    }
+    let doubled = cells(&evaluation, "doubled");
+    assert_eq!(int_of(cell(doubled, "Wheel")), 8);
+    assert!(matches!(
+        cell(doubled, "Bracket"),
+        graphcal_eval::eval::ValueCell::Unavailable(NodeUnavailable::Blocked { .. })
+    ));
+    assert!(evaluation.is_incomplete());
+    assert!(!evaluation.has_errors());
+}
+
+#[test]
+fn cells_pass_through_references_slices_and_selected_arms() {
+    let evaluation = compile_and_eval(
+        r"
+index Phase = { Launch, Cruise };
+index Part = { Wheel, Bracket };
+param pick_launch: Bool = true;
+node m: Int[Phase, Part] = table[Phase, Part] {
+    : Wheel, Bracket;
+    Launch: 1, todo<Int> {};
+    Cruise: 3, 4;
+};
+node alias: Int[Phase, Part] = @m;
+node launch: Int[Part] = @m[Phase#Launch];
+node cruise: Int[Part] = @m[Phase#Cruise];
+node chosen: Int[Part] = if @pick_launch { @m[Phase#Launch] } else { @m[Phase#Cruise] };
+node launch_wheel: Int = @m[Phase#Launch, Part#Wheel];
+",
+    )
+    .unwrap();
+    // A slice whose cells all have values is a value.
+    assert!(result(&evaluation, "cruise").is_ok());
+    assert!(result(&evaluation, "launch_wheel").is_ok());
+    for name in ["alias", "launch", "chosen"] {
+        assert!(
+            matches!(
+                result(&evaluation, name),
+                Err(NodeUnavailable::Blocked { .. })
+            ),
+            "{name}: {:?}",
+            result(&evaluation, name)
+        );
+    }
+    assert_eq!(int_of(cell(cells(&evaluation, "launch"), "Wheel")), 1);
+    assert_eq!(int_of(cell(cells(&evaluation, "chosen"), "Wheel")), 1);
+    let alias = cells(&evaluation, "alias");
+    let graphcal_eval::eval::ValueCell::Cells(cruise) = cell(alias, "Cruise") else {
+        panic!("a row of cells");
+    };
+    assert_eq!(int_of(cell(cruise, "Bracket")), 4);
+}
+
+#[test]
+fn a_failed_or_out_of_domain_cell_fails_alone() {
+    let evaluation = compile_and_eval(
+        r"
+index Part = { Wheel, Bracket, Panel };
+param divisor: Int = 0;
+node ratio: Int[Part] = for p: Part { if p == Part#Panel { div_trunc(1, @divisor) } else { 1 } };
+node bounded: Int(min: 0)[Part] = table[Part] { Wheel: 1; Bracket: -1; Panel: todo<Int> {}; };
+node wheel_ratio: Int = @ratio[Part#Wheel];
+node panel_ratio: Int = @ratio[Part#Panel];
+",
+    )
+    .unwrap();
+    assert!(evaluation.has_errors());
+    assert!(result(&evaluation, "wheel_ratio").is_ok());
+    let reason = result(&evaluation, "panel_ratio").as_ref().unwrap_err();
+    assert!(reason.has_failure(), "{reason:?}");
+    let ratio = cells(&evaluation, "ratio");
+    assert_eq!(int_of(cell(ratio, "Bracket")), 1);
+    let bounded = cells(&evaluation, "bounded");
+    assert_eq!(int_of(cell(bounded, "Wheel")), 1);
+    assert!(matches!(
+        cell(bounded, "Bracket"),
+        graphcal_eval::eval::ValueCell::Unavailable(NodeUnavailable::EvalFailed { .. })
+    ));
+    assert!(matches!(
+        cell(bounded, "Panel"),
+        graphcal_eval::eval::ValueCell::Unavailable(NodeUnavailable::Todo { .. })
+    ));
+}
+
+#[test]
+fn a_struct_with_a_hole_in_one_field_is_unfinished_as_a_whole() {
+    let evaluation = compile_and_eval(
+        r"
+type Pair { Pair(length: Length, time: Time) }
+node pair: Pair = Pair(length: 1.0 m, time: todo<Time> {});
+node length: Length = @pair.length;
+",
+    )
+    .unwrap();
+    assert!(matches!(
+        result(&evaluation, "pair"),
+        Err(NodeUnavailable::Todo { .. })
+    ));
+    assert!(matches!(
+        result(&evaluation, "length"),
+        Err(NodeUnavailable::Blocked { .. })
+    ));
+}
+
+#[test]
+fn a_cell_outside_the_domain_fails_alone_also_when_every_cell_has_a_value() {
+    let evaluation = compile_and_eval(
+        r"
+index Part = { Wheel, Bracket, Panel };
+node bounded: Int(min: 0)[Part] = table[Part] { Wheel: 1; Bracket: -1; Panel: 2; };
+node wheel: Int = @bounded[Part#Wheel];
+",
+    )
+    .unwrap();
+    assert!(evaluation.has_errors());
+    assert!(result(&evaluation, "wheel").is_ok());
+    let bounded = cells(&evaluation, "bounded");
+    assert_eq!(int_of(cell(bounded, "Panel")), 2);
+    assert!(matches!(
+        cell(bounded, "Bracket"),
+        graphcal_eval::eval::ValueCell::Unavailable(NodeUnavailable::EvalFailed { .. })
+    ));
+}
+
+#[test]
+fn an_indexed_row_outside_the_domain_fails_only_in_its_bad_entry() {
+    let evaluation = compile_and_eval(
+        r"
+index Row = { A, B };
+index Col = { X, Y };
+node raw: Int[Col] = table[Col] { X: 1; Y: -1; };
+node bounded: Int(min: 0)[Row, Col] = for r: Row { @raw };
+node good: Int = @bounded[Row#A, Col#X];
+",
+    )
+    .unwrap();
+    assert!(
+        result(&evaluation, "good").is_ok(),
+        "{:?}",
+        result(&evaluation, "good")
+    );
+    assert!(evaluation.has_errors());
+}
+
+#[test]
+fn a_mixed_value_keeps_the_failed_declarations_its_cells_read() {
+    let evaluation = compile_and_eval(
+        r"
+index Part = { Wheel, Bracket };
+param divisor: Int = 0;
+node bad: Int = div_trunc(1, @divisor);
+node mixed: Int[Part] = table[Part] { Wheel: todo<Int> {} + @bad; Bracket: div_trunc(2, @divisor); };
+",
+    )
+    .unwrap();
+    let Err(NodeUnavailable::Blocked { failed_deps, .. }) = result(&evaluation, "mixed") else {
+        panic!("{:?}", result(&evaluation, "mixed"));
+    };
+    let failed = failed_deps
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    assert!(failed.contains(&"bad".to_owned()), "{failed:?}");
+    assert!(failed.contains(&"mixed".to_owned()), "{failed:?}");
+}
+
+#[test]
+fn a_failed_cell_does_not_hide_an_unfinished_one_in_a_nested_row() {
+    let evaluation = compile_and_eval(
+        r"
+index Row = { A, B };
+index Col = { X, Y };
+param divisor: Int = 0;
+node mixed: Int[Row, Col] = table[Row, Col] { : X, Y; A: todo<Int> {}, div_trunc(1, @divisor); B: 1, 2; };
+",
+    )
+    .unwrap();
+    let reason = result(&evaluation, "mixed").as_ref().unwrap_err();
+    assert!(reason.has_failure(), "{reason:?}");
+    assert!(reason.is_incomplete(), "{reason:?}");
+}
+
+#[test]
+fn a_failed_cell_does_not_hide_an_unfinished_one() {
+    let evaluation = compile_and_eval(
+        r"
+index Part = { Wheel, Bracket, Panel };
+param divisor: Int = 0;
+node mixed: Int[Part] = table[Part] { Wheel: 1; Bracket: todo<Int> {}; Panel: div_trunc(1, @divisor); };
+",
+    )
+    .unwrap();
+    let reason = result(&evaluation, "mixed").as_ref().unwrap_err();
+    assert!(reason.has_failure(), "{reason:?}");
+    assert!(reason.is_incomplete(), "{reason:?}");
+    assert!(evaluation.has_errors());
+}

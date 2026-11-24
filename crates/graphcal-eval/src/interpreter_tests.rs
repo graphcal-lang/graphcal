@@ -2247,8 +2247,10 @@ mod execution_frames {
                         )
                         .into());
                     }
-                    Ok(crate::runtime_presentation::EvaluatedRuntimeValue::plain(
-                        crate::runtime_value::RuntimeValue::quantity(2.0).unwrap(),
+                    Ok(crate::cells::Cell::Value(
+                        crate::runtime_presentation::EvaluatedRuntimeValue::plain(
+                            crate::runtime_value::RuntimeValue::quantity(2.0).unwrap(),
+                        ),
                     ))
                 });
                 if fatal || matches!(policy, FailurePolicy::Propagate) {

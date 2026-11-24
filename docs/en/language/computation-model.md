@@ -95,6 +95,21 @@ A hole has the written type `T` and can replace a whole formula or any part of o
 
 Here, `mass_ratio` evaluates, `v_exhaust` is **TODO**, and `delta_v` is **BLOCKED**. Evaluation decides these outcomes: a declaration is TODO when its evaluation reaches one of its own holes, and BLOCKED when it reads a value that is TODO or BLOCKED. A hole that evaluation does not reach, such as one in an unselected branch, does not affect the result. These outcomes are not values, `null`, or evaluation errors, and no formula can test for them. A value that is computed is therefore the same however the holes are later filled.
 
+Each element of an indexed value is its own node, so a hole can leave one cell unfinished while the others keep their values:
+
+```
+index Part = { Wheel, Bracket, Panel };
+node qty: Int[Part] = table[Part] {
+    Wheel: 4;
+    Bracket: todo<Int> {};
+    Panel: 2;
+};
+node wheels: Int = @qty[Part#Wheel];
+node doubled: Int[Part] = for p: Part { @qty[p] * 2 };
+```
+
+Here `qty[Bracket]` is TODO, `wheels` is `4`, and `doubled` has the values `8` and `4` with `doubled[Bracket]` BLOCKED. Cells are evaluated one by one when a `for`, a map or table literal, or a reference to another declaration forms the value of a declaration. Reading one cell, such as `@qty[Part#Wheel]` or `@qty[p]`, needs only that cell. Reading the whole value, as `sum` does, is BLOCKED while any cell has no value. A struct value is one node: a hole in one of its fields leaves the whole value unfinished. An evaluation failure, such as a division by zero or a value outside the domain, likewise affects only its own cell.
+
 Replace every hole with an expression to finish the node. The formula then determines its dependencies; no historical contract remains. `check` accepts otherwise-valid unfinished models and summarizes them (`--deny-todo` rejects them). `eval` prints partial results but exits unsuccessfully unless `--allow-incomplete` is given, even when no result reached a hole with the given inputs. That flag never suppresses genuine evaluation or assertion failures.
 
 ### Constants

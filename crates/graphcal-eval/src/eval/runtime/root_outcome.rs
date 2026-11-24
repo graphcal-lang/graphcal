@@ -34,6 +34,7 @@ pub struct RootOutcome {
     values: RuntimeValueMap,
     presentations: PendingPresentedMap,
     errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    partial: HashMap<ResolvedDeclName, crate::cells::PartialValue>,
     assertions: Vec<EvalAssertion>,
 }
 
@@ -115,6 +116,7 @@ impl RootOutcome {
             values,
             presentations,
             errors,
+            partial,
         } = run_entry_loop(entry, bindings, src, sources, host_fns, cancellation)?;
         cancellation.checkpoint()?;
         let mut outcome = Self {
@@ -122,6 +124,7 @@ impl RootOutcome {
             values,
             presentations,
             errors,
+            partial,
             assertions: Vec::new(),
         };
         let ctx = outcome.session(plan, src, sources, host_fns, cancellation);
@@ -131,6 +134,7 @@ impl RootOutcome {
             &ctx,
             &outcome.values,
             &outcome.errors,
+            &outcome.partial,
             &RootNames::new(entry, display_names),
         )?;
         outcome.assertions = assertions;
@@ -149,6 +153,7 @@ impl RootOutcome {
     ) -> EvalSession<'a> {
         EvalSession::checked(plan, src, sources, host_fns, cancellation.clone())
             .with_unavailable(&self.errors)
+            .with_partial(&self.partial)
             .with_unfinished_calls(&self.unfinished_calls)
     }
 
@@ -160,6 +165,12 @@ impl RootOutcome {
     /// The declarations that failed or are unavailable.
     pub(crate) const fn errors(&self) -> &HashMap<ResolvedDeclName, RuntimeUnavailable> {
         &self.errors
+    }
+
+    /// The cells of the declarations in [`Self::errors`] whose indexed values
+    /// have cells with values.
+    pub(crate) const fn partial(&self) -> &HashMap<ResolvedDeclName, crate::cells::PartialValue> {
+        &self.partial
     }
 
     /// The presentations of the evaluated declarations, still pending: the
@@ -268,10 +279,22 @@ impl RootOutcome {
                 continue;
             }
             match self.errors.get(&declaration) {
-                Some(NodeUnavailable::EvalFailed { .. }) => {
-                    origins.insert(declaration);
+                Some(NodeUnavailable::EvalFailed { message }) => {
+                    origins.insert((declaration, message.clone()));
                 }
-                Some(dependent) => pending.extend(failed_dependencies(dependent).iter().cloned()),
+                Some(dependent) => {
+                    // A declaration with cells failed by itself in each of
+                    // its failed cells (#2405).
+                    if let Some(cells) = self.partial.get(&declaration) {
+                        origins.extend(
+                            cells
+                                .failures()
+                                .into_iter()
+                                .map(|error| (declaration.clone(), error.to_string())),
+                        );
+                    }
+                    pending.extend(failed_dependencies(dependent).iter().cloned());
+                }
                 // A failure recorded outside this evaluation's declarations,
                 // e.g. inside an invoked call, has its cause in its message.
                 None => {}
@@ -279,12 +302,9 @@ impl RootOutcome {
         }
         origins
             .into_iter()
-            .filter_map(|declaration| match self.errors.get(&declaration) {
-                Some(NodeUnavailable::EvalFailed { message }) => Some(FailureOrigin {
-                    name: names.name(&declaration),
-                    message: message.clone(),
-                }),
-                _ => None,
+            .map(|(declaration, message)| FailureOrigin {
+                name: names.name(&declaration),
+                message,
             })
             .collect()
     }

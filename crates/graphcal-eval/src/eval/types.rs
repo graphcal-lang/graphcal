@@ -743,13 +743,53 @@ pub enum EvalOutputView {
 pub struct EvalEntry {
     /// The output name the value is reported under.
     pub name: ScopedName,
-    /// The value, or why it is unavailable.
+    /// The value, or why it is unavailable as a whole.
     pub outcome: Result<Value, OutputUnavailable>,
+    /// When the declaration has no value as a whole but some cells of its
+    /// indexed value do: every cell, with its value or why it has none
+    /// (#2405). Always `None` when `outcome` is a value.
+    pub cells: Option<ValueCells>,
     /// Whether the declaration is a const, a param, or a node.
     pub category: ValueDeclCategory,
     /// The canonical declaration the entry reports, so tools join entries
     /// with the checked program without re-deriving output names.
     pub identity: graphcal_compiler::resolved_name::ResolvedDeclName,
+}
+
+/// The cells of an indexed value along one axis, some of which have no
+/// value (#2405). Each element of an indexed value is its own node of the
+/// computation DAG, so its cells are reported one by one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueCells {
+    /// The index type identity of the axis.
+    pub index_name: IndexTypeRef,
+    /// One cell per key of the axis, in axis order.
+    pub entries: IndexMap<IndexEntryKey, ValueCell>,
+    /// Display labels for coordinate keys, as for [`Value::Indexed`].
+    pub entry_display_names: Option<IndexMap<IndexEntryKey, String>>,
+}
+
+impl ValueCells {
+    /// The display name of the cell at `key`: its coordinate label on a
+    /// coordinate axis, else the key itself.
+    #[must_use]
+    pub fn entry_display_name(&self, key: &IndexEntryKey) -> String {
+        self.entry_display_names
+            .as_ref()
+            .and_then(|names| names.get(key).cloned())
+            .unwrap_or_else(|| key.to_string())
+    }
+}
+
+/// One cell of [`ValueCells`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum ValueCell {
+    /// The cell's value.
+    Value(Value),
+    /// Why the cell has no value.
+    Unavailable(OutputUnavailable),
+    /// The cells along the next axis, some of which have no value.
+    Cells(ValueCells),
 }
 
 /// One assertion outcome the root reports.

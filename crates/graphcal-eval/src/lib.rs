@@ -7,6 +7,7 @@
 
 // Modules owned by graphcal-eval.
 pub(crate) mod assertion_eval;
+pub mod cells;
 pub mod checked_program;
 pub mod constant_pools;
 mod deferred_field_checks;
