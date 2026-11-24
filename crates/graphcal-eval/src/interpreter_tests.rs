@@ -2210,7 +2210,7 @@ mod execution_frames {
         for policy in [FailurePolicy::Contain, FailurePolicy::Propagate] {
             for fatal in [false, true] {
                 let mut frame = ExecutionFrame::new(plan, plan.root(), policy);
-                let outcome = frame.run(&token, |entry, _| {
+                let outcome = frame.run(&token, |entry, frame| {
                     let crate::execution_frame::Scheduled::Declaration(entry) = entry else {
                         panic!("the program has no recurrence group")
                     };
@@ -2230,11 +2230,23 @@ mod execution_frames {
                         }
                         .into());
                     }
-                    assert_ne!(
-                        entry.key().as_str(),
-                        "dependent",
-                        "failed dependencies must never be interpreted"
-                    );
+                    // The frame evaluates a dependent of a failed declaration;
+                    // reading the failed value is what makes it unavailable.
+                    if entry.key().as_str() == "dependent" {
+                        let (failed, reason) = frame
+                            .errors()
+                            .iter()
+                            .find(|(key, _)| key.as_str() == "a")
+                            .expect("`a` failed before its dependent runs");
+                        return Err(SemanticError::located(
+                            src,
+                            entry.body().root().span(),
+                            EvaluationError::Unavailable {
+                                reason: NodeUnavailable::blocked_by([(failed, reason)]).unwrap(),
+                            },
+                        )
+                        .into());
+                    }
                     Ok(crate::runtime_presentation::EvaluatedRuntimeValue::plain(
                         crate::runtime_value::RuntimeValue::quantity(2.0).unwrap(),
                     ))

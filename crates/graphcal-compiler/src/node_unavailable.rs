@@ -96,6 +96,50 @@ impl<N> NodeUnavailable<N> {
 }
 
 impl RuntimeUnavailable {
+    /// The reason of an evaluation whose inputs have no value for the
+    /// reasons `self` and `other`: every unfinished origin and failed
+    /// declaration of both. An evaluation failure with a message is kept as
+    /// it is, since it explains itself.
+    #[must_use]
+    pub fn merged(self, other: Self) -> Self {
+        match (self, other) {
+            (failed @ Self::EvalFailed { .. }, _) | (_, failed @ Self::EvalFailed { .. }) => failed,
+            (first, second) => {
+                let unfinished = first
+                    .unfinished()
+                    .iter()
+                    .chain(second.unfinished())
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let failed_deps = first
+                    .failed_dependencies()
+                    .iter()
+                    .chain(second.failed_dependencies())
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                match NonEmpty::try_from_vec(unfinished.into_iter().collect()) {
+                    Ok(unfinished) => Self::Blocked {
+                        unfinished,
+                        failed_deps: failed_deps.into_iter().collect(),
+                    },
+                    // Neither reason names a declaration: only an evaluation
+                    // failure does not, and it is kept above.
+                    Err(_) => NonEmpty::try_from_vec(failed_deps.into_iter().collect())
+                        .map_or(first, |failed_deps| Self::DependencyFailed { failed_deps }),
+                }
+            }
+        }
+    }
+
+    /// The declarations this reason names as failed.
+    fn failed_dependencies(&self) -> &[ResolvedDeclName] {
+        match self {
+            Self::DependencyFailed { failed_deps } => failed_deps.as_slice(),
+            Self::Blocked { failed_deps, .. } => failed_deps,
+            Self::EvalFailed { .. } | Self::Todo { .. } => &[],
+        }
+    }
+
     /// Derive a dependent's outcome, preserving every unfinished origin and
     /// any independently failed input. No unavailable input is a valid case.
     #[must_use]

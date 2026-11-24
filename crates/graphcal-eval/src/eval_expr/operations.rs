@@ -309,8 +309,7 @@ pub(super) fn quantity<'t>(
                 .map_err(Outcome::Failed)
         }
         QExpr::Arith { op, lhs, rhs } => {
-            let lhs = operands.quantity(lhs)?;
-            let rhs = operands.quantity(rhs)?;
+            let (lhs, rhs) = super::strict::both(operands.quantity(lhs), operands.quantity(rhs))?;
             super::arithmetic::quantity_arith(op, lhs, rhs, ctx, span).map_err(Outcome::Failed)
         }
         QExpr::ExactPower { base, exponent, .. } => {
@@ -319,14 +318,13 @@ pub(super) fn quantity<'t>(
                 .map_err(Outcome::Failed)
         }
         QExpr::Power { base, exponent } => {
-            let base = operands.quantity(base)?;
-            let exponent = operands.quantity(exponent)?;
+            let (base, exponent) =
+                super::strict::both(operands.quantity(base), operands.quantity(exponent))?;
             super::arithmetic::quantity_power(base, exponent, ctx, span).map_err(Outcome::Failed)
         }
         QExpr::Neg(operand) => Ok(operands.quantity(operand)?.negated()),
         QExpr::DatetimeDifference { lhs, rhs } => {
-            let lhs = operands.datetime(lhs)?;
-            let rhs = operands.datetime(rhs)?;
+            let (lhs, rhs) = super::strict::both(operands.datetime(lhs), operands.datetime(rhs))?;
             let seconds = super::datetime::checked_epoch_difference_seconds(lhs, rhs)
                 .map_err(|error| ctx.runtime_error(error, span))?;
             super::numeric::finite_quantity(seconds, "datetime difference")
@@ -334,10 +332,10 @@ pub(super) fn quantity<'t>(
                 .map_err(Outcome::Failed)
         }
         QExpr::Scalar { function, ref args } => {
-            let arguments = args
-                .iter()
-                .map(|arg| operands.quantity(*arg).map(FiniteQuantity::get))
-                .collect::<Result<Vec<_>, _>>()?;
+            let arguments = super::strict::all(
+                args.iter()
+                    .map(|arg| operands.quantity(*arg).map(FiniteQuantity::get)),
+            )?;
             let result = graphcal_compiler::semantic::scalar_function::scalar_function(function)
                 .eval(&arguments)
                 .map_err(|error| {
@@ -388,8 +386,7 @@ pub(super) fn int<'t>(
     match *operation {
         IExpr::Literal(value) => Ok(value),
         IExpr::Arith { op, lhs, rhs } => {
-            let lhs = operands.int(lhs)?;
-            let rhs = operands.int(rhs)?;
+            let (lhs, rhs) = super::strict::both(operands.int(lhs), operands.int(rhs))?;
             super::arithmetic::int_arith(op, lhs, rhs, ctx, span).map_err(Outcome::Failed)
         }
         IExpr::Division {
@@ -397,8 +394,8 @@ pub(super) fn int<'t>(
             dividend,
             divisor,
         } => {
-            let dividend = operands.int(dividend)?;
-            let divisor = operands.int(divisor)?;
+            let (dividend, divisor) =
+                super::strict::both(operands.int(dividend), operands.int(divisor))?;
             super::arithmetic::int_division(function, dividend, divisor, ctx, span)
                 .map_err(Outcome::Failed)
         }
@@ -407,8 +404,7 @@ pub(super) fn int<'t>(
             super::arithmetic::int_power(base, exponent, ctx, span).map_err(Outcome::Failed)
         }
         IExpr::Power { base, exponent } => {
-            let base = operands.int(base)?;
-            let exponent = operands.int(exponent)?;
+            let (base, exponent) = super::strict::both(operands.int(base), operands.int(exponent))?;
             super::arithmetic::int_power(base, exponent, ctx, span).map_err(Outcome::Failed)
         }
         IExpr::Neg(operand) => super::arithmetic::int_negate(operands.int(operand)?, ctx, span)
@@ -463,18 +459,15 @@ pub(super) fn boolean<'t>(
         BExpr::Literal(value) => value,
         BExpr::Not(operand) => !operands.bool(operand)?,
         BExpr::And { lhs, rhs } => {
-            let lhs = operands.bool(lhs)?;
-            let rhs = operands.bool(rhs)?;
+            let (lhs, rhs) = super::strict::both(operands.bool(lhs), operands.bool(rhs))?;
             lhs && rhs
         }
         BExpr::Or { lhs, rhs } => {
-            let lhs = operands.bool(lhs)?;
-            let rhs = operands.bool(rhs)?;
+            let (lhs, rhs) = super::strict::both(operands.bool(lhs), operands.bool(rhs))?;
             lhs || rhs
         }
         BExpr::Equality { op, lhs, rhs } => {
-            let lhs = operands.value(lhs)?;
-            let rhs = operands.value(rhs)?;
+            let (lhs, rhs) = super::strict::both(operands.value(lhs), operands.value(rhs))?;
             (lhs == rhs) == (op == EqualityOp::Eq)
         }
         BExpr::Ordering {
@@ -484,18 +477,17 @@ pub(super) fn boolean<'t>(
             rhs,
         } => match kind {
             OrderedOperands::Quantity => {
-                let lhs = operands.quantity(lhs)?;
-                let rhs = operands.quantity(rhs)?;
+                let (lhs, rhs) =
+                    super::strict::both(operands.quantity(lhs), operands.quantity(rhs))?;
                 apply_ordering(op, &lhs, &rhs)
             }
             OrderedOperands::Int => {
-                let lhs = operands.int(lhs)?;
-                let rhs = operands.int(rhs)?;
+                let (lhs, rhs) = super::strict::both(operands.int(lhs), operands.int(rhs))?;
                 apply_ordering(op, &lhs, &rhs)
             }
             OrderedOperands::Datetime => {
-                let lhs = operands.datetime(lhs)?;
-                let rhs = operands.datetime(rhs)?;
+                let (lhs, rhs) =
+                    super::strict::both(operands.datetime(lhs), operands.datetime(rhs))?;
                 apply_ordering(op, &lhs, &rhs)
             }
         },
@@ -510,8 +502,7 @@ pub(super) fn complex<'t>(
 ) -> Result<ComplexValue, Outcome<SemanticError>> {
     let result = match *operation {
         CExpr::Arith { op, lhs, rhs } => {
-            let lhs = operands.complex(lhs)?;
-            let rhs = operands.complex(rhs)?;
+            let (lhs, rhs) = super::strict::both(operands.complex(lhs), operands.complex(rhs))?;
             super::complex::arith(op, lhs, rhs)
         }
         CExpr::ScaleRight {
@@ -519,8 +510,8 @@ pub(super) fn complex<'t>(
             complex,
             scalar,
         } => {
-            let complex = operands.complex(complex)?;
-            let scalar = operands.quantity(scalar)?;
+            let (complex, scalar) =
+                super::strict::both(operands.complex(complex), operands.quantity(scalar))?;
             super::complex::scale_right(op, complex, scalar)
         }
         CExpr::ScaleLeft {
@@ -528,19 +519,18 @@ pub(super) fn complex<'t>(
             scalar,
             complex,
         } => {
-            let scalar = operands.quantity(scalar)?;
-            let complex = operands.complex(complex)?;
+            let (scalar, complex) =
+                super::strict::both(operands.quantity(scalar), operands.complex(complex))?;
             super::complex::scale_left(op, scalar, complex)
         }
         CExpr::Neg(operand) => return Ok(operands.complex(operand)?.negated()),
         CExpr::Rectangular { re, im } => {
-            let re = operands.quantity(re)?;
-            let im = operands.quantity(im)?;
+            let (re, im) = super::strict::both(operands.quantity(re), operands.quantity(im))?;
             return Ok(ComplexValue::from_parts(re, im));
         }
         CExpr::Polar { magnitude, phase } => {
-            let magnitude = operands.quantity(magnitude)?;
-            let phase = operands.quantity(phase)?;
+            let (magnitude, phase) =
+                super::strict::both(operands.quantity(magnitude), operands.quantity(phase))?;
             super::complex::polar(magnitude, phase)
         }
         CExpr::FromReal(arg) => {

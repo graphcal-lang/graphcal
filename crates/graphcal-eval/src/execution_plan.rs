@@ -40,7 +40,6 @@ use thiserror::Error;
 use crate::checked_program::{CheckedProgram, SealedDag};
 use crate::constant_pools::ConstantReference;
 use crate::domain_constraint::ResolvedDomainConstraint;
-use crate::unfinished_reach::UnfinishedReachMemo;
 
 /// An index into one [`IndexVec`], whose items are pushed in the order of
 /// their indices.
@@ -124,8 +123,7 @@ impl<I: PlanIndex, T> std::ops::Index<I> for IndexVec<I, T> {
 /// What running one value declaration does.
 #[derive(Clone)]
 pub enum PlannedBody<'p> {
-    /// A param default, a node formula, or an unfinished node: a callable
-    /// computes it.
+    /// A param default or a node formula: a callable computes it.
     Computed(ComputedBody<'p>),
     /// A constant or a required port: nothing is evaluated at runtime, and
     /// no callable has a step for it.
@@ -135,12 +133,6 @@ pub enum PlannedBody<'p> {
 /// What computing one value declaration does.
 #[derive(Clone)]
 pub enum ComputedBody<'p> {
-    /// An unfinished node: running it records the TODO.
-    Todo,
-    /// A finished member of a recurrence group that also has unfinished
-    /// members: every member reaches them, so running it records BLOCKED by
-    /// them without evaluating. Only a group's planned steps carry it.
-    BlockedInGroup(NonEmpty<ResolvedDeclName>),
     /// A param default or a node formula, in the scope of the DAG that owns
     /// the declaration.
     Expression {
@@ -222,8 +214,6 @@ impl std::fmt::Debug for PlannedDeclaration<'_> {
             .field(
                 "kind",
                 &match &self.body {
-                    PlannedBody::Computed(ComputedBody::Todo) => "todo",
-                    PlannedBody::Computed(ComputedBody::BlockedInGroup(_)) => "blocked in group",
                     PlannedBody::Computed(ComputedBody::Expression { tree: Ok(_), .. }) => {
                         "executable"
                     }
@@ -711,10 +701,9 @@ type ComputedEntry<'p> = (
 
 /// Add the members of the recurrence group `plan`, scheduled as group
 /// `membership`, to `computed`. A group whose members all have executable
-/// bodies runs as one unit and joins `groups`. A group with unfinished members
-/// does not run: those members are TODO and the others are blocked by them.
-/// Otherwise, as in a template that is only run through its instances, its
-/// members are steps that report their bodies.
+/// bodies runs as one unit and joins `groups`. Otherwise, as in a template
+/// that is only run through its instances, its members are steps that report
+/// their bodies.
 fn plan_recurrence<'p>(
     plan: &'p RecurrenceGroupPlan,
     members: Vec<PlannedDeclaration<'p>>,
@@ -722,34 +711,13 @@ fn plan_recurrence<'p>(
     computed: &mut Vec<ComputedEntry<'p>>,
     groups: &mut Vec<PlannedGroup<'p>>,
 ) -> Result<(), StepIndexError> {
-    let unfinished = members
-        .iter()
-        .filter(|declaration| matches!(declaration.body, PlannedBody::Computed(ComputedBody::Todo)))
-        .map(|declaration| declaration.key.clone())
-        .collect::<Vec<_>>();
-    if let Ok(unfinished) = NonEmpty::try_from_vec(unfinished) {
-        for declaration in members {
-            let body = match &declaration.body {
-                PlannedBody::Computed(ComputedBody::Todo) => ComputedBody::Todo,
-                PlannedBody::Computed(ComputedBody::Expression { .. }) => {
-                    ComputedBody::BlockedInGroup(unfinished.clone())
-                }
-                PlannedBody::Computed(ComputedBody::BlockedInGroup(_)) | PlannedBody::Supplied => {
-                    return Err(StepIndexError::NotAFormulaMember(declaration.key.clone()));
-                }
-            };
-            computed.push((declaration, body, Some((membership, None))));
-        }
-        return Ok(());
-    }
     let first_step = computed.len();
     let mut planned = Vec::with_capacity(members.len());
     let mut axis = None::<IndexAxis>;
     for declaration in members {
         let body = match &declaration.body {
             PlannedBody::Computed(body @ ComputedBody::Expression { .. }) => body.clone(),
-            PlannedBody::Computed(ComputedBody::Todo | ComputedBody::BlockedInGroup(_))
-            | PlannedBody::Supplied => {
+            PlannedBody::Supplied => {
                 return Err(StepIndexError::NotAFormulaMember(declaration.key.clone()));
             }
         };
@@ -999,9 +967,6 @@ impl<'a, 'p> Entry<'a, 'p> {
 /// A compiled execution plan ready for runtime evaluation.
 pub struct ExecPlan<'p> {
     program: &'p CheckedProgram,
-    /// The reachability answers of the program's unfinished declarations;
-    /// `None` when every declaration is finished.
-    unfinished_reach: Option<UnfinishedReachMemo>,
     declarations: HashMap<&'p ResolvedDeclName, PlannedDeclaration<'p>>,
     /// The callable of each DAG of the program, by registry position.
     callables: IndexVec<DagPosition, CallablePlan<'p>>,
@@ -1028,17 +993,8 @@ impl<'p> ExecPlan<'p> {
             .map(prepare)
             .collect::<Result<Vec<_>, _>>()
             .map(IndexVec::from_items)?;
-        let has_unfinished_definitions = declarations.values().any(|declaration| {
-            matches!(declaration.body, PlannedBody::Computed(ComputedBody::Todo))
-        }) || program
-            .facts()
-            .consts()
-            .unfinished_constants()
-            .next()
-            .is_some();
         Ok(Self {
             program,
-            unfinished_reach: has_unfinished_definitions.then(UnfinishedReachMemo::default),
             declarations,
             callables,
         })
@@ -1054,17 +1010,6 @@ impl<'p> ExecPlan<'p> {
     #[must_use]
     pub const fn tir(&self) -> &'p graphcal_compiler::tir::typed::checked::CheckedTir {
         self.program.tir()
-    }
-
-    /// Whether any declaration of the program is unfinished.
-    pub(crate) const fn has_unfinished_definitions(&self) -> bool {
-        self.unfinished_reach.is_some()
-    }
-
-    /// The reachability answers shared by every evaluation of this plan;
-    /// `None` when every declaration is finished.
-    pub(crate) const fn unfinished_reach(&self) -> Option<&UnfinishedReachMemo> {
-        self.unfinished_reach.as_ref()
     }
 
     /// The root DAG's callable.
@@ -1154,10 +1099,6 @@ impl std::fmt::Debug for ExecPlan<'_> {
         formatter
             .debug_struct("ExecPlan")
             .field("program", self.program)
-            .field(
-                "has_unfinished_definitions",
-                &self.has_unfinished_definitions(),
-            )
             .field("declarations", &declarations)
             .field("callables", &self.callables.items)
             .finish()

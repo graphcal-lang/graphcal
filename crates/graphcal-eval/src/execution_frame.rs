@@ -25,7 +25,7 @@ use graphcal_compiler::syntax::non_empty::NonEmpty;
 use graphcal_compiler::syntax::span::Span;
 use graphcal_compiler::tir::texpr::TExpr;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Clone, Copy)]
 pub enum FailurePolicy {
@@ -47,10 +47,9 @@ pub struct ExecutionFrame<'a> {
     policy: FailurePolicy,
     values: RuntimeValueMap,
     presented: PendingPresentedMap,
+    /// Why a declaration has no value. Unfinished constants are recorded
+    /// from the start.
     errors: HashMap<ResolvedDeclName, RuntimeUnavailable>,
-    /// The unfinished constants this frame reads, as their reasons are
-    /// recorded in `errors` from the start.
-    unfinished_constants: HashSet<ResolvedDeclName>,
 }
 
 /// What a finished frame computed.
@@ -197,8 +196,29 @@ enum MemberProblem {
     Unavailable(RuntimeUnavailable),
 }
 
+/// Why an evaluation that is no declaration's formula (a plot, for example)
+/// has no value, given the error it ended with. Every hole it reached belongs
+/// to another declaration, so it is blocked by them.
 #[must_use]
 pub fn eval_failed_node_error(error: &SemanticError) -> RuntimeUnavailable {
+    unavailable_reason(None, error)
+}
+
+/// Why the declaration `key` has no value, given the error its evaluation
+/// ended with. Reaching its own hole leaves it TODO; reaching another
+/// declaration's hole, through a call, blocks it.
+#[must_use]
+pub fn declaration_unavailable(
+    key: &ResolvedDeclName,
+    error: &SemanticError,
+) -> RuntimeUnavailable {
+    unavailable_reason(Some(key), error)
+}
+
+fn unavailable_reason(
+    owner: Option<&ResolvedDeclName>,
+    error: &SemanticError,
+) -> RuntimeUnavailable {
     match error {
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind:
@@ -207,12 +227,25 @@ pub fn eval_failed_node_error(error: &SemanticError) -> RuntimeUnavailable {
                     ..
                 }),
             ..
-        }) => NodeUnavailable::Blocked {
+        }) if owner != Some(declaration) => NodeUnavailable::Blocked {
             unfinished: graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
                 declaration.clone(),
             ),
             failed_deps: Vec::new(),
         },
+        // The formula reached its own hole, among other unfinished inputs:
+        // the declaration itself is TODO.
+        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
+            kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
+            ..
+        }) if let Some(owner) = owner
+            && !reason.has_failure()
+            && reason.unfinished().contains(owner) =>
+        {
+            NodeUnavailable::Todo {
+                declaration: owner.clone(),
+            }
+        }
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
             ..
@@ -280,13 +313,12 @@ impl<'a> ExecutionFrame<'a> {
             policy,
             values,
             presented,
-            unfinished_constants: unfinished_constants.keys().cloned().collect(),
             errors: unfinished_constants,
         }
     }
 
-    /// The unavailable inputs of `step`: the earlier steps it depends on and
-    /// the unfinished constants it reads.
+    /// The unavailable inputs of a recurrence group member's `step`: the
+    /// earlier steps it depends on and the unfinished constants it reads.
     fn unavailable_inputs<'s>(
         &'s self,
         step: &'s crate::execution_plan::Step<'a>,
@@ -296,16 +328,13 @@ impl<'a> ExecutionFrame<'a> {
             .deps()
             .iter()
             .map(move |dep| callable.step(*dep).declaration().key());
-        let constants = step
-            .declaration()
-            .reads()
-            .iter()
-            .filter(|read| self.unfinished_constants.contains(*read));
-        steps.chain(constants).filter_map(|dependency| {
-            self.errors
-                .get(dependency)
-                .map(|reason| (dependency, reason))
-        })
+        steps
+            .chain(step.declaration().reads())
+            .filter_map(|dependency| {
+                self.errors
+                    .get(dependency)
+                    .map(|reason| (dependency, reason))
+            })
     }
 
     /// Values bound so far.
@@ -353,7 +382,7 @@ impl<'a> ExecutionFrame<'a> {
             (_, FailurePolicy::Propagate) if !only_incomplete => Err(error),
             _ => {
                 self.errors
-                    .insert(key.clone(), eval_failed_node_error(&error));
+                    .insert(key.clone(), declaration_unavailable(key, &error));
                 Ok(())
             }
         }
@@ -474,44 +503,8 @@ impl<'a> ExecutionFrame<'a> {
             return Ok(());
         }
         let scope = declaration.scope();
-        let (root, tree) = match step.body() {
-            ComputedBody::Todo => {
-                self.errors.insert(
-                    key.clone(),
-                    NodeUnavailable::Todo {
-                        declaration: key.clone(),
-                    },
-                );
-                return Ok(());
-            }
-            ComputedBody::BlockedInGroup(unfinished) => {
-                let todo = unfinished
-                    .iter()
-                    .map(|member| {
-                        (
-                            member,
-                            NodeUnavailable::Todo {
-                                declaration: member.clone(),
-                            },
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                let outside = self.unavailable_inputs(step);
-                if let Some(reason) = NodeUnavailable::blocked_by(
-                    todo.iter()
-                        .map(|(member, reason)| (*member, reason))
-                        .chain(outside),
-                ) {
-                    self.errors.insert(key.clone(), reason);
-                }
-                return Ok(());
-            }
-            ComputedBody::Expression { root, tree } => (root.get(), tree),
-        };
-        if let Some(reason) = NodeUnavailable::blocked_by(self.unavailable_inputs(step)) {
-            self.errors.insert(key.clone(), reason);
-            return Ok(());
-        }
+        let ComputedBody::Expression { root, tree } = step.body();
+        let root = root.get();
         let body = *tree.as_ref().map_err(|error| {
             SemanticError::internal_error(error.to_string(), scope.source(), root.span.into())
         })?;
@@ -623,7 +616,8 @@ impl<'a> ExecutionFrame<'a> {
         let axis_keys = KeyValue::all(group.axis());
         let mut slots = RecurrenceSlots::new(keys.iter().copied(), axis_keys.len());
         // Supplied members are filled before the group runs; members with an
-        // unavailable input outside the group are blocked.
+        // unavailable input outside the group are blocked
+        // (`internals/recurrence-groups.md` §5).
         let mut supplied = vec![false; members.len()];
         let mut problems: Vec<Option<MemberProblem>> = Vec::with_capacity(members.len());
         for (position, step) in steps.iter().enumerate() {

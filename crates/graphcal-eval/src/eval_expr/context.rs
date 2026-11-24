@@ -26,7 +26,6 @@ use graphcal_compiler::tir::typed::body_scope::Scoped;
 use graphcal_compiler::tir::typed::checked::CheckedTir;
 use graphcal_compiler::tir::typed::evaluation_unit::ScopedTree;
 use graphcal_compiler::tir::typed::model::StructFieldConstraintKey;
-use graphcal_compiler::tir::typed::scoped_node::ScopedNode;
 
 use crate::deferred_field_checks::{DeferredFieldCheck, DeferredFieldChecks};
 use crate::domain_constraint::ResolvedDomainConstraint;
@@ -34,7 +33,6 @@ use crate::execution_frame::ScheduledDeclaration;
 use crate::execution_plan::ExecPlan;
 use crate::host_fns::HostFunctionRegistry;
 use crate::invariant::Failure;
-use crate::static_incompleteness::ExpressionDependencies;
 
 use super::runtime_failure::RuntimeFailure;
 
@@ -283,67 +281,6 @@ impl<'a> EvalSession<'a> {
         self
     }
 
-    /// Static dependency availability of expression roots of evaluation
-    /// units, including references in unselected branches. Each root's
-    /// references are resolved in its own scope.
-    pub(crate) fn unavailable_dependencies<'e>(
-        &self,
-        roots: impl IntoIterator<Item = Scoped<'e, Expr>>,
-    ) -> Result<
-        Option<graphcal_compiler::node_unavailable::RuntimeUnavailable>,
-        Outcome<SemanticError>,
-    > {
-        let roots = roots.into_iter().collect::<Vec<_>>();
-        self.unavailable_among(
-            || roots.iter().flat_map(|root| root.reads()).collect(),
-            roots.iter().map(|root| root.get()),
-        )
-    }
-
-    /// Availability of the declarations `reads` and of the call outputs of
-    /// `expressions`.
-    fn unavailable_among<E: ExpressionDependencies>(
-        &self,
-        reads: impl FnOnce() -> Vec<ResolvedDeclName>,
-        expressions: impl IntoIterator<Item = E>,
-    ) -> Result<
-        Option<graphcal_compiler::node_unavailable::RuntimeUnavailable>,
-        Outcome<SemanticError>,
-    > {
-        let plan = match &self.capabilities {
-            Capabilities::ProvisionalConstants(_) => None,
-            Capabilities::Checked { plan, .. } => Some(*plan),
-        };
-        if self.unavailable.is_none_or(HashMap::is_empty)
-            && plan.is_none_or(|plan| !plan.has_unfinished_definitions())
-        {
-            return Ok(None);
-        }
-        let mut dependencies = reads()
-            .into_iter()
-            .filter_map(|key| {
-                self.unavailable
-                    .and_then(|unavailable| unavailable.get(&key))
-                    .map(|reason| (key, reason.clone()))
-            })
-            .collect::<Vec<_>>();
-        if let Some(plan) = plan {
-            for expression in expressions {
-                dependencies.extend(crate::static_incompleteness::collect(
-                    &expression,
-                    plan,
-                    self.src,
-                    &self.cancellation,
-                )?);
-            }
-        }
-        Ok(
-            graphcal_compiler::node_unavailable::NodeUnavailable::blocked_by(
-                dependencies.iter().map(|(name, reason)| (name, reason)),
-            ),
-        )
-    }
-
     #[must_use]
     pub(crate) fn with_src<'b>(&'b self, src: SourceId) -> EvalSession<'b>
     where
@@ -434,30 +371,5 @@ impl<'a> EvalSession<'a> {
         anchor: impl Into<DiagnosticAnchor>,
     ) -> SemanticError {
         SemanticError::internal_error(message, self.src, anchor.into())
-    }
-}
-
-impl EvalSession<'_> {
-    /// Determine, once for a whole root tree, whether every dependency it may
-    /// read (including those of unselected branches) is available.
-    pub(crate) fn check_dependencies(
-        &self,
-        expression: ScopedNode<'_>,
-    ) -> Result<(), Outcome<SemanticError>> {
-        crate::pipeline_metrics::record(
-            crate::pipeline_metrics::Event::DependencyAvailabilityCheck,
-        );
-        self.unavailable_among(
-            || expression.referenced_declarations().into_iter().collect(),
-            std::iter::once(expression),
-        )?
-        .map_or(Ok(()), |reason| {
-            Err(SemanticError::located(
-                self.src,
-                expression.span(),
-                EvaluationError::Unavailable { reason },
-            )
-            .into())
-        })
     }
 }

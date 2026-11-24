@@ -12,7 +12,6 @@ use std::borrow::Cow;
 use super::call_targets::{CallSlot, CallTargets};
 use super::label_dispatch::LabelDispatch;
 use super::map_layout::MapLayout;
-use super::model::ExecutableHole;
 use super::nominal::{ConstructorApplication, ConstructorMatch};
 use crate::hir::expr::MapEntryKey;
 use crate::resolved_name::ResolvedIndexVariant;
@@ -110,14 +109,6 @@ pub trait TypeMap<V: Concreteness, W: Concreteness> {
         span: Span,
     ) -> Result<W::Discharged<MapLayout>, Self::Error>;
 
-    /// A `todo<T> { … }` hole: no concrete tree contains one (see
-    /// [`ExecutableHole`]).
-    fn todo_hole(
-        &mut self,
-        carried: &V::Discharged<ExecutableHole>,
-        span: Span,
-    ) -> Result<W::Discharged<ExecutableHole>, Self::Error>;
-
     /// The constant key naming `entry` of the axis `index` a node carries,
     /// given the key it carried.
     fn key(
@@ -207,14 +198,6 @@ impl<V: Concreteness> TypeMap<V, V> for Rehome<'_> {
         _entries: &[&NonEmpty<MapEntryKey>],
         _span: Span,
     ) -> Result<V::Discharged<MapLayout>, Self::Error> {
-        Ok(carried.clone())
-    }
-
-    fn todo_hole(
-        &mut self,
-        carried: &V::Discharged<ExecutableHole>,
-        _span: Span,
-    ) -> Result<V::Discharged<ExecutableHole>, Self::Error> {
         Ok(carried.clone())
     }
 
@@ -439,16 +422,11 @@ impl<V: Concreteness> TExpr<V> {
                 target.span,
             )),
             TExprKind::Local(local) => TExprKind::Local(local.clone()),
-            TExprKind::TodoHole {
-                interface,
-                executable,
-            } => TExprKind::TodoHole {
-                // Entries first, so their own discharge errors are reported.
+            TExprKind::TodoHole { interface } => TExprKind::TodoHole {
                 interface: interface
                     .iter()
                     .map(|entry| entry.map_types(map))
                     .collect::<Result<_, M::Error>>()?,
-                executable: map.todo_hole(executable, span)?,
             },
             TExprKind::DatetimeLiteral(literal) => TExprKind::DatetimeLiteral(literal.clone()),
             TExprKind::Aggregate { function, arg } => TExprKind::Aggregate {

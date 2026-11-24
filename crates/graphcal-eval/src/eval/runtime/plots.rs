@@ -429,7 +429,7 @@ fn evaluate_plot(
                 .map(|field| field.map(|field| &*field.value)),
         )
         .collect::<Vec<_>>();
-    check_plot_expression_dependencies(&body_exprs, evaluated, ctx)?;
+    check_plot_expression_dependencies(&body_exprs, evaluated)?;
 
     let owner = unit.identity();
     // Checking publishes the shape of every channel of every plot; a plot
@@ -685,13 +685,7 @@ fn plot_declared_type(
 fn check_plot_expression_dependencies(
     expressions: &[Scoped<'_, graphcal_compiler::hir::expr::Expr>],
     evaluated: EvaluatedRoot<'_>,
-    ctx: &EvalSession<'_>,
 ) -> Result<(), PlotEvaluationError> {
-    if let Some(reason) = ctx.unavailable_dependencies(expressions.iter().copied())?
-        && reason.is_incomplete()
-    {
-        return Err(PlotEvaluationError::Unavailable(reason));
-    }
     dependency_failure_message(
         expressions.iter().copied(),
         evaluated.errors,
@@ -732,11 +726,6 @@ fn eval_composition_fields(
     values: &RuntimeValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<CompositionFields, PlotEvaluationError> {
-    if let Some(reason) =
-        ctx.unavailable_dependencies(fields.iter().map(|field| field.map(|field| &*field.value)))?
-    {
-        return Err(PlotEvaluationError::Unavailable(reason));
-    }
     let mut properties = Vec::new();
     for scoped_field in fields.iter() {
         let comp_prop = scoped_field.get().property;

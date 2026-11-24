@@ -204,6 +204,12 @@ fn evaluate_entry(
         assertions,
     } = outcome.into_parts();
     let result = EvalResult {
+        unfinished_declarations: plan
+            .tir()
+            .reachable_unfinished()
+            .iter()
+            .map(|declaration| names.name(declaration))
+            .collect(),
         unfinished_calls: unfinished_calls
             .iter()
             .map(|declaration| names.name(declaration))

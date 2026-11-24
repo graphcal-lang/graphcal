@@ -933,6 +933,17 @@ fn handle_eval(
 
             if result.is_incomplete() {
                 eprintln!("model incomplete: unfinished formulas remain");
+                if !result.reached_unfinished() {
+                    eprintln!(
+                        "note: no result depends on them with these inputs: {}",
+                        result
+                            .unfinished_declarations
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
             }
             for name in &result.unfinished_calls {
                 eprintln!("TODO: {name} (unfinished formula in an invoked DAG)");

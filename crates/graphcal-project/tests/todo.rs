@@ -33,7 +33,7 @@ fn blocked_assertions_are_not_expected_failures() {
         r"
 node unfinished: Length = todo<Length> {};
 #[expected_fail]
-assert missing = if true { true } else { @unfinished > 0.0 m };
+assert missing = @unfinished > 0.0 m;
 assert independent = true;
 ",
     )
@@ -132,7 +132,7 @@ node known: Length = @library.todo()::known;
 }
 
 #[test]
-fn static_call_blocking_respects_parameter_overrides_and_nested_calls() {
+fn call_blocking_follows_evaluation_through_overrides_and_nested_calls() {
     let evaluation = compile_and_eval(
         r"
 dag source { pub node missing: Length = todo<Length> {}; }
@@ -141,11 +141,11 @@ dag stage {
     pub node output: Length = @value;
 }
 dag wrapper {
-    pub node output: Length = if true { 1.0 m } else { @stage()::output };
+    pub node output: Length = @stage()::output;
 }
 node supplied: Length = @stage(value: 2.0 m)::output;
 node blocked: Length = @wrapper()::output;
-assert pending = if true { true } else { @source()::missing > 0.0 m };
+assert pending = @source()::missing > 0.0 m;
 ",
     )
     .unwrap();
@@ -170,22 +170,45 @@ assert pending = if true { true } else { @source()::missing > 0.0 m };
 }
 
 #[test]
-fn blocking_includes_unselected_call_outputs() {
+fn only_call_outputs_that_evaluation_reaches_block() {
     let evaluation = compile_and_eval(
         r"
 dag model { pub node missing: Length = todo<Length> {}; }
-node blocked: Length = if true { 1.0 m } else { @model()::missing };
+param reach: Bool = false;
+node unselected: Length = if @reach { @model()::missing } else { 1.0 m };
+node selected: Length = if @reach { 1.0 m } else { @model()::missing };
 ",
     )
     .unwrap();
     assert!(
+        result(&evaluation, "unselected").is_ok(),
+        "{:?}",
+        result(&evaluation, "unselected")
+    );
+    assert!(
         matches!(
-            result(&evaluation, "blocked"),
+            result(&evaluation, "selected"),
             Err(NodeUnavailable::Blocked { .. })
         ),
         "{:?}",
-        result(&evaluation, "blocked")
+        result(&evaluation, "selected")
     );
+    assert!(evaluation.is_incomplete());
+}
+
+#[test]
+fn a_model_whose_holes_are_not_reached_is_still_incomplete() {
+    let evaluation = compile_and_eval(
+        r"
+param reach: Bool = false;
+node value: Length = if @reach { todo<Length> {} } else { 1.0 m };
+",
+    )
+    .unwrap();
+    assert!(result(&evaluation, "value").is_ok());
+    assert!(!evaluation.reached_unfinished());
+    assert!(evaluation.is_incomplete());
+    assert_eq!(evaluation.unfinished_declarations.len(), 1);
 }
 
 #[test]
@@ -323,6 +346,7 @@ param k: Dimensionless = 2.0;
 node parenthesized: Length = (todo<Length> {});
 node operand: Length = todo<Length> { @k } + 1.0 m;
 node unselected: Length = if true { 1.0 m } else { todo<Length> {} };
+node zero_times: Length = 0.0 * todo<Length> {};
 node argument: Area = sqrt(todo<Area^2> {});
 node element: Length[Fin(2)] = for i: Fin(2) { todo<Length> { @k } };
 node done: Length = 1.0 m;
@@ -332,7 +356,7 @@ node done: Length = 1.0 m;
     for name in [
         "parenthesized",
         "operand",
-        "unselected",
+        "zero_times",
         "argument",
         "element",
     ] {
@@ -343,6 +367,8 @@ node done: Length = 1.0 m;
         );
     }
     assert!(result(&evaluation, "done").is_ok());
+    // A hole that evaluation does not reach has no effect on the result.
+    assert!(result(&evaluation, "unselected").is_ok());
 }
 
 #[test]
@@ -386,24 +412,35 @@ fn holes_are_rejected_outside_formulas_and_in_malformed_shapes() {
 }
 
 #[test]
-fn blocking_is_static_and_retains_all_origins_and_real_failures() {
+fn blocking_follows_evaluation_and_keeps_transitive_origins_and_real_failures() {
     let evaluation = compile_and_eval(
         r"
 node a: Length = todo<Length> {};
-node b: Length = todo<Length> {};
-node c: Length = @a + @b;
+node b: Length = @a * 2.0;
+node c: Length = @b + 1.0 m;
 node d: Length = if true { 1.0 m } else { @c };
 node error: Length = 1.0 m / 0.0;
-node mixed: Length = @d + @error;
+node mixed: Length = @error + @c;
 ",
     )
     .unwrap();
-    let reason = result(&evaluation, "d").as_ref().unwrap_err();
-    assert_eq!(reason.unfinished().len(), 2);
+    let reason = result(&evaluation, "c").as_ref().unwrap_err();
+    assert!(matches!(reason, NodeUnavailable::Blocked { .. }));
+    assert_eq!(
+        reason
+            .unfinished()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["a"]
+    );
     assert!(!reason.has_failure());
+    assert!(result(&evaluation, "d").is_ok());
+    // Evaluation stops at the first input with no value; the failure is
+    // reported, and `error` fails by itself.
     let reason = result(&evaluation, "mixed").as_ref().unwrap_err();
-    assert_eq!(reason.unfinished().len(), 2);
     assert!(reason.has_failure());
+    assert!(evaluation.has_errors());
 }
 
 #[test]
@@ -480,12 +517,17 @@ node free: Dimensionless = @k * 2.0;
     );
     assert!(check(&source));
     let evaluation = compile_and_eval(&source).unwrap();
-    for name in ["action", "state"] {
-        assert!(matches!(
-            result(&evaluation, name),
-            Err(NodeUnavailable::Todo { .. })
-        ));
-    }
+    // The init of `state` reaches its hole first. Every element of `action`
+    // reads, through its interface, the element of `state` at the same step,
+    // so `action` is blocked by `state` (`internals/recurrence-groups.md` §5).
+    assert!(matches!(
+        result(&evaluation, "state"),
+        Err(NodeUnavailable::Todo { .. })
+    ));
+    assert!(matches!(
+        result(&evaluation, "action"),
+        Err(NodeUnavailable::Blocked { .. })
+    ));
     assert!(matches!(
         result(&evaluation, "total"),
         Err(NodeUnavailable::Blocked { .. })
@@ -585,10 +627,11 @@ const node isp: Time = 300.0 s;
 const node v_exhaust: Velocity = todo<Velocity> { @isp, @g0 };
 const node doubled: Velocity = 2.0 * @v_exhaust;
 const node bounded: Velocity(min: 0.0 m/s) = @doubled;
-const node static_rule: Length = if true { 1.0 m } else { todo<Length> {} };
+const node unreached: Length = if true { 1.0 m } else { todo<Length> {} };
+const node reached: Length = if false { 1.0 m } else { todo<Length> {} };
 node reads_constant: Velocity = 3.0 * @doubled;
 node independent: Velocity = @isp * @g0;
-unit scaled: Length = (@static_rule / 1.0 m) m;
+unit scaled: Length = (@reached / 1.0 m) m;
 node uses_unit: Length = 2.0 scaled;
 assert positive = @doubled > 0.0 m/s;
 plot chart = { mark: point, encode: { x: @doubled, y: 1.0 m } };
@@ -599,10 +642,12 @@ plot chart = { mark: point, encode: { x: @doubled, y: 1.0 m } };
         result(&evaluation, "v_exhaust"),
         Err(NodeUnavailable::Todo { .. })
     ));
+    // A constant is TODO only when its evaluation reaches the hole.
     assert!(matches!(
-        result(&evaluation, "static_rule"),
+        result(&evaluation, "reached"),
         Err(NodeUnavailable::Todo { .. })
     ));
+    assert!(result(&evaluation, "unreached").is_ok());
     for blocked in ["doubled", "bounded", "reads_constant", "uses_unit"] {
         assert!(
             matches!(

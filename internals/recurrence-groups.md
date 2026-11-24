@@ -466,10 +466,11 @@ dependency graph. Every member that is not supplied has exactly one outcome
 | **failed** | Some element failed. The reported error is the failure at its earliest step. |
 | **dependency unavailable** | Otherwise. The reason kind (TODO, blocked, dependency failed) follows today's evaluator. |
 
-A group with an unfinished member is not evaluated: its unfinished members are
-TODO, and every other member is blocked by them, since each one reaches them
-through the group's cycle. Element statuses (§5.1) apply to groups whose
-members are all finished.
+A `todo` hole is evaluated like any other expression (#2405): an element
+whose evaluation reaches a hole is **unavailable**, and its member is TODO.
+An element that reads it, directly or through a hole's interface, is
+unavailable too, so its member is blocked. Element statuses (§5.1) apply to
+every group, finished or not.
 
 Every element of an ok member is computed [`ValidOrder.run_memberOk`]. In
 particular, if no element fails and every outside input is available, every

@@ -162,7 +162,7 @@ fn count_nodes(bodies: &crate::tir::texpr::CheckedBodies, select: fn(bool) -> bo
             CheckedBody::Executable(body) => visit_tnodes(body.as_node(), &mut |node| {
                 visit(matches!(node, TNodeRef::Contextual(_)));
             }),
-            CheckedBody::Deferred(body) | CheckedBody::Unfinished(body) => {
+            CheckedBody::Deferred(body) => {
                 visit_tnodes(body.as_node(), &mut |node| {
                     visit(matches!(node, TNodeRef::Contextual(_)));
                 });
@@ -5250,7 +5250,7 @@ fn recurrence_member_rules_report_the_member() {
 }
 
 #[test]
-fn unfinished_formulas_are_checked_but_never_executable() {
+fn unfinished_formulas_are_executable_and_classified_unfinished() {
     let (draft, src) = module_aware_tir(
         "node done: Length = 1.0 m;\nnode pending: Length = 2.0 * todo<Length> {} + @done;",
     );
@@ -5261,14 +5261,7 @@ fn unfinished_formulas_are_checked_but_never_executable() {
     };
     let bodies = tir.root().bodies();
     assert!(bodies.executable_value(done.definition.id()).is_ok());
-    assert!(matches!(
-        bodies.get(pending.definition.id()),
-        Some(crate::tir::texpr::CheckedBody::Unfinished(_))
-    ));
-    assert!(matches!(
-        bodies.executable_value(pending.definition.id()),
-        Err(crate::tir::texpr::ExecutableBodyError::Unfinished(_))
-    ));
+    assert!(bodies.executable_value(pending.definition.id()).is_ok());
     assert!(tir.root().is_unfinished(&pending.identity()));
     assert!(!tir.root().is_unfinished(&done.identity()));
 }

@@ -15,16 +15,12 @@ pub(crate) enum Event {
     FrameExecution,
     ConstructorFactConsumption,
     PresentationEvaluation,
-    DependencyAvailabilityCheck,
     #[cfg(any(test, feature = "test-internals"))]
     CallFrameValueNodes,
     #[cfg(any(test, feature = "test-internals"))]
     CallOutputEvidenceNodes,
     #[cfg(any(test, feature = "test-internals"))]
     PresentationEvidenceCopyNode,
-    /// A static TODO-reachability answer computed rather than reused.
-    #[cfg(any(test, feature = "test-internals"))]
-    UnfinishedReachAnalysis,
 }
 
 #[cfg(not(any(test, feature = "test-internals")))]
@@ -64,11 +60,9 @@ mod observer {
         pub frame_executions: u64,
         pub constructor_fact_consumptions: u64,
         pub presentation_evaluations: u64,
-        pub dependency_availability_checks: u64,
         pub call_frame_value_nodes: u64,
         pub call_output_evidence_nodes: u64,
         pub presentation_evidence_copy_nodes: u64,
-        pub unfinished_reach_analyses: u64,
     }
 
     thread_local! { static COUNTS: Cell<Counts> = Cell::new(Counts::default()); }
@@ -88,11 +82,9 @@ mod observer {
                 Event::FrameExecution => &mut counts.frame_executions,
                 Event::ConstructorFactConsumption => &mut counts.constructor_fact_consumptions,
                 Event::PresentationEvaluation => &mut counts.presentation_evaluations,
-                Event::DependencyAvailabilityCheck => &mut counts.dependency_availability_checks,
                 Event::CallFrameValueNodes => &mut counts.call_frame_value_nodes,
                 Event::CallOutputEvidenceNodes => &mut counts.call_output_evidence_nodes,
                 Event::PresentationEvidenceCopyNode => &mut counts.presentation_evidence_copy_nodes,
-                Event::UnfinishedReachAnalysis => &mut counts.unfinished_reach_analyses,
             };
             *count = count.saturating_add(amount);
             cell.set(counts);
@@ -127,9 +119,6 @@ mod observer {
                 presentation_evaluations: after
                     .presentation_evaluations
                     .saturating_sub(before.presentation_evaluations),
-                dependency_availability_checks: after
-                    .dependency_availability_checks
-                    .saturating_sub(before.dependency_availability_checks),
                 call_frame_value_nodes: after
                     .call_frame_value_nodes
                     .saturating_sub(before.call_frame_value_nodes),
@@ -139,9 +128,6 @@ mod observer {
                 presentation_evidence_copy_nodes: after
                     .presentation_evidence_copy_nodes
                     .saturating_sub(before.presentation_evidence_copy_nodes),
-                unfinished_reach_analyses: after
-                    .unfinished_reach_analyses
-                    .saturating_sub(before.unfinished_reach_analyses),
             },
         )
     }

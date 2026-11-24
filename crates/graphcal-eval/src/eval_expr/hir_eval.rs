@@ -206,7 +206,6 @@ fn eval_recurrence_element(
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
     let member = element.member();
     let root = member.root();
-    ctx.check_dependencies(root)?;
     let value = eval_member_element(element, values, presentation_values, ctx)?;
     match member.display() {
         RecurrenceDisplay::Plain => Ok(value),
@@ -299,21 +298,19 @@ pub fn eval_subtree_for_test(
 /// type and nominal facts from the node itself. Declaration, constructor,
 /// index-variant, inline-DAG, local, and built-in references are canonical.
 ///
-/// `expr` is the root of a declaration's (or another evaluated root's) tree:
-/// the availability of every dependency of the whole tree, including
-/// unselected branches, is determined once before any of it is evaluated.
+/// A read of a declaration with no value, and reaching a `todo<T> { … }`
+/// hole, end the evaluation with [`EvaluationError::Unavailable`]: what is
+/// not reached has no effect on the result.
 fn eval_texpr(
     expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<RuntimeValue, Outcome<SemanticError>> {
-    ctx.check_dependencies(expr)?;
     eval_value(expr, values, local_values, ctx)
 }
 
-/// Evaluate a subtree of a root whose dependency availability has already
-/// been determined by [`eval_texpr`] or [`eval_texpr_with_presentation`].
+/// Evaluate a subtree of a root.
 fn eval_value(
     expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
@@ -325,8 +322,7 @@ fn eval_value(
 }
 
 /// Evaluate one checked root tree while preserving concrete presentation-call
-/// identities through value-preserving expression forms. Like [`eval_texpr`],
-/// it determines the availability of the whole tree's dependencies once.
+/// identities through value-preserving expression forms.
 fn eval_texpr_with_presentation(
     expr: ScopedNode<'_>,
     values: &RuntimeValueMap,
@@ -334,7 +330,6 @@ fn eval_texpr_with_presentation(
     local_values: &HirLocalValueMap<'_>,
     ctx: &EvalSession<'_>,
 ) -> Result<EvaluatedRuntimeValue, Outcome<SemanticError>> {
-    ctx.check_dependencies(expr)?;
     eval_texpr_evaluated(expr, values, Some(presentation_values), local_values, ctx)
 }
 
@@ -405,7 +400,9 @@ fn eval_texpr_inner(
         NodeKind::Const(target) => match target.value {
             ConstRef::Decl(declaration) => {
                 let value = values.get(&declaration).cloned().ok_or_else(|| {
-                    EvaluatorBug::UnboundConstant(declaration.clone()).at(target.span, ctx)
+                    unavailable_read(&declaration, target.span, ctx).unwrap_or_else(|| {
+                        EvaluatorBug::UnboundConstant(declaration.clone()).at(target.span, ctx)
+                    })
                 })?;
                 Ok(presentation_values
                     .and_then(|presented| presented.get(&declaration))
@@ -415,6 +412,7 @@ fn eval_texpr_inner(
                 eval_constructor_call(construct, values, presentation_values, local_values, ctx)
             }
         },
+        NodeKind::TodoHole => Err(unfinished_hole(span, ctx).into()),
         NodeKind::Local(local) => local_values
             .get(local.value)
             .cloned()
@@ -597,9 +595,44 @@ fn resolve_graph_ref<'a>(
     values: &'a RuntimeValueMap,
     ctx: &EvalSession<'_>,
 ) -> Result<&'a RuntimeValue, SemanticError> {
-    values
-        .get(&target.value)
-        .ok_or_else(|| EvaluatorBug::UnboundGraphRef(target.value.clone()).at(target.span, ctx))
+    values.get(&target.value).ok_or_else(|| {
+        unavailable_read(&target.value, target.span, ctx).unwrap_or_else(|| {
+            EvaluatorBug::UnboundGraphRef(target.value.clone()).at(target.span, ctx)
+        })
+    })
+}
+
+/// The read at `span` of `declaration`, which has no value: unavailable for
+/// the reason the declaration has none. `None` when no reason is recorded,
+/// which is an evaluator bug the caller reports.
+fn unavailable_read(
+    declaration: &ResolvedDeclName,
+    span: Span,
+    ctx: &EvalSession<'_>,
+) -> Option<SemanticError> {
+    let reason = ctx.unavailable?.get(declaration)?;
+    let reason =
+        graphcal_compiler::node_unavailable::NodeUnavailable::blocked_by([(declaration, reason)])?;
+    Some(SemanticError::located(
+        ctx.src,
+        span,
+        EvaluationError::Unavailable { reason },
+    ))
+}
+
+/// Reaching the hole at `span`: the declaration being evaluated is
+/// unfinished.
+fn unfinished_hole(span: Span, ctx: &EvalSession<'_>) -> SemanticError {
+    let Some(declaration) = ctx.current_decl.clone() else {
+        return ctx.internal_error("a `todo` hole is evaluated outside a declaration", span);
+    };
+    SemanticError::located(
+        ctx.src,
+        span,
+        EvaluationError::Unavailable {
+            reason: graphcal_compiler::node_unavailable::NodeUnavailable::Todo { declaration },
+        },
+    )
 }
 
 fn clone_graph_ref_value(value: &RuntimeValue) -> RuntimeValue {

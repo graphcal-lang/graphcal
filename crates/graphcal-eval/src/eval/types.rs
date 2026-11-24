@@ -769,6 +769,11 @@ pub struct EvalAssertion {
 
 #[derive(Debug)]
 pub struct EvalResult {
+    /// The unfinished declarations the evaluated file is answerable for (see
+    /// `CheckedTir::reachable_unfinished`): its own, and those of other
+    /// modules it reaches. This is static: a declaration is listed whether or
+    /// not evaluation reached its hole with these inputs.
+    pub unfinished_declarations: Vec<OutputDeclName>,
     /// Unfinished origins reached inside invoked DAGs, including private
     /// siblings of otherwise available projected outputs.
     pub unfinished_calls: Vec<OutputDeclName>,
@@ -991,9 +996,18 @@ impl EvalResult {
         self.category(ValueDeclCategory::Node)
     }
 
-    /// Whether a node, assertion, plot, or invoked DAG remains incomplete.
+    /// Whether the model is incomplete: a declaration it is answerable for
+    /// is unfinished, even when evaluation never reached the hole, or a
+    /// result is unavailable because evaluation did reach one.
     #[must_use]
     pub fn is_incomplete(&self) -> bool {
+        !self.unfinished_declarations.is_empty() || self.reached_unfinished()
+    }
+
+    /// Whether evaluation reached a hole: a node, assertion, plot, or invoked
+    /// DAG has no result because of an unfinished formula.
+    #[must_use]
+    pub fn reached_unfinished(&self) -> bool {
         !self.unfinished_calls.is_empty()
             || self
                 .plot_errors
@@ -1222,6 +1236,7 @@ mod tests {
 
     fn empty_eval_result() -> EvalResult {
         EvalResult {
+            unfinished_declarations: Vec::new(),
             unfinished_calls: Vec::new(),
             entries: Vec::new(),
             nested_instance_entries: Vec::new(),

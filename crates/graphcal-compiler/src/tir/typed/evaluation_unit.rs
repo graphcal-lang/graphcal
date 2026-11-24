@@ -183,11 +183,11 @@ pub struct DeclarationBody<'t> {
 #[derive(Debug, Clone, Copy)]
 pub enum BodyKind<'t> {
     /// A constant and its formula.
-    Const(FormulaBody<'t>),
+    Const(Scoped<'t, Expr>),
     /// A parameter and its default, when it has one.
     Param { default: Option<Scoped<'t, Expr>> },
     /// A node and its formula.
-    Node(FormulaBody<'t>),
+    Node(Scoped<'t, Expr>),
     /// An assertion.
     Assert(Scoped<'t, TypedAssertEntry>),
     /// A plot.
@@ -196,27 +196,6 @@ pub enum BodyKind<'t> {
     Figure(Scoped<'t, TypedFigureEntry>),
     /// A layer.
     Layer(Scoped<'t, TypedLayerEntry>),
-}
-
-/// The formula of a constant or a node.
-#[derive(Debug, Clone, Copy)]
-pub enum FormulaBody<'t> {
-    /// Its formula.
-    Formula(Scoped<'t, Expr>),
-    /// An unfinished formula: it contains a `todo<T> { … }` hole, so the
-    /// declaration is TODO and its formula is never evaluated.
-    Unfinished(Scoped<'t, Expr>),
-}
-
-impl<'t> FormulaBody<'t> {
-    /// Classify `formula` by whether it contains a hole.
-    fn of(formula: Scoped<'t, Expr>) -> Self {
-        if crate::hir::expr::contains_todo_hole(formula.get()) {
-            Self::Unfinished(formula)
-        } else {
-            Self::Formula(formula)
-        }
-    }
 }
 
 impl<'t> DeclarationBody<'t> {
@@ -249,18 +228,14 @@ impl<'t> DeclarationBody<'t> {
     pub fn kind(self) -> BodyKind<'t> {
         let scope = self.scope;
         match self.declaration {
-            Decl::Const(entry) => {
-                BodyKind::Const(FormulaBody::of(Scoped::new(scope, &*entry.expr)))
-            }
+            Decl::Const(entry) => BodyKind::Const(Scoped::new(scope, &*entry.expr)),
             Decl::Param(entry) => BodyKind::Param {
                 default: entry
                     .default
                     .as_deref()
                     .map(|expr| Scoped::new(scope, expr)),
             },
-            Decl::Node(entry) => {
-                BodyKind::Node(FormulaBody::of(Scoped::new(scope, &*entry.definition)))
-            }
+            Decl::Node(entry) => BodyKind::Node(Scoped::new(scope, &*entry.definition)),
             Decl::Assert(entry) => BodyKind::Assert(Scoped::new(scope, entry)),
             Decl::Plot(entry) => BodyKind::Plot(Scoped::new(scope, entry)),
             Decl::Figure(entry) => BodyKind::Figure(Scoped::new(scope, entry)),
@@ -274,9 +249,7 @@ impl<'t> DeclarationBody<'t> {
     pub fn runtime_expression(self) -> Option<Scoped<'t, Expr>> {
         match self.kind() {
             BodyKind::Param { default } => default,
-            BodyKind::Node(FormulaBody::Formula(formula) | FormulaBody::Unfinished(formula)) => {
-                Some(formula)
-            }
+            BodyKind::Node(formula) => Some(formula),
             BodyKind::Const(_)
             | BodyKind::Assert(_)
             | BodyKind::Plot(_)
