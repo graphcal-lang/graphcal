@@ -161,6 +161,48 @@ fn flatten_entries(
     Ok(())
 }
 
+/// Project the cells of a value that has none as a whole (#2405).
+///
+/// Each cell is a labelled entry (`[Wheel]`, `[Launch][Wheel]`). A cell
+/// without a value shows its status: `TODO`, `BLOCKED`, or `ERROR`. A cell
+/// whose value cannot be displayed shows `ERROR: …` with the reason; the
+/// other cells keep their display.
+#[must_use]
+pub fn project_cell_entries(
+    cells: &graphcal_eval::eval::ValueCells,
+    render: &RenderContext,
+) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+    flatten_cells("", cells, render, &mut entries);
+    entries
+}
+
+fn flatten_cells(
+    prefix: &str,
+    cells: &graphcal_eval::eval::ValueCells,
+    render: &RenderContext,
+    out: &mut Vec<(String, String)>,
+) {
+    for (key, cell) in &cells.entries {
+        let label = format!("{prefix}[{}]", cells.entry_display_name(key));
+        match cell {
+            graphcal_eval::eval::ValueCell::Value(value) => {
+                let mut entries = Vec::new();
+                match flatten_entries(label.clone(), value, render, &mut entries) {
+                    Ok(()) => out.extend(entries),
+                    Err(error) => out.push((label, format!("ERROR: {error}"))),
+                }
+            }
+            graphcal_eval::eval::ValueCell::Cells(inner) => {
+                flatten_cells(&label, inner, render, out);
+            }
+            graphcal_eval::eval::ValueCell::Unavailable(reason) => {
+                out.push((label, reason.status_label().to_owned()));
+            }
+        }
+    }
+}
+
 /// Project a two-axis indexed value into a grid. Columns are the union of
 /// inner keys in first-seen order; missing cells stay empty.
 fn project_grid(

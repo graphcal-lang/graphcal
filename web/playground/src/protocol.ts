@@ -123,8 +123,16 @@ export const outcomeSchema = z.discriminatedUnion("status", [
           declaration_kind: z.enum(["const", "param", "node"]),
           outcome: z.discriminatedUnion("status", [
             z.object({ status: z.literal("value"), value: valueSchema, body: valueBodySchema }),
-            z.object({ status: z.literal("error"), error: nodeUnavailable }),
-            z.object({ status: z.literal("incomplete"), reason: nodeUnavailable }),
+            z.object({
+              status: z.literal("error"),
+              error: nodeUnavailable,
+              cells: valueBodySchema.nullish(),
+            }),
+            z.object({
+              status: z.literal("incomplete"),
+              reason: nodeUnavailable,
+              cells: valueBodySchema.nullish(),
+            }),
           ]),
         }),
       ),

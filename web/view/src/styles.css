@@ -721,6 +721,11 @@ body {
   justify-content: flex-end;
   color: var(--text);
 }
+/* A cell without a value while other cells have one (#2405). */
+.cell.cell-unavailable {
+  color: var(--muted);
+  font-style: italic;
+}
 .cell.editing,
 .box .box-value.editing {
   padding: 0;

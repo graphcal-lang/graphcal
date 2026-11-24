@@ -59,6 +59,19 @@ impl<N> NodeUnavailable<N> {
         }
     }
 
+    /// The status a reader is shown in place of a missing value: `ERROR`
+    /// for a failure, `TODO` for a declaration's own hole, else `BLOCKED`.
+    #[must_use]
+    pub const fn status_label(&self) -> &'static str {
+        match self {
+            _ if self.has_failure() => "ERROR",
+            Self::Todo { .. } => "TODO",
+            Self::Blocked { .. } | Self::EvalFailed { .. } | Self::DependencyFailed { .. } => {
+                "BLOCKED"
+            }
+        }
+    }
+
     #[must_use]
     pub fn is_incomplete(&self) -> bool {
         !self.unfinished().is_empty()

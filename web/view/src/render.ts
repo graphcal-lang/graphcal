@@ -4,7 +4,14 @@ import { axisName, entryName, ZONES, zoneOf } from "./layout.ts";
 import { guessedFileName, isExternal, type NodeKind, type ViewNode } from "./model.ts";
 import { rowRuns, type Hidden } from "./rows.ts";
 import { setTip } from "./tip.ts";
-import { displayOf, shortMagnitude, statusOf, valueAt, type Status } from "./values.ts";
+import {
+  displayOf,
+  shortMagnitude,
+  statusOf,
+  tableStatusOf,
+  valueAt,
+  type Status,
+} from "./values.ts";
 
 const MARK: Record<NodeKind, string> = {
   param: "◇",
@@ -69,7 +76,7 @@ function renderHead(column: Column, folded = false): HTMLElement {
     title.append(warn);
   }
   // A table has no single value to replace, so its status sits beside its name.
-  const status = statusOf(node);
+  const status = tableStatusOf(node);
   if (status !== null && column.rows.length > 0) title.append(statusChip(status));
   head.append(title);
   const meta = el("div", "col-meta");
@@ -170,7 +177,13 @@ function renderTable(
         cellText(column, [row, ...(sub === null ? [] : [sub])]),
       );
       cell.dataset.node = column.node.id;
+      const missing = valueAt(column.node.value, [row, ...(sub === null ? [] : [sub])]);
+      if (missing?.kind === "unavailable") cell.classList.add("cell-unavailable");
       if (status !== null) setTip(cell, status.note);
+      else if (missing?.kind === "unavailable") {
+        const table = tableStatusOf(column.node);
+        if (table !== null) setTip(cell, table.note);
+      }
       cell.dataset.row = row;
       if (sub !== null) cell.dataset.sub = sub;
       body.append(cell);

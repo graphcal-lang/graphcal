@@ -16,7 +16,9 @@ export type Value =
   /** Entries follow the node's axes, outermost first; `key` is an entry key of that axis. */
   | { kind: "indexed"; display: string; index: string; entries: { key: string; value: Value }[] }
   /** Anything the view has no richer shape for (structs, complex, datetimes). */
-  | { kind: "text"; display: string };
+  | { kind: "text"; display: string }
+  /** A cell without a value while other cells have one: TODO, BLOCKED, or ERROR. */
+  | { kind: "unavailable"; display: string };
 
 const valueSchema: z.ZodType<Value> = z.lazy(() =>
   z.discriminatedUnion("kind", [
@@ -42,6 +44,7 @@ const valueSchema: z.ZodType<Value> = z.lazy(() =>
       entries: z.array(z.object({ key: z.string(), value: valueSchema })),
     }),
     z.object({ kind: z.literal("text"), display: z.string() }),
+    z.object({ kind: z.literal("unavailable"), display: z.string() }),
   ]),
 );
 

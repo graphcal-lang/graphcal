@@ -137,6 +137,48 @@ fn unfinished_markers_are_informational_in_executables_and_libraries() {
 }
 
 #[test]
+fn cells_with_values_are_shown_beside_unfinished_cells() {
+    let uri = untitled_uri();
+    let analysis = run_analysis(
+        &uri,
+        "index Part = { Wheel, Bracket, Panel }; \
+         node qty: Int[Part] = table[Part] { Wheel: 4; Bracket: todo<Int> {}; Panel: 2; }; \
+         node doubled: Int[Part] = for p: Part { @qty[p] * 2 };",
+        &[],
+        test_plugin_host(),
+    );
+    let values = analysis.eval_values.values().collect::<Vec<_>>();
+    for expected in [
+        "{ Wheel: 4, Bracket: TODO, Panel: 2 }",
+        "{ Wheel: 8, Bracket: BLOCKED, Panel: 4 }",
+    ] {
+        assert!(
+            values.iter().any(|value| value.as_str() == expected),
+            "{expected} in {values:?}"
+        );
+    }
+}
+
+#[test]
+fn a_complete_row_beside_an_unfinished_one_is_shown_cell_by_cell() {
+    let uri = untitled_uri();
+    let analysis = run_analysis(
+        &uri,
+        "index Row = { A, B }; index Col = { X, Y }; \
+         node m: Int[Row, Col] = table[Row, Col] { : X, Y; A: 1, todo<Int> {}; B: 3, 4; };",
+        &[],
+        test_plugin_host(),
+    );
+    let values = analysis.eval_values.values().collect::<Vec<_>>();
+    assert!(
+        values
+            .iter()
+            .any(|value| value.as_str() == "{ (A, X): 1, (A, Y): TODO, (B, X): 3, (B, Y): 4 }"),
+        "{values:?}"
+    );
+}
+
+#[test]
 fn unfinished_constants_are_marked_and_their_readers_shown_blocked() {
     let uri = untitled_uri();
     let analysis = run_analysis(

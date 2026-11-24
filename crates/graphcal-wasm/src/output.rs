@@ -45,7 +45,11 @@ impl From<&EvalResult> for EvaluationView {
             .map(|entry| DeclarationView {
                 name: entry.name.to_string(),
                 declaration_kind: DeclarationKindView::from(entry.category),
-                outcome: DeclarationOutcomeView::from_result(&entry.outcome, &result.render),
+                outcome: DeclarationOutcomeView::from_result(
+                    &entry.outcome,
+                    entry.cells.as_ref(),
+                    &result.render,
+                ),
             })
             .collect();
 
@@ -164,14 +168,29 @@ pub enum DeclarationOutcomeView {
     },
     Error {
         error: NodeUnavailableView,
+        /// Every cell, labelled, when some cells have values (#2405).
+        cells: Option<graphcal_report::value_display::ValueBody>,
     },
     Incomplete {
         reason: NodeUnavailableView,
+        /// Every cell, labelled, when some cells have values (#2405).
+        cells: Option<graphcal_report::value_display::ValueBody>,
     },
 }
 
 impl DeclarationOutcomeView {
-    fn from_result(result: &Result<Value, OutputUnavailable>, render: &RenderContext) -> Self {
+    fn from_result(
+        result: &Result<Value, OutputUnavailable>,
+        cells: Option<&graphcal_eval::eval::ValueCells>,
+        render: &RenderContext,
+    ) -> Self {
+        let cells = || {
+            cells.map(|cells| {
+                graphcal_report::value_display::ValueBody::Entries(
+                    graphcal_report::value_display::project_cell_entries(cells, render),
+                )
+            })
+        };
         match result {
             Ok(value) => ValueView::from_value(value, render)
                 .and_then(|view| {
@@ -182,12 +201,15 @@ impl DeclarationOutcomeView {
                     error: NodeUnavailableView::EvaluationFailed {
                         message: error.to_string(),
                     },
+                    cells: None,
                 }),
             Err(reason) if !reason.has_failure() => Self::Incomplete {
                 reason: NodeUnavailableView::from(reason),
+                cells: cells(),
             },
             Err(error) => Self::Error {
                 error: NodeUnavailableView::from(error),
+                cells: cells(),
             },
         }
     }
@@ -616,13 +638,15 @@ mod tests {
         assert!(matches!(
             view.values[0].outcome,
             DeclarationOutcomeView::Incomplete {
-                reason: NodeUnavailableView::Todo { .. }
+                reason: NodeUnavailableView::Todo { .. },
+                ..
             }
         ));
         assert!(matches!(
             view.values[1].outcome,
             DeclarationOutcomeView::Incomplete {
-                reason: NodeUnavailableView::Blocked { .. }
+                reason: NodeUnavailableView::Blocked { .. },
+                ..
             }
         ));
         assert!(matches!(
@@ -844,13 +868,15 @@ mod tests {
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Error {
-                error: NodeUnavailableView::EvaluationFailed { .. }
+                error: NodeUnavailableView::EvaluationFailed { .. },
+                ..
             }
         )));
         assert!(view.values.iter().any(|declaration| matches!(
             &declaration.outcome,
             DeclarationOutcomeView::Error {
-                error: NodeUnavailableView::DependencyFailed { .. }
+                error: NodeUnavailableView::DependencyFailed { .. },
+                ..
             }
         )));
         assert!(

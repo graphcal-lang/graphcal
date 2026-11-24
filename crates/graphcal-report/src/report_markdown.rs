@@ -148,14 +148,23 @@ fn push_card(out: &mut String, card: &ValueCard) {
                 push_grid(out, grid);
             }
         }
-        CardBody::Incomplete { message } => {
+        CardBody::Incomplete { message, cells } => {
             let _ = write!(out, "- {} = {}", code(&card.name), text(message));
             push_doc_suffix(out, card);
+            push_cells(out, cells.as_deref());
         }
-        CardBody::Error { message } => {
+        CardBody::Error { message, cells } => {
             let _ = write!(out, "- {} = ERROR: {}", code(&card.name), text(message));
             push_doc_suffix(out, card);
+            push_cells(out, cells.as_deref());
         }
+    }
+}
+
+/// The cells of a value that has none as a whole, one line each (#2405).
+fn push_cells(out: &mut String, cells: Option<&[(String, String)]>) {
+    for (label, display) in cells.into_iter().flatten() {
+        let _ = writeln!(out, "    - {} = {}", code(label), text(display));
     }
 }
 
