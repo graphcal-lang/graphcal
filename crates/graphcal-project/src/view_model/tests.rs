@@ -722,6 +722,30 @@ node last: Dimensionless = 2.0;
 }
 
 #[test]
+fn a_table_with_an_unfinished_cell_shows_its_other_cells() {
+    let view = evaluated_view_of_source(
+        "\
+index Part = { Wheel, Bracket, Panel };
+node qty: Int[Part] = table[Part] { Wheel: 4; Bracket: todo<Int> {}; Panel: 2; };
+",
+    );
+    let qty = node(&view, "qty");
+    assert_eq!(qty.unavailable, Some(ViewUnavailable::Todo));
+    let Some(ViewValue::Indexed { entries, .. }) = &qty.value else {
+        panic!("expected the cells of `qty`, got {:?}", qty.value);
+    };
+    let shown = entries
+        .iter()
+        .map(|entry| match &entry.value {
+            ViewValue::Int { display } | ViewValue::Unavailable { display } => display.as_str(),
+            other => panic!("unexpected cell {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(shown, ["4", "TODO", "2"]);
+    assert!(matches!(entries[1].value, ViewValue::Unavailable { .. }));
+}
+
+#[test]
 fn a_missing_value_names_the_unfinished_formula_behind_it() {
     let view = evaluated_view_of_source(
         "\

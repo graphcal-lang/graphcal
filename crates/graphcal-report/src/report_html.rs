@@ -233,22 +233,65 @@ fn push_value_card(out: &mut String, card: &ValueCard) {
     }
     match &card.body {
         CardBody::Value(body) => push_value_body(out, body, &card.name),
-        CardBody::Incomplete { message } => {
-            let _ = writeln!(
-                out,
-                "<p class=\"notice\" data-role=\"value\">{}</p>",
-                html_escape(message)
-            );
+        CardBody::Incomplete { message, cells } => {
+            push_unavailable(out, "notice", "", message, cells.as_ref(), &card.name);
         }
-        CardBody::Error { message } => {
-            let _ = writeln!(
+        CardBody::Error { message, cells } => {
+            push_unavailable(
                 out,
-                "<p class=\"error-chip\" data-role=\"value\">ERROR: {}</p>",
-                html_escape(message)
+                "error-chip",
+                "ERROR: ",
+                message,
+                cells.as_ref(),
+                &card.name,
             );
         }
     }
     out.push_str("</article>\n");
+}
+
+/// A card without a value as a whole: why, and the cells that have values
+/// when some do (#2405).
+fn push_unavailable(
+    out: &mut String,
+    class: &str,
+    prefix: &str,
+    message: &str,
+    cells: Option<&Vec<(String, String)>>,
+    name: &str,
+) {
+    match cells {
+        None => {
+            let _ = writeln!(
+                out,
+                "<p class=\"{class}\" data-role=\"value\">{prefix}{}</p>",
+                html_escape(message)
+            );
+        }
+        Some(cells) => {
+            let _ = writeln!(
+                out,
+                "<div class=\"partial-value value-scroll\" data-role=\"value\" role=\"region\" tabindex=\"0\" aria-label=\"{} values\">\n<p class=\"{class}\">{prefix}{}</p>",
+                html_escape(name),
+                html_escape(message)
+            );
+            push_entries(out, cells);
+            out.push_str("</div>\n");
+        }
+    }
+}
+
+fn push_entries(out: &mut String, entries: &[(String, String)]) {
+    out.push_str("<table class=\"entries\"><tbody>\n");
+    for (label, display) in entries {
+        let _ = writeln!(
+            out,
+            "<tr><th scope=\"row\"><code>{}</code></th><td>{}</td></tr>",
+            html_escape(label),
+            html_escape(display)
+        );
+    }
+    out.push_str("</tbody></table>\n");
 }
 
 fn push_value_body(out: &mut String, body: &ValueBody, name: &str) {
@@ -268,18 +311,7 @@ fn push_value_body(out: &mut String, body: &ValueBody, name: &str) {
                 html_escape(display)
             );
         }
-        ValueBody::Entries(entries) => {
-            out.push_str("<table class=\"entries\"><tbody>\n");
-            for (label, display) in entries {
-                let _ = writeln!(
-                    out,
-                    "<tr><th scope=\"row\"><code>{}</code></th><td>{}</td></tr>",
-                    html_escape(label),
-                    html_escape(display)
-                );
-            }
-            out.push_str("</tbody></table>\n");
-        }
+        ValueBody::Entries(entries) => push_entries(out, entries),
         ValueBody::Grid(grid) => push_grid(out, grid),
         ValueBody::Slices(slices) => {
             out.push_str("<div class=\"slices\">\n");

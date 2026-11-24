@@ -53,11 +53,15 @@ pub enum CardBody {
     Value(ValueBody),
     Incomplete {
         message: String,
+        /// Every cell, labelled, when some have values (#2405).
+        cells: Option<Vec<(String, String)>>,
     },
     /// The declaration failed to evaluate (or its display projection failed);
     /// per-node fault isolation keeps the rest of the report intact.
     Error {
         message: String,
+        /// Every cell, labelled, when some have values (#2405).
+        cells: Option<Vec<(String, String)>>,
     },
 }
 
@@ -149,6 +153,37 @@ pub fn collect_doc_captions(root: &CheckedDag) -> DocCaptions {
         .collect()
 }
 
+/// The card body of one evaluated value: its value, or why it has none with
+/// the cells that have values when some do (#2405).
+fn card_body(
+    entry: &graphcal_eval::eval::EvalEntry,
+    render: &graphcal_eval::eval::RenderContext,
+) -> CardBody {
+    let cells = || {
+        entry
+            .cells
+            .as_ref()
+            .map(|cells| crate::value_display::project_cell_entries(cells, render))
+    };
+    match &entry.outcome {
+        Ok(value) => match project_value_body(value, render) {
+            Ok(body) => CardBody::Value(body),
+            Err(error) => CardBody::Error {
+                message: error.to_string(),
+                cells: None,
+            },
+        },
+        Err(reason) if !reason.has_failure() => CardBody::Incomplete {
+            message: reason.to_string(),
+            cells: cells(),
+        },
+        Err(error) => CardBody::Error {
+            message: error.to_string(),
+            cells: cells(),
+        },
+    }
+}
+
 /// Derive the auto-report document from one evaluated result.
 ///
 /// Value display failures are isolated into per-card errors, mirroring the
@@ -166,20 +201,7 @@ pub fn build_report(inputs: ReportInputs<'_>) -> Result<ReportDocument, ReportBu
             _ => &mut values,
         };
         let name = entry.name.to_string();
-        let body = match &entry.outcome {
-            Ok(value) => match project_value_body(value, &result.render) {
-                Ok(body) => CardBody::Value(body),
-                Err(error) => CardBody::Error {
-                    message: error.to_string(),
-                },
-            },
-            Err(reason) if !reason.has_failure() => CardBody::Incomplete {
-                message: reason.to_string(),
-            },
-            Err(error) => CardBody::Error {
-                message: error.to_string(),
-            },
-        };
+        let body = card_body(entry, &result.render);
         let card = ValueCard {
             doc: inputs.docs.get(&entry.identity).cloned(),
             name,

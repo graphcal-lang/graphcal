@@ -344,3 +344,21 @@ fn plot_json_reports_todo_blocked_assertions_on_stderr() {
         );
     }
 }
+
+#[test]
+fn json_output_reports_the_cells_of_a_partly_unfinished_table() {
+    let source = "index Part = { Wheel, Bracket, Panel }; \
+                  node qty: Int[Part] = table[Part] { Wheel: 4; Bracket: todo<Int> {}; Panel: 2; };";
+    let output = run(source, &["eval", "--allow-incomplete", "--format", "json"]);
+    let json: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let qty = &json["node"]["qty"];
+    assert_eq!(qty["status"], "todo");
+    assert_eq!(qty["cells"]["entries"]["Wheel"], 4);
+    assert_eq!(qty["cells"]["entries"]["Panel"], 2);
+    assert_eq!(qty["cells"]["entries"]["Bracket"]["status"], "todo");
+
+    let output = run(source, &["eval", "--allow-incomplete"]);
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("qty[Wheel]"), "{text}");
+    assert!(text.contains("qty[Bracket]"), "{text}");
+}

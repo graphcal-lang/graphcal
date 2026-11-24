@@ -27,10 +27,11 @@ pub fn format_eval_values(
         if !shown.contains(&entry.identity) {
             continue;
         }
-        let formatted = match &entry.outcome {
-            Ok(value) => format_value_inline(value, &result.render),
-            Err(reason) if reason.is_incomplete() => reason.to_string(),
-            Err(_) => continue,
+        let formatted = match (&entry.outcome, &entry.cells) {
+            (Ok(value), _) => format_value_inline(value, &result.render),
+            (Err(_), Some(cells)) => format_cells_inline(cells, &result.render, INLAY_HINT_MAX_LEN),
+            (Err(reason), None) if reason.is_incomplete() => reason.to_string(),
+            (Err(_), None) => continue,
         };
         map.insert(entry.identity.clone(), formatted);
     }
@@ -51,6 +52,103 @@ pub const INLAY_HINT_MAX_LEN: usize = 80;
 /// - Indexed: `"{ Departure: 4.92 [km/s], Correction: 0.24 [km/s], ... }"`
 pub fn format_value_inline(value: &Value, render: &graphcal_eval::eval::RenderContext) -> String {
     format_value_inline_with_budget(value, render, INLAY_HINT_MAX_LEN)
+}
+
+/// Format the cells of a value that has none as a whole, like an indexed
+/// value (`{ Wheel: 4, Bracket: TODO, Panel: 2 }`), with a cell without a
+/// value shown by its status. Several axes use tuple keys.
+fn format_cells_inline(
+    cells: &graphcal_eval::eval::ValueCells,
+    render: &graphcal_eval::eval::RenderContext,
+    max_len: usize,
+) -> String {
+    let mut leaves = Vec::new();
+    let mut length = 0;
+    collect_cell_leaves(
+        cells,
+        &mut Vec::new(),
+        render,
+        max_len,
+        &mut length,
+        &mut leaves,
+    );
+    let multi = leaves.first().is_some_and(|(keys, _)| keys.len() > 1);
+    let mut out = String::from("{ ");
+    for (position, (keys, display)) in leaves.iter().enumerate() {
+        let key = if multi {
+            format!("({})", keys.join(", "))
+        } else {
+            keys.join(", ")
+        };
+        let item = format!("{key}: {display}");
+        let separator = if position == 0 { "" } else { ", " };
+        if out.len() + separator.len() + item.len() + 2 > max_len {
+            out.push_str(if position == 0 { "... }" } else { ", ... }" });
+            return out;
+        }
+        out.push_str(separator);
+        out.push_str(&item);
+    }
+    out.push_str(" }");
+    out
+}
+
+/// The leaves of a cell's `value` with their key paths: one per entry of
+/// an indexed value, so the budget applies per leaf, else the value itself.
+fn collect_value_leaves(
+    value: &graphcal_eval::eval::Value,
+    path: &mut Vec<String>,
+    render: &graphcal_eval::eval::RenderContext,
+    max_len: usize,
+    length: &mut usize,
+    leaves: &mut Vec<(Vec<String>, String)>,
+) {
+    if let graphcal_eval::eval::Value::Indexed { entries, .. } = value {
+        for (key, entry) in entries {
+            if *length > max_len {
+                return;
+            }
+            path.push(value.indexed_entry_display_name(key));
+            collect_value_leaves(entry, path, render, max_len, length, leaves);
+            path.pop();
+        }
+        return;
+    }
+    let display = format_value_inline_with_budget(value, render, max_len);
+    *length += display.len();
+    leaves.push((path.clone(), display));
+}
+
+/// The leaves of `cells` with their key paths, until about `max_len`
+/// characters are collected.
+fn collect_cell_leaves(
+    cells: &graphcal_eval::eval::ValueCells,
+    path: &mut Vec<String>,
+    render: &graphcal_eval::eval::RenderContext,
+    max_len: usize,
+    length: &mut usize,
+    leaves: &mut Vec<(Vec<String>, String)>,
+) {
+    for (key, cell) in &cells.entries {
+        if *length > max_len {
+            return;
+        }
+        path.push(cells.entry_display_name(key));
+        match cell {
+            graphcal_eval::eval::ValueCell::Cells(inner) => {
+                collect_cell_leaves(inner, path, render, max_len, length, leaves);
+            }
+            graphcal_eval::eval::ValueCell::Value(value) => {
+                collect_value_leaves(value, path, render, max_len, length, leaves);
+            }
+            graphcal_eval::eval::ValueCell::Unavailable(reason) => {
+                let status = reason.status_label();
+                *length += status.len();
+                leaves.push((path.clone(), status.to_owned()));
+            }
+        }
+        path.pop();
+    }
 }
 
 /// Format a `Value` with a character budget. When the formatted entries would

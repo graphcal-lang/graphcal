@@ -42,7 +42,7 @@ use super::model::{
     ViewValue,
 };
 use super::target::{ViewModels, ViewTarget};
-use super::value::{common_unit, view_value};
+use super::value::{common_unit, view_cells, view_value};
 use super::wire_key::{ViewIndexId, ViewInstanceId, ViewNodeId};
 
 /// Why a checked project could not be projected into a view model.
@@ -212,7 +212,13 @@ impl ViewProjection {
                     .and_then(assertion_value),
                 ValueBindingKind::Value => values
                     .value(&binding.declaration)
-                    .map(|value| view_value(value, &values.result.render, &mut problems)),
+                    .map(|value| view_value(value, &values.result.render, &mut problems))
+                    .or_else(|| {
+                        values
+                            .cells
+                            .get(&binding.declaration)
+                            .map(|cells| view_cells(cells, &values.result.render, &mut problems))
+                    }),
             };
             node.unit = value.as_ref().and_then(common_unit);
             node.unavailable = match binding.kind {
@@ -1181,6 +1187,8 @@ const fn kind_of(category: ValueDeclCategory) -> ViewNodeKind {
 struct EvaluatedValues<'e> {
     result: &'e EvalResult,
     by_identity: HashMap<&'e ResolvedDeclName, &'e Result<Value, OutputUnavailable>>,
+    /// The cells of the values that have none as a whole but have cells.
+    cells: HashMap<&'e ResolvedDeclName, &'e graphcal_eval::eval::ValueCells>,
     assertions: HashMap<&'e ResolvedDeclName, &'e AssertResult>,
 }
 
@@ -1193,6 +1201,12 @@ impl<'e> EvaluatedValues<'e> {
                 .iter()
                 .chain(&result.nested_instance_entries)
                 .map(|entry| (&entry.identity, &entry.outcome))
+                .collect(),
+            cells: result
+                .entries
+                .iter()
+                .chain(&result.nested_instance_entries)
+                .filter_map(|entry| entry.cells.as_ref().map(|cells| (&entry.identity, cells)))
                 .collect(),
             assertions: result
                 .assertions

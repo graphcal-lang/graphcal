@@ -977,7 +977,19 @@
           error.kind === "dependency_failed"
             ? "dependency failed: " + error.failed_dependencies.join(", ")
             : error.message;
-        replacement = element("p", incomplete ? "notice" : "error-chip", (incomplete ? "" : "ERROR: ") + message);
+        var reasonLine = element("p", incomplete ? "notice" : "error-chip", (incomplete ? "" : "ERROR: ") + message);
+        var cells = declaration.outcome.cells;
+        if (cells && cells.kind === "entries") {
+          // Some cells have values (#2405): the reason, then every cell.
+          replacement = element("div", "partial-value value-scroll");
+          replacement.setAttribute("role", "region");
+          replacement.setAttribute("tabindex", "0");
+          replacement.setAttribute("aria-label", declaration.name + " values");
+          replacement.appendChild(reasonLine);
+          replacement.appendChild(buildEntriesTable(cells.body));
+        } else {
+          replacement = reasonLine;
+        }
         replacement.setAttribute("data-role", "value");
       }
       var changed = hasApplied && previousText !== replacement.textContent;

@@ -40,6 +40,21 @@ function listDetails(
   return details;
 }
 
+/** Every cell of a value that has none as a whole, labelled (#2405). */
+function cellsDetails(cells: readonly (readonly [string, string])[]): HTMLDetailsElement {
+  const details = element("details");
+  details.append(element("summary", `${cells.length} cells`));
+  details.addEventListener("toggle", () => {
+    if (!details.open || details.childElementCount > 1) return;
+    paged(details, cells, ([name, display]) => {
+      const row = element("div", undefined, "value-row");
+      row.append(element("code", name), element("code", display));
+      return row;
+    });
+  });
+  return details;
+}
+
 function tableNode(grid: GridTable, sliceLabel?: string): HTMLElement {
   const section = element("section", undefined, "table-slice");
   const scroller = element("div", undefined, "value-table-scroll");
@@ -197,6 +212,10 @@ export class Output {
                 result.status === "incomplete" ? "muted" : "error",
               ),
             );
+            // Some cells have values (#2405): list every cell.
+            if (result.cells?.kind === "entries") {
+              row.append(cellsDetails(result.cells.body));
+            }
           }
           return row;
         });

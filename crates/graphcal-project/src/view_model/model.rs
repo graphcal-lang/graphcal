@@ -165,11 +165,13 @@ pub struct ViewNode {
     pub doc: Option<String>,
     /// Where the declaration lives.
     pub source: Option<ViewSource>,
-    /// The evaluated value, when available.
+    /// The evaluated value, when available. A value that has none as a
+    /// whole but some of whose cells do is its cells, with
+    /// [`ViewValue::Unavailable`] for the others (#2405).
     pub value: Option<ViewValue>,
     /// Why an evaluated model has no value here, when the cause is an
-    /// unfinished formula. Absent with a value, without an evaluation, and
-    /// for a value that failed to evaluate.
+    /// unfinished formula. Absent with a complete value, without an
+    /// evaluation, and for a value that failed to evaluate.
     pub unavailable: Option<ViewUnavailable>,
     /// Why parts of the value are not shown as declared: a display unit
     /// that could not be applied, so the SI value is shown instead. Empty
@@ -314,6 +316,11 @@ pub enum ViewValue {
     /// Anything the view has no richer shape for (structs, complex numbers,
     /// datetimes), rendered as text.
     Text {
+        display: String,
+    },
+    /// A cell of an indexed value that has no value while other cells do
+    /// (#2405): `TODO`, `BLOCKED`, or `ERROR`.
+    Unavailable {
         display: String,
     },
 }

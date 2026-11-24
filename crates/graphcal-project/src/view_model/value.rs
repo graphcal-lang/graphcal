@@ -2,7 +2,8 @@
 //! shows them in, labels, and nested entries per axis.
 
 use graphcal_eval::eval::{
-    KeyRendering, RenderContext, UnitLabel, Value, format_number, quantity_display_value,
+    KeyRendering, RenderContext, UnitLabel, Value, ValueCell, ValueCells, format_number,
+    quantity_display_value,
 };
 
 use super::model::{ViewEntry, ViewValue};
@@ -105,6 +106,45 @@ fn leaf_or_entries(
     }
 }
 
+/// Project the cells of a value that has none as a whole (#2405): an
+/// indexed value whose cells without a value show their status.
+pub(super) fn view_cells(
+    cells: &ValueCells,
+    render: &RenderContext,
+    problems: &mut Vec<String>,
+) -> ViewValue {
+    cells_at(cells, render, "", problems)
+}
+
+fn cells_at(
+    cells: &ValueCells,
+    render: &RenderContext,
+    path: &str,
+    problems: &mut Vec<String>,
+) -> ViewValue {
+    ViewValue::Indexed {
+        display: format!("[{}]", cells.index_name),
+        index: cells.index_name.to_string(),
+        entries: cells
+            .entries
+            .iter()
+            .map(|(key, cell)| {
+                let path = format!("{path}[{key}]");
+                ViewEntry {
+                    key: key.to_string(),
+                    value: match cell {
+                        ValueCell::Value(value) => leaf_or_entries(value, render, &path, problems),
+                        ValueCell::Cells(inner) => cells_at(inner, render, &path, problems),
+                        ValueCell::Unavailable(reason) => ViewValue::Unavailable {
+                            display: reason.status_label().to_owned(),
+                        },
+                    },
+                }
+            })
+            .collect(),
+    }
+}
+
 /// The SI label of a quantity's dimension, ignoring its display unit.
 fn si_label(value: &Value, render: &RenderContext) -> Option<String> {
     match value {
@@ -149,6 +189,7 @@ fn collect_quantity_units(value: &ViewValue, out: &mut Vec<Option<String>>) {
         ViewValue::Int { .. }
         | ViewValue::Bool { .. }
         | ViewValue::Label { .. }
-        | ViewValue::Text { .. } => {}
+        | ViewValue::Text { .. }
+        | ViewValue::Unavailable { .. } => {}
     }
 }

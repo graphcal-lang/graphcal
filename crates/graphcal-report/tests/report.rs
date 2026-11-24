@@ -59,6 +59,26 @@ fn unfinished_reports_are_explicitly_incomplete_not_errors() {
 }
 
 #[test]
+fn a_table_with_an_unfinished_cell_reports_its_other_cells() {
+    let document = build_document(
+        "index Part = { Wheel, Bracket, Panel }; \
+         node qty: Int[Part] = table[Part] { Wheel: 4; Bracket: todo<Int> {}; Panel: 2; };",
+    );
+    let html = render_report_html(&document, None);
+    assert!(html.contains("class=\"partial-value"), "{html}");
+    assert!(
+        html.contains("<code>[Wheel]</code></th><td>4</td>"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<code>[Bracket]</code></th><td>TODO</td>"),
+        "{html}"
+    );
+    let markdown = render_report_markdown(&document);
+    assert!(markdown.contains("`[Panel]` = 2"), "{markdown}");
+}
+
+#[test]
 fn multi_decl_report_captions_belong_to_individual_slots() {
     let document = build_document(
         "\

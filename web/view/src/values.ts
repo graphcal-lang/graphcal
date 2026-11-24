@@ -26,8 +26,16 @@ export interface Status {
 
 /** The status of a node without a value because a formula is unfinished, else null. */
 export function statusOf(node: Pick<ViewNode, "value" | "unavailable">): Status | null {
+  return node.value === null ? tableStatusOf(node) : null;
+}
+
+/**
+ * Why a node has no value as a whole, also when some of its cells have values
+ * (each other cell then shows its own `TODO` / `BLOCKED` / `ERROR`).
+ */
+export function tableStatusOf(node: Pick<ViewNode, "unavailable">): Status | null {
   const reason = node.unavailable ?? null;
-  if (node.value !== null || reason === null) return null;
+  if (reason === null) return null;
   if (reason.kind === "todo") {
     return { kind: "todo", label: "TODO", note: "TODO: this formula is unfinished" };
   }

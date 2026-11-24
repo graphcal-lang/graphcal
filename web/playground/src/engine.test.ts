@@ -71,6 +71,22 @@ it("preserves TODO, runtime blocking, and independent values through real Wasm",
   expect(result.evaluation.notices[0]?.kind).toBe("plot_incomplete");
 });
 
+it("reports the cells of a partly unfinished table through real Wasm", () => {
+  const source =
+    "index Part = { Wheel, Bracket }; node qty: Int[Part] = table[Part] { Wheel: 4; Bracket: todo<Int> {}; };";
+  const result = outcomeSchema.parse(evaluate(evaluationRequest({ filename: "main.gcl", source })));
+  if (result.status !== "evaluated") throw new Error(JSON.stringify(result));
+  const outcome = result.evaluation.values[0]?.outcome;
+  if (outcome?.status !== "incomplete") throw new Error(JSON.stringify(outcome));
+  expect(outcome.cells).toEqual({
+    kind: "entries",
+    body: [
+      ["[Wheel]", "4"],
+      ["[Bracket]", "TODO"],
+    ],
+  });
+});
+
 it("retains the shared report projection for multidimensional tables", async () => {
   const source = await readFile(
     new URL("../../../tests/fixtures/valid/table_literal.gcl", import.meta.url),

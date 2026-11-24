@@ -1803,15 +1803,53 @@ fn print_json(
         }
     }
 
+    /// The cells of a value that has none as a whole: one entry per key, a
+    /// value or why it has none, nested per axis like an indexed value.
+    fn cells_to_json(
+        cells: &graphcal_eval::eval::ValueCells,
+        render: &graphcal_eval::eval::RenderContext,
+    ) -> Result<serde_json::Value, DisplayProjectionError> {
+        let entries = cells
+            .entries
+            .iter()
+            .map(|(key, cell)| {
+                let json = match cell {
+                    graphcal_eval::eval::ValueCell::Value(value) => value_to_json(value, render)?,
+                    graphcal_eval::eval::ValueCell::Unavailable(reason) => {
+                        node_error_to_json(reason)
+                    }
+                    graphcal_eval::eval::ValueCell::Cells(inner) => cells_to_json(inner, render)?,
+                };
+                Ok((cells.entry_display_name(key), json))
+            })
+            .collect::<Result<serde_json::Map<_, _>, _>>()?;
+        Ok(serde_json::json!({
+            "index": cells.index_name.to_string(),
+            "entries": entries,
+        }))
+    }
+
     fn result_to_json(
         result: &Result<Value, OutputUnavailable>,
+        cells: Option<&graphcal_eval::eval::ValueCells>,
         render: &graphcal_eval::eval::RenderContext,
     ) -> Result<serde_json::Value, DisplayProjectionError> {
         match result {
             Ok(value) => value_to_json(value, render),
-            Err(error) => Ok(node_error_to_json(error)),
+            Err(error) => {
+                let mut json = node_error_to_json(error);
+                if let (Some(cells), serde_json::Value::Object(map)) = (cells, &mut json) {
+                    map.insert("cells".to_string(), cells_to_json(cells, render)?);
+                }
+                Ok(json)
+            }
         }
     }
+
+    let cells_by_name = result
+        .output_values(output_view)
+        .filter_map(|entry| entry.cells.as_ref().map(|cells| (&entry.name, cells)))
+        .collect::<std::collections::HashMap<_, _>>();
 
     let render = &result.render;
     let mut output = serde_json::Map::new();
@@ -1832,15 +1870,24 @@ fn print_json(
 
     let consts = result
         .output_consts(output_view)
-        .map(|(name, value)| result_to_json(value, render).map(|value| (name.to_string(), value)))
+        .map(|(name, value)| {
+            result_to_json(value, cells_by_name.get(name).copied(), render)
+                .map(|value| (name.to_string(), value))
+        })
         .collect::<Result<serde_json::Map<_, _>, _>>()?;
     let params = result
         .output_params(output_view)
-        .map(|(name, value)| result_to_json(value, render).map(|value| (name.to_string(), value)))
+        .map(|(name, value)| {
+            result_to_json(value, cells_by_name.get(name).copied(), render)
+                .map(|value| (name.to_string(), value))
+        })
         .collect::<Result<serde_json::Map<_, _>, _>>()?;
     let nodes = result
         .output_nodes(output_view)
-        .map(|(name, value)| result_to_json(value, render).map(|value| (name.to_string(), value)))
+        .map(|(name, value)| {
+            result_to_json(value, cells_by_name.get(name).copied(), render)
+                .map(|value| (name.to_string(), value))
+        })
         .collect::<Result<serde_json::Map<_, _>, _>>()?;
 
     output.insert("const".to_string(), serde_json::Value::Object(consts));
