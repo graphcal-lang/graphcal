@@ -642,6 +642,8 @@ impl<'a> ExecutionFrame<'a> {
             blocked[position] = outside.is_some();
             problems.push(outside.map(MemberProblem::Unavailable));
         }
+        // The members whose failed elements each member's elements read.
+        let mut failed_reads = vec![std::collections::BTreeSet::new(); members.len()];
         let mut previous_key: Option<&KeyValue> = None;
         for (step, at) in axis_keys.iter().enumerate() {
             cancellation.checkpoint()?;
@@ -664,7 +666,11 @@ impl<'a> ExecutionFrame<'a> {
                     match slots.slot(*dependency, *at_step) {
                         None | Some(ElementSlot::Pending) => return Err(stuck()),
                         Some(ElementSlot::Computed(_)) => {}
-                        Some(ElementSlot::Failed | ElementSlot::Unavailable) => ready = false,
+                        Some(ElementSlot::Failed) => {
+                            ready = false;
+                            failed_reads[position].insert(*dependency);
+                        }
+                        Some(ElementSlot::Unavailable) => ready = false,
                     }
                 }
                 if !ready {
@@ -760,9 +766,24 @@ impl<'a> ExecutionFrame<'a> {
             match problem {
                 Some(MemberProblem::Failed(error)) => self.failure(key, error)?,
                 Some(MemberProblem::Unavailable(reason)) => {
-                    self.errors
-                        .entry(key.clone())
-                        .or_insert_with(|| reason.of_declaration(key));
+                    let reason = self
+                        .errors
+                        .remove(key)
+                        .unwrap_or_else(|| reason.of_declaration(key));
+                    // An unfinished member that also read failed elements
+                    // reports them too: the unfinished reason must not hide
+                    // a failure.
+                    let failed = failed_reads[position]
+                        .iter()
+                        .map(|read: &usize| keys[*read].clone())
+                        .collect::<Vec<_>>();
+                    let reason = match NonEmpty::try_from_vec(failed) {
+                        Ok(failed_deps) => {
+                            reason.merged(NodeUnavailable::DependencyFailed { failed_deps })
+                        }
+                        Err(_) => reason,
+                    };
+                    self.errors.insert(key.clone(), reason);
                 }
                 None => {}
             }
