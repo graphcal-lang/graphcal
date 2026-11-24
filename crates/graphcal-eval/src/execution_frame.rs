@@ -611,6 +611,10 @@ impl<'a> ExecutionFrame<'a> {
         // unavailable input outside the group are blocked
         // (`internals/recurrence-groups.md` §5).
         let mut supplied = vec![false; members.len()];
+        // Members blocked as a whole before the group runs; any other member
+        // is evaluated element by element, also after one of its elements
+        // has no value (§4.2).
+        let mut blocked = vec![false; members.len()];
         let mut problems: Vec<Option<MemberProblem>> = Vec::with_capacity(members.len());
         for (position, step) in steps.iter().enumerate() {
             let key = keys[position];
@@ -630,21 +634,19 @@ impl<'a> ExecutionFrame<'a> {
                 continue;
             }
             if let Some(reason) = self.errors.get(key) {
+                blocked[position] = true;
                 problems.push(Some(MemberProblem::Unavailable(reason.clone())));
                 continue;
             }
-            problems.push(
-                NodeUnavailable::blocked_by(self.unavailable_inputs(step))
-                    .map(MemberProblem::Unavailable),
-            );
+            let outside = NodeUnavailable::blocked_by(self.unavailable_inputs(step));
+            blocked[position] = outside.is_some();
+            problems.push(outside.map(MemberProblem::Unavailable));
         }
         let mut previous_key: Option<&KeyValue> = None;
         for (step, at) in axis_keys.iter().enumerate() {
             cancellation.checkpoint()?;
             for (position, member) in members.iter().enumerate() {
-                if supplied[position]
-                    || matches!(problems[position], Some(MemberProblem::Unavailable(_)))
-                {
+                if supplied[position] || blocked[position] {
                     if !supplied[position] {
                         slots.set(position, step, ElementSlot::Unavailable);
                     }
@@ -741,7 +743,10 @@ impl<'a> ExecutionFrame<'a> {
                     }
                     (_, FailurePolicy::Contain, None) => {
                         slots.set(position, step, ElementSlot::Failed);
-                        if problems[position].is_none() {
+                        // A failed element makes its member failed, whatever
+                        // an earlier element of it lacked (§5.2); the
+                        // earliest failure is the one reported.
+                        if !matches!(problems[position], Some(MemberProblem::Failed(_))) {
                             problems[position] = Some(MemberProblem::Failed(failure));
                         }
                     }
