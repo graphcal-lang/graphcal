@@ -559,16 +559,20 @@ pub(super) fn datetime<'t>(
             datetime,
             duration,
         } => {
-            let datetime = operands.datetime(datetime)?;
-            let seconds = operands.quantity(duration)?.get();
+            let (datetime, seconds) = super::strict::both(
+                operands.datetime(datetime),
+                operands.quantity(duration).map(FiniteQuantity::get),
+            )?;
             match op {
                 ShiftOp::Add => super::datetime::checked_epoch_add_seconds(datetime, seconds),
                 ShiftOp::Sub => super::datetime::checked_epoch_subtract_seconds(datetime, seconds),
             }
         }
         DExpr::ShiftAfter { duration, datetime } => {
-            let seconds = operands.quantity(duration)?.get();
-            let datetime = operands.datetime(datetime)?;
+            let (seconds, datetime) = super::strict::both(
+                operands.quantity(duration).map(FiniteQuantity::get),
+                operands.datetime(datetime),
+            )?;
             super::datetime::checked_epoch_add_seconds(datetime, seconds)
         }
         DExpr::FromUnixTime(arg) => {

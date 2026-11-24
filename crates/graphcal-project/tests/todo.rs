@@ -537,6 +537,42 @@ node free: Dimensionless = @k * 2.0;
 }
 
 #[test]
+fn a_member_reaching_its_own_hole_with_other_unfinished_inputs_is_todo() {
+    let evaluation = compile_and_eval(&format!(
+        "{RECURRENCE}
+dag helper {{ pub node missing: Dimensionless = todo<Dimensionless> {{}}; }}
+node action: Dimensionless[Step] = for t: Step {{ @k * @state[t] }};
+node state: Dimensionless[Step] = unfold(Step, todo<Dimensionless> {{}} + @helper()::missing, |s, prev_t, t| s + @action[prev_t]);
+"
+    ))
+    .unwrap();
+    assert!(
+        matches!(
+            result(&evaluation, "state"),
+            Err(NodeUnavailable::Todo { .. })
+        ),
+        "{:?}",
+        result(&evaluation, "state")
+    );
+}
+
+#[test]
+fn a_failure_is_not_hidden_by_an_unfinished_datetime_operand() {
+    let evaluation = compile_and_eval(
+        r"
+param zero: Dimensionless = 0.0;
+node later: Datetime<TAI> = todo<Datetime<TAI>> {} + 1.0 s / @zero;
+node earlier: Datetime<TAI> = 1.0 s / @zero + todo<Datetime<TAI>> {};
+",
+    )
+    .unwrap();
+    for name in ["later", "earlier"] {
+        let reason = result(&evaluation, name).as_ref().unwrap_err();
+        assert!(reason.has_failure(), "{name}: {reason:?}");
+    }
+}
+
+#[test]
 fn finished_members_of_a_group_with_an_unfinished_member_are_blocked() {
     let evaluation = compile_and_eval(&format!(
         "{RECURRENCE}

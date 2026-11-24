@@ -220,6 +220,8 @@ fn unavailable_reason(
     error: &SemanticError,
 ) -> RuntimeUnavailable {
     match error {
+        // A hole reached outside any declaration's own formula (a plot, an
+        // assertion) belongs to another declaration.
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind:
                 SemanticErrorKind::Evaluation(EvaluationError::Unavailable {
@@ -227,29 +229,19 @@ fn unavailable_reason(
                     ..
                 }),
             ..
-        }) if owner != Some(declaration) => NodeUnavailable::Blocked {
+        }) if owner.is_none() => NodeUnavailable::Blocked {
             unfinished: graphcal_compiler::syntax::non_empty::NonEmpty::singleton(
                 declaration.clone(),
             ),
             failed_deps: Vec::new(),
         },
-        // The formula reached its own hole, among other unfinished inputs:
-        // the declaration itself is TODO.
         SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
             kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
             ..
-        }) if let Some(owner) = owner
-            && !reason.has_failure()
-            && reason.unfinished().contains(owner) =>
-        {
-            NodeUnavailable::Todo {
-                declaration: owner.clone(),
-            }
-        }
-        SemanticError::Located(graphcal_compiler::diagnostic::Diagnostic {
-            kind: SemanticErrorKind::Evaluation(EvaluationError::Unavailable { reason, .. }),
-            ..
-        }) => reason.clone(),
+        }) => owner.map_or_else(
+            || reason.clone(),
+            |owner| reason.clone().of_declaration(owner),
+        ),
         other => NodeUnavailable::EvalFailed {
             message: other.to_string(),
         },
@@ -763,7 +755,9 @@ impl<'a> ExecutionFrame<'a> {
             match problem {
                 Some(MemberProblem::Failed(error)) => self.failure(key, error)?,
                 Some(MemberProblem::Unavailable(reason)) => {
-                    self.errors.entry(key.clone()).or_insert(reason);
+                    self.errors
+                        .entry(key.clone())
+                        .or_insert_with(|| reason.of_declaration(key));
                 }
                 None => {}
             }

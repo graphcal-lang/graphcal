@@ -131,6 +131,23 @@ impl RuntimeUnavailable {
         }
     }
 
+    /// This reason as the reason of the declaration `owner` itself: TODO
+    /// when, failing nothing, it reached `owner`'s own hole, and blocked
+    /// when it reached only other declarations' holes.
+    #[must_use]
+    pub fn of_declaration(self, owner: &ResolvedDeclName) -> Self {
+        match self {
+            Self::Todo { declaration } if &declaration != owner => Self::Blocked {
+                unfinished: NonEmpty::singleton(declaration),
+                failed_deps: Vec::new(),
+            },
+            reason if !reason.has_failure() && reason.unfinished().contains(owner) => Self::Todo {
+                declaration: owner.clone(),
+            },
+            reason => reason,
+        }
+    }
+
     /// The declarations this reason names as failed.
     fn failed_dependencies(&self) -> &[ResolvedDeclName] {
         match self {

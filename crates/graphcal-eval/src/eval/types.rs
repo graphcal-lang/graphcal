@@ -843,6 +843,16 @@ impl EvalResult {
         self.entries
             .iter_mut()
             .for_each(|entry| entry.name = rename(&entry.name));
+        // Only names the root gives are scoped names; invoked modules keep
+        // their own.
+        self.unfinished_declarations
+            .iter_mut()
+            .chain(&mut self.unfinished_calls)
+            .for_each(|name| {
+                if let OutputDeclName::Root(scoped) = name {
+                    *scoped = rename(scoped);
+                }
+            });
         self.output_surface = std::mem::take(&mut self.output_surface)
             .into_iter()
             .map(|name| rename(&name))
