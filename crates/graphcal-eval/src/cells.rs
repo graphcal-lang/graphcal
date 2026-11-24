@@ -192,6 +192,36 @@ impl Cell {
     }
 }
 
+/// What a declaration's result is, given its cells.
+#[derive(Debug)]
+pub enum Collected {
+    /// Every cell has a value.
+    Complete(EvaluatedRuntimeValue),
+    /// Some cells have no value.
+    Partial(PartialValue),
+    /// The value has none as a whole, for this reason.
+    Unavailable(RuntimeUnavailable),
+    /// The value's own evaluation failed.
+    Failed(SemanticError),
+}
+
+impl Cell {
+    /// What a declaration whose formula evaluated to this tree has.
+    #[must_use]
+    pub fn collect(self) -> Collected {
+        match self.complete() {
+            Ok(value) | Err(Self::Value(value)) => Collected::Complete(value),
+            Err(Self::Unavailable(reason)) => Collected::Unavailable(reason),
+            Err(Self::Failed(error)) => Collected::Failed(error),
+            Err(Self::Axis(cells)) => match PartialValue::new(cells) {
+                Ok(partial) => Collected::Partial(partial),
+                // Every cell has a value: collecting completes it.
+                Err(complete) => complete.collect(),
+            },
+        }
+    }
+}
+
 /// A cell without a value, and why.
 #[derive(Debug, Clone, Copy)]
 pub enum MissingCell<'a> {
@@ -241,6 +271,38 @@ impl PartialValue {
     #[must_use]
     pub const fn cells(&self) -> &IndexedValue<Cell> {
         &self.cells
+    }
+
+    /// Visit every cell with a value, with its entry keys, outermost first,
+    /// in axis order, until `visit` returns an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first error of `visit`.
+    pub fn try_for_each_value<E>(
+        &self,
+        visit: &mut impl FnMut(&[IndexEntryKey], &EvaluatedRuntimeValue) -> Result<(), E>,
+    ) -> Result<(), E> {
+        fn walk<E>(
+            cell: &Cell,
+            path: &mut Vec<IndexEntryKey>,
+            visit: &mut impl FnMut(&[IndexEntryKey], &EvaluatedRuntimeValue) -> Result<(), E>,
+        ) -> Result<(), E> {
+            match cell {
+                Cell::Value(value) => visit(path, value),
+                Cell::Axis(cells) => cells.iter().try_for_each(|(key, cell)| {
+                    path.push(key.into_owned());
+                    let walked = walk(cell, path, visit);
+                    path.pop();
+                    walked
+                }),
+                Cell::Unavailable(_) | Cell::Failed(_) => Ok(()),
+            }
+        }
+        self.cells.iter().try_for_each(|(key, cell)| {
+            let mut path = vec![key.into_owned()];
+            walk(cell, &mut path, visit)
+        })
     }
 
     /// The first failed cell's error, in axis order.

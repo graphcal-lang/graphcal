@@ -108,7 +108,7 @@ node wheels: Int = @qty[Part#Wheel];
 node doubled: Int[Part] = for p: Part { @qty[p] * 2 };
 ```
 
-Here `qty[Bracket]` is TODO, `wheels` is `4`, and `doubled` has the values `8` and `4` with `doubled[Bracket]` BLOCKED. Cells are evaluated one by one when a `for`, a map or table literal, or a reference to another declaration forms the value of a declaration. Reading one cell, such as `@qty[Part#Wheel]` or `@qty[p]`, needs only that cell. Reading the whole value, as `sum` does, is BLOCKED while any cell has no value. A struct value is one node: a hole in one of its fields leaves the whole value unfinished. An evaluation failure, such as a division by zero or a value outside the domain, likewise affects only its own cell.
+Here `qty[Bracket]` is TODO, `wheels` is `4`, and `doubled` has the values `8` and `4` with `doubled[Bracket]` BLOCKED. Cells are evaluated one by one when a `for`, a map or table literal, a reference to another declaration, or an inline DAG call forms the value of a declaration. A `scan` or `unfold` keeps the steps before the first step without a value; each later step reads that step, so it has no value either. Reading one cell, such as `@qty[Part#Wheel]` or `@qty[p]`, needs only that cell. Reading the whole value, as `sum` does, is BLOCKED while any cell has no value. A struct value is one node: a hole in one of its fields leaves the whole value unfinished. An evaluation failure, such as a division by zero or a value outside the domain, likewise affects only its own cell.
 
 Replace every hole with an expression to finish the node. The formula then determines its dependencies; no historical contract remains. `check` accepts otherwise-valid unfinished models and summarizes them (`--deny-todo` rejects them). `eval` prints partial results but exits unsuccessfully unless `--allow-incomplete` is given, even when no result reached a hole with the given inputs. That flag never suppresses genuine evaluation or assertion failures.
 
@@ -120,7 +120,7 @@ const node g0: Acceleration = 9.80665 m/s^2;
 
 Constants are evaluated at compile time before the DAG is built. They cannot reference parameters or nodes. DAG calls are anonymous runtime includes, so they are also prohibited in `const node` expressions and compile-time domain bounds.
 
-A constant whose value is not decided yet can be written with a hole, such as `const node v_exhaust: Velocity = todo<Velocity> { @g0 };`. Its interface may list only constants. As for nodes, a constant whose evaluation reaches a hole is TODO, and everything that reads it is BLOCKED. A domain bound must be known when the model is checked, so a bound that reads an unfinished constant is an error. Because constants are checked at compile time, filling in the hole can make `check` report an error that was not visible before, such as a value outside the constant's domain.
+A constant whose value is not decided yet can be written with a hole, such as `const node v_exhaust: Velocity = todo<Velocity> { @g0 };`. Its interface may list only constants. As for nodes, a constant whose evaluation reaches a hole is TODO, and everything that reads it is BLOCKED. A domain bound must be known when the model is checked, so a bound whose evaluation reads an unfinished constant, or a cell of one that has no value, is an error. Because constants are checked at compile time, filling in the hole can make `check` report an error that was not visible before, such as a value outside the constant's domain.
 
 ### Assertions
 

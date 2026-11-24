@@ -26,11 +26,12 @@ fn key(tir: &CheckedTir, name: &str) -> ResolvedDeclName {
 
 fn one() -> impl FnMut(
     graphcal_eval::constant_pools::ConstStep<'_>,
-) -> Result<
-    Result<RuntimeValue, graphcal_eval::constant_pools::UnfinishedConstant>,
-    std::convert::Infallible,
-> {
-    |_| Ok(Ok(RuntimeValue::quantity(1.0).unwrap()))
+) -> Result<graphcal_eval::constant_pools::ConstOutcome, std::convert::Infallible> {
+    |_| {
+        Ok(graphcal_eval::constant_pools::ConstOutcome::Value(
+            RuntimeValue::quantity(1.0).unwrap(),
+        ))
+    }
 }
 
 fn sealed(source: &str) -> CheckedProgram {
@@ -68,10 +69,9 @@ fn const_pools_evaluate_every_constant_once_after_the_constants_it_reads() {
             "every earlier constant is visible"
         );
         evaluated.push(step.key.clone());
-        Ok::<_, std::convert::Infallible>(Ok(RuntimeValue::quantity(f64::from(
-            u8::try_from(evaluated.len()).unwrap(),
+        Ok::<_, std::convert::Infallible>(graphcal_eval::constant_pools::ConstOutcome::Value(
+            RuntimeValue::quantity(f64::from(u8::try_from(evaluated.len()).unwrap())).unwrap(),
         ))
-        .unwrap()))
     })
     .unwrap();
     let names = evaluated
@@ -107,7 +107,7 @@ fn const_pools_stop_at_the_first_failed_constant() {
     let mut calls = 0;
     let result = ConstPool::build(&tir, &ConstPool::default(), |_| {
         calls += 1;
-        Err::<Result<RuntimeValue, _>, _>("failed")
+        Err::<graphcal_eval::constant_pools::ConstOutcome, _>("failed")
     });
     assert!(matches!(
         result,

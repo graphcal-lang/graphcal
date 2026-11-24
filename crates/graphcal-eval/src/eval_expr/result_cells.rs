@@ -21,7 +21,7 @@ use crate::runtime_presentation::EvaluatedRuntimeValue;
 use crate::runtime_value::{IndexedValue, RuntimeValue};
 
 use super::context::EvalSession;
-use super::entry_reads::{CellRead, HirLocalValueMap, read_cells};
+use super::entry_reads::{CellRead, HirLocalValueMap, partial_target, read_cells};
 
 type Evaluated<T> = Result<T, Outcome<SemanticError>>;
 
@@ -31,6 +31,9 @@ pub(super) struct Whole<'w> {
     pub(super) value: &'w dyn Fn(ScopedNode<'_>, &HirLocalValueMap<'_>) -> Evaluated<RuntimeValue>,
     pub(super) presented:
         &'w dyn Fn(ScopedNode<'_>, &HirLocalValueMap<'_>) -> Evaluated<EvaluatedRuntimeValue>,
+    /// An inline DAG call, to the cells of its output, or of a slice of it,
+    /// or a `scan` or `unfold`, to one cell per step.
+    pub(super) stepped: &'w dyn Fn(ScopedNode<'_>, &HirLocalValueMap<'_>) -> Evaluated<Cell>,
 }
 
 /// Evaluate `expr`, a formula in its result position, to its cells.
@@ -59,9 +62,6 @@ fn eval_result_inner(
     let evaluate = |node| (whole.value)(node, local_values);
     let operands = super::operations::Operands::new(&evaluate, ctx);
     let result = |node| eval_result(node, local_values, whole, ctx);
-    let partial = |target: &graphcal_compiler::resolved_name::ResolvedDeclName| {
-        ctx.partial.and_then(|partial| partial.get(target))
-    };
     match expr.kind() {
         NodeKind::For { bindings, body } => {
             let (first, remaining) = bindings.split_first();
@@ -86,17 +86,25 @@ fn eval_result_inner(
             let arm = operands.key_arm(scrutinee, dispatch)?;
             result(arms.map(|arms| &arms[arm].body))
         }
-        NodeKind::GraphRef(target) if let Some(partial) = partial(&target.value) => {
+        // A reference to a declaration or constant with cells keeps them.
+        _ if let Some((target, partial)) = partial_target(expr, ctx) => {
             Ok(Cell::Axis(partial.cells().clone()).read_from(&target.value))
         }
         NodeKind::Index { expr: inner, args }
-            if let NodeKind::GraphRef(target) = inner.kind()
-                && let Some(partial) = partial(&target.value) =>
+            if let Some((target, partial)) = partial_target(inner, ctx) =>
         {
-            match read_cells(&target, partial, args, &operands, local_values, ctx)? {
+            match read_cells(&target, partial.cells(), args, &operands, local_values, ctx)? {
                 CellRead::Cells(cells) => Ok(Cell::Axis(cells.clone()).read_from(&target.value)),
                 CellRead::Value { .. } => (whole.presented)(expr, local_values).map(Cell::Value),
             }
+        }
+        // A slice of a call output keeps its cells; the call runs once.
+        NodeKind::Index { expr: inner, .. } if matches!(inner.kind(), NodeKind::DagCall { .. }) => {
+            (whole.stepped)(expr, local_values)
+        }
+        // A call output keeps its cells; a scan or unfold has one per step.
+        NodeKind::DagCall { .. } | NodeKind::Scan(_) | NodeKind::Unfold { .. } => {
+            (whole.stepped)(expr, local_values)
         }
         _ => (whole.presented)(expr, local_values).map(Cell::Value),
     }
@@ -104,7 +112,7 @@ fn eval_result_inner(
 
 /// The cell an evaluation of one element gives: its value, or why it has
 /// none. Cancellation and violated invariants stop the whole evaluation.
-fn cell(result: Evaluated<Cell>) -> Evaluated<Cell> {
+pub(super) fn cell(result: Evaluated<Cell>) -> Evaluated<Cell> {
     match result {
         Ok(cell) => Ok(cell),
         Err(Outcome::Failed(error)) if !matches!(error, SemanticError::Internal(_)) => {

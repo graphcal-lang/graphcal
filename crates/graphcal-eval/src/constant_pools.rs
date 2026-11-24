@@ -99,6 +99,23 @@ pub struct ConstStep<'a> {
     /// Why each unfinished constant so far has no value, as a read of it
     /// reports.
     pub unfinished: &'a HashMap<ResolvedDeclName, RuntimeUnavailable>,
+    /// The cells of each unfinished constant so far whose indexed value has
+    /// cells with values: a read of one cell sees it (#2405).
+    pub partial: &'a HashMap<ResolvedDeclName, crate::cells::PartialValue>,
+}
+
+/// What evaluating one constant gives.
+#[derive(Debug)]
+pub enum ConstOutcome {
+    /// Its value.
+    Value(RuntimeValue),
+    /// Why it has none.
+    Unfinished(UnfinishedConstant),
+    /// Why it has none as a whole, and its cells, some of which have values.
+    Partial {
+        unfinished: UnfinishedConstant,
+        cells: crate::cells::PartialValue,
+    },
 }
 
 impl UnfinishedConstant {
@@ -129,13 +146,17 @@ impl UnfinishedConstant {
 pub struct ConstPool {
     by_dag: HashMap<DagId, Arc<RuntimeValueMap>>,
     unfinished: Arc<UnfinishedConstantMap>,
+    /// The cells of the unfinished constants whose indexed values have cells
+    /// with values.
+    partial: Arc<HashMap<ResolvedDeclName, crate::cells::PartialValue>>,
 }
 
 impl ConstPool {
     /// Evaluate the constants of `tir`'s scheduled DAGs, calling `evaluate`
     /// exactly once per constant in the checker's constant schedule; every
     /// other DAG of `tir` shares its pool from `inherited`. `evaluate` gives
-    /// a constant's value, or why it is unfinished.
+    /// a constant's value, or why it is unfinished, with its cells when some
+    /// have values.
     ///
     /// The result covers exactly the DAGs of `tir`.
     ///
@@ -146,7 +167,7 @@ impl ConstPool {
     pub fn build<E>(
         tir: &CheckedTir,
         inherited: &Self,
-        mut evaluate: impl FnMut(ConstStep<'_>) -> Result<Result<RuntimeValue, UnfinishedConstant>, E>,
+        mut evaluate: impl FnMut(ConstStep<'_>) -> Result<ConstOutcome, E>,
     ) -> Result<(Self, PositionedPools), ConstPoolBuildError<E>> {
         let invalid = |error| Err(ConstPoolBuildError::Invalid(error));
         let schedule = tir.const_schedule();
@@ -176,6 +197,7 @@ impl ConstPool {
             .iter()
             .map(|(key, unfinished)| (key.clone(), unfinished.reason(key)))
             .collect::<HashMap<_, _>>();
+        let mut partial = inherited.partial.as_ref().clone();
         for key in schedule.order() {
             let (Some(formula), Some(pool)) = (
                 tir.declaration_body(key)
@@ -193,16 +215,25 @@ impl ConstPool {
                 expression: formula,
                 visible: &visible,
                 unfinished: &reasons,
+                partial: &partial,
             })
             .map_err(ConstPoolBuildError::Evaluation)?
             {
-                Ok(value) => {
+                ConstOutcome::Value(value) => {
                     visible.insert(key.clone(), value.clone());
                     pool.insert(key.clone(), value);
                 }
-                Err(why) => {
+                ConstOutcome::Unfinished(why) => {
                     reasons.insert(key.clone(), why.reason(key));
                     unfinished.insert(key.clone(), why);
+                }
+                ConstOutcome::Partial {
+                    unfinished: why,
+                    cells,
+                } => {
+                    reasons.insert(key.clone(), why.reason(key));
+                    unfinished.insert(key.clone(), why);
+                    partial.insert(key.clone(), cells);
                 }
             }
         }
@@ -221,6 +252,7 @@ impl ConstPool {
             Self {
                 by_dag,
                 unfinished: Arc::new(unfinished),
+                partial: Arc::new(partial),
             },
             PositionedPools { by_position },
         ))
@@ -237,6 +269,37 @@ impl ConstPool {
         &self,
     ) -> impl Iterator<Item = (&ResolvedDeclName, &UnfinishedConstant)> {
         self.unfinished.iter()
+    }
+
+    /// The cells of the unfinished constant `key`, when its indexed value
+    /// has cells with values.
+    #[must_use]
+    pub fn cells(&self, key: &ResolvedDeclName) -> Option<&crate::cells::PartialValue> {
+        self.partial.get(key)
+    }
+
+    /// Why each unfinished constant has no value, as a read of it reports.
+    #[must_use]
+    pub fn unavailable_reasons(&self) -> HashMap<ResolvedDeclName, RuntimeUnavailable> {
+        self.unfinished
+            .iter()
+            .map(|(key, unfinished)| (key.clone(), unfinished.reason(key)))
+            .collect()
+    }
+
+    /// The cells of every unfinished constant whose indexed value has cells
+    /// with values, by constant.
+    #[must_use]
+    pub fn cells_by_constant(&self) -> &HashMap<ResolvedDeclName, crate::cells::PartialValue> {
+        &self.partial
+    }
+
+    /// Every unfinished constant whose indexed value has cells with values,
+    /// with its cells.
+    pub fn partial_constants(
+        &self,
+    ) -> impl Iterator<Item = (&ResolvedDeclName, &crate::cells::PartialValue)> {
+        self.partial.iter()
     }
 
     /// The evaluated constants of one DAG.
@@ -265,7 +328,10 @@ impl ConstPool {
             .get(key)
             .map(|unfinished| ConstantReference {
                 key: key.clone(),
-                target: ReferenceTarget::Unfinished(unfinished.clone()),
+                target: ReferenceTarget::Unfinished(
+                    unfinished.clone(),
+                    self.partial.get(key).cloned(),
+                ),
             })
     }
 }
@@ -305,7 +371,8 @@ pub struct ConstantReference {
 #[derive(Debug, Clone)]
 enum ReferenceTarget {
     Value(Arc<RuntimeValueMap>),
-    Unfinished(UnfinishedConstant),
+    /// An unfinished constant, with its cells when some have values.
+    Unfinished(UnfinishedConstant, Option<crate::cells::PartialValue>),
 }
 
 impl ConstantReference {
@@ -323,7 +390,17 @@ impl ConstantReference {
     pub fn value(&self) -> Result<&RuntimeValue, &UnfinishedConstant> {
         match &self.target {
             ReferenceTarget::Value(pool) => Ok(&pool[&self.key]),
-            ReferenceTarget::Unfinished(unfinished) => Err(unfinished),
+            ReferenceTarget::Unfinished(unfinished, _) => Err(unfinished),
+        }
+    }
+
+    /// The cells of the referenced constant, when it is unfinished and some
+    /// of its cells have values (#2405).
+    #[must_use]
+    pub const fn cells(&self) -> Option<&crate::cells::PartialValue> {
+        match &self.target {
+            ReferenceTarget::Value(_) => None,
+            ReferenceTarget::Unfinished(_, cells) => cells.as_ref(),
         }
     }
 }
