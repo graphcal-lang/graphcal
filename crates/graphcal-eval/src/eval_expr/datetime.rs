@@ -415,7 +415,8 @@ mod tests {
     use graphcal_compiler::semantic::time_scale::TimeScale;
 
     use crate::eval_expr::datetime::{
-        GregorianFields, checked_epoch_add_seconds, checked_epoch_difference_seconds,
+        GregorianFields, checked_duration_from_nanoseconds, checked_duration_from_seconds,
+        checked_epoch_add_seconds, checked_epoch_difference_seconds,
         checked_epoch_from_unix_seconds, checked_epoch_subtract_seconds, nanoseconds_from_seconds,
         seconds_from_nanoseconds, unix_seconds,
     };
@@ -598,5 +599,173 @@ mod tests {
             assert_eq!(fields.iso_weekday(), weekday);
             assert_eq!(fields.day_of_year(), day_of_year);
         }
+    }
+
+    fn utc_noon_fields(year: i32, month: u8, day: u8) -> GregorianFields {
+        let epoch = hifitime::Epoch::maybe_from_gregorian(
+            year,
+            month,
+            day,
+            12,
+            0,
+            0,
+            0,
+            hifitime::TimeScale::UTC,
+        )
+        .unwrap();
+        GregorianFields::from_epoch(epoch).unwrap()
+    }
+
+    #[test]
+    fn day_of_year_covers_the_first_and_last_day_of_every_month() {
+        // Day of year of the first of each month, January through December.
+        const COMMON_FIRSTS: [i64; 12] = [1, 32, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335];
+        const LEAP_FIRSTS: [i64; 12] = [1, 32, 61, 92, 122, 153, 183, 214, 245, 275, 306, 336];
+        const COMMON_LENGTHS: [u8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        const LEAP_LENGTHS: [u8; 12] = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        // 2023 and 2100 are common years (2100 by the century rule); 2024
+        // and 2000 are leap years (2000 by the 400-year rule).
+        let cases = [
+            (2023, COMMON_FIRSTS, COMMON_LENGTHS),
+            (2100, COMMON_FIRSTS, COMMON_LENGTHS),
+            (2024, LEAP_FIRSTS, LEAP_LENGTHS),
+            (2000, LEAP_FIRSTS, LEAP_LENGTHS),
+        ];
+        for (year, firsts, lengths) in cases {
+            for ((month, first), length) in (1..=12_u8).zip(firsts).zip(lengths) {
+                assert_eq!(
+                    utc_noon_fields(year, month, 1).day_of_year(),
+                    first,
+                    "{year}-{month:02}-01"
+                );
+                assert_eq!(
+                    utc_noon_fields(year, month, length).day_of_year(),
+                    first + i64::from(length) - 1,
+                    "{year}-{month:02}-{length}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn iso_weekday_holds_across_400_year_eras_and_their_boundaries() {
+        // The Gregorian calendar repeats every 400 years (146097 days, exactly
+        // 20871 weeks), and 2000-01-01 was a Saturday, so every year ≡ 0
+        // (mod 400) starts on a Saturday, its 29 February is a Tuesday, its
+        // 1 March a Wednesday, and the day before it a Friday.
+        let cases = [
+            // Era boundaries: the last day of a 400-year cycle and the first
+            // day of the next, plus 29 February / 1 March, where the
+            // March-based formula changes era.
+            ((-401, 12, 31), 5),
+            ((-400, 1, 1), 6),
+            ((-400, 2, 29), 2),
+            ((-400, 3, 1), 3),
+            ((-1, 12, 31), 5),
+            ((0, 1, 1), 6),
+            ((0, 2, 29), 2),
+            ((0, 3, 1), 3),
+            ((1599, 12, 31), 5),
+            ((1600, 1, 1), 6),
+            ((1600, 2, 29), 2),
+            ((1600, 3, 1), 3),
+            ((2399, 12, 31), 5),
+            ((2400, 1, 1), 6),
+            ((2400, 2, 29), 2),
+            ((2400, 3, 1), 3),
+            ((4000, 1, 1), 6),
+            // Well-known dates in other eras.
+            ((1, 1, 1), 1),      // proleptic Gregorian day one, a Monday
+            ((1582, 10, 15), 5), // first day of the Gregorian calendar, a Friday
+            ((1969, 12, 31), 3), // the day before the Unix epoch
+            ((1970, 1, 1), 4),   // the Unix epoch, a Thursday
+            ((2100, 1, 1), 5),   // a Friday
+            ((9999, 12, 31), 5), // a Friday
+        ];
+        for ((year, month, day), weekday) in cases {
+            assert_eq!(
+                utc_noon_fields(year, month, day).iso_weekday(),
+                weekday,
+                "{year}-{month:02}-{day:02}"
+            );
+        }
+    }
+
+    /// hifitime's duration range is ±32768 centuries of 36525 days, a whole
+    /// number of seconds that binary64 represents exactly.
+    const DURATION_LIMIT_SECONDS: f64 = 32_768.0 * 36_525.0 * 86_400.0;
+
+    #[test]
+    fn duration_limits_are_whole_centuries() {
+        let centuries = 1_i128 << 15; // 32768
+        let limit_ns = centuries * 36_525 * 86_400 * 1_000_000_000;
+        assert_eq!(hifitime::Duration::MAX.total_nanoseconds(), limit_ns);
+        assert_eq!(hifitime::Duration::MIN.total_nanoseconds(), -limit_ns);
+    }
+
+    #[test]
+    fn duration_constructors_accept_exactly_the_representable_range() {
+        let max_ns = hifitime::Duration::MAX.total_nanoseconds();
+        let min_ns = hifitime::Duration::MIN.total_nanoseconds();
+        assert_eq!(
+            checked_duration_from_nanoseconds(max_ns, "test").unwrap(),
+            hifitime::Duration::MAX
+        );
+        assert_eq!(
+            checked_duration_from_nanoseconds(min_ns, "test").unwrap(),
+            hifitime::Duration::MIN
+        );
+        assert!(checked_duration_from_nanoseconds(max_ns + 1, "test").is_err());
+        assert!(checked_duration_from_nanoseconds(min_ns - 1, "test").is_err());
+
+        assert_eq!(
+            checked_duration_from_seconds(DURATION_LIMIT_SECONDS, "test").unwrap(),
+            hifitime::Duration::MAX
+        );
+        assert_eq!(
+            checked_duration_from_seconds(-DURATION_LIMIT_SECONDS, "test").unwrap(),
+            hifitime::Duration::MIN
+        );
+        // The adjacent binary64 values lie 2^-6 s outside the range.
+        assert!(checked_duration_from_seconds(DURATION_LIMIT_SECONDS.next_up(), "test").is_err());
+        assert!(
+            checked_duration_from_seconds((-DURATION_LIMIT_SECONDS).next_down(), "test").is_err()
+        );
+    }
+
+    #[test]
+    fn an_inserted_leap_second_extracts_as_the_repeated_last_second_of_its_day() {
+        // The leap second 2016-12-31T23:59:60 UTC is TAI 2017-01-01T00:00:36:
+        // TAI−UTC was 36 s before it and 37 s from the following midnight.
+        // A Graphcal datetime cannot represent second 60, so the inserted
+        // second reads as a repeated 23:59:59.
+        let tai = |second| {
+            hifitime::Epoch::maybe_from_gregorian(
+                2017,
+                1,
+                1,
+                0,
+                0,
+                second,
+                0,
+                hifitime::TimeScale::TAI,
+            )
+            .unwrap()
+        };
+        let utc_fields = |second| {
+            let utc = crate::time_scale_conversion::to_time_scale(tai(second), TimeScale::UTC);
+            let fields = GregorianFields::from_epoch(utc).unwrap();
+            (
+                fields.year(),
+                fields.month(),
+                fields.day(),
+                fields.hour(),
+                fields.minute(),
+                fields.second(),
+            )
+        };
+        assert_eq!(utc_fields(35), (2016, 12, 31, 23, 59, 59));
+        assert_eq!(utc_fields(36), (2016, 12, 31, 23, 59, 59));
+        assert_eq!(utc_fields(37), (2017, 1, 1, 0, 0, 0));
     }
 }
