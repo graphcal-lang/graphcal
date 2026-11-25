@@ -90,8 +90,9 @@ impl DocComment {
         Self { text, span }
     }
 
-    /// The documentation text: one line per `///` line, with the delimiter
-    /// and at most one leading space removed, joined with `\n`.
+    /// The documentation text: one line per `///` line, with the delimiter,
+    /// at most one leading space, and trailing spaces and tabs removed,
+    /// joined with `\n`.
     #[must_use]
     pub fn text(&self) -> &str {
         &self.text

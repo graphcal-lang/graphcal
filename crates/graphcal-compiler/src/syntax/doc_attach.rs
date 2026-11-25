@@ -70,10 +70,7 @@ fn doc_block_before(
         .filter(|run| !run.is_empty())?;
     let text = run
         .iter()
-        .map(|comment| {
-            let body = comment.value.body_text();
-            body.strip_prefix(' ').unwrap_or(body)
-        })
+        .map(|comment| doc_line_text(comment.value.body_text()))
         .collect::<Vec<_>>()
         .join("\n");
     let first = run.first()?;
@@ -83,6 +80,18 @@ fn doc_block_before(
         span_end(last.span) - first.span.offset(),
     );
     Some(DocComment::new(text, span))
+}
+
+/// The documentation text of one `///` line body: at most one leading space
+/// and all trailing spaces and tabs removed.
+///
+/// Trailing horizontal whitespace is not part of the documentation. The
+/// formatter strips it from every line, so keeping it here would let
+/// formatting change the documentation text (#2399).
+fn doc_line_text(body: &str) -> &str {
+    body.strip_prefix(' ')
+        .unwrap_or(body)
+        .trim_end_matches([' ', '\t'])
 }
 
 const fn span_end(span: Span) -> usize {
