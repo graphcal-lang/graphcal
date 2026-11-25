@@ -13,3 +13,4 @@ punctuation = ".,;:!?。！？"
 
 [per-file-ignores]
 ".github/pull_request_template.md" = ["first-line-h1"]
+".github/ISSUE_TEMPLATE/*.md" = ["first-line-h1"]
