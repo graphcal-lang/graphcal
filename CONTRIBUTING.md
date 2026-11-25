@@ -18,6 +18,23 @@ The CLI build generates and verifies the embedded browser engine under Cargo's
 `OUT_DIR`. Do not bypass its freshness or integrity checks, and do not commit
 the generated engine files.
 
+## Tools for the checks
+
+The `just` recipes below call tools beyond the build prerequisites. Install
+the ones for the recipes you run:
+
+| Tool | Used by |
+|------|---------|
+| [`just`](https://github.com/casey/just) | every recipe |
+| `lake`, through [`elan`](https://github.com/leanprover/elan) (Lean) | `formal`, part of `just test` and `just lint` |
+| [`ripgrep`](https://github.com/BurntSushi/ripgrep) (`rg`) | `formal` |
+| `vp` (see [`internals/playground.md`](internals/playground.md)) | playground and view recipes, part of `just test` and `just lint` |
+| [`wasm-pack`](https://github.com/drager/wasm-pack) | `playground-assets`, part of `just test` |
+| [Node.js](https://nodejs.org/) (`node`) | report-runtime tests in `just test` |
+| [`cargo-audit`](https://github.com/rustsec/rustsec/tree/main/cargo-audit) | `just lint` |
+| [Nushell](https://www.nushell.sh/) (`nu`) | `refactor-metrics`, part of `just lint` |
+| [`uv`](https://docs.astral.sh/uv/) | `reading-order`, part of `just lint` |
+
 ## Test
 
 ```bash
