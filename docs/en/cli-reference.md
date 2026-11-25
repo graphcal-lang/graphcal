@@ -878,7 +878,7 @@ graphcal format --check
 |------|---------|
 | `0` | Formatting completed, or every inspected file was already formatted under `--check` |
 | `1` | A file could not be read/formatted/replaced, or `--check` found changes |
-| `2` | One or more requested directories could not be traversed completely |
+| `2` | One or more requested directories could not be traversed completely, or `-` was combined with other paths |
 
 ---
 
