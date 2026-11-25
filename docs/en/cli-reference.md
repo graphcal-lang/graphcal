@@ -851,7 +851,7 @@ graphcal format [OPTIONS] [PATHS]...
 
 | Argument | Description |
 |----------|-------------|
-| `[PATHS]...` | Files or directories to format (default: current directory); a lone `-` reads source from stdin and writes the formatted text to stdout |
+| `[PATHS]...` | Files or directories to format (default: current directory); a lone `-` reads source from stdin and writes the formatted text to stdout (nothing with `--check`) |
 
 **Options:**
 
