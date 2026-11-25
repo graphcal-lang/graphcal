@@ -4986,11 +4986,14 @@ fn constructor_calls_place_written_fields_at_their_declared_fields() {
     // Every field is evaluated; the failures merge in written order.
     assert_eq!(
         call.apply(
-            |init| Err::<(), _>(init.name.as_str().to_owned()),
-            |first, second| format!("{first}+{second}"),
+            |init| Err::<(), _>(vec![init.name.as_str().to_owned()]),
+            |mut first, second| {
+                first.extend(second);
+                first
+            },
         )
         .unwrap_err(),
-        "right+left"
+        ["right", "left"]
     );
 
     // A call admits exactly the application's declared fields.
