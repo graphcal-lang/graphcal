@@ -170,10 +170,52 @@ impl ArrayArgument {
     }
 }
 
+/// One plugin-call argument read at its ABI kind, not yet checked against
+/// the ABI.
+enum ReadArgument<'k> {
+    Quantity(FiniteQuantity),
+    Bool(bool),
+    Int {
+        param: &'k FnParamName,
+        value: i64,
+    },
+    Array {
+        param: &'k FnParamName,
+        array: ArrayArgument,
+    },
+}
+
+impl<'k> ReadArgument<'k> {
+    /// The value `reader` reads from `node` at `kind`.
+    fn read<N, R: ArgumentReader<N>>(
+        kind: &'k ExternArgKind,
+        node: N,
+        reader: &R,
+    ) -> Result<Self, R::Error> {
+        Ok(match kind {
+            ExternArgKind::Quantity { .. } => Self::Quantity(reader.quantity(node)?),
+            ExternArgKind::Bool { .. } => Self::Bool(reader.bool(node)?),
+            ExternArgKind::Int { param } => Self::Int {
+                param,
+                value: reader.int(node)?,
+            },
+            ExternArgKind::Indexed {
+                param,
+                element,
+                indexes,
+            } => Self::Array {
+                param,
+                array: reader.array(node, element, indexes)?,
+            },
+        })
+    }
+}
+
 /// Why the arguments of an extern call could not be encoded.
 #[derive(Debug)]
 pub enum EncodeError<E> {
-    /// Producing the argument value failed.
+    /// Producing argument values failed: the failures of every such
+    /// argument, combined in call order.
     Value(E),
     /// The argument at `position` cannot cross the ABI.
     Argument {
@@ -250,57 +292,62 @@ impl ResultError {
 impl<'s> HostArguments<'s> {
     /// Encode the arguments of a checked call of a function whose declared
     /// result kind is `result`: `arguments` yields each argument's ABI kind
-    /// with the node
-    /// `reader` evaluates, in call order. Values are read lazily, so an
-    /// earlier argument's failure is reported before a later one is evaluated.
+    /// with the node `reader` evaluates, in call order. Every argument is
+    /// read, also after one has failed; the failures are combined with
+    /// `merge` in call order. An argument is checked against the ABI only
+    /// once every argument has a value.
     ///
     /// # Errors
     ///
-    /// Returns [`EncodeError`] for a failed argument value or an argument
+    /// Returns [`EncodeError`] for failed argument values or an argument
     /// that cannot cross the ABI.
+    #[expect(
+        clippy::manual_try_fold,
+        reason = "every argument is read, also after one has failed"
+    )]
     pub fn encode<'k, N, R: ArgumentReader<N>>(
         result: &'s TExternResult,
         arguments: impl IntoIterator<Item = (&'k ExternArgKind, N)>,
         reader: &R,
+        mut merge: impl FnMut(R::Error, R::Error) -> R::Error,
     ) -> Result<Self, EncodeError<R::Error>> {
-        let arguments = arguments.into_iter();
+        let read = arguments
+            .into_iter()
+            .map(|(kind, node)| ReadArgument::read(kind, node, reader))
+            .fold(Ok(Vec::new()), |collected, argument| {
+                match (collected, argument) {
+                    (Ok(mut collected), Ok(argument)) => {
+                        collected.push(argument);
+                        Ok(collected)
+                    }
+                    (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
+                    (Err(first), Err(second)) => Err(merge(first, second)),
+                }
+            })
+            .map_err(EncodeError::Value)?;
         let mut encoded = Self {
             result,
-            values: Vec::with_capacity(arguments.size_hint().0),
+            values: Vec::with_capacity(read.len()),
             bound: HashMap::new(),
         };
-        for (position, (kind, node)) in arguments.enumerate() {
-            let argument = |failure| EncodeError::Argument { position, failure };
-            let value = match kind {
-                ExternArgKind::Quantity { .. } => HostArgument::Scalar(HostScalar::Quantity(
-                    reader.quantity(node).map_err(EncodeError::Value)?,
-                )),
-                ExternArgKind::Bool { .. } => HostArgument::Scalar(HostScalar::Bool(
-                    reader.bool(node).map_err(EncodeError::Value)?,
-                )),
-                ExternArgKind::Int { param } => {
-                    let value = reader.int(node).map_err(EncodeError::Value)?;
-                    HostInt::try_new(value)
-                        .map(|value| HostArgument::Scalar(HostScalar::Int(value)))
-                        .map_err(|error| {
-                            argument(Failure::Error(ArgumentError::InexactInt {
-                                parameter: param.clone(),
-                                error,
-                            }))
-                        })?
-                }
-                ExternArgKind::Indexed {
-                    param,
-                    element,
-                    indexes,
-                } => {
-                    let array = reader
-                        .array(node, element, indexes)
-                        .map_err(EncodeError::Value)?;
+        for (position, argument) in read.into_iter().enumerate() {
+            let failure = |failure| EncodeError::Argument { position, failure };
+            let value = match argument {
+                ReadArgument::Quantity(value) => HostArgument::Scalar(HostScalar::Quantity(value)),
+                ReadArgument::Bool(value) => HostArgument::Scalar(HostScalar::Bool(value)),
+                ReadArgument::Int { param, value } => HostInt::try_new(value)
+                    .map(|value| HostArgument::Scalar(HostScalar::Int(value)))
+                    .map_err(|error| {
+                        failure(Failure::Error(ArgumentError::InexactInt {
+                            parameter: param.clone(),
+                            error,
+                        }))
+                    })?,
+                ReadArgument::Array { param, array } => {
                     encoded
                         .bind_axes(&array.bindings)
-                        .map_err(|invariant| argument(invariant.into()))?;
-                    HostArgument::Array(array.into_host(param).map_err(argument)?)
+                        .map_err(|invariant| failure(invariant.into()))?;
+                    HostArgument::Array(array.into_host(param).map_err(failure)?)
                 }
             };
             encoded.values.push(value);
@@ -543,7 +590,12 @@ mod tests {
             .iter()
             .map(ExternArgKind::for_param)
             .collect::<Vec<_>>();
-        HostArguments::encode(result, kinds.iter().zip(values), &ValueReader)
+        HostArguments::encode(
+            result,
+            kinds.iter().zip(values),
+            &ValueReader,
+            |first, _| first,
+        )
     }
 
     fn argument_failure<E: fmt::Debug>(error: EncodeError<E>) -> (usize, Failure<ArgumentError>) {
@@ -741,6 +793,43 @@ mod tests {
             failure,
             Failure::Error(ArgumentError::InexactIntElement { index: 1, .. })
         ));
+    }
+
+    #[test]
+    fn every_argument_is_read_and_value_failures_are_merged_in_call_order() {
+        let signature = signature(
+            &[],
+            vec![
+                ParamKind::Scalar(ScalarValueKind::Int),
+                ParamKind::Scalar(ScalarValueKind::Bool),
+                ParamKind::Scalar(ScalarValueKind::Int),
+            ],
+            ParamKind::Scalar(ScalarValueKind::Int).into(),
+        );
+        let kinds = signature
+            .params()
+            .iter()
+            .map(ExternArgKind::for_param)
+            .collect::<Vec<_>>();
+        let kind = result_over(&signature, &[]);
+        let merges = std::cell::RefCell::new(Vec::new());
+        let encoded = HostArguments::encode(
+            &kind,
+            kinds.iter().zip(vec![
+                RuntimeValue::Int((1_i64 << 53) + 1),
+                RuntimeValue::Int(1),
+                RuntimeValue::Bool(true),
+            ]),
+            &ValueReader,
+            |first, second| {
+                merges.borrow_mut().push((first, second));
+                first
+            },
+        );
+        // The second and third arguments fail to read; the inexact first
+        // argument is checked against the ABI only once every value exists.
+        assert!(matches!(encoded, Err(EncodeError::Value("not a Bool"))));
+        assert_eq!(*merges.borrow(), [("not a Bool", "not an Int")]);
     }
 
     #[test]

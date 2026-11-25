@@ -156,18 +156,22 @@ impl<'t> Scoped<'t, TConstruct> {
     }
 
     /// The value of this call: each field's value as `value` produces it from
-    /// the field's initializer in this call's scope, evaluated in written
-    /// order, at the field's declared place.
+    /// the field's initializer in this call's scope, at the field's declared
+    /// place. Every field is evaluated, in written order, also after one has
+    /// failed.
     ///
     /// # Errors
     ///
-    /// Returns the first error `value` returns, in written order.
+    /// Returns the errors `value` returns, combined with `merge` in written
+    /// order.
     pub fn apply<T, E>(
         self,
         mut value: impl FnMut(Scoped<'t, TFieldInit>) -> Result<T, E>,
+        merge: impl FnMut(E, E) -> E,
     ) -> Result<StructValue<T>, E> {
         let scope = self.scope();
-        self.get().apply(|init| value(Scoped::new(scope, init)))
+        self.get()
+            .apply(|init| value(Scoped::new(scope, init)), merge)
     }
 }
 

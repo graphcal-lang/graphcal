@@ -573,6 +573,44 @@ node earlier: Datetime<TAI> = 1.0 s / @zero + todo<Datetime<TAI>> {};
 }
 
 #[test]
+fn a_constructor_names_the_unfinished_origins_of_every_field() {
+    let evaluation = compile_and_eval(
+        r"
+type Pair { Pair(first: Length, second: Length) }
+node a: Length = todo<Length> {};
+node b: Length = todo<Length> {};
+param zero: Dimensionless = 0.0;
+node pair: Pair = Pair(first: @a, second: @b);
+node sum_ab: Length = @a + @b;
+node failing: Pair = Pair(first: @a, second: 1.0 m / @zero);
+const node ca: Length = todo<Length> {};
+const node cb: Length = todo<Length> {};
+const node const_pair: Pair = Pair(first: @ca, second: @cb);
+",
+    )
+    .unwrap();
+    for (name, origins) in [
+        ("pair", ["a", "b"]),
+        ("sum_ab", ["a", "b"]),
+        ("const_pair", ["ca", "cb"]),
+    ] {
+        let reason = result(&evaluation, name).as_ref().unwrap_err();
+        assert_eq!(
+            reason
+                .unfinished()
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            origins,
+            "{name}"
+        );
+    }
+    // A later field's failure is not hidden by an earlier unfinished field.
+    let reason = result(&evaluation, "failing").as_ref().unwrap_err();
+    assert!(reason.has_failure(), "{reason:?}");
+}
+
+#[test]
 fn finished_members_of_a_group_with_an_unfinished_member_are_blocked() {
     let evaluation = compile_and_eval(&format!(
         "{RECURRENCE}

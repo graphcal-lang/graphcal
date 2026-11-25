@@ -37,7 +37,11 @@ pub(super) fn all<T>(inputs: impl IntoIterator<Item = Evaluated<T>>) -> Evaluate
     })
 }
 
-fn merge(first: Outcome<SemanticError>, second: Outcome<SemanticError>) -> Outcome<SemanticError> {
+/// Why two inputs have no value, as one reason.
+pub(super) fn merge(
+    first: Outcome<SemanticError>,
+    second: Outcome<SemanticError>,
+) -> Outcome<SemanticError> {
     match (first, second) {
         (Outcome::Cancelled, _) | (_, Outcome::Cancelled) => Outcome::Cancelled,
         (Outcome::Failed(first), Outcome::Failed(second)) => {

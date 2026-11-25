@@ -4963,10 +4963,13 @@ fn constructor_calls_place_written_fields_at_their_declared_fields() {
     // Fields are evaluated in written order and stored in declared order.
     let mut order = Vec::new();
     let value = call
-        .apply(|init| {
-            order.push(init.name.as_str().to_owned());
-            Ok::<_, ()>(init.name.as_str().to_owned())
-        })
+        .apply(
+            |init| {
+                order.push(init.name.as_str().to_owned());
+                Ok::<_, ()>(init.name.as_str().to_owned())
+            },
+            |(), ()| (),
+        )
         .unwrap();
     assert_eq!(order, ["right", "left"]);
     let fields = value
@@ -4980,11 +4983,14 @@ fn constructor_calls_place_written_fields_at_their_declared_fields() {
             ("right".to_owned(), "right".to_owned())
         ]
     );
-    // The first failing field, in written order, is the call's failure.
+    // Every field is evaluated; the failures merge in written order.
     assert_eq!(
-        call.apply(|init| Err::<(), _>(init.name.as_str().to_owned()))
-            .unwrap_err(),
-        "right"
+        call.apply(
+            |init| Err::<(), _>(init.name.as_str().to_owned()),
+            |first, second| format!("{first}+{second}"),
+        )
+        .unwrap_err(),
+        "right+left"
     );
 
     // A call admits exactly the application's declared fields.
