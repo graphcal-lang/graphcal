@@ -5,7 +5,10 @@
 //! performs writes around them. Keeping them here lets tests exercise the same
 //! discovery and decision logic the binary uses without spawning a process.
 
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+
+use graphcal_io::ByteLimit;
 
 /// Directories skipped during recursive `.gcl` collection.
 const SKIP_DIRS: &[&str] = &[".git", "target", "node_modules", ".build", "__pycache__"];
@@ -31,6 +34,71 @@ pub fn format_status(source: &str) -> FormatStatus {
         Ok(formatted) => FormatStatus::Changed(formatted),
         Err(e) => FormatStatus::Error(e),
     }
+}
+
+/// What `graphcal format` operates on, decided from its path arguments.
+#[derive(Debug, PartialEq, Eq)]
+pub enum FormatInput {
+    /// `-`: read one source from stdin and write the result to stdout.
+    Stdin,
+    /// Files or directories formatted in place (empty means the current
+    /// directory).
+    Paths(Vec<PathBuf>),
+}
+
+/// The stdin marker `-` was given together with other paths.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[error("`-` (stdin) cannot be combined with other paths")]
+pub struct StdinCombinedWithPaths;
+
+impl FormatInput {
+    /// Classify the CLI path arguments. `-` must be the only argument.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StdinCombinedWithPaths`] when `-` occurs alongside any other
+    /// argument (including a second `-`).
+    pub fn from_args(paths: Vec<PathBuf>) -> Result<Self, StdinCombinedWithPaths> {
+        let is_stdin = |path: &PathBuf| path.as_path() == Path::new("-");
+        match paths.as_slice() {
+            [only] if is_stdin(only) => Ok(Self::Stdin),
+            _ if paths.iter().any(is_stdin) => Err(StdinCombinedWithPaths),
+            _ => Ok(Self::Paths(paths)),
+        }
+    }
+}
+
+/// Failure to read a source document from a stream.
+#[derive(Debug, thiserror::Error)]
+pub enum SourceReadError {
+    /// The stream failed or was not valid UTF-8.
+    #[error(transparent)]
+    Io(#[from] io::Error),
+    /// The stream was longer than the source-size limit.
+    #[error("input exceeds the read limit of {limit} bytes")]
+    TooLarge {
+        /// Maximum accepted byte count.
+        limit: ByteLimit,
+    },
+}
+
+/// Read one UTF-8 source document from `reader`, accepting at most `limit`
+/// bytes so an unbounded stream cannot exhaust memory.
+///
+/// # Errors
+///
+/// Returns [`SourceReadError`] when reading fails, the input is not UTF-8, or
+/// it exceeds `limit`.
+pub fn read_source_bounded(reader: impl Read, limit: ByteLimit) -> Result<String, SourceReadError> {
+    let mut bytes = Vec::new();
+    reader
+        .take(limit.get().saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > limit.get() {
+        return Err(SourceReadError::TooLarge { limit });
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| SourceReadError::Io(io::Error::new(io::ErrorKind::InvalidData, error)))
 }
 
 /// One failed traversal operation, retaining the requested discovery root when
@@ -232,6 +300,58 @@ pub fn collect_gcl_files(dir: &Path) -> FileDiscovery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn paths(args: &[&str]) -> Vec<PathBuf> {
+        args.iter().map(PathBuf::from).collect()
+    }
+
+    #[test]
+    fn lone_dash_selects_stdin() {
+        assert_eq!(
+            FormatInput::from_args(paths(&["-"])),
+            Ok(FormatInput::Stdin)
+        );
+    }
+
+    #[test]
+    fn plain_paths_are_kept_in_order() {
+        assert_eq!(
+            FormatInput::from_args(paths(&["b.gcl", "a"])),
+            Ok(FormatInput::Paths(paths(&["b.gcl", "a"])))
+        );
+        assert_eq!(
+            FormatInput::from_args(Vec::new()),
+            Ok(FormatInput::Paths(Vec::new()))
+        );
+    }
+
+    #[test]
+    fn dash_with_other_paths_is_rejected() {
+        for args in [&["-", "a.gcl"][..], &["a.gcl", "-"], &["-", "-"]] {
+            assert_eq!(
+                FormatInput::from_args(paths(args)),
+                Err(StdinCombinedWithPaths)
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_read_accepts_input_at_the_limit() {
+        let read = read_source_bounded(&b"abc"[..], ByteLimit::new(3)).unwrap();
+        assert_eq!(read, "abc");
+    }
+
+    #[test]
+    fn bounded_read_rejects_input_over_the_limit() {
+        let error = read_source_bounded(&b"abcd"[..], ByteLimit::new(3)).unwrap_err();
+        assert!(matches!(error, SourceReadError::TooLarge { limit } if limit.get() == 3));
+    }
+
+    #[test]
+    fn bounded_read_rejects_invalid_utf8() {
+        let error = read_source_bounded(&[0xff_u8][..], ByteLimit::new(3)).unwrap_err();
+        assert!(matches!(error, SourceReadError::Io(e) if e.kind() == io::ErrorKind::InvalidData));
+    }
 
     #[test]
     fn missing_root_is_an_incomplete_discovery() {

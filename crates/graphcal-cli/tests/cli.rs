@@ -4927,6 +4927,85 @@ fn format_check_parse_error_fails() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+fn run_format_stdin(args: &[&str], input: &str) -> std::process::Output {
+    let mut child = graphcal_bin()
+        .arg("format")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run graphcal");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+const UNFORMATTED_STDIN_SOURCE: &str = "param   x  :  Dimensionless  =   1.0  ;";
+
+#[test]
+fn format_stdin_writes_formatted_text_to_stdout() {
+    let output = run_format_stdin(&["-"], UNFORMATTED_STDIN_SOURCE);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let formatted = graphcal_fmt::format_source(UNFORMATTED_STDIN_SOURCE).unwrap();
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), formatted);
+
+    // Already formatted input passes through unchanged.
+    let output = run_format_stdin(&["-"], &formatted);
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), formatted);
+}
+
+#[test]
+fn format_check_stdin_reports_through_exit_status_only() {
+    let output = run_format_stdin(&["--check", "-"], UNFORMATTED_STDIN_SOURCE);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.stdout, b"");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("would be reformatted"));
+
+    let formatted = graphcal_fmt::format_source(UNFORMATTED_STDIN_SOURCE).unwrap();
+    let output = run_format_stdin(&["--check", "-"], &formatted);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"");
+}
+
+#[test]
+fn format_stdin_parse_error_fails_without_output() {
+    for args in [&["-"][..], &["--check", "-"]] {
+        let output = run_format_stdin(args, "this is }{ not valid");
+        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(output.stdout, b"");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("<stdin>"), "stderr: {stderr}");
+    }
+}
+
+#[test]
+fn format_stdin_cannot_be_combined_with_paths() {
+    let output = graphcal_bin()
+        .args(["format", "-", &fixture("valid/rocket.gcl")])
+        .stdin(Stdio::null())
+        .output()
+        .expect("failed to run graphcal");
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("cannot be combined with other paths")
+    );
+}
+
 #[test]
 fn format_in_place_then_check() {
     // Format a file in-place, then verify --check passes (idempotency via CLI)
