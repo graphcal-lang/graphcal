@@ -893,6 +893,7 @@ fn eval_extern_fn(
         result,
         args.iter().map(|arg| (&arg.get().kind, argument_node(arg))),
         &operands,
+        super::strict::merge,
     )
     .map_err(|error| match error {
         EncodeError::Value(error) => error,
@@ -939,8 +940,9 @@ fn eval_extern_fn(
         .map_err(Outcome::Failed)
 }
 
-/// Evaluate a constructor call: each field in written order, checked
-/// against its field constraint, at its declared place.
+/// Evaluate a constructor call: every field in written order, checked
+/// against its field constraint, at its declared place. The reasons of the
+/// fields without a value are merged, as for the inputs of an operation.
 fn eval_constructor_call(
     construct: Scoped<'_, TConstruct>,
     values: &RuntimeValueMap,
@@ -953,27 +955,30 @@ fn eval_constructor_call(
     let constructor_name = application.constructor.name();
     let owning_type = StructTypeRef::from_resolved(application.definition().clone());
     construct
-        .apply(|scoped_init| {
-            let field_init = scoped_init.get();
-            let evaluated = eval_texpr_evaluated(
-                scoped_init.map(|init| &init.value),
-                values,
-                presentation_values,
-                local_values,
-                ctx,
-            )?;
-            if application.constructor.constrains(&field_init.name) {
-                let key =
+        .apply(
+            |scoped_init| {
+                let field_init = scoped_init.get();
+                let evaluated = eval_texpr_evaluated(
+                    scoped_init.map(|init| &init.value),
+                    values,
+                    presentation_values,
+                    local_values,
+                    ctx,
+                )?;
+                if application.constructor.constrains(&field_init.name) {
+                    let key =
                     graphcal_compiler::tir::typed::model::StructFieldConstraintKey::for_application(
                         owning_type.clone(),
                         application.generic_args().to_vec(),
                         constructor_name.clone(),
                         field_init.name.clone(),
                     );
-                ctx.check_constructor_field(key, &evaluated.value(), field_init.value.span())?;
-            }
-            Ok::<_, Outcome<SemanticError>>(evaluated)
-        })
+                    ctx.check_constructor_field(key, &evaluated.value(), field_init.value.span())?;
+                }
+                Ok::<_, Outcome<SemanticError>>(evaluated)
+            },
+            super::strict::merge,
+        )
         .map(EvaluatedRuntimeValue::from_struct)
 }
 

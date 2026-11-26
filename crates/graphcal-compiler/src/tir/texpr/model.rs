@@ -609,20 +609,37 @@ impl<V: Concreteness> TConstruct<V> {
 
 impl TConstruct {
     /// The value of this call: each field's value as `value` produces it,
-    /// evaluated in written order, at the field's declared place.
+    /// at the field's declared place. Every field is evaluated, in written
+    /// order, also after one has failed.
     ///
     /// # Errors
     ///
-    /// Returns the first error `value` returns, in written order.
+    /// Returns the errors `value` returns, combined with `merge` in written
+    /// order.
+    #[expect(
+        clippy::manual_try_fold,
+        reason = "every field is evaluated, also after one has failed"
+    )]
     pub fn apply<'s, T, E>(
         &'s self,
         mut value: impl FnMut(&'s TFieldInit) -> Result<T, E>,
+        mut merge: impl FnMut(E, E) -> E,
     ) -> Result<StructValue<T>, E> {
         let mut values = self
             .fields
             .iter()
-            .map(|(slot, init)| Ok((*slot, value(init)?)))
-            .collect::<Result<Vec<_>, E>>()?;
+            .map(|(slot, init)| value(init).map(|value| (*slot, value)))
+            .fold(
+                Ok(Vec::with_capacity(self.fields.len())),
+                |collected, field| match (collected, field) {
+                    (Ok(mut collected), Ok(field)) => {
+                        collected.push(field);
+                        Ok(collected)
+                    }
+                    (Err(error), Ok(_)) | (Ok(_), Err(error)) => Err(error),
+                    (Err(first), Err(second)) => Err(merge(first, second)),
+                },
+            )?;
         values.sort_by_key(|(slot, _)| *slot);
         Ok(StructValue::from_declared(
             std::sync::Arc::clone(&self.application.applied),
