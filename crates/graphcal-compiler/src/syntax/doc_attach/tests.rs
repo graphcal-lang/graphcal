@@ -195,3 +195,18 @@ fn crlf_line_endings_attach() {
     let file = parse("/// Windows.\r\nparam x: Dimensionless = 1.0;\r\n");
     assert_eq!(doc_of(&file, 0), Some("Windows."));
 }
+
+#[test]
+fn trailing_horizontal_whitespace_is_not_doc_text() {
+    for line_ending in ["\n", "\r", "\r\n"] {
+        let source = format!(
+            "/// First. \t{line_ending}///   {line_ending}/// Last.  {line_ending}param x: Dimensionless = 1.0;{line_ending}"
+        );
+        let file = parse(&source);
+        assert_eq!(
+            doc_of(&file, 0),
+            Some("First.\n\nLast."),
+            "line ending {line_ending:?}"
+        );
+    }
+}

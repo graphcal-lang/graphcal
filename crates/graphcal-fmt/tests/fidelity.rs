@@ -73,6 +73,31 @@ fn own_line_doc_comment_after_lone_cr_documents_the_next_declaration() {
     );
 }
 
+#[test]
+fn doc_comment_with_trailing_whitespace_formats_under_every_line_ending() {
+    // Regression for #2399: the formatter strips trailing whitespace, so the
+    // documentation text must not include it either.
+    for line_ending in ["\n", "\r", "\r\n"] {
+        let source = format!(
+            "node a: Dimensionless = 1.0;{line_ending}/// doc fooc \t{line_ending}node b: Dimensionless = 2.0;{line_ending}"
+        );
+        let formatted = format_stable(&source);
+        assert!(
+            formatted.contains("/// doc fooc\nnode b"),
+            "line ending {line_ending:?}: {formatted:?}"
+        );
+    }
+}
+
+#[test]
+fn fuzz_reproducer_2399_formats() {
+    let source = "node a: Dimensionless = 1.0;\r/// doc fooc \rnode b :Dimensionless = 2.0;\r";
+    assert_eq!(
+        format_stable(source),
+        "node a: Dimensionless = 1.0;\n\n/// doc fooc\nnode b: Dimensionless = 2.0;\n"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // FE-5: an end-of-line comment after a construct stays after it.
 // ---------------------------------------------------------------------------
