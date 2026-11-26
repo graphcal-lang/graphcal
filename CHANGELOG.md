@@ -4,6 +4,174 @@ Release notes for Graphcal. Each release section becomes the body of its GitHub 
 Add a `## v<version>` section before running the release workflow.
 Earlier releases are listed on [GitHub Releases](https://github.com/graphcal-lang/graphcal/releases).
 
+## v0.0.1-alpha.46
+
+In this release, a `todo` hole blocks only the values that actually read it. A table with one unfinished entry keeps the values of its other entries.
+
+**Some existing Graphcal source programs need to be modified.** Each program that needs a change fails to compile; see [Breaking Changes](#breaking-changes).
+
+### Breaking Changes
+
+- Civil (offset-free) datetime literals, the first argument of `datetime("…", "Area/City")` and the argument of `epoch<S>("…")`, must be exactly `YYYY-MM-DDTHH:MM:SS[.fraction]`, like the offset form. A space instead of `T`, omitted minutes or seconds (`T12:00`), the basic format (`20241105T1200`), comma fractions, signed six-digit years, and bracketed annotations such as `[u-ca=hebrew]`, which were silently ignored, are now D028. No accepted literal changes its value. (_#2360_)
+
+  ```graphcal
+  node a: Datetime = datetime("2024-11-05T10:00", "Asia/Tokyo");     // D028
+  node b: Datetime = datetime("2024-11-05T10:00:00", "Asia/Tokyo");  // OK
+  node c: Datetime<TAI> = epoch<TAI>("2024-11-05 12:00:00");         // D028
+  node d: Datetime<TAI> = epoch<TAI>("2024-11-05T12:00:00");         // OK
+  ```
+
+- A module alias that takes a built-in function or constant name is N009 at the alias, as selective-item aliases already were. This also covers implicit aliases (a file named `sqrt.gcl` imported without `as`) and module-form `include` aliases. Common words such as `second` and `outer` are built-in names. Plugin aliases are unchanged. (_#2382_)
+
+  ```graphcal
+  import p.lib.f as sqrt;   // N009: module alias `sqrt` shadows a built-in name
+  import p.lib.f as f_lib;  // OK
+  ```
+
+### Unfinished Values
+
+- A `todo` hole is evaluated like any other expression. A declaration is TODO only when evaluation reaches its hole, and a reader is BLOCKED only when it actually reads an unfinished value. A hole in an unselected branch no longer blocks the result. No formula can test whether a value is unfinished, so a computed value is the same however the holes are filled later. The `eval` exit status stays 1 while the model has a hole, even when no result reached it, and the CLI adds a note in that case. `const node` follows the same rule at compile time. Recurrence groups still block members with unavailable outside inputs. (_#2410_)
+
+  ```graphcal
+  param fast: Bool = true;
+  node speed: Velocity = todo<Velocity> {};
+  node time: Time = if @fast { 10.0 s } else { 100.0 m / @speed };  // 10 s, was BLOCKED
+  node distance: Length = @speed * 2.0 s;                            // still BLOCKED
+  ```
+
+- Each element of an indexed value has its own outcome. A cell that reaches a hole, reads a value that has none, or fails no longer removes the values of the other cells. A read of one cell needs only that cell, a `for` keeps every cell it can compute, and a whole read such as `sum(...)` still needs every cell. Domain checks and evaluation failures apply per cell. A struct value stays one node. (_#2411_)
+
+  ```graphcal
+  index Part = { Wheel, Bracket, Panel };
+  node mass: Mass[Part] = table[Part] {
+      Wheel: 2.0 kg;
+      Bracket: todo<Mass> {};
+      Panel: 5.0 kg;
+  };
+  node wheel_mass: Mass = @mass[Part#Wheel];                   // 2 kg, was BLOCKED
+  node with_margin: Mass[Part] = for p: Part { @mass[p] * 1.1 }; // Wheel and Panel have values
+  node total: Mass = sum(@mass);                               // still BLOCKED
+  ```
+
+- Per-cell outcomes reach constants, inline DAG calls, `scan`, and `unfold`. A `const node` keeps its finished cells, an inline call's arguments and outputs keep theirs, and `@f(...)::out[2]` reads one cell. A `scan` or `unfold` in a result position keeps the steps before the first step without a value. (_#2414_)
+
+  ```graphcal
+  index Step = range(0.0 s, 3.0 s, step: 1.0 s);
+  // state[0 s] = 1 and state[1 s] = 2 have values; state[2 s] and state[3 s] are TODO
+  node state: Dimensionless[Step] = unfold(Step, 1.0, |x, prev_t, t|
+      if coord(t) < 1.5 s { x * 2.0 } else { todo<Dimensionless> { x } });
+  ```
+
+- A domain bound is C010 only when its evaluation actually reads an unfinished constant or an unfinished cell of one. Before, any bound that mentioned an unfinished constant was rejected, even in an unselected branch or through a finished cell. Programs accepted before are still accepted. (_#2414_)
+
+  ```graphcal
+  index Part = { Wheel, Bracket };
+  const node limit: Length[Part] = table[Part] { Wheel: 1.0 m; Bracket: todo<Length> {}; };
+  param wheel_size: Length(max: @limit[Part#Wheel]) = 0.5 m;      // OK, was C010
+  param bracket_size: Length(max: @limit[Part#Bracket]) = 0.5 m;  // still C010
+  ```
+
+- Constructor fields and plugin arguments merge the reasons of every unfinished input, as operations already did. `Pair(first: @a, second: @b)` names both `a` and `b`, and a failing field is no longer hidden behind an earlier unfinished one. A plugin call with an unfinished argument reports it before any ABI check of the other arguments. Values do not change. (_#2419_)
+
+### Output of Unfinished Values
+
+- `graphcal eval` prints one line per cell of a partly unfinished value, such as `mass[Wheel] = 2 kg` and `mass[Bracket] = TODO — formula unfinished`. (_#2411_)
+- `eval --format json` adds a `cells` object, with the same `index`/`entries` shape as an indexed value, to an unavailable outcome. Language-server inlay hints show `{ Wheel: 4, Bracket: TODO, Panel: 2 }`, report cards list each cell in HTML, Markdown, and the interactive runtime, and the wasm engine's `incomplete` and `error` outcomes carry `cells`. (_#2413_)
+
+  ```json
+  {
+    "declaration": "mass",
+    "status": "todo",
+    "cells": {
+      "index": "Part",
+      "entries": {
+        "Wheel": { "si_value": 2.0, "display_value": 2.0, "unit": "kg" },
+        "Bracket": { "declaration": "mass", "status": "todo" }
+      }
+    }
+  }
+  ```
+
+- `graphcal view` shows `TODO` or `BLOCKED` in place of a value in scalar boxes, the formula bar, and code inlays, and beside a table's name. Missing table cells are muted. Hovering names the unfinished formulas a value waits on, for example `BLOCKED: waits on the unfinished cell_voltage, harness_loss`. A failed value still shows `—`. (_#2404_, _#2413_)
+
+### CLI
+
+- `graphcal eval --plot FILE.svg` writes one figure as static SVG, rendered by the bundled Vega/Vega-Lite in an embedded QuickJS engine. The SVG matches the HTML rendering and needs no browser, Node.js, or network. With several displayed figures, `--figure NAME` is required; a missing or unknown name exits 1 and lists the figures. `--figure` with `browser`, `json`, or `.html` output exits 2 instead of being ignored. Vega-Lite warnings go to stderr. (_#2408_)
+
+  ```sh
+  graphcal eval model.gcl --plot figure.svg                   # the only displayed figure
+  graphcal eval model.gcl --plot figure.svg --figure curve_b  # one of several
+  ```
+
+- `graphcal format -` reads one source from stdin and writes the formatted text to stdout. `--check -` writes nothing to stdout and exits 1 with `<stdin> would be reformatted` on stderr when the input is not formatted. `-` must be the only path (exit 2 otherwise), and stdin is bounded by the source-file size limit. (_#2420_)
+
+  ```sh
+  graphcal format - < model.gcl > formatted.gcl
+  graphcal format --check - < model.gcl
+  ```
+
+### Formatter
+
+- A `///` line with trailing spaces or tabs no longer fails the formatter's equivalence check. Doc text drops trailing spaces and tabs, so hover, reports, and the view show the same text before and after formatting. Two trailing spaces no longer make a Markdown hard line break. (_#2418_)
+
+### Diagnostics
+
+- V001 for an import of a private DAG is labelled at the import's module path, not the whole file. A module-form `include` with a private DAG on its path is labelled the same way. (_#2377_)
+- A type mismatch in a rebound include parameter default (D002) is reported at the binding argument. Before, the underline was drawn from the dependency's type annotation onto unrelated text of the importer. (_#2378_)
+- A dimension exponent overflow in a rigid view (D010) is reported at the dimension's declaration, or at the include that materializes the instance, not over the whole file. (_#2380_)
+- An inline DAG-call `Fin(...)` binding accepts any closed Nat expression, as include bindings do, and reports I001, I037, I039, or I040 instead of M016. (_#2379_)
+- A failed `x ^ @y` with a runtime exponent reports "power operation", like `x ^ 2`. (_#2357_)
+
+### Language Server
+
+- N037 (a unit name that equals a local in a quantity literal) offers the quick fix "Close the quantity literal with parentheses", No fix is offered for a leading unit, a `->` target, or a unit inside a parenthesized unit group. (_#2390_)
+
+  ```text
+  before:  2.0 m / s     (N037: `s` is a local in scope, not the unit second)
+  after:   (2.0 m) / s
+  ```
+
+- An unsaved overlay file aliased onto another path, such as `/p/graphcal.toml -> sub/config.toml`, no longer makes `/p` resolve as `/p/sub`. (_#2376_)
+
+### Reports and View
+
+- In the interactive report, pinned inputs and values keep their descriptions, clamped to two lines. A pinned scalar or one-field-record input also keeps its override and draft markers. (_#2402_)
+- The browser engine takes up to 1,024 files per project instead of 16, so the web viewer opens larger projects. The byte limits are unchanged. (_#2372_)
+- The view uses its own tooltips instead of the native `title`, which a VS Code webview never shows. Reasons and doc comments show at once, and click hints after half a second. (_#2404_)
+
+### Documentation
+
+- `built-ins.md` states the canonical civil datetime form next to the offset form. (_#2360_)
+- The "Unfinished nodes" and "Constants" sections of `computation-model.md` describe the runtime and per-cell rules and the read-based C010 rule. (_#2410_, _#2411_, _#2414_)
+- The CLI reference and the plots page cover `--plot FILE.svg` and `--figure`. The CLI reference mentions `graphcal format -`. (_#2408_, _#2420_)
+- `grammar.ebnf` states the allowed `pub` / `pub(bind)` prefix per declaration kind, matching the parser, and defines the missing `visibility` nonterminal. (_#2375_)
+
+### Dependency, Toolchain, and Workflow Maintenance
+
+- `wasmi`, which runs plugins, goes from 2.0.0 to 2.0.3 in three steps, because 2.0.0, 2.0.1, and 2.0.2 were each yanked. The releases fix miscompilations, a use-after-free, a segfault after a tail call to a host function, and memory-unsafe `v128.store8_lane` / `v128.store16_lane` execution. Each step used the documented minimum-publish-age override. (_#2373_, _#2398_, _#2424_)
+- Updated `url` to 2.5.9 for RUSTSEC-2026-0592. Graphcal does not call the affected `Url::origin()`. (_#2406_)
+- Ignored RUSTSEC-2026-0543 (`chrono` unmaintained, pulled in only by `arrow-array`) and RUSTSEC-2026-0574 to RUSTSEC-2026-0582 (`heapless` 0.8, pulled in only by `faster-hex` through gix, in code a Graphcal build does not compile), tracked in #2358 and #2374. (_#2359_, _#2373_)
+- Added `rquickjs` to the CLI for SVG rendering. `graphcal-wasm` does not depend on it. (_#2408_)
+- Stray dependency specifiers moved to `[workspace.dependencies]`; `Cargo.lock` is unchanged. (_#2392_)
+- Updated JavaScript tooling: `@playwright/test` to v1.65.0 and pnpm to v12.18.0. (_#2349_)
+- Updated `zensical` to v0.1.0. (_#2348_)
+- Updated GitHub Actions: `leanprover/lean-action` to v1.7.1 and `taiki-e/install-action` to v2.90.3. (_#2349_)
+- Bumped cargo-hawk to 0.1.18, built on Rust 1.100.0 like the workspace. (_#2354_)
+
+### Internal
+
+- Removed 78 unreferenced functions found by coverage and a deletion probe, then unreferenced trait impls, write-only fields, and functions only their own unit tests called. Implicit access paths such as `Deref` for `Spanned<T>` and conversions that duplicated named constructors are gone. (_#2350_, _#2351_, _#2355_)
+- Removed the model API left over from the Tenax integration (`PreparedModel`, `evaluate_model_row`, `bind_named_key`), with the never-emitted binding errors O011 and O012. (_#2356_)
+- `PipelineError` is replaced by `SemanticError`, and inline calls resolve through the scope's callee table instead of a copy in the execution plan. (_#2352_, _#2353_)
+- Deduplicated logic found by a duplicate-code candidate search, including one load-and-prepare helper for `eval`, `dump`, and `model`, one portable-path rule for package and plugin paths, and a bounds-checked `IndexAxis::key_at`. (_#2357_)
+- `UncheckedTir` and `InstantiatedTir` can be constructed only in `tir/typed`. N009 and M011 carry typed kind fields. (_#2389_, _#2381_)
+- Shared duplicated helpers and removed dead code in `web/view`. (_#2394_, _#2395_)
+- Corrected the codebase reading guide and doc comments that contradicted the implementation. (_#2387_, _#2391_)
+- Added tests for datetime literal validators at every range bound, calendar arithmetic, duration limits, leap-second readings, and LSP routing to a symlinked dependency. (_#2388_, _#2393_, _#2421_)
+- Bumped the workspace version to v0.0.1-alpha.46 and added these notes to `CHANGELOG.md`. (_#2425_)
+
+**Full Changelog**: <https://github.com/graphcal-lang/graphcal/compare/v0.0.1-alpha.45...v0.0.1-alpha.46>
+
 ## v0.0.1-alpha.45
 
 In this release, an `Int` can scale a quantity in `*` and `/`, and a `Dimensionless` base accepts a runtime `Int` exponent. `const node` formulas accept `todo` holes.
