@@ -1998,7 +1998,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -2039,7 +2039,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-ast-derive"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2048,7 +2048,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-compiler"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "graphcal-ast-derive",
  "graphcal-ratio",
@@ -2068,7 +2068,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-eval"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "graphcal-compiler",
  "hifitime",
@@ -2085,7 +2085,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-fmt"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "graphcal-compiler",
  "graphcal-test-support",
@@ -2099,7 +2099,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-io"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "cap-std",
  "graphcal-compiler",
@@ -2111,7 +2111,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-lsp"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "futures-util",
  "graphcal-compiler",
@@ -2135,7 +2135,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-model-client"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "arrow-ipc",
  "arrow-schema",
@@ -2146,7 +2146,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-model-protocol"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -2158,7 +2158,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-model-server"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-package"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "sha2",
  "thiserror",
@@ -2181,7 +2181,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
@@ -2195,7 +2195,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin-abi"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "serde",
  "serde_json",
@@ -2204,7 +2204,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin-host"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
@@ -2221,7 +2221,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-plugin-macros"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "graphcal-plugin-abi",
  "graphcal-ratio",
@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-project"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "base64 0.23.1",
  "graphcal-compiler",
@@ -2257,7 +2257,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-ratio"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "proptest",
  "thiserror",
@@ -2265,7 +2265,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-report"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "base64 0.23.1",
  "graphcal-compiler",
@@ -2278,7 +2278,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-test-support"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "graphcal-compiler",
  "proptest",
@@ -2286,7 +2286,7 @@ dependencies = [
 
 [[package]]
 name = "graphcal-wasm"
-version = "0.0.1-alpha.45"
+version = "0.0.1-alpha.46"
 dependencies = [
  "graphcal-compiler",
  "graphcal-eval",
