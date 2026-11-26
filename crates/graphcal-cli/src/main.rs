@@ -54,7 +54,8 @@ use graphcal_project::prepare::PreparedProject;
 use graphcal_project::project_compiler::ProjectCompiler;
 
 use graphcal::format::{
-    FileDiscovery, FormatStatus, TraversalFailures, collect_gcl_files, format_status,
+    FileDiscovery, FormatInput, FormatStatus, TraversalFailures, collect_gcl_files, format_status,
+    read_source_bounded,
 };
 
 use graphcal::figure_selection::{parse_figure_name, select_figure};
@@ -139,9 +140,11 @@ enum Commands {
     },
     /// Format .gcl files
     Format {
-        /// Files or directories to format (default: current directory)
+        /// Files or directories to format (default: current directory); `-`
+        /// alone reads source from stdin and writes the formatted text to stdout
         paths: Vec<PathBuf>,
-        /// Check formatting without modifying files (exit 1 if unformatted)
+        /// Check formatting without modifying files (exit 1 if unformatted);
+        /// with `-`, nothing is written to stdout
         #[arg(long)]
         check: bool,
     },
@@ -486,9 +489,14 @@ fn run_command(cli: Cli) {
         } => {
             run_check(&paths, root.as_deref(), deny_todo);
         }
-        Commands::Format { paths, check } => {
-            run_format(&paths, check);
-        }
+        Commands::Format { paths, check } => match FormatInput::from_args(paths) {
+            Ok(FormatInput::Stdin) => run_format_stdin(check),
+            Ok(FormatInput::Paths(paths)) => run_format(&paths, check),
+            Err(error) => {
+                eprintln!("error: {error}");
+                process::exit(2);
+            }
+        },
         Commands::Dump { command } => match dump::run(command) {
             Ok(dump::DumpStatus::Success) => {}
             Ok(dump::DumpStatus::ProgramErrors) => process::exit(1),
@@ -1326,6 +1334,39 @@ fn run_view(file: &Path, project_root: Option<&Path>, instance: Option<String>) 
                 ViewTarget::Module => eprintln!("error: {} has no view", file.display()),
             }
             process::exit(2);
+        }
+    }
+}
+
+/// `graphcal format -`: format stdin to stdout, or with `--check` only report
+/// through the exit status whether stdin is already formatted.
+fn run_format_stdin(check: bool) {
+    let source = match read_source_bounded(
+        std::io::stdin().lock(),
+        ProjectIngestionPolicy::default().source_file(),
+    ) {
+        Ok(source) => source,
+        Err(error) => {
+            eprintln!("error: cannot read stdin: {error}");
+            process::exit(1);
+        }
+    };
+    match format_status(&source) {
+        FormatStatus::Error(error) => {
+            eprintln!("error: <stdin>: {error}");
+            process::exit(1);
+        }
+        FormatStatus::Unchanged => {
+            if !check {
+                out!("{source}");
+            }
+        }
+        FormatStatus::Changed(formatted) => {
+            if check {
+                eprintln!("<stdin> would be reformatted");
+                process::exit(1);
+            }
+            out!("{formatted}");
         }
     }
 }
