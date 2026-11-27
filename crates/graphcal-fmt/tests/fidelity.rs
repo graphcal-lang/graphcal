@@ -152,6 +152,52 @@ fn comment_inside_index_brackets_stays_inside() {
 }
 
 // ---------------------------------------------------------------------------
+// #2407: an own-line comment directly under a declaration stays under it.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn own_line_comment_directly_after_declaration_stays_attached() {
+    let source = "/// Dry mass of the bus\n\
+                  const node dry_mass: Mass = 800.0 kg;\n\
+                  // src: mass budget rev. C\n\
+                  // link: https://example.com/mass-budget\n\n\
+                  /// Number of engines\n\
+                  const node n_engines: Int = 2;\n";
+    assert_eq!(format_stable(source), source);
+}
+
+#[test]
+fn trailing_comment_continued_on_next_line_stays_together() {
+    let source = "param a: Dimensionless = 1.0; // first line\n\
+                  // continued\n\
+                  param b: Dimensionless = 2.0;\n";
+    assert_eq!(format_stable(source), source);
+}
+
+#[test]
+fn own_line_comment_directly_after_declaration_in_dag_body_stays_attached() {
+    let source = "dag d {\n    param a: Dimensionless;\n    // note on a\n\n    param b: Dimensionless;\n}\n";
+    assert_eq!(format_stable(source), source);
+}
+
+#[test]
+fn line_comment_then_doc_comment_after_declaration_keeps_both_in_place() {
+    let source = "param a: Dimensionless = 1.0;\n\
+                  // note on a\n\
+                  /// doc for b\n\
+                  param b: Dimensionless = 2.0;\n";
+    assert_eq!(format_stable(source), source);
+}
+
+#[test]
+fn comment_separated_by_blank_line_stays_separated() {
+    let source = "param a: Dimensionless = 1.0;\n\n\
+                  // note on b\n\
+                  param b: Dimensionless = 2.0;\n";
+    assert_eq!(format_stable(source), source);
+}
+
+// ---------------------------------------------------------------------------
 // FE-8: a bare built-in type former keeps its spelling.
 // ---------------------------------------------------------------------------
 

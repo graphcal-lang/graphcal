@@ -880,7 +880,7 @@ pub fn format_multi_decl(fmt: &mut Formatter<'_>, info: &MultiDecl) -> RcDoc<'st
             out.push('\n');
         }
         if let Some(comments) = fmt.drain_comments_before_declaration(slot.header_span().offset()) {
-            out.push_str(&render_doc_to_string(&comments));
+            out.push_str(&render_doc_to_string(&comments.doc));
         }
         // Do not let the next slot's leading-comment drain relocate a comment
         // from inside this header. Leave it queued for the verbatim fallback.
@@ -1097,17 +1097,24 @@ pub(super) fn format_decl_sequence(
 
         // Emit leading comments before this declaration
         let leading = fmt.drain_comments_before_declaration(emit_start);
-        let has_leading_comments = leading.is_some();
 
         if i > 0 {
             docs.push(RcDoc::hardline());
-            // Extra blank line before comments or when original had a blank line
-            if has_leading_comments || fmt.has_blank_line_between(prev_end, emit_start) {
+            // Keep a blank line where the source had one before the leading
+            // comments (or the declaration itself). A `//` comment written
+            // directly under the previous declaration stays attached to it;
+            // a `///` doc comment belongs to the next declaration, so it is
+            // always separated from the previous one.
+            let (gap_end, starts_with_doc_comment) =
+                leading.as_ref().map_or((emit_start, false), |l| {
+                    (l.start, l.starts_with_doc_comment)
+                });
+            if starts_with_doc_comment || fmt.has_blank_line_between(prev_end, gap_end) {
                 docs.push(RcDoc::hardline());
             }
         }
         if let Some(leading) = leading {
-            docs.push(leading);
+            docs.push(leading.doc);
         }
 
         // Format, then verify every comment inside the span was drained by

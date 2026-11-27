@@ -62,7 +62,7 @@ impl Comment {
 
     /// Whether this is a `///` doc comment (`////` is a line comment).
     #[must_use]
-    pub(crate) const fn is_doc(&self) -> bool {
+    pub const fn is_doc(&self) -> bool {
         matches!(self.delimiter, CommentDelimiter::Doc)
     }
 
