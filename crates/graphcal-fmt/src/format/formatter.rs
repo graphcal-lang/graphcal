@@ -7,10 +7,28 @@ use pretty::RcDoc;
 
 use super::doc::text_with_hardlines;
 
-/// Comments drained in one run, with the end offset of the last one.
+/// Comments drained in one run, with the start offset and kind of the first
+/// one and the end offset of the last one.
 struct CommentRun {
     doc: RcDoc<'static>,
+    start: usize,
     end: usize,
+    starts_with_doc_comment: bool,
+}
+
+/// The comments leading a declaration, drained by
+/// [`Formatter::drain_comments_before_declaration`].
+pub struct LeadingComments {
+    /// The rendered comments, ending with a hardline (two when the source
+    /// separated the last comment from the declaration with a blank line).
+    pub doc: RcDoc<'static>,
+    /// Source offset where the first comment starts. The gap before the
+    /// declaration's leading comments ends here, not at the declaration.
+    pub start: usize,
+    /// Whether the first comment is a `///` doc comment. A doc comment
+    /// belongs to the declaration after it, so the formatter separates it
+    /// from the previous declaration even when the source did not.
+    pub starts_with_doc_comment: bool,
 }
 
 /// State for tracking comments during formatting.
@@ -72,14 +90,16 @@ impl<'src> Formatter<'src> {
     pub fn drain_comments_before_declaration(
         &mut self,
         declaration_offset: usize,
-    ) -> Option<RcDoc<'static>> {
+    ) -> Option<LeadingComments> {
         self.drain_comment_run_before(declaration_offset)
-            .map(|run| {
-                if self.has_blank_line_between(run.end, declaration_offset) {
+            .map(|run| LeadingComments {
+                doc: if self.has_blank_line_between(run.end, declaration_offset) {
                     run.doc.append(RcDoc::hardline())
                 } else {
                     run.doc
-                }
+                },
+                start: run.start,
+                starts_with_doc_comment: run.starts_with_doc_comment,
             })
     }
 
@@ -92,7 +112,12 @@ impl<'src> Formatter<'src> {
             let text = RcDoc::text(comment.value.lexeme()).append(RcDoc::hardline());
             let end = comment.span.offset() + comment.span.len();
             run = Some(match run {
-                None => CommentRun { doc: text, end },
+                None => CommentRun {
+                    doc: text,
+                    start: comment.span.offset(),
+                    end,
+                    starts_with_doc_comment: comment.value.is_doc(),
+                },
                 Some(previous) => {
                     let separator =
                         if self.has_blank_line_between(previous.end, comment.span.offset()) {
@@ -102,7 +127,9 @@ impl<'src> Formatter<'src> {
                         };
                     CommentRun {
                         doc: previous.doc.append(separator).append(text),
+                        start: previous.start,
                         end,
+                        starts_with_doc_comment: previous.starts_with_doc_comment,
                     }
                 }
             });
